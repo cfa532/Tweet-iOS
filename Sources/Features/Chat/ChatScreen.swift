@@ -12,6 +12,7 @@ struct ChatScreen: View {
     @State private var selectedAttachment: MimeiFileType?
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var attachmentItemData: HproseInstance.PendingTweetUpload.ItemData?
+    @State private var isProcessingAttachment = false
     @State private var keyboardHeight: CGFloat = 0
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
@@ -141,8 +142,20 @@ struct ChatScreen: View {
             
             // Message Input - Fixed at bottom
             VStack(spacing: 0) {
-                // Attachment preview
-                if let attachment = selectedAttachment {
+                // Attachment preview or loading indicator
+                if isProcessingAttachment {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text(NSLocalizedString("Preparing attachment...", comment: "Chat attachment loading"))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                } else if let attachment = selectedAttachment {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
@@ -190,6 +203,10 @@ struct ChatScreen: View {
                             .foregroundColor(.blue)
                     }
                     .onChange(of: selectedPhotos) { oldItems, newItems in
+                        // Ignore if clearing selection or already processing
+                        guard !newItems.isEmpty, !isProcessingAttachment else {
+                            return
+                        }
                         Task {
                             await handlePhotoSelection(newItems)
                         }
@@ -437,8 +454,16 @@ struct ChatScreen: View {
     }
     
     private func sendMessageWithAttachments() {
+        // Check if attachment is still being processed
+        guard !isProcessingAttachment else {
+            print("[ChatScreen] Cannot send message - attachment is still being processed")
+            showToastMessage(NSLocalizedString("Please wait while the attachment is being prepared...", comment: "Chat attachment loading"), type: .info)
+            return
+        }
+        
         guard let itemData = attachmentItemData else {
-            print("[ChatScreen] No attachment data available")
+            print("[ChatScreen] No attachment data available - cannot send message with attachment")
+            showToastMessage(NSLocalizedString("Attachment not ready. Please try selecting the media again.", comment: "Chat attachment error"), type: .error)
             return
         }
         
@@ -578,7 +603,19 @@ struct ChatScreen: View {
     }
     
     private var canSendMessage: Bool {
-        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedAttachment != nil
+        // If there's text, allow sending
+        if !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        
+        // If there's an attachment, only allow sending if:
+        // 1. Attachment is not currently being processed
+        // 2. Attachment data is ready
+        if let _ = selectedAttachment {
+            return !isProcessingAttachment && attachmentItemData != nil
+        }
+        
+        return false
     }
     
     private func getAttachmentIcon(for type: MediaType) -> String {
@@ -675,7 +712,14 @@ struct ChatScreen: View {
     private func handlePhotoSelection(_ items: [PhotosPickerItem]) async {
         guard let item = items.first else { return }
         
+        // Set processing flag to prevent concurrent selections
+        await MainActor.run {
+            isProcessingAttachment = true
+        }
+        
         do {
+            print("[ChatScreen] Starting to prepare attachment data...")
+            
             // Use MediaUploadHelper to properly prepare the item data (same as tweet attachments)
             let itemDataArray = try await MediaUploadHelper.prepareItemData(
                 selectedItems: [item],
@@ -685,12 +729,15 @@ struct ChatScreen: View {
             
             guard let itemData = itemDataArray.first else {
                 print("[ChatScreen] Failed to prepare item data")
+                await MainActor.run {
+                    isProcessingAttachment = false
+                }
                 return
             }
             
             // Get the type identifier to determine media type
             let typeIdentifier = itemData.typeIdentifier
-            print("[ChatScreen] Type identifier: \(typeIdentifier)")
+            print("[ChatScreen] Type identifier: \(typeIdentifier), data size: \(itemData.data.count) bytes")
             
             // Determine media type from type identifier
             let typeIdLower = typeIdentifier.lowercased()
@@ -716,15 +763,27 @@ struct ChatScreen: View {
                 url: nil
             )
             
+            // Set attachment and itemData atomically on main thread
             await MainActor.run {
-                // Replace current attachment with new one
                 selectedAttachment = tempAttachment
-                attachmentItemData = itemData // Store the prepared item data
-                selectedPhotos = [] // Clear selection
+                attachmentItemData = itemData // Store the prepared item data - CRITICAL: set this before clearing photos
+                print("[ChatScreen] Attachment data prepared successfully. attachmentItemData is now set.")
+                
+                // Clear processing flag AFTER everything is set
+                isProcessingAttachment = false
+                
+                // Clear selection AFTER a small delay to ensure state is fully set
+                // This prevents onChange from being triggered while attachmentItemData is still nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    selectedPhotos = []
+                }
             }
+            
+            print("[ChatScreen] Attachment selection completed successfully")
         } catch {
             print("[ChatScreen] Error loading media: \(error)")
             await MainActor.run {
+                isProcessingAttachment = false
                 showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
             }
         }

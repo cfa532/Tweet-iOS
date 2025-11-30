@@ -27,7 +27,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4722"
             endingLineNumber = "4722"
-            landmarkName = "uploadAttachments(itemData:)"
+            landmarkName = "uploadTweet(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -43,7 +43,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4736"
             endingLineNumber = "4736"
-            landmarkName = "savePendingUpload(_:)"
+            landmarkName = "uploadTweet(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -91,7 +91,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1288"
             endingLineNumber = "1288"
-            landmarkName = "isServerHealthy(_:logFailures:)"
+            landmarkName = "handleRetryRecovery(for:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -107,7 +107,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1293"
             endingLineNumber = "1293"
-            landmarkName = "isServerHealthy(_:logFailures:)"
+            landmarkName = "handleRetryRecovery(for:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -123,7 +123,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1297"
             endingLineNumber = "1297"
-            landmarkName = "isServerHealthy(_:logFailures:)"
+            landmarkName = "handleRetryRecovery(for:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -139,8 +139,8 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "5033"
             endingLineNumber = "5033"
-            landmarkName = "HproseInstance"
-            landmarkType = "3">
+            landmarkName = "handleCompletedVideoJob(pendingUpload:cid:)"
+            landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

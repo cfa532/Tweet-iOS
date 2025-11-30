@@ -154,6 +154,43 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// Unwrap v2 API response format
+    /// v2 format: {success: true, data: result} or {success: false, message: "...", error: ...}
+    /// Also handles Int success values: {success: 1, data: result} or {success: 0, message: "..."}
+    /// Returns the unwrapped data if success, throws error if failure
+    private static func unwrapV2Response(_ response: Any?) throws -> Any? {
+        guard let dict = response as? [String: Any] else {
+            return response
+        }
+        
+        // Check if this is a v2 response - handle both Bool and Int success values
+        var successValue: Bool? = nil
+        
+        if let successBool = dict["success"] as? Bool {
+            successValue = successBool
+        } else if let successInt = dict["success"] as? Int {
+            successValue = (successInt != 0)
+        }
+        
+        if let success = successValue {
+            if success {
+                // Success case - return data field if present, otherwise return the whole dict
+                if let data = dict["data"] {
+                    return data
+                }
+                // If no data field, the result might be directly in the dict (e.g., {success: true, mid: "...", count: ...})
+                return dict
+            } else {
+                // Error case
+                let message = dict["message"] as? String ?? NSLocalizedString("Unknown error from server", comment: "Server error")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        
+        // Not a v2 response, return as-is
+        return response
+    }
+    
     /// Print detailed app user content for debugging
     private func printAppUserContent(_ context: String) {
         print("=== APP USER CONTENT [\(context)] ===")
@@ -449,6 +486,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "tweetid": parentTweet.mid,
             "appuserid": appUser.mid,
             "pn": pageNumber,
@@ -482,11 +520,14 @@ final class HproseInstance: ObservableObject {
         
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
         
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
         // Handle empty array case - server returns empty array when tweet has no comments
         let response: [[String: Any]?]
-        if let arrayResponse = rawResponse as? [[String: Any]?] {
+        if let arrayResponse = unwrappedResponse as? [[String: Any]?] {
             response = arrayResponse
-        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+        } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
             // Server returned empty array - handle gracefully
             response = []
             print("DEBUG: [HproseInstance] fetchComments - Server returned empty array (no comments)")
@@ -553,6 +594,7 @@ final class HproseInstance: ObservableObject {
         var params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "pn": pageNumber,
             "ps": pageSize,
             "userid": !user.isGuest ? user.mid : Gadget.getAlphaIds().first as Any,
@@ -562,7 +604,10 @@ final class HproseInstance: ObservableObject {
         if entry == "update_following_tweets" {
             params["hostid"] = appUser.hostIds?.first
         }
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
         }
         
@@ -685,13 +730,17 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid,
             "pn": pageNumber,
             "ps": pageSize,
             "appuserid": appUser.mid,
         ] as [String : Any]
         
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
         }
         
@@ -803,10 +852,14 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "tweetid": tweetId,
             "appuserid": appUser.mid
         ]
-        if let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        if let tweetDict = unwrappedResponse as? [String: Any] {
             do {
                 let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
                 if let author = try? await fetchUser(authorId) {
@@ -846,12 +899,22 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "username": username,
             ]
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
+            if let stringResponse = unwrappedResponse as? String {
+                return stringResponse
             }
-            return response as? String
+            
+            // If unwrapped response is a dict, extract data or return nil
+            if let dictResponse = unwrappedResponse as? [String: Any] {
+                return dictResponse["data"] as? String
+            }
+            
+            return nil
         }
     }
     
@@ -1259,6 +1322,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": appUser.mid
         ]
         
@@ -1294,9 +1358,32 @@ final class HproseInstance: ObservableObject {
             return true
         }
         
+        // Unwrap v2 response if needed
+        let unwrappedResponse: Any?
+        do {
+            unwrappedResponse = try Self.unwrapV2Response(response)
+        } catch {
+            // If unwrapping fails, treat as unhealthy
+            if logFailures {
+                print("DEBUG: [updateUserFromServer] Server health check for \(host) - error unwrapping v2 response: \(error)")
+            }
+            return false
+        }
+        
         // Check if response is a dictionary with status: "ok"
-        if let responseDict = response as? [String: Any] {
+        // For v2 format, status might be in data field or directly in response
+        if let responseDict = unwrappedResponse as? [String: Any] {
+            // Check for status directly in response (legacy format)
             if let status = (responseDict["status"] as? String)?.lowercased(), status == "ok" {
+                return true
+            }
+            // Check for status in data field (v2 format)
+            if let data = responseDict["data"] as? [String: Any],
+               let status = (data["status"] as? String)?.lowercased(), status == "ok" {
+                return true
+            }
+            // Check for success field (v2 format)
+            if let success = responseDict["success"] as? Bool, success {
                 return true
             }
             if logFailures {
@@ -1327,6 +1414,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid,
         ]
         
@@ -1336,13 +1424,31 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
         }
         
-        guard let response = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
+        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
+        guard let response = rawResponse else {
             print("DEBUG: [updateUserFromServer] No response from server for user: \(user.mid)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for user: \(user.mid)"])
         }
         
+        // Unwrap v2 response - handle IP redirects which may be strings
+        let unwrappedResponse: Any?
+        do {
+            unwrappedResponse = try Self.unwrapV2Response(response)
+        } catch {
+            print("DEBUG: [updateUserFromServer] Error unwrapping v2 response: \(error)")
+            throw error
+        }
+        
         // Check for IP address response first (user not found on this node)
-        if let ipAddress = response as? String, !ipAddress.isEmpty {
+        // IP address can be returned directly as string or wrapped in v2 format
+        var ipAddress: String? = nil
+        if let ipString = unwrappedResponse as? String, !ipString.isEmpty {
+            ipAddress = ipString
+        } else if let dict = unwrappedResponse as? [String: Any], let data = dict["data"] as? String {
+            ipAddress = data
+        }
+        
+        if let ipAddress = ipAddress, !ipAddress.isEmpty {
             // Check if we're being redirected to the same IP we're already on (redirect loop)
             // Normalize both IPs for comparison (remove http:// prefix, ensure format consistency)
             let normalizedRedirectIp: String
@@ -1378,7 +1484,8 @@ final class HproseInstance: ObservableObject {
             }
             
             // Call runMApp with the redirected client
-            let newResponse = redirectedClient.invoke("runMApp", withArgs: [entry, params])
+            let newRawResponse = redirectedClient.invoke("runMApp", withArgs: [entry, params])
+            let newResponse = try Self.unwrapV2Response(newRawResponse)
             
             if let newUserDict = newResponse as? [String: Any] {
                 // Valid user dictionary returned from redirected server - update cached user
@@ -1427,7 +1534,7 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: [updateUserFromServer] \(user.mid) not found - nil or unexpected response from redirected server")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "userid not found after redirect - nil response"])
             }
-        } else if let userDict = response as? [String: Any] {
+        } else if let userDict = unwrappedResponse as? [String: Any] {
             // User found on current node
             do {
                 try await MainActor.run {
@@ -1449,7 +1556,7 @@ final class HproseInstance: ObservableObject {
                 throw error  // Re-throw to trigger retry logic
             }
         } else {
-            print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: response)), value: \(response)")
+            print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: unwrappedResponse)), value: \(String(describing: unwrappedResponse))")
             
             do {
                 if let providerIP = try await self.getProviderIP(user.mid) {
@@ -1466,7 +1573,7 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: [updateUserFromServer] Error refreshing provider IP after unexpected response for userId: \(user.mid): \(error)")
             }
             
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response from server: \(response))"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response from server: \(String(describing: unwrappedResponse))"])
         }
     }
     
@@ -1486,6 +1593,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "userid": userId
             ]
             
@@ -1498,7 +1606,9 @@ final class HproseInstance: ObservableObject {
                 }
                 // Use fallback client but log the issue
                 print("DEBUG: [resyncUser] Using appUser's client for user \(userId) - this may use wrong baseUrl")
-                guard let userData = fallbackClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+                let rawResponse = fallbackClient.invoke("runMApp", withArgs: [entry, params])
+                let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+                guard let userData = unwrappedResponse as? [String: Any] else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
                 }
                 
@@ -1527,7 +1637,9 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [resyncUser] Using user's own hproseClient with baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(userId)")
             
-            guard let userData = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            guard let userData = unwrappedResponse as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
@@ -1561,6 +1673,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "username": loginUser.username!,
             "password": loginUser.password!
         ]
@@ -1572,8 +1685,31 @@ final class HproseInstance: ObservableObject {
             
             defer { newClient.close() }
             
-            guard let response = newClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
+            guard let response = unwrappedResponse as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
+            }
+            
+            // Handle v2 format: check success field first, then status field for backward compatibility
+            if let success = response["success"] as? Bool {
+                if !success {
+                    let message = response["message"] as? String ?? NSLocalizedString("Login failed", comment: "Generic login failure message")
+                    let localizedReason = self.localizeLoginError(message)
+                    return ["reason": localizedReason, "status": "failure"]
+                }
+                // success is true, check for user data
+                if response["user"] != nil || response["data"] != nil {
+                    await MainActor.run {
+                        self.preferenceHelper?.setUserId(loginUser.mid)
+                        self.appUser = loginUser
+                    }
+                    Task {
+                        await self.populateUserLists(user: loginUser)
+                    }
+                    return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
+                }
             }
             
             if let status = response["status"] as? String {
@@ -1667,6 +1803,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid,
         ]
         guard let client = user.hproseClient else {
@@ -1675,11 +1812,14 @@ final class HproseInstance: ObservableObject {
         
         let rawResponse = client.invoke("runMApp", withArgs: [entry.rawValue, params])
         
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
         // Handle empty array case - server returns empty array when user has no followers/following
         let response: [[String: Any]]
-        if let arrayResponse = rawResponse as? [[String: Any]] {
+        if let arrayResponse = unwrappedResponse as? [[String: Any]] {
             response = arrayResponse
-        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+        } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
             // Server returned empty array - handle gracefully
             response = []
             print("DEBUG: [HproseInstance] getListByType - Server returned empty array for \(entry.rawValue)")
@@ -1705,6 +1845,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid
         ]
         
@@ -1715,11 +1856,14 @@ final class HproseInstance: ObservableObject {
             
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             
+            // Unwrap v2 response
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
             // Handle empty array case - server returns empty array when user has no followings
             let response: [[String: Any]]
-            if let arrayResponse = rawResponse as? [[String: Any]] {
+            if let arrayResponse = unwrappedResponse as? [[String: Any]] {
                 response = arrayResponse
-            } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
                 // Server returned empty array - handle gracefully
                 response = []
                 print("DEBUG: [HproseInstance] getFollowings - Server returned empty array (no followings)")
@@ -1793,6 +1937,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid
         ]
         
@@ -1802,12 +1947,13 @@ final class HproseInstance: ObservableObject {
             }
             
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             // Handle empty array case - server returns empty array when user has no fans
             let response: [[String: Any]]
-            if let arrayResponse = rawResponse as? [[String: Any]] {
+            if let arrayResponse = unwrappedResponse as? [[String: Any]] {
                 response = arrayResponse
-            } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+            } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
                 // Server returned empty array - handle gracefully
                 response = []
                 print("DEBUG: [HproseInstance] getFans - Server returned empty array (no fans)")
@@ -1838,6 +1984,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid,
             "type": type.rawValue,
             "pn": pageNumber,
@@ -1863,17 +2010,37 @@ final class HproseInstance: ObservableObject {
         
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
         
-        // Handle empty array case - server returns empty array when user has no bookmarks/favorites
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        print("DEBUG: [HproseInstance] getUserTweetsByType - Unwrapped response type: \(String(describing: Swift.type(of: unwrappedResponse)))")
+        
+        // Handle response - can be an array of dictionaries or array of optional dictionaries
         let response: [[String: Any]?]
-        if let arrayResponse = rawResponse as? [[String: Any]?] {
+        if let arrayResponse = unwrappedResponse as? [[String: Any]?] {
+            // Array of optional dictionaries
             response = arrayResponse
-        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
-            // Server returned empty array - handle gracefully
-            response = []
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Server returned empty array (no bookmarks/favorites)")
+        } else if let arrayResponse = unwrappedResponse as? [[String: Any]] {
+            // Array of dictionaries - convert to array of optional dictionaries
+            response = arrayResponse.map { $0 as [String: Any]? }
+        } else if let arrayResponse = unwrappedResponse as? [Any] {
+            // Array of Any - try to cast each element
+            if arrayResponse.isEmpty {
+                response = []
+                print("DEBUG: [HproseInstance] getUserTweetsByType - Server returned empty array (no bookmarks/favorites)")
+            } else {
+                response = arrayResponse.map { item in
+                    if let dict = item as? [String: Any] {
+                        return dict
+                    } else {
+                        print("DEBUG: [HproseInstance] getUserTweetsByType - Array item is not a dictionary: \(String(describing: Swift.type(of: item)))")
+                        return nil
+                    }
+                }
+            }
         } else {
             newClient?.close()
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format")
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format: \(String(describing: unwrappedResponse))")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
         }
         
@@ -1943,16 +2110,26 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "followingid": followingId,
                 "userid": effectiveUserId,
             ]
             guard let client = appUser.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
+            // Can be Bool or dict with success field
+            if let boolResponse = unwrappedResponse as? Bool {
+                return boolResponse
+            } else if let dictResponse = unwrappedResponse as? [String: Any] {
+                if let success = dictResponse["success"] as? Bool {
+                    return success
+                }
             }
-            return response
+            
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
         }
     }
     
@@ -1965,6 +2142,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "appuserid": appUser.mid,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
@@ -1973,7 +2151,9 @@ final class HproseInstance: ObservableObject {
             guard let client = appUser.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            guard let response = unwrappedResponse as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
@@ -2009,6 +2189,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "userid": appUser.mid,
                 "tweetid": tweet.mid,
                 "authorid": tweet.authorId,
@@ -2017,7 +2198,9 @@ final class HproseInstance: ObservableObject {
             guard let client = appUser.hproseClient else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            guard let response = unwrappedResponse as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
             
@@ -2111,6 +2294,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "appuserid": appUser.mid,
             "retweetid": retweetId,
             "tweetid": tweet.mid,
@@ -2125,7 +2309,12 @@ final class HproseInstance: ObservableObject {
             return nil
         }
         
-        guard let tweetDict = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
+            print("⚠️ [updateRetweetCount] Failed to unwrap v2 response")
+            return nil
+        }
+        guard let tweetDict = unwrappedResponse as? [String: Any] else {
             print("⚠️ [updateRetweetCount] Nil response from server")
             return nil
         }
@@ -2153,6 +2342,7 @@ final class HproseInstance: ObservableObject {
             let params = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "appuserid": appUser.mid,
                 "tweetid": tweetId
             ]
@@ -2228,13 +2418,16 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": appUser.mid,
             "tweetid": tweetId
         ]
         guard let client = appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
         
@@ -2291,13 +2484,17 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "hostid": tweet.author?.hostIds?.first as Any,
             "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
             "tweetid": tweet.mid,
             "appuserid": appUser.mid
         ]
         let entry = "add_comment"
-        guard let response = uploadClient.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = uploadClient.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
         
@@ -2390,6 +2587,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "tweetid": parentTweet.mid,
             "hostid": parentTweet.author?.hostIds?.first as Any,
             "commentid": commentId,
@@ -2398,7 +2596,9 @@ final class HproseInstance: ObservableObject {
         guard let client = appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
         
@@ -3533,11 +3733,14 @@ final class HproseInstance: ObservableObject {
             let params: [String: Any] = [
                 "aid": "Tweet",
                 "ver": "last",
+                "version": "v2",
                 "userid": appUser.mid,
                 "cid": cid
             ]
             
-            guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try? HproseInstance.unwrapV2Response(rawResponse)
+            guard let response = unwrappedResponse as? [String: Any] else {
                 return nil // No response yet
             }
             
@@ -3743,6 +3946,7 @@ final class HproseInstance: ObservableObject {
             var request: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "offset": offset
             ]
             
@@ -3801,9 +4005,17 @@ final class HproseInstance: ObservableObject {
                 request["referenceid"] = referenceId
             }
             
-            let finalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
+            let rawFinalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
+            let finalResponse = try? HproseInstance.unwrapV2Response(rawFinalResponse)
             
-            guard let cid = finalResponse as? String else {
+            var cid: String? = nil
+            if let stringResponse = finalResponse as? String {
+                cid = stringResponse
+            } else if let dictResponse = finalResponse as? [String: Any] {
+                cid = dictResponse["cid"] as? String
+            }
+            
+            guard let cid = cid, !cid.isEmpty else {
                 print("ERROR: Upload finalization failed - invalid CID response")
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload file", comment: "Upload error")])
             }
@@ -4173,7 +4385,8 @@ final class HproseInstance: ObservableObject {
             // Add 3 minute timeout for each chunk upload (handles slow connections)
             return try await withThrowingTaskGroup(of: Any.self) { group in
                 group.addTask {
-                    uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]]) as Any
+                    let rawResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request, [data]])
+                    return try HproseInstance.unwrapV2Response(rawResponse) as Any
                 }
                 
                 group.addTask {
@@ -4468,6 +4681,7 @@ final class HproseInstance: ObservableObject {
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
+                "version": "v2",
                 "hostid": appUser.hostIds?.first as Any,
                 "tweet": tweetJSON
             ]
@@ -4480,8 +4694,11 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
             
+            // Unwrap v2 response
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
             // Handle the JSON response format
-            guard let responseDict = rawResponse as? [String: Any] else {
+            guard let responseDict = unwrappedResponse as? [String: Any] else {
                 print("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
             }
@@ -5055,13 +5272,23 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "tweetid": tweetId,
             "appuserid": appUser.mid,
         ]
-        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? Bool else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")])
+        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        // Can be Bool or dict with success field
+        if let boolResponse = unwrappedResponse as? Bool {
+            return boolResponse
+        } else if let dictResponse = unwrappedResponse as? [String: Any] {
+            if let success = dictResponse["success"] as? Bool {
+                return success
+            }
         }
-        return response
+        
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")])
     }
     
     /**
@@ -5073,6 +5300,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid,
             "appuserid": appUser.mid
         ]
@@ -5083,11 +5311,14 @@ final class HproseInstance: ObservableObject {
         
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
         
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
         // Handle empty array case - server returns empty array when user has no pinned tweets
         let response: [[String: Any]]
-        if let arrayResponse = rawResponse as? [[String: Any]] {
+        if let arrayResponse = unwrappedResponse as? [[String: Any]] {
             response = arrayResponse
-        } else if let emptyArray = rawResponse as? [Any], emptyArray.isEmpty {
+        } else if let emptyArray = unwrappedResponse as? [Any], emptyArray.isEmpty {
             // Server returned empty array - handle gracefully
             response = []
             print("DEBUG: [HproseInstance] getPinnedTweets - Server returned empty array (no pinned tweets)")
@@ -5137,6 +5368,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "user": String(data: try encoder.encode(newUser), encoding: .utf8) ?? "",
             "followings": String(data: try encoder.encode(Gadget.getAlphaIds()), encoding: .utf8) ?? ""
         ]
@@ -5188,6 +5420,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "user": userJsonString
         ]
         
@@ -5202,12 +5435,25 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: updateUserCore - JSON snippet around domainToShare: ...\(snippet)...")
         }
         
-        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        guard let response = unwrappedResponse as? [String: Any] else {
             print("DEBUG: updateUserCore - failed to get response from server")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])
         }
         
         print("DEBUG: updateUserCore - server response: \(response)")
+        
+        // Handle v2 format: check success field first
+        if let success = response["success"] as? Bool {
+            if !success {
+                let message = response["message"] as? String ?? NSLocalizedString("Profile update failed", comment: "Profile update error")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+            // success is true, continue with status check for backward compatibility
+        }
+        
         if let result = response["status"] as? String {
             if result == "success" {
                 print("DEBUG: updateUserCore - server returned success")
@@ -5256,17 +5502,25 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": user.mid,
             "avatar": avatar
         ]
         
-        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) else {
+        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        guard rawResponse != nil else {
             throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Server did not respond"])
         }
         
-        // Server returns avatar MimeiId directly as a String
-        if let confirmedAvatar = response as? String {
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        // Server returns avatar MimeiId directly as a String or wrapped in v2 format
+        if let confirmedAvatar = unwrappedResponse as? String {
             return confirmedAvatar
+        } else if let dictResponse = unwrappedResponse as? [String: Any] {
+            if let avatar = dictResponse["avatar"] as? String ?? dictResponse["data"] as? String {
+                return avatar
+            }
         }
         
         throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected server response"])
@@ -5282,15 +5536,26 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "mid": mid
         ]
         
         return try await retryOperation(maxRetries: 3) {
-            guard let response = self.client.invoke("runMApp", withArgs: ["get_provider_ip", params]) else {
+            let rawResponse = self.client.invoke("runMApp", withArgs: ["get_provider_ip", params])
+            guard rawResponse != nil else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ip: \(mid)"])
             }
             
-            guard let ipAddress = response as? String else {
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
+            var ipAddress: String? = nil
+            if let stringResponse = unwrappedResponse as? String {
+                ipAddress = stringResponse
+            } else if let dictResponse = unwrappedResponse as? [String: Any] {
+                ipAddress = dictResponse["data"] as? String
+            }
+            
+            guard let ipAddress = ipAddress else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip: \(mid)"])
             }
             
@@ -5308,81 +5573,115 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "nodeid": nodeId,
             "v4only": v4Only
         ]
-        if let response = client.invoke("runMApp", withArgs: ["get_node_ip", params]) {
-            return response as? String
+        let rawResponse = client.invoke("runMApp", withArgs: ["get_node_ip", params])
+        guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
+            return nil
         }
+        
+        if let stringResponse = unwrappedResponse as? String {
+            return stringResponse
+        } else if let dictResponse = unwrappedResponse as? [String: Any] {
+            return dictResponse["data"] as? String
+        }
+        
         return nil
     }
     
     // MARK: - Chat Functions
     
-    /// Send a chat message to a recipient
-    func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
-        // Check if app user is blacklisted by the recipient
-        guard let recipient = try await fetchUser(receiptId) else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Recipient user not found", comment: "User lookup error")])
-        }
-        if recipient.isUserBlacklisted(appUser.mid) {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot send a message to this user because you are blocked", comment: "Message blocked error")])
-        }
+    /// Helper result struct for message sending operations
+    private struct MessageSendResult {
+        let success: Bool
+        let errorMessage: ChatMessage?
+    }
+    
+    /// Helper function to send message_outgoing to sender's own node with retry and baseUrl refresh
+    private func sendToSenderNodeWithRetry(
+        receiptId: String,
+        message: ChatMessage,
+        maxRetries: Int = 2
+    ) async throws -> MessageSendResult {
+        var lastError: String?
         
-        let entry = "message_outgoing"
-        let params: [String: Any] = [
-            "aid": appId,
-            "ver": "last",
-            "userid": appUser.mid,
-            "receiptid": receiptId,
-            "msg": message.toJSONString()
-        ]
-        
-        let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
-        
-        // Handle new response format: {success: false, error: e.message}
-        if let responseDict = response as? [String: Any] {
-            if let success = responseDict["success"] as? Bool, !success {
-                let errorMessage = responseDict["error"] as? String ?? "Unknown error"
-                // Return message with failure status
-                return ChatMessage(
-                    id: message.id,
-                    authorId: message.authorId,
-                    receiptId: message.receiptId,
-                    chatSessionId: message.chatSessionId,
-                    content: message.content,
-                    timestamp: message.timestamp,
-                    attachments: message.attachments,
+        for attempt in 0...maxRetries {
+            // On retry, force refresh appUser's baseUrl by passing empty string
+            let forceRefresh = attempt > 0
+            if forceRefresh {
+                print("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing sender's baseUrl")
+            }
+            
+            // Refresh appUser's baseUrl if needed
+            if forceRefresh {
+                if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: "") {
+                    await MainActor.run {
+                        if refreshedUser.baseUrl != appUser.baseUrl {
+                            appUser.baseUrl = refreshedUser.baseUrl
+                            print("[sendMessage] ✅ Updated sender's baseUrl to: \(refreshedUser.baseUrl?.absoluteString ?? "nil")")
+                        }
+                    }
+                }
+            }
+            
+            let entry = "message_outgoing"
+            let params: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "version": "v2",
+                "userid": appUser.mid,
+                "receiptid": receiptId,
+                "msg": message.toJSONString()
+            ]
+            
+            guard let senderClient = appUser.hproseClient else {
+                let errorMsg = "Failed to create client for sender node"
+                print("[sendMessage] ❌ \(errorMsg) - baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
+                if attempt < maxRetries {
+                    try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
+                    continue
+                }
+                return MessageSendResult(
                     success: false,
-                    errorMsg: errorMessage
+                    errorMessage: ChatMessage(
+                        id: message.id,
+                        authorId: message.authorId,
+                        receiptId: message.receiptId,
+                        chatSessionId: message.chatSessionId,
+                        content: message.content,
+                        timestamp: message.timestamp,
+                        attachments: message.attachments,
+                        success: false,
+                        errorMsg: errorMsg
+                    )
                 )
             }
-        }
-        
-        // Handle legacy boolean response or successful response
-        let isSuccess = response as? Bool ?? false
-        
-        if isSuccess {
-            // Try to send to recipient's node as well
-            if let receiptUser = try await fetchUser(receiptId) {
-                let receiptEntry = "message_incoming"
-                let receiptParams: [String: Any] = [
-                    "aid": appId,
-                    "ver": "last",
-                    "senderid": appUser.mid,
-                    "receiptid": receiptId,
-                    "msg": message.toJSONString()
-                ]
-                
-                let receiptResponse = receiptUser.hproseClient?.invoke("runMApp", withArgs: [receiptEntry, receiptParams])
-                
-                // Handle new response format for message_incoming
-                if let receiptResponseDict = receiptResponse as? [String: Any] {
-                    if let success = receiptResponseDict["success"] as? Bool, !success {
-                        let errorMessage = receiptResponseDict["error"] as? String ?? "Failed to send to recipient node"
-                        print("[sendMessage] Warning: Failed to send to recipient node: \(errorMessage)")
-                        // Return message with failure status
-                        return ChatMessage(
+            
+            print("[sendMessage] 📤 Sending to sender node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
+            
+            let rawResponse = senderClient.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
+            let response = unwrappedResponse ?? rawResponse
+            
+            // Handle new response format: {success: false, error: e.message}
+            if let responseDict = response as? [String: Any] {
+                if let success = responseDict["success"] as? Bool, !success {
+                    let errorMessage = responseDict["error"] as? String ?? "Unknown error"
+                    lastError = errorMessage
+                    print("[sendMessage] ❌ Failed to send to sender node (attempt \(attempt + 1)/\(maxRetries + 1)): \(errorMessage)")
+                    
+                    if attempt < maxRetries {
+                        let delay = UInt64(attempt + 1) * 2_000_000_000 // 2, 4 seconds
+                        print("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
+                        try? await Task.sleep(nanoseconds: delay)
+                        continue
+                    }
+                    
+                    return MessageSendResult(
+                        success: false,
+                        errorMessage: ChatMessage(
                             id: message.id,
                             authorId: message.authorId,
                             receiptId: message.receiptId,
@@ -5393,14 +5692,225 @@ final class HproseInstance: ObservableObject {
                             success: false,
                             errorMsg: errorMessage
                         )
-                    }
+                    )
                 } else {
-                    let receiptSuccess = receiptResponse as? Bool ?? false
-                    if !receiptSuccess {
-                        print("[sendMessage] Warning: Failed to send to recipient node")
-                    }
+                    // Success!
+                    print("[sendMessage] ✅ Successfully sent to sender node (attempt \(attempt + 1))")
+                    return MessageSendResult(success: true, errorMessage: nil)
                 }
             } else {
+                // Handle legacy boolean response
+                let isSuccess = response as? Bool ?? false
+                if isSuccess {
+                    print("[sendMessage] ✅ Successfully sent to sender node (attempt \(attempt + 1), legacy format)")
+                    return MessageSendResult(success: true, errorMessage: nil)
+                } else {
+                    let errorMessage = "Failed to send to sender node (legacy format)"
+                    lastError = errorMessage
+                    print("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
+                    
+                    if attempt < maxRetries {
+                        try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
+                        continue
+                    }
+                }
+            }
+        }
+        
+        // All retries exhausted
+        let finalError = lastError ?? "Failed to send message to sender node after \(maxRetries + 1) attempts"
+        print("[sendMessage] ❌ All retry attempts exhausted for sender node: \(finalError)")
+        return MessageSendResult(
+            success: false,
+            errorMessage: ChatMessage(
+                id: message.id,
+                authorId: message.authorId,
+                receiptId: message.receiptId,
+                chatSessionId: message.chatSessionId,
+                content: message.content,
+                timestamp: message.timestamp,
+                attachments: message.attachments,
+                success: false,
+                errorMsg: finalError
+            )
+        )
+    }
+    
+    /// Helper function to send message to recipient's node with retry and baseUrl refresh
+    private func sendToRecipientNodeWithRetry(
+        receiptId: String,
+        message: ChatMessage,
+        maxRetries: Int = 2
+    ) async throws -> MessageSendResult {
+        var receiptUser: User?
+        var lastError: String?
+        
+        for attempt in 0...maxRetries {
+            // On retry, force refresh recipient's baseUrl by passing empty string
+            let forceRefresh = attempt > 0
+            if forceRefresh {
+                print("[sendMessage] 🔄 Retry attempt \(attempt): Refreshing recipient's baseUrl for userId: \(receiptId)")
+            }
+            
+            // Fetch recipient user (with forced refresh on retry)
+            receiptUser = try await fetchUser(receiptId, baseUrl: forceRefresh ? "" : "")
+            
+            guard let recipient = receiptUser else {
+                let errorMsg = "Recipient user not found"
+                print("[sendMessage] ❌ \(errorMsg) for userId: \(receiptId)")
+                return MessageSendResult(
+                    success: false,
+                    errorMessage: ChatMessage(
+                        id: message.id,
+                        authorId: message.authorId,
+                        receiptId: message.receiptId,
+                        chatSessionId: message.chatSessionId,
+                        content: message.content,
+                        timestamp: message.timestamp,
+                        attachments: message.attachments,
+                        success: false,
+                        errorMsg: errorMsg
+                    )
+                )
+            }
+            
+            let receiptEntry = "message_incoming"
+            let receiptParams: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "version": "v2",
+                "senderid": appUser.mid,
+                "receiptid": receiptId,
+                "msg": message.toJSONString()
+            ]
+            
+            // Get fresh client (will be recreated if baseUrl changed)
+            guard let recipientClient = recipient.hproseClient else {
+                let errorMsg = "Failed to create client for recipient node"
+                print("[sendMessage] ❌ \(errorMsg) - baseUrl: \(recipient.baseUrl?.absoluteString ?? "nil")")
+                if attempt < maxRetries {
+                    // Wait before retry
+                    try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
+                    continue
+                }
+                return MessageSendResult(
+                    success: false,
+                    errorMessage: ChatMessage(
+                        id: message.id,
+                        authorId: message.authorId,
+                        receiptId: message.receiptId,
+                        chatSessionId: message.chatSessionId,
+                        content: message.content,
+                        timestamp: message.timestamp,
+                        attachments: message.attachments,
+                        success: false,
+                        errorMsg: errorMsg
+                    )
+                )
+            }
+            
+            print("[sendMessage] 📤 Sending to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)) - baseUrl: \(recipient.baseUrl?.absoluteString ?? "nil")")
+            
+            let rawReceiptResponse = recipientClient.invoke("runMApp", withArgs: [receiptEntry, receiptParams])
+            let receiptResponseUnwrapped = try? Self.unwrapV2Response(rawReceiptResponse)
+            let receiptResponse = receiptResponseUnwrapped ?? rawReceiptResponse
+            
+            // Handle new response format for message_incoming
+            if let receiptResponseDict = receiptResponse as? [String: Any] {
+                if let success = receiptResponseDict["success"] as? Bool, !success {
+                    let errorMessage = receiptResponseDict["error"] as? String ?? "Failed to send to recipient node"
+                    lastError = errorMessage
+                    print("[sendMessage] ❌ Failed to send to recipient node (attempt \(attempt + 1)/\(maxRetries + 1)): \(errorMessage)")
+                    
+                    if attempt < maxRetries {
+                        // Wait before retry with exponential backoff
+                        let delay = UInt64(attempt + 1) * 2_000_000_000 // 2, 4 seconds
+                        print("[sendMessage] ⏳ Waiting \(delay / 1_000_000_000) seconds before retry...")
+                        try? await Task.sleep(nanoseconds: delay)
+                        continue
+                    }
+                    
+                    return MessageSendResult(
+                        success: false,
+                        errorMessage: ChatMessage(
+                            id: message.id,
+                            authorId: message.authorId,
+                            receiptId: message.receiptId,
+                            chatSessionId: message.chatSessionId,
+                            content: message.content,
+                            timestamp: message.timestamp,
+                            attachments: message.attachments,
+                            success: false,
+                            errorMsg: errorMessage
+                        )
+                    )
+                } else {
+                    // Success!
+                    print("[sendMessage] ✅ Successfully sent to recipient node (attempt \(attempt + 1))")
+                    return MessageSendResult(success: true, errorMessage: nil)
+                }
+            } else {
+                // Legacy boolean response
+                let receiptSuccess = receiptResponse as? Bool ?? false
+                if receiptSuccess {
+                    print("[sendMessage] ✅ Successfully sent to recipient node (attempt \(attempt + 1), legacy format)")
+                    return MessageSendResult(success: true, errorMessage: nil)
+                } else {
+                    let errorMessage = "Failed to send to recipient node (legacy format)"
+                    lastError = errorMessage
+                    print("[sendMessage] ❌ \(errorMessage) (attempt \(attempt + 1)/\(maxRetries + 1))")
+                    
+                    if attempt < maxRetries {
+                        // Wait before retry
+                        try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 2_000_000_000)
+                        continue
+                    }
+                }
+            }
+        }
+        
+        // All retries exhausted
+        let finalError = lastError ?? "Failed to send message after \(maxRetries + 1) attempts"
+        print("[sendMessage] ❌ All retry attempts exhausted: \(finalError)")
+        return MessageSendResult(
+            success: false,
+            errorMessage: ChatMessage(
+                id: message.id,
+                authorId: message.authorId,
+                receiptId: message.receiptId,
+                chatSessionId: message.chatSessionId,
+                content: message.content,
+                timestamp: message.timestamp,
+                attachments: message.attachments,
+                success: false,
+                errorMsg: finalError
+            )
+        )
+    }
+    
+    /// Send a chat message to a recipient
+    /// This function performs two steps:
+    /// 1. Send message_outgoing to sender's own node (with retry and baseUrl refresh)
+    /// 2. Send message_incoming to recipient's node (with retry and baseUrl refresh)
+    func sendMessage(receiptId: String, message: ChatMessage) async throws -> ChatMessage {
+        // Check if app user is blacklisted by the recipient
+        guard let recipient = try await fetchUser(receiptId) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Recipient user not found", comment: "User lookup error")])
+        }
+        if recipient.isUserBlacklisted(appUser.mid) {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot send a message to this user because you are blocked", comment: "Message blocked error")])
+        }
+        
+        // Step 1: Send to sender's own node (message_outgoing) with retry
+        print("[sendMessage] 📤 Step 1: Sending message_outgoing to sender's node")
+        let senderSendResult = try await sendToSenderNodeWithRetry(
+            receiptId: receiptId,
+            message: message,
+            maxRetries: 2
+        )
+        
+        if !senderSendResult.success {
+            guard let errorMessage = senderSendResult.errorMessage else {
                 return ChatMessage(
                     id: message.id,
                     authorId: message.authorId,
@@ -5410,36 +5920,53 @@ final class HproseInstance: ObservableObject {
                     timestamp: message.timestamp,
                     attachments: message.attachments,
                     success: false,
-                    errorMsg: "Failed to send message"
+                    errorMsg: "Failed to send message to sender node"
                 )
             }
-            
-            // Return message with success status
-            return ChatMessage(
-                id: message.id,
-                authorId: message.authorId,
-                receiptId: message.receiptId,
-                chatSessionId: message.chatSessionId,
-                content: message.content,
-                timestamp: message.timestamp,
-                attachments: message.attachments,
-                success: true,
-                errorMsg: nil
-            )
-        } else {
-            // Return message with failure status
-            return ChatMessage(
-                id: message.id,
-                authorId: message.authorId,
-                receiptId: message.receiptId,
-                chatSessionId: message.chatSessionId,
-                content: message.content,
-                timestamp: message.timestamp,
-                attachments: message.attachments,
-                success: false,
-                errorMsg: "Failed to send message"
-            )
+            return errorMessage
         }
+        
+        print("[sendMessage] ✅ Step 1 completed: Successfully sent to sender's node")
+        
+        // Step 2: Send to recipient's node (message_incoming) with retry
+        print("[sendMessage] 📤 Step 2: Sending message_incoming to recipient's node")
+        let recipientSendResult = try await sendToRecipientNodeWithRetry(
+            receiptId: receiptId,
+            message: message,
+            maxRetries: 2
+        )
+        
+        if !recipientSendResult.success {
+            guard let errorMessage = recipientSendResult.errorMessage else {
+                return ChatMessage(
+                    id: message.id,
+                    authorId: message.authorId,
+                    receiptId: message.receiptId,
+                    chatSessionId: message.chatSessionId,
+                    content: message.content,
+                    timestamp: message.timestamp,
+                    attachments: message.attachments,
+                    success: false,
+                    errorMsg: "Failed to send message to recipient node"
+                )
+            }
+            return errorMessage
+        }
+        
+        print("[sendMessage] ✅ Step 2 completed: Successfully sent to recipient's node")
+        
+        // Both steps succeeded
+        return ChatMessage(
+            id: message.id,
+            authorId: message.authorId,
+            receiptId: message.receiptId,
+            chatSessionId: message.chatSessionId,
+            content: message.content,
+            timestamp: message.timestamp,
+            attachments: message.attachments,
+            success: true,
+            errorMsg: nil
+        )
     }
     
     /// Fetch recent unread messages from a sender (incoming messages only)
@@ -5452,22 +5979,24 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": appUser.mid,
             "senderid": senderId
         ]
         
-        let response = client.invoke("runMApp", withArgs: [entry, params])
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         // Handle new response format: {success: false, error: e.message}
-        if let responseDict = response as? [String: Any] {
+        if let responseDict = unwrappedResponse as? [String: Any] {
             if let success = responseDict["success"] as? Bool, !success {
-                let errorMessage = responseDict["error"] as? String ?? "Unknown error"
+                let errorMessage = responseDict["error"] as? String ?? responseDict["message"] as? String ?? "Unknown error"
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
         
         // Handle legacy array format or successful response
-        let messageArray = response as? [[String: Any]] ?? []
+        let messageArray = unwrappedResponse as? [[String: Any]] ?? []
         
         return messageArray.compactMap { messageData in
             do {
@@ -5511,10 +6040,14 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": appUser.mid
         ]
         
-        let response = client.invoke("runMApp", withArgs: [entry, params]) as? [[String: Any]] ?? []
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
+        
+        let response = unwrappedResponse as? [[String: Any]] ?? []
         
         return response.compactMap { messageData in
             do {
@@ -5554,6 +6087,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "entry": entry
         ]
         
@@ -5562,12 +6096,23 @@ final class HproseInstance: ObservableObject {
             return
         }
         
-        guard let response = client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
+        
+        guard let response = unwrappedResponse as? [String: Any] else {
             print("[checkAndUpdateDomain] Invalid response format")
             return
         }
         
-        guard let domain = response["domain"] as? String else {
+        // Check for domain in response or data field
+        var domain: String? = response["domain"] as? String
+        if domain == nil {
+            if let data = response["data"] as? [String: Any] {
+                domain = data["domain"] as? String
+            }
+        }
+        
+        guard let domain = domain else {
             print("[checkAndUpdateDomain] No upgrade domain received")
             return
         }
@@ -5616,6 +6161,7 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": appUser.mid,
             "blocked": userId
         ]
@@ -5634,9 +6180,12 @@ final class HproseInstance: ObservableObject {
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "userid": appUser.mid
         ]
-        return client.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] ?? [:]
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try? Self.unwrapV2Response(rawResponse)
+        return unwrappedResponse as? [String: Any] ?? [:]
     }
     
     /// Reports a tweet for inappropriate content and deletes it from backend
