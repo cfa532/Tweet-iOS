@@ -1080,8 +1080,11 @@ final class HproseInstance: ObservableObject {
             let skipRetries = cachedUser.username == nil
             let user = try await updateUserFromServer(userId, baseUrl: baseUrl, skipRetries: skipRetries)
             // Successfully fetched user - remove from blacklist candidates if it was there
+            // Skip blacklist update when searching for potential username (skipRetries is true)
             if let user = user {
-                blackList.recordSuccess(userId)
+                if !skipRetries {
+                    blackList.recordSuccess(userId)
+                }
                 // User singleton's @Published properties are updated via User.updateUserInstance
                 // Views observing the User singleton will update automatically - no need to iterate all tweets
                 // Only update tweets that have nil author (not yet loaded) - but this should be handled lazily by TweetItemView
@@ -1093,8 +1096,14 @@ final class HproseInstance: ObservableObject {
             return user
         } catch {
             // After all retries failed, add userId to blacklist
-            print("DEBUG: [fetchUser] All retries failed for userId: \(userId), adding to blacklist")
-            blackList.recordFailure(userId)
+            // Skip blacklist update when searching for potential username (skipRetries is true)
+            let skipRetries = cachedUser.username == nil
+            if !skipRetries {
+                print("DEBUG: [fetchUser] All retries failed for userId: \(userId), adding to blacklist")
+                blackList.recordFailure(userId)
+            } else {
+                print("DEBUG: [fetchUser] Server fetch failed for userId: \(userId) (potential username search, no blacklist update)")
+            }
             
             // Return skeleton instead of cached user when server fetch fails
             // This indicates to the UI that something is wrong and the user data couldn't be fetched

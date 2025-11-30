@@ -6,6 +6,11 @@ struct SearchScreen: View {
     @State private var navigationPath = NavigationPath()
     @FocusState private var isSearchFieldFocused: Bool
     
+    private func hideKeyboard() {
+        isSearchFieldFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+    
     var body: some View {
         NavigationStack(path: $navigationPath) {
             VStack(spacing: 0) {
@@ -49,6 +54,7 @@ struct SearchScreen: View {
                         enableAnimation: true,
                         enableVibration: false
                     ) {
+                        hideKeyboard()
                         Task {
                             await searchViewModel.search()
                         }
@@ -84,7 +90,7 @@ struct SearchScreen: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         // Close keyboard when tapping on empty state
-                        isSearchFieldFocused = false
+                        hideKeyboard()
                     }
                 } else if searchViewModel.searchText.isEmpty && searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty {
                     VStack {
@@ -104,7 +110,7 @@ struct SearchScreen: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         // Close keyboard when tapping on empty state
-                        isSearchFieldFocused = false
+                        hideKeyboard()
                     }
                 } else {
                     List {
@@ -125,20 +131,6 @@ struct SearchScreen: View {
                                 }
                             }
                         }
-                        
-                        // Empty footer to handle taps on empty space below the list
-                        Section {
-                            EmptyView()
-                                .frame(height: 200)
-                                .listRowInsets(EdgeInsets())
-                                .listRowBackground(
-                                    Color.clear
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            isSearchFieldFocused = false
-                                        }
-                                )
-                        }
                     }
                     .scrollDismissesKeyboard(.interactively)
                 }
@@ -151,7 +143,7 @@ struct SearchScreen: View {
                 }, navigationPath: $navigationPath)
                     .onAppear {
                         // Dismiss keyboard when navigating to profile
-                        isSearchFieldFocused = false
+                        hideKeyboard()
                     }
             }
             .navigationDestination(for: Tweet.self) { tweet in
@@ -195,7 +187,9 @@ struct UserSearchResultRow: View {
                 Spacer()
             }
             .padding(.vertical, 4)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(PlainButtonStyle())
     }
 }
 
