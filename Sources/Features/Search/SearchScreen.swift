@@ -4,6 +4,7 @@ struct SearchScreen: View {
     @StateObject private var searchViewModel = SearchViewModel.shared
     @Environment(\.dismiss) private var dismiss
     @State private var navigationPath = NavigationPath()
+    @FocusState private var isSearchFieldFocused: Bool
     
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -16,10 +17,12 @@ struct SearchScreen: View {
                         
                         TextField(LocalizedStringKey("Search by username or name..."), text: $searchViewModel.searchText)
                             .textFieldStyle(PlainTextFieldStyle())
+                            .focused($isSearchFieldFocused)
                             .onSubmit {
                                 Task {
                                     await searchViewModel.search()
                                 }
+                                isSearchFieldFocused = false
                             }
                         
                         if !searchViewModel.searchText.isEmpty {
@@ -63,7 +66,7 @@ struct SearchScreen: View {
                     ProgressView()
                         .scaleEffect(1.2)
                     Spacer()
-                } else if searchViewModel.searchResults.isEmpty && !searchViewModel.searchText.isEmpty {
+                } else if searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty && !searchViewModel.searchText.isEmpty {
                     VStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 48))
@@ -78,25 +81,66 @@ struct SearchScreen: View {
                             .padding(.horizontal)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if searchViewModel.searchText.isEmpty && searchViewModel.searchResults.isEmpty {
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Close keyboard when tapping on empty state
+                        isSearchFieldFocused = false
+                    }
+                } else if searchViewModel.searchText.isEmpty && searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty {
                     VStack {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 48))
                             .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Search for users"))
+                        Text(LocalizedStringKey("Search"))
                             .font(.headline)
                             .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Search by username or display name"))
+                        Text(LocalizedStringKey("Search by username or tweet content"))
                             .font(.caption)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List(searchViewModel.searchResults) { user in
-                        UserSearchResultRow(user: user)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Close keyboard when tapping on empty state
+                        isSearchFieldFocused = false
                     }
+                } else {
+                    List {
+                        // User results section
+                        if !searchViewModel.userResults.isEmpty {
+                            Section(header: Text(LocalizedStringKey("Accounts"))) {
+                                ForEach(searchViewModel.userResults) { user in
+                                    UserSearchResultRow(user: user)
+                                }
+                            }
+                        }
+                        
+                        // Tweet results section
+                        if !searchViewModel.tweetResults.isEmpty {
+                            Section(header: Text(LocalizedStringKey("Tweets"))) {
+                                ForEach(searchViewModel.tweetResults) { tweet in
+                                    TweetSearchResultRow(tweet: tweet)
+                                }
+                            }
+                        }
+                        
+                        // Empty footer to handle taps on empty space below the list
+                        Section {
+                            EmptyView()
+                                .frame(height: 200)
+                                .listRowInsets(EdgeInsets())
+                                .listRowBackground(
+                                    Color.clear
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            isSearchFieldFocused = false
+                                        }
+                                )
+                        }
+                    }
+                    .scrollDismissesKeyboard(.interactively)
                 }
             }
             .navigationTitle(LocalizedStringKey("Search"))
@@ -105,6 +149,13 @@ struct SearchScreen: View {
                 ProfileView(user: user, onLogout: {
                     navigationPath.removeLast(navigationPath.count)
                 }, navigationPath: $navigationPath)
+                    .onAppear {
+                        // Dismiss keyboard when navigating to profile
+                        isSearchFieldFocused = false
+                    }
+            }
+            .navigationDestination(for: Tweet.self) { tweet in
+                TweetDetailView(tweet: tweet)
             }
         }
     }
@@ -148,10 +199,53 @@ struct UserSearchResultRow: View {
     }
 }
 
+struct TweetSearchResultRow: View {
+    let tweet: Tweet
+    
+    var body: some View {
+        NavigationLink(value: tweet) {
+            VStack(alignment: .leading, spacing: 8) {
+                // Author info
+                HStack {
+                    Avatar(user: tweet.author ?? User.getInstance(mid: tweet.authorId), size: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let name = tweet.author?.name, !name.isEmpty {
+                            Text(name)
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                        }
+                        if let username = tweet.author?.username, !username.isEmpty {
+                            Text("@\(username)")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Spacer()
+                }
+                
+                // Tweet content preview
+                if let content = tweet.content, !content.isEmpty {
+                    Text(content)
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .lineLimit(3)
+                } else if let title = tweet.title, !title.isEmpty {
+                    Text(title)
+                        .font(.body)
+                        .foregroundColor(.primary)
+                        .lineLimit(3)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+}
+
 class SearchViewModel: ObservableObject {
     static let shared = SearchViewModel()
     
-    @Published var searchResults: [User] = []
+    @Published var userResults: [User] = []
+    @Published var tweetResults: [Tweet] = []
     @Published var searchText: String = ""
     @Published var isLoading = false
     
@@ -161,50 +255,81 @@ class SearchViewModel: ObservableObject {
     private init() {}
     
     func search() async {
-        let query = searchText
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
             await clearResults()
             return
         }
         
         await MainActor.run {
             isLoading = true
+            userResults = []
+            tweetResults = []
         }
         
-        // Remove @ prefix if present for consistent searching
-        let cleanQuery = query.hasPrefix("@") ? String(query.dropFirst()) : query
+        // Check if query starts with @ (username-only search)
+        let isUsernameOnly = query.hasPrefix("@")
+        let userQuery = isUsernameOnly ? String(query.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines) : query
         
-        // Search incrementally and show results as they come in
-        await cacheManager.searchUsersIncremental(query: cleanQuery, limit: 25) { [weak self] users in
-            // Update UI immediately with each batch of results
-            guard let self = self else { return }
-            await MainActor.run {
-                self.searchResults = users
+        // Search users
+        if !userQuery.isEmpty {
+            // When @ is present, do both exact match and partial search
+            var exactUser: User? = nil
+            
+            // Always try exact match when @ is present (get userId from username and fetch from backend)
+            if isUsernameOnly {
+                if let userId = try? await hproseInstance.getUserId(userQuery),
+                   let user = try? await hproseInstance.fetchUser(userId) {
+                    // CRITICAL: Validate user has a username before adding to results
+                    if let username = user.username, !username.isEmpty {
+                        exactUser = user
+                    }
+                }
+            } else {
+                // For non-@ queries, only try exact match if no spaces
+                if !userQuery.contains(" ") {
+                    if let userId = try? await hproseInstance.getUserId(userQuery),
+                       let user = try? await hproseInstance.fetchUser(userId) {
+                        if let username = user.username, !username.isEmpty {
+                            exactUser = user
+                        }
+                    }
+                }
             }
-        }
-        
-        // Try exact username match from API (if query looks like a username)
-        // Only do API call if query doesn't contain spaces (usernames can't have spaces)
-        if !cleanQuery.contains(" ") {
-            if let userId = try? await hproseInstance.getUserId(cleanQuery),
-               let user = try? await hproseInstance.fetchUser(userId) {
-                // CRITICAL: Validate user has a username before adding to results
-                if let username = user.username, !username.isEmpty {
-                    await MainActor.run {
-                        var finalResults = self.searchResults
+            
+            // Always do partial search of known usernames/names
+            // Capture exactUser as immutable to avoid Swift 6 concurrency error
+            let capturedExactUser = exactUser
+            await cacheManager.searchUsersIncremental(query: userQuery, limit: 25) { [weak self] users in
+                // Update UI immediately with each batch of results
+                guard let self = self else { return }
+                await MainActor.run {
+                    var finalResults = users
+                    
+                    // Merge exact match if found
+                    if let exactUser = capturedExactUser {
                         // Add to results if not already there
-                        if !finalResults.contains(where: { $0.mid == user.mid }) {
-                            finalResults.insert(user, at: 0) // Put exact API match first
+                        if !finalResults.contains(where: { $0.mid == exactUser.mid }) {
+                            finalResults.insert(exactUser, at: 0) // Put exact API match first
                         } else {
                             // Move exact match to the front if it exists
-                            if let index = finalResults.firstIndex(where: { $0.mid == user.mid }) {
+                            if let index = finalResults.firstIndex(where: { $0.mid == exactUser.mid }) {
                                 let exactMatch = finalResults.remove(at: index)
                                 finalResults.insert(exactMatch, at: 0)
                             }
                         }
-                        self.searchResults = finalResults
                     }
+                    
+                    self.userResults = finalResults
                 }
+            }
+        }
+        
+        // Only search tweets if query doesn't start with @ (matches Android logic)
+        if !isUsernameOnly {
+            let tweets = await cacheManager.searchTweets(query: query, limit: 40)
+            await MainActor.run {
+                self.tweetResults = tweets
             }
         }
         
@@ -215,7 +340,13 @@ class SearchViewModel: ObservableObject {
     
     func clearResults() async {
         await MainActor.run {
-            searchResults = []
+            userResults = []
+            tweetResults = []
         }
+    }
+    
+    // Computed property for backward compatibility
+    var searchResults: [User] {
+        userResults
     }
 }

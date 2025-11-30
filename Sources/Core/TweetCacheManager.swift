@@ -968,6 +968,112 @@ extension TweetCacheManager {
             await onResults(getSortedResults())
         }
     }
+    
+    /// Search for tweets by content and title only (not author username/name)
+    /// Matches Android implementation - only searches in content and title
+    func searchTweets(query: String, limit: Int = 40) async -> [Tweet] {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        
+        let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        var scoredResults: [String: (score: Int, tweet: Tweet)] = [:]
+        
+        // Helper function to calculate match score (lower is better)
+        // Only matches content and title, NOT author username/name
+        func matchScore(for tweet: Tweet, query: String) -> Int? {
+            // Skip private tweets
+            if tweet.isPrivate ?? false {
+                return nil
+            }
+            
+            let contentLower = tweet.content?.lowercased() ?? ""
+            let titleLower = tweet.title?.lowercased() ?? ""
+            
+            // Prioritize matches: prefix > contains, content > title
+            if contentLower.hasPrefix(query) {
+                return 0 // Best: content starts with query
+            } else if contentLower.contains(query) {
+                return 1 // Good: content contains query
+            } else if titleLower.hasPrefix(query) {
+                return 2 // OK: title starts with query
+            } else if titleLower.contains(query) {
+                return 3 // Lower priority: title contains query
+            }
+            return nil
+        }
+        
+        // Helper to consider a tweet for results
+        func consider(_ tweet: Tweet) {
+            guard let score = matchScore(for: tweet, query: normalizedQuery) else { return }
+            
+            // Keep the best score for each tweet
+            if let existing = scoredResults[tweet.mid] {
+                if score < existing.score {
+                    scoredResults[tweet.mid] = (score, tweet)
+                }
+            } else {
+                scoredResults[tweet.mid] = (score, tweet)
+            }
+        }
+        
+        // Step 1: Search in-memory tweet singletons (fast)
+        let memoryTweets = Tweet.getAllInstances()
+        for (_, tweet) in memoryTweets {
+            consider(tweet)
+            if scoredResults.count >= limit { break }
+        }
+        
+        // Step 2: Search cached tweets in Core Data
+        if scoredResults.count < limit {
+            let coreDataTweets = await withCheckedContinuation { (continuation: CheckedContinuation<[Tweet], Never>) in
+                context.perform {
+                    let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                    request.fetchLimit = 400 // Get more candidates for better results
+                    
+                    var tweets: [Tweet] = []
+                    if let cdTweets = try? self.context.fetch(request) {
+                        for cdTweet in cdTweets {
+                            if let tweetData = cdTweet.tweetData,
+                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                                tweets.append(tweet)
+                            }
+                            if tweets.count >= 400 { break }
+                        }
+                    }
+                    continuation.resume(returning: tweets)
+                }
+            }
+            
+            // Consider tweets outside the closure to avoid Sendable warnings
+            for tweet in coreDataTweets {
+                if scoredResults.count >= limit { break }
+                consider(tweet)
+            }
+        }
+        
+        // Sort by score (lower is better), then by timestamp (newer first)
+        let sortedResults = scoredResults.values
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score < rhs.score
+                }
+                // If scores are equal, sort by timestamp (newer first)
+                return lhs.tweet.timestamp > rhs.tweet.timestamp
+            }
+            .prefix(limit)
+            .map { $0.tweet }
+        
+        // Ensure authors are loaded for display
+        for tweet in sortedResults {
+            if tweet.author == nil {
+                tweet.author = User.getInstance(mid: tweet.authorId)
+            }
+        }
+        
+        return Array(sortedResults)
+    }
 } 
 
 

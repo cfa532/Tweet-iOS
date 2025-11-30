@@ -979,11 +979,11 @@ final class HproseInstance: ObservableObject {
         
         print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
         
-        // If current object is invalid (nil username), fetch synchronously with retries
-        // This ensures the spinner stays visible in UserRowView until all retries complete
+        // If current object is invalid (nil username), fetch synchronously without retries
+        // Username searches don't need retries - if the first attempt fails, it's likely the user doesn't exist
         if cachedUser.username == nil {
-            print("DEBUG: [fetchUser] User has nil username, fetching synchronously with retries for userId: \(userId)")
-            // Fall through to synchronous fetch with retries at line 990
+            print("DEBUG: [fetchUser] User has nil username, fetching synchronously without retries for userId: \(userId)")
+            // Fall through to synchronous fetch without retries
         }
         
         // CRITICAL: If cached user has nil baseUrl, ALWAYS resolve it (even if app not initialized)
@@ -1076,7 +1076,9 @@ final class HproseInstance: ObservableObject {
             // Pass the original baseUrl parameter to updateUserFromServer to preserve caller's intent
             // If baseUrl is empty, updateUserFromServer will force fresh IP resolution on first attempt
             // If baseUrl is not empty, updateUserFromServer will use it on first attempt
-            let user = try await updateUserFromServer(userId, baseUrl: baseUrl)
+            // Skip retries if username is nil (searching for potential username)
+            let skipRetries = cachedUser.username == nil
+            let user = try await updateUserFromServer(userId, baseUrl: baseUrl, skipRetries: skipRetries)
             // Successfully fetched user - remove from blacklist candidates if it was there
             if let user = user {
                 blackList.recordSuccess(userId)
@@ -1113,10 +1115,12 @@ final class HproseInstance: ObservableObject {
     /// - Parameters:
     ///   - userId: The user ID to fetch
     ///   - baseUrl: BaseUrl to use for FIRST attempt. Retries always force fresh IP resolution.
+    ///   - skipRetries: If true, only attempt once without retries (useful for username searches)
     /// - Note: Pass empty string "" to force fresh IP resolution from first attempt (e.g., app init, explicit refresh)
     func updateUserFromServer(
         _ userId: String,
-        baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
+        baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? "",
+        skipRetries: Bool = false
     ) async throws -> User? {
         // Never update GUEST_ID from server
         if userId == Constants.GUEST_ID {
@@ -1159,7 +1163,10 @@ final class HproseInstance: ObservableObject {
         // 2. User cache has expired (baseUrl is also considered expired when user is expired)
         let forceFreshIP = baseUrl.isEmpty || hasExpired
         
-        for attempt in 1...3 {
+        // Only retry if skipRetries is false
+        let maxAttempts = skipRetries ? 1 : 3
+        
+        for attempt in 1...maxAttempts {
             do {
                 // First attempt: Use user's existing baseUrl if available AND not forcing fresh IP, otherwise resolve IP
                 // Retry attempts: Always force fresh IP resolution
@@ -1218,7 +1225,7 @@ final class HproseInstance: ObservableObject {
                 
             } catch {
                 lastError = error
-                print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 failed for userId: \(userId): \(error)")
+                print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) failed for userId: \(userId): \(error)")
                 
                 // Check if this is a redirect loop error (code -2) - don't retry in this case
                 if let nsError = error as NSError?, nsError.code == -2 {
@@ -1226,11 +1233,16 @@ final class HproseInstance: ObservableObject {
                     throw error
                 }
                 
-                if attempt < 3 {
+                // If skipRetries is true, don't retry
+                if skipRetries {
+                    throw error
+                }
+                
+                if attempt < maxAttempts {
                     await handleRetryRecovery(for: user)
                 }
                 
-                if attempt < 3 {
+                if attempt < maxAttempts {
                     // Exponential backoff: 1s, 2s
                     let delay = UInt64(attempt) * 1_000_000_000
                     try await Task.sleep(nanoseconds: delay)
