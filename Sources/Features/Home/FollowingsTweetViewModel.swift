@@ -2,7 +2,7 @@
 //  FollowingsTweetViewModel.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/6/4.
+//  Created by Tomás Hongo on 2025/6/4.
 //
 
 import AVFoundation

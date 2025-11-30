@@ -2,7 +2,7 @@
 //  MediaType.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/17.
+//  Created by Tomás Hongo on 2025/5/17.
 //
 
 enum MediaType: String, Codable {

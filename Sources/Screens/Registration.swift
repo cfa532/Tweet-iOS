@@ -2,7 +2,7 @@
 //  Registration.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/24.
+//  Created by Tomás Hongo on 2025/5/24.
 //
 
 import SwiftUI

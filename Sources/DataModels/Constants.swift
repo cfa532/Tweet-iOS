@@ -2,7 +2,7 @@
 //  Constants.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/7/3.
+//  Created by Tomás Hongo on 2025/7/3.
 //
 import Foundation
 

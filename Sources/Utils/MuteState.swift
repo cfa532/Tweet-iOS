@@ -2,7 +2,7 @@
 //  MuteState.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/8/10.
+//  Created by Tomás Hongo on 2025/8/10.
 //
 import SwiftUI
 

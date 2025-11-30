@@ -2,7 +2,7 @@
 //  ChatMessageView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/6/27.
+//  Created by Tomás Hongo on 2025/6/27.
 //
 
 import SwiftUI

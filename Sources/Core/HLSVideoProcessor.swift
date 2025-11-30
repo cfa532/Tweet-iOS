@@ -2,7 +2,7 @@
 //  HLSVideoProcessor.swift
 //  Tweet
 //
-//  Created by tomas hongo on 2025/06/25.
+//  Created by Tomás Hongo on 2025/06/25.
 //
 
 import Foundation

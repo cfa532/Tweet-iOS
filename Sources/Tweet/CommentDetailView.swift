@@ -2,7 +2,7 @@
 //  CommentDetailView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/6/8.
+//  Created by Tomás Hongo on 2025/6/8.
 //
 
 import SwiftUI
