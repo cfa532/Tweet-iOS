@@ -190,6 +190,8 @@ struct TweetListView<RowView: View>: View {
                .onScrollGeometryChange(for: CGFloat.self) { geometry in
                    geometry.contentOffset.y
                } action: { oldValue, newValue in
+                   // Ignore negative offsets (pull-to-refresh / bounce) to keep header behavior stable
+                   guard newValue >= 0, oldValue >= 0 else { return }
                    let delta = newValue - oldValue
                    onScroll?(newValue, delta)  // Pass both offset and delta
                }

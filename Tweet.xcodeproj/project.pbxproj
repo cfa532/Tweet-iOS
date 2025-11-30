@@ -606,7 +606,6 @@
 				5499E604271535F4C9305C6D /* [CP] Check Pods Manifest.lock */,
 				1A1A1A1A1A1A1A1A1A1A1A02 /* Frameworks */,
 				1A1A1A1A1A1A1A1A1A1A1A11 /* Sources */,
-				268923FBB04C4341B2467854 /* Append Debug Suffix to App Name */,
 				1A1A1A1A1A1A1A1A1A1A1A12 /* Resources */,
 				9C5162FBFA79188DC00146B1 /* [CP] Embed Pods Frameworks */,
 			);
@@ -714,25 +713,7 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
-		268923FBB04C4341B2467854 /* Append Debug Suffix to App Name */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Append Debug Suffix to App Name";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${SRCROOT}/scripts/append_debug_suffix.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
+		/* 268923FBB04C4341B2467854 \"Append Debug Suffix to App Name\" build phase removed */
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
