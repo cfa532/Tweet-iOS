@@ -474,6 +474,10 @@
 // MARK: - Chat Messages
 "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.";
 "Receipt ID: %@" = "Receipt ID: %@";
+"Sent" = "Sent";
+"Received" = "Received";
+"Yesterday" = "Yesterday";
+"%@ %@" = "%@ %@";
 
 // MARK: - Video Player
 "Failed to load video" = "Failed to load video";

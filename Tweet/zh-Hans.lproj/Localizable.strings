@@ -466,6 +466,10 @@
 // MARK: - Chat Messages
 "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "确定要删除与 %@ 的聊天吗？这将永久删除此对话中的所有消息。";
 "Receipt ID: %@" = "收件人ID: %@";
+"Sent" = "已发送";
+"Received" = "已接收";
+"Yesterday" = "昨天";
+"%@ %@" = "%@ %@";
 
 // MARK: - Video Player
 "Failed to load video" = "视频加载失败";

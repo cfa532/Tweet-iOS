@@ -345,13 +345,14 @@ struct ChatSessionRow: View {
         
         if calendar.isDate(date, inSameDayAs: now) {
             let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm"
+            formatter.timeStyle = .short
             return formatter.string(from: date)
         } else if calendar.isDate(date, equalTo: calendar.date(byAdding: .day, value: -1, to: now) ?? now, toGranularity: .day) {
-            return "昨天"
+            return NSLocalizedString("Yesterday", comment: "Yesterday label")
         } else {
             let formatter = DateFormatter()
-            formatter.dateFormat = "M月d日"
+            formatter.dateStyle = .short
+            formatter.timeStyle = .none
             return formatter.string(from: date)
         }
     }

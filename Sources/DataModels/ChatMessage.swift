@@ -103,8 +103,8 @@ extension ChatMessage {
             return trimmedContent.isEmpty ? nil : trimmedContent
         }
         let description = Self.attachmentDescription(for: attachments)
-        let directionText = authorId == currentUserId ? NSLocalizedString("sent", comment: "Attachment sent label") : NSLocalizedString("received", comment: "Attachment received label")
-        return "\(description) \(directionText)"
+        let directionText = authorId == currentUserId ? NSLocalizedString("Sent", comment: "Attachment sent label") : NSLocalizedString("Received", comment: "Attachment received label")
+        return String(format: NSLocalizedString("%@ %@", comment: "Attachment description with direction"), description, directionText)
     }
     
     private func isAttachmentPlaceholder(_ text: String) -> Bool {
