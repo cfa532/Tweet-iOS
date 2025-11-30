@@ -199,8 +199,6 @@ struct TweetItemView: View, Equatable {
             isVisible = false
             tweet.isVisible = false
         }
-        // Add stable identity to prevent unnecessary re-composition
-        .id("\(tweet.mid)_\(originalTweet?.mid ?? "none")")
     }
     
     private var tweetContent: some View {

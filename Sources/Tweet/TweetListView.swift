@@ -36,6 +36,7 @@ struct TweetListView<RowView: View>: View {
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
     @State private var scrollAnchorId: String? = nil  // Track scroll position
+    @State private var lastScrollOffset: CGFloat = 0  // For stable scroll delta reporting
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -192,10 +193,19 @@ struct TweetListView<RowView: View>: View {
                } action: { oldValue, newValue in
                    // Ignore negative offsets (pull-to-refresh / bounce) to keep header behavior stable
                    guard newValue >= 0, oldValue >= 0 else { return }
-                   let delta = newValue - oldValue
-                   onScroll?(newValue, delta)  // Pass both offset and delta
+                   
+                   // Only forward significant changes to reduce jitter in header/show-hide logic
+                   let rawDelta = newValue - oldValue
+                   let effectiveDelta = newValue - lastScrollOffset
+                   let threshold: CGFloat = 8  // Minimum movement before notifying parent
+                   
+                   guard abs(effectiveDelta) >= threshold else { return }
+                   
+                   lastScrollOffset = newValue
+                   onScroll?(newValue, effectiveDelta)  // Pass both offset and debounced delta
                }
                .onAppear {
+                   lastScrollOffset = 0
                    onScroll?(0, 0)  // Pass both offset and delta
                }
                 
