@@ -31,6 +31,83 @@ This document describes the new chat and search features that have been added to
 #### Components
 - `SearchViewModel.swift`: Handles search logic and API calls
 
+#### Search Algorithm
+
+The search system implements a multi-phase algorithm that combines exact API lookups with incremental local cache searches for responsive results.
+
+**Query Processing:**
+1. **Username-only queries** (starting with `@`): Treated as username searches only
+   - Removes `@` prefix and searches for exact username match
+   - Only searches users, not tweets
+   
+2. **General queries**: Searches both users and tweets
+   - If query has no spaces, attempts exact username match first
+   - Then performs partial search in local cache
+
+**User Search Algorithm:**
+
+The user search uses a three-phase incremental approach:
+
+**Phase 1: Exact API Match (for potential usernames)**
+- When query starts with `@` or has no spaces, attempts exact username lookup
+- Calls `getUserId(username)` to get userId from backend
+- Fetches user via `fetchUser(userId)` with special handling:
+  - **No retries**: Only one attempt (no retry on failure)
+  - **No blacklist updates**: Failed searches don't affect blacklist
+  - Validates user has non-empty username before including in results
+
+**Phase 2: Incremental Local Cache Search**
+Uses `searchUsersIncremental()` which searches three sources progressively:
+
+1. **In-Memory User Singletons** (fastest)
+   - Searches all User instances currently in memory
+   - Results shown immediately for instant feedback
+
+2. **Core Data Cached Users**
+   - Searches up to 100 users from Core Data cache
+   - Updates UI with additional results as found
+
+3. **Tweet Authors from Cached Tweets**
+   - Extracts author IDs from recent cached tweets (up to 200 tweets, 50 unique authors)
+   - Fetches User instances for these authors
+   - Only includes users with valid usernames
+
+**Relevance Scoring:**
+Results are scored and sorted by relevance:
+- **Score 0**: Username starts with query (best match)
+- **Score 1**: Username contains query
+- **Score 2**: Name starts with query
+- **Score 3**: Name contains query (lowest priority)
+
+**Result Merging:**
+- Exact API matches are always placed first (at index 0)
+- If exact match already exists in partial results, it's moved to front
+- Results sorted by: score (ascending), then alphabetically by username
+- Limited to 25 results
+
+**Tweet Search Algorithm:**
+
+Tweet search only runs for non-`@` queries and searches:
+- **Content field**: Tweet text content
+- **Title field**: Tweet title (for media tweets)
+
+**Relevance Scoring:**
+- **Score 0**: Content starts with query (best match)
+- **Score 1**: Content contains query
+- **Score 2**: Title starts with query
+- **Score 3**: Title contains query (lowest priority)
+
+**Exclusions:**
+- Private tweets are excluded from search results
+- Only searches content/title, NOT author username or name
+- Limited to 40 results
+
+**Performance Optimizations:**
+- Incremental results: UI updates as each phase completes
+- Early termination: Stops searching when limit reached
+- Case-insensitive matching: All comparisons use lowercased strings
+- Deduplication: Each user/tweet appears only once with best score
+
 ### 3. Navigation Updates
 
 #### Tab Bar
