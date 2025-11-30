@@ -607,6 +607,7 @@
 				1A1A1A1A1A1A1A1A1A1A1A02 /* Frameworks */,
 				1A1A1A1A1A1A1A1A1A1A1A11 /* Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A12 /* Resources */,
+				FEDCBA9876543210FEDCBA98 /* Use debug InfoPlist.strings */,
 				9C5162FBFA79188DC00146B1 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
@@ -711,6 +712,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		FEDCBA9876543210FEDCBA98 /* Use debug InfoPlist.strings */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Use debug InfoPlist.strings";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ \"${CONFIGURATION}\" = \"Debug\" ] && [ \"${PRODUCT_BUNDLE_IDENTIFIER}\" = \"com.example.Tweet.debug\" ]; then\n  RES_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n  PROJECT_DIR=\"${SRCROOT}/Tweet\"\n  for LOC_DIR in \"${PROJECT_DIR}\"/*.lproj; do\n    if [ -d \"${LOC_DIR}\" ]; then\n      LOCALE_NAME=$(basename \"${LOC_DIR}\")\n      DEBUG_FILE=\"${LOC_DIR}/InfoPlist-Debug.strings\"\n      BUILD_LOC_DIR=\"${RES_DIR}/${LOCALE_NAME}\"\n      BUILD_FILE=\"${BUILD_LOC_DIR}/InfoPlist.strings\"\n      if [ -f \"${DEBUG_FILE}\" ] && [ -f \"${BUILD_FILE}\" ]; then\n        cp \"${DEBUG_FILE}\" \"${BUILD_FILE}\"\n      fi\n    fi\n  done\nfi\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -1027,6 +1047,7 @@
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_CFBundleDisplayName = "Tweetd";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

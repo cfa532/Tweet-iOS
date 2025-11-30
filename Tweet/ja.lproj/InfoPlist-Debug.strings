@@ -1,12 +1,12 @@
 /* 
-  InfoPlist.strings (Japanese)
+  InfoPlist.strings (Japanese) - Debug Version
   ZZ
   
-  Created for permission localization.
+  Created for debug build localization.
 */
 NSCameraUsageDescription = "投稿や返信用の写真や動画を撮影するためにカメラへのアクセスが必要です。フォロワーと共有するリッチメディアコンテンツを作成できます。";
 NSMicrophoneUsageDescription = "動画投稿や返信を作成する際に音声を録音するためにマイクへのアクセスが必要です。これにより動画コンテンツに音声ナレーションを追加できます。";
 NSPhotoLibraryUsageDescription = "撮影した写真や動画を保存し、投稿や返信用に既存のメディアを選択するためにフォトライブラリへのアクセスが必要です。";
 NSUserNotificationUsageDescription = "新しいチャットメッセージ、メンション、ネットワークからの重要な更新について最新情報を提供するために通知を使用します。";
-CFBundleDisplayName = "Tweet";
+CFBundleDisplayName = "Tweetd";
 
