@@ -3,7 +3,6 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct TweetItemView: View, Equatable {
     @ObservedObject var tweet: Tweet
-    let embedded: Bool = false
     var isPinned: Bool = false
     var isInProfile: Bool = false
     var showDeleteButton: Bool = false
@@ -13,34 +12,17 @@ struct TweetItemView: View, Equatable {
     var currentProfileUser: User? = nil
     var hideActions: Bool = false
     var backgroundColor: Color = Color(.systemBackground)
-    @State private var showDetail = false
-    @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
-    @State private var showEmbeddedBrowser = false
-    @State private var selectedEmbeddedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
     
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
         return tweet.originalTweetId != nil && tweet.originalAuthorId != nil
-    }
-
-    private func mediaGrid(for tweet: Tweet) -> some View {
-        Group {
-            if let attachments = tweet.attachments, !attachments.isEmpty {
-                MediaGridView(
-                    parentTweet: tweet,
-                    attachments: attachments,
-                    visibleTweetId: tweet.mid
-                )
-                .padding(.top, 8)
-            }
-        }
     }
     
     @ViewBuilder
@@ -112,18 +94,9 @@ struct TweetItemView: View, Equatable {
                 sourceTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
         }
-        .fullScreenCover(isPresented: $showEmbeddedBrowser) {
-            MediaBrowserView(
-                tweet: originalTweet ?? tweet,
-                initialIndex: selectedEmbeddedMediaIndex,
-                sourceTweetId: tweet.mid // Pass visible tweet ID (the retweet)
-            )
-        }
         .task {
             isVisible = true
             tweet.isVisible = true
-            // Usually TweetDetailView is not orignalTweet
-            detailTweet = tweet
             
             // Load author if not already loaded
             if tweet.author == nil {
@@ -184,7 +157,6 @@ struct TweetItemView: View, Equatable {
                         
                         await MainActor.run {
                             originalTweet = t
-                            detailTweet = t
                         }
                     } else {
                         // Could not fetch original tweet, remove this tweet from the list

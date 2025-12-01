@@ -17,11 +17,7 @@ struct CommentItemView: View {
     var linkToComment: Bool = false // Enable NavigationLink for the comment
     var commentsVM: CommentsViewModel? = nil
     var backgroundColor: Color = Color(.systemBackground)
-    @State private var showDetail = false
     @State private var isVisible = false
-    @State private var showBrowser = false
-    @State private var selectedMediaIndex = 0
-    @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         Group {
@@ -33,12 +29,6 @@ struct CommentItemView: View {
             } else {
                 commentContent
             }
-        }
-        .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(
-                tweet: comment,
-                initialIndex: selectedMediaIndex
-            )
         }
         .task {
             isVisible = true
