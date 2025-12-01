@@ -91,7 +91,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1291"
             endingLineNumber = "1291"
-            landmarkName = "normalizedBaseURL(from:context:)"
+            landmarkName = "updateUserFromServer(_:baseUrl:skipRetries:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -107,7 +107,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1296"
             endingLineNumber = "1296"
-            landmarkName = "handleRetryRecovery(for:)"
+            landmarkName = "updateUserFromServer(_:baseUrl:skipRetries:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -123,7 +123,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1300"
             endingLineNumber = "1300"
-            landmarkName = "handleRetryRecovery(for:)"
+            landmarkName = "updateUserFromServer(_:baseUrl:skipRetries:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -139,8 +139,8 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "5036"
             endingLineNumber = "5036"
-            landmarkName = "HproseInstance"
-            landmarkType = "3">
+            landmarkName = "savePendingUpload(_:)"
+            landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>

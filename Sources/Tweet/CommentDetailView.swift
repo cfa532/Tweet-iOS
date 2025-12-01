@@ -54,7 +54,7 @@ struct CommentDetailViewWithParent: View {
         }
         
         do {
-            let parent = try await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+            let parent = try await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId)
             await MainActor.run {
                 self.parentTweet = parent
                 self.isLoading = false
@@ -261,7 +261,7 @@ struct CommentDetailView: View {
     
     private func refreshComment() async {
         do {
-            if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
+            if let refreshedComment = try await hproseInstance.refreshTweet(tweetId: comment.mid, authorId: comment.authorId) {
                 try comment.update(from: refreshedComment)
             }
         } catch {

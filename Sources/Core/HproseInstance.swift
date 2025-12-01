@@ -824,6 +824,19 @@ final class HproseInstance: ObservableObject {
         return tweets
     }
     
+    /// Get tweet from the current provider of the tweet.
+    /// 
+    /// This function retrieves tweet data from the current provider node, which may not be the most
+    /// up-to-date version. It does NOT sync data from the author's host node. Use this for fetching
+    /// original tweets in retweets/quoted tweets where you just need the tweet data quickly.
+    /// 
+    /// For the latest data, use `refreshTweet` instead, which syncs from the author's host before retrieving.
+    ///
+    /// - Parameters:
+    ///   - tweetId: The ID of the tweet to retrieve
+    ///   - authorId: The ID of the tweet's author
+    ///   - nodeUrl: Optional node URL (unused)
+    /// - Returns: The tweet object, or nil if not found
     func getTweet(
         tweetId: String,
         authorId: String,
@@ -835,12 +848,76 @@ final class HproseInstance: ObservableObject {
             return await TweetCacheManager.shared.fetchTweet(mid: tweetId)
         }
         
-        if let cached = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
-            return cached
+        // Check cache first using TweetCacheManager
+        let author = try await fetchUser(authorId)
+        if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
+            // Set author if not already set
+            if cachedTweet.author == nil {
+                await MainActor.run {
+                    cachedTweet.author = author
+                }
+            }
+            return cachedTweet
         }
-        return try await refreshTweet(tweetId: tweetId, authorId: authorId)
+        
+        // Fetch from server using get_tweet API (like Android's fetchTweet)
+        guard let authorClient = author?.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author client not initialized", comment: "Author client initialization error")])
+        }
+        
+        let entry = "get_tweet"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "tweetid": tweetId,
+            "appuserid": appUser.mid
+        ]
+        
+        do {
+            let rawResponse = authorClient.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
+            if let tweetDict = unwrappedResponse as? [String: Any] {
+                // Record successful access
+                blackList.recordSuccess(tweetId)
+                
+                let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+                await MainActor.run {
+                    tweet.author = author  // Set on main thread since author is @Published
+                }
+                
+                // Cache tweet by authorId, not appUser.mid
+                TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
+                
+                return tweet
+            } else {
+                // Tweet not found - record failure to blacklist candidates
+                print("DEBUG: [getTweet] Tweet not found for tweetId: \(tweetId), recording failure")
+                blackList.recordFailure(tweetId)
+                return nil
+            }
+        } catch {
+            // Record failed access
+            blackList.recordFailure(tweetId)
+            print("DEBUG: [getTweet] Error fetching tweet: \(tweetId), author: \(authorId)")
+            print("DEBUG: [getTweet] Exception: \(error)")
+            throw error
+        }
     }
     
+    /// Refresh tweet by syncing from author's host and retrieving the latest data.
+    /// 
+    /// This function not only retrieves the tweet but also updates the current provider's data to match
+    /// the host of the author (where the tweet is actually written to). This ensures you get the most
+    /// up-to-date version of the tweet, including any recent changes or updates.
+    /// 
+    /// Use this in detail views where you need the latest data. For quick retrieval of original tweets
+    /// in retweets/quoted tweets, use `getTweet` instead.
+    ///
+    /// - Parameters:
+    ///   - tweetId: The ID of the tweet to refresh
+    ///   - authorId: The ID of the tweet's author
+    /// - Returns: The refreshed tweet object, or nil if not found
     func refreshTweet(
         tweetId: String,
         authorId: String,
