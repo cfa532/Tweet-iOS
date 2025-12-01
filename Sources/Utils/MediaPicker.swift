@@ -185,39 +185,63 @@ struct MediaPreviewGrid: View {
         }
     }
     
-    
-    
     var body: some View {
         if !selectedImages.isEmpty || !selectedItems.isEmpty || !selectedVideos.isEmpty {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                // Camera images
-                ForEach(Array(selectedImages.enumerated()), id: \.offset) { index, image in
+                // Camera images - find index dynamically when removing
+                ForEach(Array(selectedImages.enumerated()), id: \.offset) { enumerated in
+                    let index = enumerated.offset
+                    let image = enumerated.element
                     MediaPreviewItem(
                         image: image,
-                        onRemove: { onRemoveImage(index) }
-                    )
-                }
-                
-                // Camera videos
-                ForEach(Array(selectedVideos.enumerated()), id: \.offset) { index, videoURL in
-                    MediaPreviewItem(
-                        videoURL: videoURL,
-                        onRemove: { onRemoveVideo(index) }
-                    )
-                }
-                
-                // PhotosPicker items
-                ForEach(indexedItems) { indexedItem in
-                    MediaPreviewItem(
-                        item: indexedItem.item,
-                        onRemove: { 
-                            // Clear cache for the removed item
-                            if let itemId = indexedItem.item.itemIdentifier {
-                                ThumbnailView.clearCacheForItem(itemId)
+                        onRemove: {
+                            // Find the current index of this image in the array
+                            let currentImages = selectedImages
+                            if let currentIndex = currentImages.firstIndex(where: { $0 === image }) {
+                                onRemoveImage(currentIndex)
+                            } else {
+                                onRemoveImage(index)
                             }
-                            onRemoveItem(indexedItem.originalIndex) 
                         }
                     )
+                    .id("image_\(ObjectIdentifier(image).debugDescription)_\(selectedImages.count)")
+                }
+                
+                // Camera videos - find index dynamically when removing
+                ForEach(Array(selectedVideos.enumerated()), id: \.offset) { enumerated in
+                    let index = enumerated.offset
+                    let videoURL = enumerated.element
+                    MediaPreviewItem(
+                        videoURL: videoURL,
+                        onRemove: {
+                            // Find the current index of this video in the array
+                            let currentVideos = selectedVideos
+                            if let currentIndex = currentVideos.firstIndex(where: { $0.path == videoURL.path }) {
+                                onRemoveVideo(currentIndex)
+                            } else {
+                                onRemoveVideo(index)
+                            }
+                        }
+                    )
+                    .id("video_\(videoURL.path)_\(selectedVideos.count)")
+                }
+                
+                // PhotosPicker items - use indices with count-based ID to force view recreation
+                ForEach(selectedItems.indices, id: \.self) { index in
+                    let item = selectedItems[index]
+                    MediaPreviewItem(
+                        item: item,
+                        onRemove: {
+                            if index < selectedItems.count {
+                                if let itemId = item.itemIdentifier {
+                                    ThumbnailView.clearCacheForItem(itemId)
+                                }
+                                onRemoveItem(index)
+                            }
+                        }
+                    )
+                    // Include both index and count in ID - when count changes, all views are recreated
+                    .id("item_\(index)_count_\(selectedItems.count)")
                 }
             }
         }
@@ -253,7 +277,7 @@ struct MediaPreviewItem: View {
     }
     
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        Group {
             if let image = image {
                 Image(uiImage: image)
                     .resizable()
@@ -270,14 +294,23 @@ struct MediaPreviewItem: View {
                     .frame(width: 60, height: 60)
                     .cornerRadius(8)
             }
-            
+        }
+        .frame(width: 60, height: 60)
+        .overlay(alignment: .topTrailing) {
             Button(action: onRemove) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.white)
-                    .background(Color.black.opacity(0.6))
-                    .clipShape(Circle())
+                ZStack {
+                    Circle()
+                        .fill(Color.black.opacity(0.7))
+                        .frame(width: 22, height: 22)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white)
+                }
             }
-            .offset(x: 4, y: -4)
+            .buttonStyle(PlainButtonStyle())
+            .contentShape(Circle())
+            .frame(width: 30, height: 30)
+            .offset(x: 2, y: -2)
         }
     }
 }

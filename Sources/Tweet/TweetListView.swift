@@ -195,7 +195,6 @@ struct TweetListView<RowView: View>: View {
                    guard newValue >= 0, oldValue >= 0 else { return }
                    
                    // Only forward significant changes to reduce jitter in header/show-hide logic
-                   let rawDelta = newValue - oldValue
                    let effectiveDelta = newValue - lastScrollOffset
                    let threshold: CGFloat = 8  // Minimum movement before notifying parent
                    

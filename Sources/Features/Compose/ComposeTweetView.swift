@@ -167,12 +167,15 @@ struct ComposeTweetView: View {
             selectedImages: viewModel.selectedImages,
             selectedVideos: viewModel.selectedVideos,
             onRemoveItem: { index in
+                guard index < viewModel.selectedItems.count else { return }
                 viewModel.selectedItems.remove(at: index)
             },
             onRemoveImage: { index in
+                guard index < viewModel.selectedImages.count else { return }
                 viewModel.selectedImages.remove(at: index)
             },
             onRemoveVideo: { index in
+                guard index < viewModel.selectedVideos.count else { return }
                 viewModel.selectedVideos.remove(at: index)
             }
         )
