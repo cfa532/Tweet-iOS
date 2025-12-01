@@ -1,135 +1,21 @@
 import SwiftUI
 import AVKit
 
-// MARK: - Video Player Representable
-struct VideoPlayerRepresentable: UIViewRepresentable {
-    let player: AVPlayer
-    
-    func makeUIView(context: Context) -> UIView {
-        let view = VideoPlayerView()
-        view.backgroundColor = .black
-        
-        NSLog("DEBUG: [VideoPlayerRepresentable] makeUIView - creating NEW view and layer")
-        
-        // Create layer immediately
-        let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspect
-        playerLayer.needsDisplayOnBoundsChange = true
-        view.layer.addSublayer(playerLayer)
-        view.playerLayer = playerLayer
-        
-        context.coordinator.playerLayer = playerLayer
-        context.coordinator.view = view
-        context.coordinator.currentPlayer = player
-        
-        NSLog("DEBUG: [VideoPlayerRepresentable] makeUIView - layer created and player assigned")
-        
-        return view
-    }
-    
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard let videoView = uiView as? VideoPlayerView else { return }
-        
-        NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView called")
-        
-        // Check if player instance changed
-        let playerChanged = videoView.playerLayer?.player !== player
-        
-        // Always refresh player connection
-        if let playerLayer = videoView.playerLayer {
-            NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView - updating player, changed: \(playerChanged)")
-            playerLayer.player = player
-            context.coordinator.currentPlayer = player
-            
-            // CRITICAL: Reset recreation flag when player changes
-            // This ensures layer will be recreated for the new player
-            if playerChanged {
-                videoView.hasRecreatedLayer = false
-                NSLog("DEBUG: [VideoPlayerRepresentable] Player changed - reset recreation flag")
-            }
-        } else {
-            NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView - NO LAYER EXISTS!")
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-    
-    class Coordinator: NSObject {
-        var playerLayer: AVPlayerLayer?
-        var view: VideoPlayerView?
-        var currentPlayer: AVPlayer?
-    }
-}
-
-// Custom UIView that properly handles layout
-class VideoPlayerView: UIView {
-    var playerLayer: AVPlayerLayer?
-    var hasRecreatedLayer = false  // Not private - needs to be reset by representable
-    
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        
-        guard let layer = playerLayer else { return }
-        
-        let hadZeroBounds = layer.frame.width == 0 || layer.frame.height == 0
-        let hasValidBounds = bounds.width > 0 && bounds.height > 0
-        
-        // ALWAYS recreate layer if it has zero bounds - don't trust the flag
-        // This handles view reuse cases where the flag might be stale
-        if hadZeroBounds && hasValidBounds {
-            NSLog("DEBUG: [VideoPlayerView] Recreating layer - old frame: \(layer.frame), new bounds: \(bounds), flag was: \(hasRecreatedLayer)")
-            hasRecreatedLayer = true
-            
-            // Get player before removing layer
-            let player = layer.player
-            layer.removeFromSuperlayer()
-            
-            // CRITICAL: Create layer WITHOUT player, set frame FIRST, then assign player
-            let newLayer = AVPlayerLayer()
-            newLayer.videoGravity = .resizeAspect
-            newLayer.frame = bounds  // Set frame BEFORE assigning player
-            newLayer.needsDisplayOnBoundsChange = true
-            self.layer.addSublayer(newLayer)
-            
-            // NOW assign player after frame is set
-            newLayer.player = player
-            
-            playerLayer = newLayer
-            
-            NSLog("DEBUG: [VideoPlayerView] Layer recreated - frame set BEFORE player assigned")
-        } else {
-            // Just update frame
-            layer.frame = bounds
-        }
-    }
-}
-
-// MARK: - Scroll Detection
-private enum ScrollDirection {
-    case up
-    case down
-}
-
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
 @available(iOS 16.0, *)
 struct DetailMediaCell: View {
     @ObservedObject var parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float
-    @State private var play: Bool
     let shouldLoadVideo: Bool
-    @State private var isVisible: Bool = true
     @State private var image: UIImage?
     @State private var loading = false
     let showMuteButton: Bool
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
-        self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
         self.showMuteButton = showMuteButton
     }
@@ -237,7 +123,6 @@ struct DetailMediaCell: View {
         }
         .onAppear {
             print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid)")
-            isVisible = true
             if attachment.type == .image && image == nil {
                 print("DEBUG: [DetailMediaCell] Starting image load for attachment \(attachmentIndex)")
                 loadImage()
@@ -292,10 +177,6 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
-    @State private var showToast = false
-    @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .info
-    @State private var isVisible = true
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
@@ -304,7 +185,6 @@ struct TweetDetailView: View {
     // Scroll detection state for top navigation bar
     @State private var isTopNavigationVisible = true
     @State private var previousScrollOffset: CGFloat = 0
-    @State private var cleanupTask: Task<Void, Never>? // Delayed cleanup task
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
@@ -475,7 +355,6 @@ struct TweetDetailView: View {
                 }
             }
             
-            
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
@@ -484,19 +363,9 @@ struct TweetDetailView: View {
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
         }
-        .overlay(toastOverlay)
         .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
-            
-            // Stop video player immediately
-            // The .task defer block will also clean up when the view is permanently dismissed
-            DetailVideoManager.shared.clearCurrentVideo()
-            print("DEBUG: [TweetDetailView] Stopped video player immediately in onDisappear")
-            
-            // Cancel any pending cleanup task
-            cleanupTask?.cancel()
-            cleanupTask = nil
             
             // Reset top navigation visibility when view disappears
             withAnimation(.easeInOut(duration: 0.3)) {
@@ -504,14 +373,11 @@ struct TweetDetailView: View {
             }
             
             // Clean up timers and tasks
-            scrollEndTimer?.invalidate()
-            scrollEndTimer = nil
             scrollUpdateTask?.cancel()
             scrollUpdateTask = nil
             
             refreshTimer?.invalidate()
             refreshTimer = nil
-            isVisible = false
             
             // Cancel any pending image loads to prevent memory leaks
             if let attachments = displayTweet.attachments {
@@ -554,17 +420,13 @@ struct TweetDetailView: View {
                             parentTweet: displayTweet,
                             attachmentIndex: index,
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
-                            play: index == selectedMediaIndex,
-                            shouldLoadVideo:  index == selectedMediaIndex,
+                            shouldLoadVideo: index == selectedMediaIndex,
                             showMuteButton: false
                         )
                         .tag(index)
                     }
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                .onChange(of: selectedMediaIndex) { _, newIndex in
-                    // User swiped to new image - no aspect ratio loading needed
-                }
                 .frame(maxWidth: .infinity)
                 .frame(height: UIScreen.main.bounds.width / fixedAspect)
                 .background(Color.black)
@@ -645,19 +507,6 @@ struct TweetDetailView: View {
         .padding(.trailing, 12)
     }
     
-    private var toastOverlay: some View {
-        Group {
-            if showToast {
-                VStack {
-                    Spacer()
-                    ToastView(message: toastMessage, type: toastType)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                .padding(.bottom, 32)
-            }
-        }
-    }
-    
     private var commentsListView: some View {
         CommentListView<CommentItemView>(
             title: "Comments",
@@ -675,11 +524,7 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .newCommentAdded,
                     key: "comment",
-                    shouldAccept: { comment in
-                        // Accept comments that belong to this tweet based on parentTweetId in notification
-                        // This will be handled by the notification system using the parentTweetId
-                        return true // We'll filter in the action
-                    },
+                    shouldAccept: { _ in true },
                     action: { comment, parentTweetId in
                         // Only add comment if it belongs to this tweet
                         if parentTweetId == displayTweet.mid {
@@ -690,10 +535,7 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .commentDeleted,
                     key: "comment",
-                    shouldAccept: { comment in
-                        // Accept all comment deletions - let the action function filter
-                        return true
-                    },
+                    shouldAccept: { _ in true },
                     action: { comment, parentTweetId in
                         if parentTweetId == displayTweet.mid {
                             comments.removeAll { $0.mid == comment.mid }
@@ -796,19 +638,6 @@ struct TweetDetailView: View {
         }
     }
     
-    private func showToast(message: String, type: ToastView.ToastType) {
-        toastMessage = message
-        toastType = type
-        withAnimation {
-            showToast = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation {
-                showToast = false
-            }
-        }
-    }
-    
     private func aspectRatio(for attachment: MimeiFileType, at index: Int) -> CGFloat {
         if attachment.type == .video || attachment.type == .hls_video {
             return CGFloat(attachment.aspectRatio ?? (4.0/3.0))
@@ -853,8 +682,6 @@ struct TweetDetailView: View {
         return max(0.5, min(2.0, minAspectRatio))
     }
     
-    
-    @State private var scrollEndTimer: Timer?
     @State private var scrollUpdateTask: Task<Void, Never>?
     @State private var lastStateChangeTime: Date = Date()
     

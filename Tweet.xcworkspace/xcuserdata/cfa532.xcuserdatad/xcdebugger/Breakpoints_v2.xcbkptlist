@@ -139,8 +139,8 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "5036"
             endingLineNumber = "5036"
-            landmarkName = "handleCompletedVideoJob(pendingUpload:cid:)"
-            landmarkType = "7">
+            landmarkName = "HproseInstance"
+            landmarkType = "3">
          </BreakpointContent>
       </BreakpointProxy>
    </Breakpoints>
