@@ -25,17 +25,12 @@ struct TweetListView<RowView: View>: View {
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreTweets: Bool = true
     @State private var currentPage: UInt = 0
-    @State private var errorMessage: String? = nil
-    @State private var showDeleteResult = false
-    @State private var deleteResultMessage = ""
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
-    @State private var deletedTweetIds = Set<String>()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
-    @State private var scrollAnchorId: String? = nil  // Track scroll position
     @State private var lastScrollOffset: CGFloat = 0  // For stable scroll delta reporting
     
     // Minimum duration to show the loading spinner (in seconds)
@@ -162,82 +157,63 @@ struct TweetListView<RowView: View>: View {
 
     // MARK: - Body
     var body: some View {
-        ScrollViewReader { proxy in
-            ZStack {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        TweetListContentView(
-                            tweets: Binding(
-                                get: { tweets.map { Optional($0) } },
-                                set: { newValue in
-                                    tweets = newValue.compactMap { $0 }
-                                }
-                            ),
-                            header: header,
-                            rowView: { tweet in
-                                rowView(tweet)
-                            },
-                            hasMoreTweets: $hasMoreTweets,
-                            isLoadingMore: isLoadingMore,
-                            isLoading: isLoading,
-                            initialLoadComplete: initialLoadComplete,
-                            loadMoreTweets: { loadMoreTweets() }
-                       )
-                   }
-               }
-               .safeAreaInset(edge: .top) {
-                   Color.clear.frame(height: 0)
-               }
-               .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                   geometry.contentOffset.y
-               } action: { oldValue, newValue in
-                   // Ignore negative offsets (pull-to-refresh / bounce) to keep header behavior stable
-                   guard newValue >= 0, oldValue >= 0 else { return }
-                   
-                   // Only forward significant changes to reduce jitter in header/show-hide logic
-                   let effectiveDelta = newValue - lastScrollOffset
-                   let threshold: CGFloat = 8  // Minimum movement before notifying parent
-                   
-                   guard abs(effectiveDelta) >= threshold else { return }
-                   
-                   lastScrollOffset = newValue
-                   onScroll?(newValue, effectiveDelta)  // Pass both offset and debounced delta
-               }
-               .onAppear {
-                   lastScrollOffset = 0
-                   onScroll?(0, 0)  // Pass both offset and delta
-               }
+        ZStack {
+            ScrollView {
+                VStack(spacing: 0) {
+                    TweetListContentView(
+                        tweets: Binding(
+                            get: { tweets.map { Optional($0) } },
+                            set: { newValue in
+                                tweets = newValue.compactMap { $0 }
+                            }
+                        ),
+                        header: header,
+                        rowView: { tweet in
+                            rowView(tweet)
+                        },
+                        hasMoreTweets: $hasMoreTweets,
+                        isLoadingMore: isLoadingMore,
+                        isLoading: isLoading,
+                        initialLoadComplete: initialLoadComplete,
+                        loadMoreTweets: { loadMoreTweets() }
+                    )
+                }
+            }
+            .safeAreaInset(edge: .top) {
+                Color.clear.frame(height: 0)
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentOffset.y
+            } action: { oldValue, newValue in
+                // Ignore negative offsets (pull-to-refresh / bounce) to keep header behavior stable
+                guard newValue >= 0, oldValue >= 0 else { return }
                 
-                if showToast {
-                    VStack {
-                        Spacer()
-                        ToastView(message: toastMessage, type: toastType)
-                            .padding(.bottom, 40)
-                    }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.3), value: showToast)
+                // Only forward significant changes to reduce jitter in header/show-hide logic
+                let effectiveDelta = newValue - lastScrollOffset
+                let threshold: CGFloat = 8  // Minimum movement before notifying parent
+                
+                guard abs(effectiveDelta) >= threshold else { return }
+                
+                lastScrollOffset = newValue
+                onScroll?(newValue, effectiveDelta)  // Pass both offset and debounced delta
+            }
+            .onAppear {
+                lastScrollOffset = 0
+                onScroll?(0, 0)  // Pass both offset and delta
+            }
+            
+            if showToast {
+                VStack {
+                    Spacer()
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 40)
                 }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.3), value: showToast)
             }
-            .refreshable {
-                await refreshTweets()
-            }
-            .task {
-                // Only load if tweets are empty and we haven't completed initial load
-                if tweets.isEmpty && !initialLoadComplete {
-                    await performInitialLoad()
-                } else if !tweets.isEmpty {
-                    // If we already have tweets, mark as loaded
-                    initialLoadComplete = true
-                    isLoading = false
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
-                Task {
-                    await refreshTweets()
-                }
-            }
+            
             // Listen to all notifications
-            ForEach(Array(notifications.enumerated()), id: \ .element.name) { idx, notification in
+            ForEach(Array(notifications.enumerated()), id: \.element.name) { idx, notification in
                 EmptyView()
                     .onReceive(NotificationCenter.default.publisher(for: notification.name)) { notif in
                         if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
@@ -288,6 +264,24 @@ struct TweetListView<RowView: View>: View {
                             print("[TweetListView] Removed \(removedCount) tweets from blocked user: \(blockedUserId)")
                         }
                     }
+            }
+        }
+        .refreshable {
+            await refreshTweets()
+        }
+        .task {
+            // Only load if tweets are empty and we haven't completed initial load
+            if tweets.isEmpty && !initialLoadComplete {
+                await performInitialLoad()
+            } else if !tweets.isEmpty {
+                // If we already have tweets, mark as loaded
+                initialLoadComplete = true
+                isLoading = false
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
+            Task {
+                await refreshTweets()
             }
         }
         .navigationTitle(title)
@@ -363,7 +357,6 @@ struct TweetListView<RowView: View>: View {
             
         } catch {
             print("[TweetListView] Error during initial load: \(error)")
-            errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
@@ -523,12 +516,6 @@ struct TweetListView<RowView: View>: View {
             let hasValidTweet = !validServerTweets.isEmpty
             
             await MainActor.run {
-                // Capture scroll position before updating content
-                if !tweets.isEmpty {
-                    // Save the first visible tweet to maintain scroll position
-                    scrollAnchorId = tweets.first?.mid
-                }
-                
                 // Update tweets with server data (existing mergeTweets already preserves cached tweets for failed IDs)
                 if hasValidTweet {
                     if page == 0 {
@@ -578,18 +565,12 @@ struct TweetListView<RowView: View>: View {
                     // Don't mark as complete yet - keep trying next pages
                     // Don't call loadMoreTweets recursively here, let the normal flow continue
                 }
-                
-                // Clear scroll anchor after a brief delay to allow layout to settle
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    scrollAnchorId = nil
-                }
             }
             
         } catch {
             print("[TweetListView] Server load failed: \(error)")
             
             await MainActor.run {
-                errorMessage = "Unable to load fresh content. Showing cached data."
                 // Mark initial load as complete even on error for page 0
                 if page == 0 {
                     isLoading = false
@@ -604,42 +585,6 @@ struct TweetListView<RowView: View>: View {
     // MARK: - Optimistic UI Methods
     func insertTweet(_ tweet: Tweet) {
         tweets.insert(tweet, at: 0)
-    }
-    
-    func removeTweet(_ tweet: Tweet) async -> Void {
-    }
-}
-
-// MARK: - Scroll Offset Preference Key
-struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-// MARK: - Scroll Detection Modifier
-private struct ScrollDetectionModifier: ViewModifier {
-    let onScroll: ((CGFloat) -> Void)?
-    
-    func body(content: Content) -> some View {
-        if let onScroll = onScroll {
-            content.simultaneousGesture(
-                DragGesture()
-                    .onChanged { value in
-                        let offset = value.translation.height
-                        onScroll(offset)
-                    }
-                    .onEnded { _ in
-                        // When gesture ends, maintain current state for a brief period
-                        // to allow scroll inertia to settle naturally
-                        // Don't immediately change navigation state
-                        // Let the scroll view settle naturally
-                    }
-            )
-        } else {
-            content
-        }
     }
 }
 
