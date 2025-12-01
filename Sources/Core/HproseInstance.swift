@@ -869,6 +869,7 @@ final class HproseInstance: ObservableObject {
         let params = [
             "aid": appId,
             "ver": "last",
+            "version": "v2",
             "tweetid": tweetId,
             "appuserid": appUser.mid
         ]
@@ -5463,9 +5464,22 @@ final class HproseInstance: ObservableObject {
             "followings": String(data: try encoder.encode(Gadget.getAlphaIds()), encoding: .utf8) ?? ""
         ]
         
-        guard let response = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params]) as? [String: Any] else {
+        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
+        
+        // Handle v2 format: check success field first
+        if let success = response["success"] as? Bool {
+            if !success {
+                let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+            // success is true, continue with status check for backward compatibility
+        }
+        
         if let result = response["status"] as? String {
             if result == "success" {
                 return true
