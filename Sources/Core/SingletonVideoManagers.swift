@@ -11,13 +11,163 @@ import AVFoundation
 import UIKit
 import SwiftUI
 
+// MARK: - Shared App Lifecycle Protocol
+@MainActor
+protocol VideoPlayerLifecycleManager: AnyObject {
+    var savedPlaybackState: (wasPlaying: Bool, time: CMTime)? { get set }
+    var hasRecoveredThisCycle: Bool { get set }
+    
+    func getPlayer() -> AVPlayer?
+    func pausePlayer()
+    func setPlaying(_ playing: Bool)
+    func isPlayerBroken() -> Bool
+    func clearBrokenPlayer()
+    func recoverFromBackground()
+}
+
+extension VideoPlayerLifecycleManager {
+    func setupAppLifecycleNotifications() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppWillResignActive()
+            }
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppDidEnterBackground()
+            }
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppWillEnterForeground()
+            }
+        }
+        
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppDidBecomeActive()
+            }
+        }
+    }
+    
+    func handleAppWillResignActive() {
+        guard let player = getPlayer() else { return }
+        
+        let managerName = String(describing: type(of: self))
+        print("DEBUG: [\(managerName)] App resigning active (screen lock), saving state")
+        
+        // Save current playback state
+        let wasPlaying = player.rate > 0
+        let currentTime = player.currentTime()
+        savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
+        
+        // Pause the player
+        pausePlayer()
+        setPlaying(false)
+        
+        // Reset recovery flag
+        hasRecoveredThisCycle = false
+        
+        print("DEBUG: [\(managerName)] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
+    }
+    
+    func handleAppDidEnterBackground() {
+        guard let player = getPlayer() else { return }
+        
+        let managerName = String(describing: type(of: self))
+        print("DEBUG: [\(managerName)] App entering background, saving state")
+        
+        // Save current playback state (if not already saved by willResignActive)
+        if savedPlaybackState == nil {
+            let wasPlaying = player.rate > 0
+            let currentTime = player.currentTime()
+            savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
+            
+            // Pause the player
+            pausePlayer()
+            setPlaying(false)
+            
+            print("DEBUG: [\(managerName)] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
+        } else {
+            print("DEBUG: [\(managerName)] State already saved by willResignActive")
+        }
+    }
+    
+    func handleAppWillEnterForeground() {
+        let managerName = String(describing: type(of: self))
+        print("DEBUG: [\(managerName)] App entering foreground, recovering from background")
+        recoverFromBackground()
+    }
+    
+    func handleAppDidBecomeActive() {
+        let managerName = String(describing: type(of: self))
+        print("DEBUG: [\(managerName)] App became active")
+        // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
+        // Only recover if we haven't already recovered in this cycle (to avoid duplicate recovery)
+        if !hasRecoveredThisCycle {
+            print("DEBUG: [\(managerName)] Recovering from screen lock in didBecomeActive")
+            recoverFromBackground()
+        } else {
+            print("DEBUG: [\(managerName)] Already recovered in willEnterForeground, checking for broken player")
+            // Even if we already recovered, check if player is broken (e.g., after video finished)
+            if isPlayerBroken() {
+                clearBrokenPlayer()
+            }
+        }
+    }
+}
+
 /// Singleton video manager for fullscreen video playback with auto-advance
 /// Uses a dedicated singleton player instance independent from MediaCell players
 @MainActor
-class FullScreenVideoManager: ObservableObject {
+class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     static let shared = FullScreenVideoManager()
     private init() {
         setupAppLifecycleNotifications()
+    }
+    
+    // MARK: - VideoPlayerLifecycleManager Protocol
+    var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
+    var hasRecoveredThisCycle = false
+    
+    func getPlayer() -> AVPlayer? {
+        return singletonPlayer
+    }
+    
+    func pausePlayer() {
+        pause()
+    }
+    
+    func setPlaying(_ playing: Bool) {
+        isPlaying = playing
+    }
+    
+    func clearBrokenPlayer() {
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+        singletonPlayer?.pause()
+        singletonPlayer = nil
+        isPlaying = false
     }
     
     // Independent singleton player for fullscreen mode
@@ -426,143 +576,10 @@ class FullScreenVideoManager: ObservableObject {
         }
     }
     
-    // MARK: - App Lifecycle
-    
-    private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
-    private var hasRecoveredThisCycle = false
-    
-    private func setupAppLifecycleNotifications() {
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleAppWillResignActive()
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleAppDidEnterBackground()
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleAppWillEnterForeground()
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleAppDidBecomeActive()
-            }
-        }
-    }
-    
-    private func handleAppWillResignActive() {
-        guard let player = singletonPlayer else { return }
-        
-        print("DEBUG: [FullScreenVideoManager] App resigning active (screen lock), saving state")
-        
-        // Save current playback state
-        let wasPlaying = player.rate > 0
-        let currentTime = player.currentTime()
-        savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
-        
-        // Pause the player
-        pause()
-        
-        // Reset recovery flag
-        hasRecoveredThisCycle = false
-        
-        print("DEBUG: [FullScreenVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
-    }
-    
-    private func handleAppDidEnterBackground() {
-        guard let player = singletonPlayer else { return }
-        
-        print("DEBUG: [FullScreenVideoManager] App entering background, saving state")
-        
-        // Save current playback state (if not already saved by willResignActive)
-        if savedPlaybackState == nil {
-            let wasPlaying = player.rate > 0
-            let currentTime = player.currentTime()
-            savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
-            
-            // Pause the player
-            pause()
-            
-            print("DEBUG: [FullScreenVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
-        } else {
-            print("DEBUG: [FullScreenVideoManager] State already saved by willResignActive")
-        }
-    }
-    
-    private func handleAppWillEnterForeground() {
-        print("DEBUG: [FullScreenVideoManager] App entering foreground, recovering from background")
-        recoverFromBackground()
-    }
-    
-    private func handleAppDidBecomeActive() {
-        print("DEBUG: [FullScreenVideoManager] App became active")
-        // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
-        // Only recover if we haven't already recovered in this cycle (to avoid duplicate recovery)
-        if !hasRecoveredThisCycle {
-            print("DEBUG: [FullScreenVideoManager] Recovering from screen lock in didBecomeActive")
-            recoverFromBackground()
-        } else {
-            print("DEBUG: [FullScreenVideoManager] Already recovered in willEnterForeground, checking for broken player")
-            // Even if we already recovered, check if player is broken (e.g., after video finished)
-            checkAndRecoverBrokenPlayer()
-        }
-    }
-    
-    /// Check and recover from broken player state (e.g., after video finished and app was idle)
-    private func checkAndRecoverBrokenPlayer() {
-        // Only check if we have a current video
-        guard currentVideoMid != nil else {
-            return
-        }
-        
-        // Check if player exists and is broken
-        if let player = singletonPlayer {
-            if isPlayerBroken() {
-                print("DEBUG: [FullScreenVideoManager] Player is broken after app became active - clearing for recreation")
-                // Clear broken player - view will reload it
-                if let observer = videoCompletionObserver {
-                    NotificationCenter.default.removeObserver(observer)
-                    videoCompletionObserver = nil
-                }
-                player.pause()
-                singletonPlayer = nil
-                isPlaying = false
-                // Keep currentVideoMid so view knows to reload
-            } else {
-                // Player is healthy - no need to rewind here
-                // Position will be checked when user tries to play
-            }
-        } else {
-            // Player is nil but we have a current video - view should reload it
-            print("DEBUG: [FullScreenVideoManager] Player is nil but video is current - view should reload")
-        }
-    }
+    // MARK: - App Lifecycle (via VideoPlayerLifecycleManager protocol)
     
     /// Two-layer recovery from background
-    private func recoverFromBackground() {
+    func recoverFromBackground() {
         guard let player = singletonPlayer else {
             print("DEBUG: [FullScreenVideoManager] No player to recover")
             hasRecoveredThisCycle = true
@@ -577,13 +594,7 @@ class FullScreenVideoManager: ObservableObject {
             NSLog("DEBUG: [FullScreenVideoManager] Layer 2 (Security): Player is broken - clearing to force recreation")
             
             // Clear broken player
-            if let observer = videoCompletionObserver {
-                NotificationCenter.default.removeObserver(observer)
-                videoCompletionObserver = nil
-            }
-            singletonPlayer?.pause()
-            singletonPlayer = nil
-            isPlaying = false
+            clearBrokenPlayer()
             currentVideoMid = nil
             currentTweetId = nil
             currentSourceTweetId = nil
@@ -647,7 +658,7 @@ class FullScreenVideoManager: ObservableObject {
     }
     
     /// Check if player is broken (Layer 2 security check)
-    private func isPlayerBroken() -> Bool {
+    func isPlayerBroken() -> Bool {
         guard let player = singletonPlayer else {
             NSLog("DEBUG: [FullScreenVideoManager] Player is nil -> BROKEN")
             return true
@@ -688,12 +699,43 @@ class FullScreenVideoManager: ObservableObject {
 
 /// Singleton video manager for detail view context
 @MainActor
-class DetailVideoManager: NSObject, ObservableObject {
+class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManager {
     static let shared = DetailVideoManager()
     private override init() {
         super.init()
         setupAppLifecycleNotifications()
         setupAudioInterruptionNotifications()
+    }
+    
+    // MARK: - VideoPlayerLifecycleManager Protocol
+    var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
+    var hasRecoveredThisCycle = false
+    
+    func getPlayer() -> AVPlayer? {
+        return currentPlayer
+    }
+    
+    func pausePlayer() {
+        currentPlayer?.pause()
+    }
+    
+    func setPlaying(_ playing: Bool) {
+        isPlaying = playing
+    }
+    
+    func clearBrokenPlayer() {
+        if hasKVOObserver, let playerItem = currentPlayer?.currentItem {
+            playerItem.removeObserver(self, forKeyPath: "status")
+            hasKVOObserver = false
+        }
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+        currentPlayer?.pause()
+        currentPlayer = nil
+        currentVideoMid = nil
+        isPlaying = false
     }
     
     @Published var currentPlayer: AVPlayer?
@@ -896,113 +938,10 @@ class DetailVideoManager: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - App Lifecycle Handling
-    
-    private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
-    private var hasRecoveredThisCycle = false
-    
-    private func setupAppLifecycleNotifications() {
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleAppWillResignActive()
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didEnterBackgroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleAppDidEnterBackground()
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleAppWillEnterForeground()
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.handleAppDidBecomeActive()
-            }
-        }
-    }
-    
-    private func handleAppWillResignActive() {
-        guard let player = currentPlayer else { return }
-        
-        NSLog("DEBUG: [DetailVideoManager] App resigning active (screen lock), saving state")
-        
-        // Save current playback state
-        let wasPlaying = player.rate > 0
-        let currentTime = player.currentTime()
-        savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
-        
-        // Pause the player
-        player.pause()
-        isPlaying = false
-        
-        // Reset recovery flag
-        hasRecoveredThisCycle = false
-        
-        print("DEBUG: [DetailVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
-    }
-    
-    private func handleAppDidEnterBackground() {
-        guard let player = currentPlayer else { return }
-        
-        print("DEBUG: [DetailVideoManager] App entering background, saving state")
-        
-        // Save current playback state (if not already saved by willResignActive)
-        if savedPlaybackState == nil {
-            let wasPlaying = player.rate > 0
-            let currentTime = player.currentTime()
-            savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
-            
-            // Pause the player to prevent black screen
-            player.pause()
-            isPlaying = false
-            
-            print("DEBUG: [DetailVideoManager] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
-        } else {
-            print("DEBUG: [DetailVideoManager] State already saved by willResignActive")
-        }
-    }
-    
-    private func handleAppWillEnterForeground() {
-        print("DEBUG: [DetailVideoManager] App entering foreground, recovering from background")
-        recoverFromBackground()
-    }
-    
-    private func handleAppDidBecomeActive() {
-        NSLog("DEBUG: [DetailVideoManager] App became active")
-        // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
-        // Only recover if we haven't already recovered in this cycle (to avoid duplicate recovery)
-        if !hasRecoveredThisCycle {
-            NSLog("DEBUG: [DetailVideoManager] Recovering from screen lock in didBecomeActive")
-            recoverFromBackground()
-        } else {
-            NSLog("DEBUG: [DetailVideoManager] Already recovered in willEnterForeground, skipping")
-        }
-    }
+    // MARK: - App Lifecycle (via VideoPlayerLifecycleManager protocol)
     
     /// Two-layer recovery from background
-    private func recoverFromBackground() {
+    func recoverFromBackground() {
         guard let player = currentPlayer else {
             NSLog("DEBUG: [DetailVideoManager] No player to recover")
             hasRecoveredThisCycle = true
@@ -1017,19 +956,7 @@ class DetailVideoManager: NSObject, ObservableObject {
             NSLog("DEBUG: [DetailVideoManager] Layer 2 (Security): Player is broken - clearing to force recreation")
             
             // Clear broken player completely
-            if hasKVOObserver, let playerItem = player.currentItem {
-                playerItem.removeObserver(self, forKeyPath: "status")
-                hasKVOObserver = false
-            }
-            if let observer = videoCompletionObserver {
-                NotificationCenter.default.removeObserver(observer)
-                videoCompletionObserver = nil
-            }
-            
-            currentPlayer?.pause()
-            currentPlayer = nil
-            currentVideoMid = nil
-            isPlaying = false
+            clearBrokenPlayer()
             
             // Post notification to tell SimpleVideoPlayer to reload
             // This will trigger SimpleVideoPlayer's handleVideoInfrastructureRestarted
@@ -1098,7 +1025,7 @@ class DetailVideoManager: NSObject, ObservableObject {
     }
     
     /// Check if player is broken (Layer 2 security check)
-    private func isPlayerBroken() -> Bool {
+    func isPlayerBroken() -> Bool {
         guard let player = currentPlayer else {
             NSLog("DEBUG: [DetailVideoManager] Player is nil -> BROKEN")
             return true

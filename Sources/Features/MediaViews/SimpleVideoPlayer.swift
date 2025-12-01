@@ -117,15 +117,6 @@ class VideoStateCache {
 
 // MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
-    /// Extract mediaID from URL
-    private func extractMediaID(from url: URL) -> String? {
-        let urlString = url.absoluteString
-        // Look for IPFS hash pattern (Qm...)
-        if let range = urlString.range(of: "Qm[A-Za-z0-9]{44}") {
-            return String(urlString[range])
-        }
-        return nil
-    }
     // MARK: Required Parameters
     let url: URL
     let mid: String
