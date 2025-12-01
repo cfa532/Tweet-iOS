@@ -5300,13 +5300,17 @@ final class HproseInstance: ObservableObject {
         let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
-        // Can be Bool or dict with success field
+        // For v2 API: server returns {success: true, data: {isPinned: bool}}
+        // After unwrapV2Response, we get {isPinned: bool}
+        if let dataDict = unwrappedResponse as? [String: Any] {
+            if let isPinned = dataDict["isPinned"] as? Bool {
+                return isPinned
+            }
+        }
+        
+        // Fallback: check if it's a direct Bool (legacy format)
         if let boolResponse = unwrappedResponse as? Bool {
             return boolResponse
-        } else if let dictResponse = unwrappedResponse as? [String: Any] {
-            if let success = dictResponse["success"] as? Bool {
-                return success
-            }
         }
         
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to update pinned tweet", comment: "Pin tweet error")])
