@@ -9,4 +9,3 @@ NSMicrophoneUsageDescription = "We need microphone access to record audio when y
 NSPhotoLibraryUsageDescription = "We need photo library access to save your captured photos and videos, and to let you select existing media for your posts and replies.";
 NSUserNotificationUsageDescription = "We use notifications to keep you updated about new chat messages, mentions, and important updates from your network.";
 CFBundleDisplayName = "Tweetd";
-

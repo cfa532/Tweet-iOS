@@ -2141,13 +2141,17 @@ final class HproseInstance: ObservableObject {
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
-            // Can be Bool or dict with success field
+            // For v2 API: server returns {success: true, data: {isFollowing: bool}}
+            // After unwrapV2Response, we get {isFollowing: bool}
+            if let dataDict = unwrappedResponse as? [String: Any] {
+                if let isFollowing = dataDict["isFollowing"] as? Bool {
+                    return isFollowing
+                }
+            }
+            
+            // Fallback: check if it's a direct Bool (legacy format)
             if let boolResponse = unwrappedResponse as? Bool {
                 return boolResponse
-            } else if let dictResponse = unwrappedResponse as? [String: Any] {
-                if let success = dictResponse["success"] as? Bool {
-                    return success
-                }
             }
             
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
@@ -2374,59 +2378,40 @@ final class HproseInstance: ObservableObject {
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             print("[updateTweetPrivacy] Raw response: \(String(describing: rawResponse))")
             
-            // Handle different response formats
-            if let isPrivateBool = rawResponse as? Bool {
-                // Backend returns just a boolean directly
+            // Unwrap v2 response
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            print("[updateTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
+            
+            // For v2 API: server returns {success: true, data: {isPrivate: bool}}
+            // After unwrapV2Response, we get {isPrivate: bool}
+            if let dataDict = unwrappedResponse as? [String: Any] {
+                if let isPrivate = dataDict["isPrivate"] as? Bool {
+                    print("[updateTweetPrivacy] Privacy status from v2 format: \(isPrivate)")
+                    return isPrivate
+                }
+            }
+            
+            // Fallback: check if it's a direct Bool (legacy format)
+            if let isPrivateBool = unwrappedResponse as? Bool {
                 print("[updateTweetPrivacy] Direct boolean response: \(isPrivateBool)")
                 return isPrivateBool
             }
             
-            // Handle numeric responses (0 = false, 1 = true)
-            if let numericResponse = rawResponse as? NSNumber {
+            // Handle numeric responses (0 = false, 1 = true) - legacy format
+            if let numericResponse = unwrappedResponse as? NSNumber {
                 let isPrivate = numericResponse.boolValue
                 print("[updateTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
                 return isPrivate
             }
             
-            // Handle integer responses (0 = false, 1 = true)
-            if let intResponse = rawResponse as? Int {
+            // Handle integer responses (0 = false, 1 = true) - legacy format
+            if let intResponse = unwrappedResponse as? Int {
                 let isPrivate = intResponse != 0
                 print("[updateTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
                 return isPrivate
             }
             
-            guard let response = rawResponse as? [String: Any] else {
-                print("[updateTweetPrivacy] Unexpected response format: \(String(describing: rawResponse))")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-            
-            print("[updateTweetPrivacy] Response dictionary: \(response)")
-            
-            // Check if the operation was successful
-            guard let success = response["success"] as? Bool, success else {
-                let errorMessage = response["error"] as? String ?? "updateTweetPrivacy: Operation failed"
-                print("[updateTweetPrivacy] Operation failed: \(errorMessage)")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
-            }
-            
-            // Parse the new privacy status from dictionary
-            if let isPrivate = response["isPrivate"] as? Bool {
-                print("[updateTweetPrivacy] Privacy status from dictionary: \(isPrivate)")
-                return isPrivate
-            }
-            
-            // Try alternative key names
-            if let isPrivate = response["private"] as? Bool {
-                print("[updateTweetPrivacy] Privacy status from 'private' key: \(isPrivate)")
-                return isPrivate
-            }
-            
-            if let isPrivate = response["privacy"] as? Bool {
-                print("[updateTweetPrivacy] Privacy status from 'privacy' key: \(isPrivate)")
-                return isPrivate
-            }
-            
-            print("[updateTweetPrivacy] No privacy status found in response keys: \(response.keys)")
+            print("[updateTweetPrivacy] Unexpected response format: \(String(describing: unwrappedResponse))")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
     }

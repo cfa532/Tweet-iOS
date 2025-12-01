@@ -9,4 +9,3 @@ NSMicrophoneUsageDescription = "需要麦克风访问权限，在您创建视频
 NSPhotoLibraryUsageDescription = "需要访问您的照片库以保存拍摄的照片和视频，并让您为帖子和回复选择现有媒体。";
 NSUserNotificationUsageDescription = "使用通知来让您了解新的聊天消息、提及和来自您网络的重要更新。";
 CFBundleDisplayName = "众众d";
-
