@@ -730,17 +730,13 @@ struct TweetDetailView: View {
     
     private func refreshTweet() {
         Task {
-            do {
-                if let refreshedTweet = try await hproseInstance.refreshTweet(
-                    tweetId: tweet.mid,
-                    authorId: tweet.authorId
-                ) {
-                    try await MainActor.run {
-                        try tweet.update(from: refreshedTweet)
-                    }
+            if let refreshedTweet = try await hproseInstance.refreshTweet(
+                tweetId: tweet.mid,
+                authorId: tweet.authorId
+            ) {
+                try await MainActor.run {
+                    try tweet.update(from: refreshedTweet)
                 }
-            } catch {
-                // Error refreshing tweet
             }
         }
     }

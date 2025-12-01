@@ -25,8 +25,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "4722"
-            endingLineNumber = "4722"
+            startingLineNumber = "4725"
+            endingLineNumber = "4725"
             landmarkName = "uploadTweet(_:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -41,8 +41,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "4736"
-            endingLineNumber = "4736"
+            startingLineNumber = "4739"
+            endingLineNumber = "4739"
             landmarkName = "uploadTweet(_:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -89,9 +89,9 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1288"
-            endingLineNumber = "1288"
-            landmarkName = "handleRetryRecovery(for:)"
+            startingLineNumber = "1291"
+            endingLineNumber = "1291"
+            landmarkName = "normalizedBaseURL(from:context:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -105,8 +105,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1293"
-            endingLineNumber = "1293"
+            startingLineNumber = "1296"
+            endingLineNumber = "1296"
             landmarkName = "handleRetryRecovery(for:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -121,8 +121,8 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1297"
-            endingLineNumber = "1297"
+            startingLineNumber = "1300"
+            endingLineNumber = "1300"
             landmarkName = "handleRetryRecovery(for:)"
             landmarkType = "7">
          </BreakpointContent>
@@ -137,9 +137,9 @@
             filePath = "Sources/Core/HproseInstance.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "5033"
-            endingLineNumber = "5033"
-            landmarkName = "checkVideoJobStatus(jobId:baseURL:)"
+            startingLineNumber = "5036"
+            endingLineNumber = "5036"
+            landmarkName = "handleCompletedVideoJob(pendingUpload:cid:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

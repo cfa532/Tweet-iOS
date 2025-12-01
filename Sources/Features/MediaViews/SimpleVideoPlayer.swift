@@ -2518,6 +2518,7 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                 var timeControlObserver: NSKeyValueObservation?
                 @Binding var isBuffering: Bool
                 var bufferingDebounceTask: DispatchWorkItem?
+                var hasLoggedPlayingStart = false // Track if we've already logged "Video started playing"
                 
                 init(isBuffering: Binding<Bool>) {
                     self._isBuffering = isBuffering
@@ -2557,6 +2558,9 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                 
                 if let player = player {
                     
+                    // Reset logging flag for new player
+                    context.coordinator.hasLoggedPlayingStart = false
+                    
                     // Setup timeControlStatus observer to track buffering
                     // CRITICAL: No .initial option to prevent immediate firing and update loops
                     context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
@@ -2578,11 +2582,17 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                                 // Cancel pending show task and hide spinner immediately
                                 context.coordinator.bufferingDebounceTask?.cancel()
                                 context.coordinator.isBuffering = false
-                                NSLog("✅ [AVPlayerViewController] Video started playing")
+                                // Only log once per playback session
+                                if !context.coordinator.hasLoggedPlayingStart {
+                                    context.coordinator.hasLoggedPlayingStart = true
+                                    NSLog("✅ [AVPlayerViewController] Video started playing")
+                                }
                             } else {
                                 // Paused - cancel pending show task and hide spinner
                                 context.coordinator.bufferingDebounceTask?.cancel()
                                 context.coordinator.isBuffering = false
+                                // Reset flag when paused so we can log again on next play
+                                context.coordinator.hasLoggedPlayingStart = false
                             }
                         }
                     }
@@ -2637,12 +2647,20 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                 // CRITICAL: Detach player first, then re-attach
                 // This ensures the player's layer is not attached to any other view
                 
+                // Check if player instance changed before detaching
+                let playerChanged = uiViewController.player !== player
+                
                 // Detach and reattach to force fresh layer connection
                 uiViewController.player = nil
                 uiViewController.player = player
                 
+                // Reset logging flag if player changed
+                if playerChanged {
+                    context.coordinator.hasLoggedPlayingStart = false
+                }
+                
                 // Update timeControlStatus observer only if player changed
-                if let player = player, uiViewController.player != player {
+                if let player = player, playerChanged {
                     context.coordinator.timeControlObserver?.invalidate()
                     context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
                         DispatchQueue.main.async {
@@ -2652,9 +2670,15 @@ struct VideoLayerRefreshView: UIViewRepresentable {
                                 context.coordinator.isBuffering = true
                             } else if observedPlayer.timeControlStatus == .playing {
                                 context.coordinator.isBuffering = false
-                                NSLog("✅ [AVPlayerViewController] Video started playing in updateUIViewController")
+                                // Only log once per playback session
+                                if !context.coordinator.hasLoggedPlayingStart {
+                                    context.coordinator.hasLoggedPlayingStart = true
+                                    NSLog("✅ [AVPlayerViewController] Video started playing in updateUIViewController")
+                                }
                             } else {
                                 context.coordinator.isBuffering = false
+                                // Reset flag when paused so we can log again on next play
+                                context.coordinator.hasLoggedPlayingStart = false
                             }
                         }
                     }
