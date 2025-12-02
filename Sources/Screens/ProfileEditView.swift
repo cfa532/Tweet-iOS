@@ -38,6 +38,9 @@ struct ProfileEditView: View {
     @State private var showExitConfirmation = false
     @State private var hasUnsavedChanges = false
     @State private var initialValues: [String: String] = [:]
+    @State private var originalHostId: String? = nil
+    @State private var originalCloudDrivePort: Int = 0
+    @State private var originalDomainToShare: String? = nil
     @State private var avatarUpdateTrigger = 0 // Force avatar view update
     @State private var showImageCropper = false
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -215,7 +218,7 @@ struct ProfileEditView: View {
                 Text(LocalizedStringKey("Cloud Drive Port"))
                     .font(.caption)
                     .foregroundColor(.themeText)
-                TextField("", text: $cloudDrivePort, prompt: Text(cloudDrivePortPlaceholder))
+                TextField(LocalizedStringKey("Cloud Drive Port"), text: $cloudDrivePort)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .keyboardType(.numberPad)
                     .focused($focusedField, equals: .cloudDrivePort)
@@ -371,8 +374,13 @@ struct ProfileEditView: View {
         profile = appUser.profile ?? "" // Show existing profile in the field
         hostId = "" // Always leave hostId empty when profile editor opens
         avatarId = appUser.avatar
-        cloudDrivePort = "" // Always leave cloudDrivePort empty when profile editor opens
-        domainToShare = appUser.domainToShare ?? ""
+        cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description // Show existing cloudDrivePort value in the field
+        domainToShare = "" // Always leave domainToShare empty when profile editor opens
+        
+        // Store original values to send if user doesn't provide new input
+        originalHostId = appUser.hostIds?.first
+        originalCloudDrivePort = appUser.cloudDrivePort
+        originalDomainToShare = appUser.domainToShare
         
         // Store initial values for change detection
         initialValues = [
@@ -485,10 +493,18 @@ struct ProfileEditView: View {
             return
         }
         
-        // Validate cloudDrivePort
-        if let port = Int(cloudDrivePort), port < 8000 || port > 9000 {
-            errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 9000.", comment: "Validation error")
-            return
+        // Validate cloudDrivePort: must be empty/null or between 8000-9000
+        let trimmedPort = cloudDrivePort.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPort.isEmpty {
+            if let port = Int(trimmedPort) {
+                if port < 8000 || port > 9000 {
+                    errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 9000.", comment: "Validation error")
+                    return
+                }
+            } else {
+                errorMessage = NSLocalizedString("Cloud Drive Port must be a valid number.", comment: "Validation error")
+                return
+            }
         }
         
         // Password validation (optional, but if provided, must match confirm)
@@ -506,20 +522,22 @@ struct ProfileEditView: View {
         // Call the submit function asynchronously
         Task {
             do {
-                // Convert cloudDrivePort: empty string → 0 (to explicitly clear on server)
-                let portValue: Int
-                if cloudDrivePort.isEmpty {
-                    portValue = 0  // Explicitly send 0 to clear the port
-                } else {
-                    portValue = Int(cloudDrivePort) ?? 0
-                }
+                // For hostId, cloudDrivePort, and domainToShare:
+                // If user provided input, use it; otherwise use original value
+                let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
+                let hostIdValue = trimmedHostId.isEmpty ? originalHostId : trimmedHostId
                 
                 let trimmedShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
-                let shareDomainValue = trimmedShareDomain.isEmpty ? nil : trimmedShareDomain
+                let shareDomainValue = trimmedShareDomain.isEmpty ? originalDomainToShare : trimmedShareDomain
                 
-                // If hostId is empty, pass nil to ignore hostIds field
-                let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
-                let hostIdValue = trimmedHostId.isEmpty ? nil : trimmedHostId
+                // For cloudDrivePort: if empty, use original value (or 0 if original was 0); if provided, use it
+                let trimmedPort = cloudDrivePort.trimmingCharacters(in: .whitespacesAndNewlines)
+                let finalPortValue: Int
+                if trimmedPort.isEmpty {
+                    finalPortValue = originalCloudDrivePort
+                } else {
+                    finalPortValue = Int(trimmedPort) ?? originalCloudDrivePort
+                }
                 
                 try await onSubmit(
                     username,
@@ -527,7 +545,7 @@ struct ProfileEditView: View {
                     alias.isEmpty ? nil : alias,
                     profile.isEmpty ? nil : profile,
                     hostIdValue,
-                    portValue,
+                    finalPortValue,
                     shareDomainValue
                 )
                 
