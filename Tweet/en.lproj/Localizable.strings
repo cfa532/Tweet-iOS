@@ -584,6 +584,28 @@
 "Network error. Please check your connection and try again." = "Network error. Please check your connection and try again.";
 "Something went wrong. Please try again." = "Something went wrong. Please try again.";
 
+// MARK: - Server Error Messages
+"Username is taken" = "Username is taken";
+"User not found" = "User not found";
+"Wrong password" = "Wrong password";
+"Unknown error" = "Unknown error";
+"User not found or missing host" = "User not found or missing host";
+"User host not found" = "User host not found";
+"Author host not found" = "Author host not found";
+"User not found in database" = "User not found in database";
+"User missing host" = "User missing host";
+"Cannot follow yourself" = "Cannot follow yourself";
+"Cannot get followed user" = "Cannot get followed user";
+"Missing host for followed user" = "Missing host for followed user";
+"Tweet not found" = "Tweet not found";
+"Only the tweet author can update privacy settings" = "Only the tweet author can update privacy settings";
+"Not a friend of the host" = "Not a friend of the host";
+"No provider IP found." = "No provider IP found.";
+"Chunk size exceeds 1MB limit" = "Chunk size exceeds 1MB limit";
+"Failed to extract zip file" = "Failed to extract zip file";
+"Invalid HLS structure" = "Invalid HLS structure";
+"App ID mismatch" = "App ID mismatch";
+
 // MARK: - Cloud Drive Limit
 "Tweet Limit Reached" = "Tweet Limit Reached";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.";

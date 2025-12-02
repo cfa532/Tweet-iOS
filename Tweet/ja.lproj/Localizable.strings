@@ -505,6 +505,28 @@
 "Network error. Please check your connection and try again." = "ネットワークエラーです。接続を確認してもう一度お試しください。";
 "Something went wrong. Please try again." = "問題が発生しました。もう一度お試しください。";
 
+// MARK: - Server Error Messages
+"Username is taken" = "ユーザー名は既に使用されています";
+"User not found" = "ユーザーが見つかりません";
+"Wrong password" = "パスワードが間違っています";
+"Unknown error" = "不明なエラー";
+"User not found or missing host" = "ユーザーが見つからないか、ホストがありません";
+"User host not found" = "ユーザーホストが見つかりません";
+"Author host not found" = "作成者ホストが見つかりません";
+"User not found in database" = "データベースにユーザーが見つかりません";
+"User missing host" = "ユーザーのホストがありません";
+"Cannot follow yourself" = "自分自身をフォローすることはできません";
+"Cannot get followed user" = "フォローしているユーザーを取得できません";
+"Missing host for followed user" = "フォローしているユーザーのホストがありません";
+"Tweet not found" = "ツイートが見つかりません";
+"Only the tweet author can update privacy settings" = "ツイートの作成者のみがプライバシー設定を更新できます";
+"Not a friend of the host" = "ホストの友達ではありません";
+"No provider IP found." = "プロバイダーIPが見つかりません。";
+"Chunk size exceeds 1MB limit" = "チャンクサイズが1MB制限を超えています";
+"Failed to extract zip file" = "ZIPファイルの抽出に失敗しました";
+"Invalid HLS structure" = "無効なHLS構造";
+"App ID mismatch" = "アプリIDが一致しません";
+
 // MARK: - Cloud Drive Limit
 "Tweet Limit Reached" = "ツイート制限に達しました";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "これはWeb3ツイートアプリです。善意でホストされているツイートの最大数に達しました。独自のノードを設定するか、友人に今後のツイートをホストしてもらってください。";

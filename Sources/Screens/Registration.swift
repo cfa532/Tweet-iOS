@@ -316,10 +316,16 @@ struct RegistrationView: View {
                     Int(cloudDrivePort) ?? 0
                 )
                 
-                // Reset submission state after completion
+                // Show success message and dismiss after a delay
                 await MainActor.run {
                     isSubmitting = false
                     onSubmissionStateChange?(false)
+                    showToastMessage(NSLocalizedString("Registration successful. Please wait a few minutes before logging in.", comment: "Registration success message with login reminder"), type: .success)
+                    
+                    // Dismiss after showing success message for 3 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                        dismiss()
+                    }
                 }
             } catch {
                 // Handle registration failure with toast
@@ -340,7 +346,8 @@ struct RegistrationView: View {
         showToast = true
         
         // Auto-hide toast after appropriate duration
-        let duration: TimeInterval = type == .error ? 3.0 : 2.0
+        // Success messages show for 3 seconds, error messages for 3 seconds
+        let duration: TimeInterval = type == .error ? 3.0 : 3.0
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
             withAnimation { showToast = false }
         }

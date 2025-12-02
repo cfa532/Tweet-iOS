@@ -255,7 +255,74 @@ struct ErrorMessageHelper {
     
     /// Convert a technical error to a user-friendly message
     static func userFriendlyMessage(from error: Error) -> String {
-        let errorDescription = error.localizedDescription.lowercased()
+        let originalMessage = error.localizedDescription
+        let errorDescription = originalMessage.lowercased()
+        
+        // Check if the error message is already user-friendly
+        // User-friendly messages are typically short, clear, and don't contain technical jargon
+        let technicalTerms = ["nsurlsession", "nsurlerror", "domain error", "error code", "error -", 
+                             "failed with", "underlying error", "userinfo", "nserror", "exception",
+                             "stack trace", "debug", "parse", "decode", "json", "http", "https",
+                             "ssl", "certificate", "tcp", "socket", "connection", "timeout"]
+        
+        let isTechnicalError = technicalTerms.contains { errorDescription.contains($0) }
+        let isShortAndClear = originalMessage.count < 100 && !originalMessage.contains("Error Domain")
+        
+        // Server-provided user-friendly error messages mapping to localized versions
+        // These are actual error messages returned from the server API
+        let serverErrorMapping: [String: String] = [
+            // Registration errors
+            "username is taken": NSLocalizedString("Username is taken", comment: "Server error: username already taken"),
+            // Login errors
+            "user not found": NSLocalizedString("User not found", comment: "Server error: user not found"),
+            "wrong password": NSLocalizedString("Wrong password", comment: "Server error: wrong password"),
+            "unknown error": NSLocalizedString("Unknown error", comment: "Server error: unknown error"),
+            // User/host errors
+            "user not found or missing host": NSLocalizedString("User not found or missing host", comment: "Server error: user not found or missing host"),
+            "user host not found": NSLocalizedString("User host not found", comment: "Server error: user host not found"),
+            "author host not found": NSLocalizedString("Author host not found", comment: "Server error: author host not found"),
+            "user not found in database": NSLocalizedString("User not found in database", comment: "Server error: user not found in database"),
+            "user missing host": NSLocalizedString("User missing host", comment: "Server error: user missing host"),
+            // Following/follower errors
+            "cannot follow yourself": NSLocalizedString("Cannot follow yourself", comment: "Server error: cannot follow yourself"),
+            "cannot get followed user": NSLocalizedString("Cannot get followed user", comment: "Server error: cannot get followed user"),
+            "missing host for followed user": NSLocalizedString("Missing host for followed user", comment: "Server error: missing host for followed user"),
+            // Tweet errors
+            "tweet not found": NSLocalizedString("Tweet not found", comment: "Server error: tweet not found"),
+            "only the tweet author can update privacy settings": NSLocalizedString("Only the tweet author can update privacy settings", comment: "Server error: only author can update privacy"),
+            // Authentication/authorization errors
+            "not a friend of the host": NSLocalizedString("Not a friend of the host", comment: "Server error: not a friend of the host"),
+            "no provider ip found.": NSLocalizedString("No provider IP found.", comment: "Server error: no provider IP found"),
+            // Upload errors
+            "failed to extract zip file": NSLocalizedString("Failed to extract zip file", comment: "Server error: failed to extract zip file"),
+            "invalid hls structure": NSLocalizedString("Invalid HLS structure", comment: "Server error: invalid HLS structure"),
+            // App errors
+            "app id mismatch": NSLocalizedString("App ID mismatch", comment: "Server error: app ID mismatch")
+        ]
+        
+        // Check for exact match first (case-insensitive)
+        if let localizedMessage = serverErrorMapping[errorDescription] {
+            return localizedMessage
+        }
+        
+        // Check for chunk size error (has variable size like "Chunk size 1234 exceeds 1MB limit")
+        if errorDescription.contains("chunk size") && errorDescription.contains("exceeds") && errorDescription.contains("1mb limit") {
+            return NSLocalizedString("Chunk size exceeds 1MB limit", comment: "Server error: chunk size exceeds limit")
+        }
+        
+        // Check for partial matches (for messages that might have additional context)
+        // Sort by length (longest first) to match more specific messages first
+        let sortedKeys = serverErrorMapping.keys.sorted { $0.count > $1.count }
+        for serverKey in sortedKeys {
+            if errorDescription.contains(serverKey) {
+                return serverErrorMapping[serverKey]!
+            }
+        }
+        
+        // If the message is already user-friendly, return it as-is
+        if !isTechnicalError && isShortAndClear {
+            return originalMessage
+        }
         
         // Network connectivity issues
         if errorDescription.contains("network connection was lost") ||
@@ -271,11 +338,14 @@ struct ErrorMessageHelper {
             return NSLocalizedString("The request took too long. Please try again.", comment: "Timeout error")
         }
         
-        if errorDescription.contains("could not connect to the server") ||
-           errorDescription.contains("server is not responding") ||
-           errorDescription.contains("cannot find the server") ||
-           errorDescription.contains("host") ||
-           errorDescription.contains("dns") {
+        // Network/server errors (but not server-provided user-friendly messages)
+        if (errorDescription.contains("could not connect to the server") ||
+            errorDescription.contains("server is not responding") ||
+            errorDescription.contains("cannot find the server") ||
+            errorDescription.contains("dns")) &&
+            !errorDescription.contains("user host not found") &&
+            !errorDescription.contains("author host not found") &&
+            !errorDescription.contains("missing host") {
             return NSLocalizedString("Cannot reach the server. Please try again later.", comment: "Server unreachable error")
         }
         

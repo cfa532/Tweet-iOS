@@ -16,7 +16,6 @@ struct LoginView: View {
     @State private var showRegistration = false
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var showSuccess = false
     @FocusState private var focusedField: Field?
     
     enum Field {
@@ -146,22 +145,13 @@ struct LoginView: View {
                             hostId: (hostId?.isEmpty ?? true) ? nil : hostId,
                             cloudDrivePort: cloudDrivePort
                         )
-                        if success {
-                            showSuccess = true
-                            showRegistration = false
-                        } else {
+                        if !success {
                             // Let RegistrationView handle the error with toast
                             throw NSError(domain: "Registration", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
                         }
+                        // Success is handled by RegistrationView with toast message
                     }
                 )
-            }
-            .alert(LocalizedStringKey("Login Successful. Wait for a few minutes before login."), isPresented: $showSuccess) {
-                Button(LocalizedStringKey("OK")) {
-//                    dismiss()
-                }
-            } message: {
-                Text(LocalizedStringKey("Welcome back!"))
             }
         }
     }
