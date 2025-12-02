@@ -11,7 +11,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct RegistrationView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmit: (String, String?, String?, String?, String?) async throws -> Void // username, password, alias, profile, hostId
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onRegistrationFailure: ((String) -> Void)? = nil // Callback for registration failure
 
@@ -21,7 +21,6 @@ struct RegistrationView: View {
     @State private var alias: String = ""
     @State private var profile: String = ""
     @State private var hostId: String = ""
-    @State private var cloudDrivePort: String = ""
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
     @State private var isSubmitting = false
@@ -35,10 +34,10 @@ struct RegistrationView: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
-        case username, password, confirmPassword, alias, profile, hostId, cloudDrivePort
+        case username, password, confirmPassword, alias, profile, hostId
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onRegistrationFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onRegistrationFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
         self.onSubmissionStateChange = onSubmissionStateChange
         self.onRegistrationFailure = onRegistrationFailure
@@ -51,12 +50,9 @@ struct RegistrationView: View {
 
                     Group {
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                                            Text(LocalizedStringKey("Username *"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
-                                Spacer()
-                            }
+                            Text(LocalizedStringKey("Username *"))
+                                .font(.footnote)
+                                .foregroundColor(.themeText)
                             TextField(LocalizedStringKey("Username"), text: $username)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .autocapitalization(.none)
@@ -67,12 +63,9 @@ struct RegistrationView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(LocalizedStringKey("Password *"))
-                                    .font(.caption)
-                                    .foregroundColor(.themeSecondaryText)
-                                Spacer()
-                            }
+                            Text(LocalizedStringKey("Password *"))
+                                .font(.footnote)
+                                .foregroundColor(.themeText)
                             SecureField(LocalizedStringKey("Password"), text: $password)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .password)
@@ -82,8 +75,8 @@ struct RegistrationView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(LocalizedStringKey("Confirm Password"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
+                                .font(.footnote)
+                                .foregroundColor(.themeText)
                             SecureField(LocalizedStringKey("Confirm Password"), text: $confirmPassword)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .confirmPassword)
@@ -93,8 +86,8 @@ struct RegistrationView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(LocalizedStringKey("Alias"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
+                                .font(.footnote)
+                                .foregroundColor(.themeText)
                             TextField(LocalizedStringKey("Alias"), text: $alias)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .alias)
@@ -104,8 +97,8 @@ struct RegistrationView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(LocalizedStringKey("Profile"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
+                                .font(.footnote)
+                                .foregroundColor(.themeText)
                             TextEditor(text: $profile)
                                 .frame(minHeight: 60, maxHeight: 120)
                                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.themeBorder.opacity(0.3)))
@@ -114,9 +107,9 @@ struct RegistrationView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(LocalizedStringKey("Host ID (optional)"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
+                            Text(LocalizedStringKey("Host ID"))
+                                .font(.footnote)
+                                .foregroundColor(.themeText)
                             TextField("", text: $hostId)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .focused($focusedField, equals: .hostId)
@@ -125,25 +118,6 @@ struct RegistrationView: View {
                                 .onChange(of: hostId) { _, newValue in
                                     if newValue.count > Constants.MIMEI_ID_LENGTH {
                                         hostId = String(newValue.prefix(Constants.MIMEI_ID_LENGTH))
-                                    }
-                                }
-                        }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(LocalizedStringKey("Cloud Drive Port"))
-                                .font(.caption)
-                                .foregroundColor(.themeSecondaryText)
-                            TextField(LocalizedStringKey("Cloud Drive Port"), text: $cloudDrivePort)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .keyboardType(.numberPad)
-                                .focused($focusedField, equals: .cloudDrivePort)
-                                .contentShape(Rectangle())
-                                .onTapGesture { focusedField = .cloudDrivePort }
-                                .onChange(of: cloudDrivePort) { _, newValue in
-                                    // Only allow numeric input
-                                    let filtered = newValue.filter { $0.isNumber }
-                                    if filtered != newValue {
-                                        cloudDrivePort = filtered
                                     }
                                 }
                         }
@@ -157,20 +131,20 @@ struct RegistrationView: View {
                             }) {
                                 Image(systemName: hasAcceptedTerms ? "checkmark.square.fill" : "square")
                                     .foregroundColor(hasAcceptedTerms ? .blue : .gray)
-                                    .font(.title2)
+                                    .font(.footnote)
                             }
                             .buttonStyle(PlainButtonStyle())
                             
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 0) {
                                     Text(LocalizedStringKey("I agree to the "))
-                                        .font(.body) +
+                                        .font(.footnote) +
                                     Text(LocalizedStringKey("Terms of Service"))
-                                        .font(.body)
+                                        .font(.footnote)
                                         .foregroundColor(.blue)
                                         .underline() +
                                     Text(LocalizedStringKey(" and acknowledge that there is no tolerance for objectionable content or abusive users."))
-                                        .font(.body)
+                                        .font(.footnote)
                                 }
                             }
                             .onTapGesture {
@@ -238,7 +212,6 @@ struct RegistrationView: View {
             .onChange(of: alias) { _, _ in checkForChanges() }
             .onChange(of: profile) { _, _ in checkForChanges() }
             .onChange(of: hostId) { _, _ in checkForChanges() }
-            .onChange(of: cloudDrivePort) { _, _ in checkForChanges() }
             .sheet(isPresented: $showTermsOfService) {
                 TermsOfServiceView(
                     hasAcceptedTerms: $hasAcceptedTerms,
@@ -286,12 +259,6 @@ struct RegistrationView: View {
             return
         }
         
-        // Validate cloudDrivePort
-        if let port = Int(cloudDrivePort), port < 8000 || port > 9000 {
-            errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 9000.", comment: "Validation error")
-            return
-        }
-        
         // Validate terms acceptance
         if !hasAcceptedTerms {
             errorMessage = NSLocalizedString("You must accept the Terms of Service to continue.", comment: "Validation error")
@@ -312,8 +279,7 @@ struct RegistrationView: View {
                     password.isEmpty ? nil : password,
                     alias.isEmpty ? nil : alias,
                     profile.isEmpty ? nil : profile,
-                    hostId,
-                    Int(cloudDrivePort) ?? 0
+                    hostId
                 )
                 
                 // Show success message and dismiss after a delay
@@ -360,8 +326,7 @@ struct RegistrationView: View {
                         !confirmPassword.isEmpty || 
                         !alias.isEmpty || 
                         !profile.isEmpty || 
-                        !hostId.isEmpty || 
-                        !cloudDrivePort.isEmpty ||
+                        !hostId.isEmpty ||
                         hasAcceptedTerms
         
         hasUnsavedChanges = hasChanges

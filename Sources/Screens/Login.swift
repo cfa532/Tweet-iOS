@@ -136,14 +136,14 @@ struct LoginView: View {
             })
             .sheet(isPresented: $showRegistration) {
                 RegistrationView(
-                    onSubmit: { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int) in
+                    onSubmit: { (username: String, password: String?, alias: String?, profile: String?, hostId: String?) in
                         let success = try await hproseInstance.registerUser(
                             username: username,
                             password: password ?? "",
                             alias: alias ?? "",
                             profile: profile ?? "",
                             hostId: (hostId?.isEmpty ?? true) ? nil : hostId,
-                            cloudDrivePort: cloudDrivePort
+                            cloudDrivePort: 0
                         )
                         if !success {
                             // Let RegistrationView handle the error with toast
