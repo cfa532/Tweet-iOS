@@ -5456,7 +5456,7 @@ final class HproseInstance: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         
-        let params = [
+        var params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
@@ -5471,23 +5471,17 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
-        // Handle v2 format: check success field first
-        if let success = response["success"] as? Bool {
-            if !success {
-                let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
-            }
-            // success is true, continue with status check for backward compatibility
+        // v2 format: {success: true, user: <parsed user object>}
+        guard let success = response["success"] as? Bool else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
-        if let result = response["status"] as? String {
-            if result == "success" {
-                return true
-            } else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")])
-            }
+        if success {
+            return true
+        } else {
+            let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
         }
-        return false
     }
     
     func updateUserCore(
