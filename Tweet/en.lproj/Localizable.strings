@@ -86,8 +86,9 @@
 "Alias" = "Alias";
 "Profile" = "Profile";
 "Host ID (optional)" = "Host ID (optional)";
+"Host ID" = "Host ID";
 "Cloud Drive Port" = "Cloud Drive Port";
-"Share Domain (optional)" = "Share Domain (optional)";
+"Share Domain" = "Share Domain";
 "Register" = "Register";
 "Cancel" = "Cancel";
 "Uploading..." = "Uploading...";

@@ -5513,18 +5513,41 @@ final class HproseInstance: ObservableObject {
         
         let sanitizedDomain = domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalShareDomain = sanitizedDomain?.isEmpty == true ? nil : sanitizedDomain
+        
+        // Create a copy of the user object with all existing properties
         let updatedUser = User(
             mid: appUser.mid,
-            name: alias,
-            password: password,
-            profile: profile,
+            name: alias ?? appUser.name,
+            password: password ?? appUser.password,
+            profile: profile ?? appUser.profile,
             cloudDrivePort: cloudDrivePort,
-            domainToShare: finalShareDomain
+            domainToShare: finalShareDomain ?? appUser.domainToShare
         )
+        // Copy other properties from appUser
+        updatedUser.baseUrl = appUser.baseUrl
+        updatedUser.writableUrl = appUser.writableUrl
+        updatedUser.username = appUser.username
+        updatedUser.avatar = appUser.avatar
+        updatedUser.email = appUser.email
+        updatedUser.timestamp = appUser.timestamp
+        updatedUser.lastLogin = appUser.lastLogin
+        updatedUser.tweetCount = appUser.tweetCount
+        updatedUser.followingCount = appUser.followingCount
+        updatedUser.followersCount = appUser.followersCount
+        updatedUser.bookmarksCount = appUser.bookmarksCount
+        updatedUser.favoritesCount = appUser.favoritesCount
+        updatedUser.commentsCount = appUser.commentsCount
+        updatedUser.publicKey = appUser.publicKey
+        updatedUser.fansList = appUser.fansList
+        updatedUser.followingList = appUser.followingList
+        
         // Only set hostIds if hostId is provided and not empty
-        // If hostId is nil or empty, hostIds field will be ignored (not included in JSON)
+        // If hostId is nil or empty, preserve existing hostIds (don't modify)
         if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             updatedUser.hostIds = [hostId]
+        } else {
+            // Preserve existing hostIds when hostId is not provided
+            updatedUser.hostIds = appUser.hostIds
         }
         
         // Configure encoder to use milliseconds for timestamps
@@ -5583,13 +5606,11 @@ final class HproseInstance: ObservableObject {
                     if let profile = profile {
                         self.appUser.profile = profile
                     }
-                    // Update hostIds: if hostId is provided, set it; if nil/empty, clear hostIds
+                    // Update hostIds: if hostId is provided, set it; if nil/empty, preserve existing hostIds
                     if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.appUser.hostIds = [hostId]
-                    } else {
-                        // Clear hostIds when hostId is empty/nil
-                        self.appUser.hostIds = nil
                     }
+                    // If hostId is nil/empty, don't modify appUser.hostIds - preserve existing value
                     // CRITICAL: Update cloudDrivePort
                     self.appUser.cloudDrivePort = cloudDrivePort
                     if let sanitizedDomain = sanitizedDomain, !sanitizedDomain.isEmpty {

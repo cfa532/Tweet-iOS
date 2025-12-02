@@ -65,6 +65,23 @@ struct ProfileEditView: View {
         return domain
     }
     
+    private var hostIdPlaceholder: String {
+        return hproseInstance.appUser.hostIds?.first ?? ""
+    }
+    
+    private var cloudDrivePortPlaceholder: String {
+        let port = hproseInstance.appUser.cloudDrivePort
+        return (port != 0) ? String(port) : ""
+    }
+    
+    private var profilePlaceholder: String {
+        return hproseInstance.appUser.profile ?? ""
+    }
+    
+    private var aliasPlaceholder: String {
+        return hproseInstance.appUser.name ?? ""
+    }
+    
     private var avatarSection: some View {
         VStack {
             ZStack(alignment: .bottomTrailing) {
@@ -116,7 +133,7 @@ struct ProfileEditView: View {
                 HStack {
                     Text(LocalizedStringKey("Username"))
                         .font(.caption)
-                        .foregroundColor(.themeSecondaryText)
+                        .foregroundColor(.themeText)
                     Spacer()
                 }
                 Text(username)
@@ -132,7 +149,7 @@ struct ProfileEditView: View {
                 HStack {
                     Text(LocalizedStringKey("New Password (optional)"))
                         .font(.caption)
-                        .foregroundColor(.themeSecondaryText)
+                        .foregroundColor(.themeText)
                     Spacer()
                 }
                 SecureField(LocalizedStringKey("New Password"), text: $password)
@@ -146,7 +163,7 @@ struct ProfileEditView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(LocalizedStringKey("Confirm New Password"))
                         .font(.caption)
-                        .foregroundColor(.themeSecondaryText)
+                        .foregroundColor(.themeText)
                     SecureField(LocalizedStringKey("Confirm New Password"), text: $confirmPassword)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .focused($focusedField, equals: .confirmPassword)
@@ -159,7 +176,7 @@ struct ProfileEditView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringKey("Alias"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
+                    .foregroundColor(.themeText)
                 TextField(LocalizedStringKey("Alias"), text: $alias)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .focused($focusedField, equals: .alias)
@@ -170,7 +187,7 @@ struct ProfileEditView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringKey("Profile"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
+                    .foregroundColor(.themeText)
                 TextEditor(text: $profile)
                     .frame(minHeight: 60, maxHeight: 120)
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.themeBorder.opacity(0.3)))
@@ -179,10 +196,10 @@ struct ProfileEditView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringKey("Host ID (optional)"))
+                Text(LocalizedStringKey("Host ID"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
-                TextField("", text: $hostId)
+                    .foregroundColor(.themeText)
+                TextField("", text: $hostId, prompt: Text(hostIdPlaceholder))
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .focused($focusedField, equals: .hostId)
                     .contentShape(Rectangle())
@@ -197,8 +214,8 @@ struct ProfileEditView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringKey("Cloud Drive Port"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
-                TextField(LocalizedStringKey("Cloud Drive Port"), text: $cloudDrivePort)
+                    .foregroundColor(.themeText)
+                TextField("", text: $cloudDrivePort, prompt: Text(cloudDrivePortPlaceholder))
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .keyboardType(.numberPad)
                     .focused($focusedField, equals: .cloudDrivePort)
@@ -214,9 +231,9 @@ struct ProfileEditView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringKey("Share Domain (optional)"))
+                Text(LocalizedStringKey("Share Domain"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
+                    .foregroundColor(.themeText)
                 TextField("", text: $domainToShare, prompt: Text(shareDomainPlaceholder))
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .keyboardType(.URL)
@@ -350,11 +367,11 @@ struct ProfileEditView: View {
     private func loadInitialData() {
         let appUser = hproseInstance.appUser
         username = appUser.username ?? ""
-        alias = appUser.name ?? ""
-        profile = appUser.profile ?? ""
+        alias = appUser.name ?? "" // Show existing name in the field
+        profile = appUser.profile ?? "" // Show existing profile in the field
         hostId = "" // Always leave hostId empty when profile editor opens
         avatarId = appUser.avatar
-        cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description
+        cloudDrivePort = "" // Always leave cloudDrivePort empty when profile editor opens
         domainToShare = appUser.domainToShare ?? ""
         
         // Store initial values for change detection

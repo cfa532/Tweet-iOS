@@ -86,8 +86,9 @@
 "Alias" = "昵称";
 "Profile" = "个人简介";
 "Host ID (optional)" = "主机 ID（可选）";
+"Host ID" = "主机 ID";
 "Cloud Drive Port" = "云盘端口";
-"Share Domain (optional)" = "分享域名（可选）";
+"Share Domain" = "分享域名";
 "Register" = "注册";
 "Cancel" = "取消";
 "Uploading..." = "上传中...";
