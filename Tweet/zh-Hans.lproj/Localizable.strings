@@ -93,6 +93,7 @@
 "Uploading..." = "上传中...";
 "Saving..." = "保存中...";
 "Create Account" = "创建账户";
+"Registration successful. Please wait a few minutes before logging in." = "注册成功。请等待几分钟后再登录。";
 
 // MARK: - Settings Screen
 "Account" = "账户";

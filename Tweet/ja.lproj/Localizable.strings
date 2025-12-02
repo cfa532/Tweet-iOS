@@ -90,6 +90,7 @@
 "Uploading..." = "アップロード中...";
 "Saving..." = "保存中...";
 "Create Account" = "アカウント作成";
+"Registration successful. Please wait a few minutes before logging in." = "登録が完了しました。ログインまで数分お待ちください。";
 
 // MARK: - Settings Screen
 "Account" = "アカウント";

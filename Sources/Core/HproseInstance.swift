@@ -5456,12 +5456,11 @@ final class HproseInstance: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         
-        var params: [String: Any] = [
+        let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "user": String(data: try encoder.encode(newUser), encoding: .utf8) ?? "",
-            "followings": String(data: try encoder.encode(Gadget.getAlphaIds()), encoding: .utf8) ?? ""
+            "user": String(data: try encoder.encode(newUser), encoding: .utf8) ?? ""
         ]
         
         let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
@@ -5477,6 +5476,24 @@ final class HproseInstance: ObservableObject {
         }
         
         if success {
+            // Extract the newly created user's ID from the response
+            guard let userDict = response["user"] as? [String: Any],
+                  let registeredUserId = userDict["mid"] as? String else {
+                // If user object is missing, still return success but log warning
+                print("DEBUG: [registerUser] Warning: User object not found in registration response")
+                return true
+            }
+            
+            // Make the newly registered user follow each user in getAlphaIds()
+            let alphaIds = Gadget.getAlphaIds()
+            for alphaId in alphaIds {
+                do {
+                    _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
+                } catch {
+                    print("DEBUG: [registerUser] Failed to follow alphaId \(alphaId): \(error.localizedDescription)")
+                    // Continue with other users even if one fails
+                }
+            }
             return true
         } else {
             let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")

@@ -93,6 +93,7 @@
 "Uploading..." = "Uploading...";
 "Saving..." = "Saving...";
 "Create Account" = "Create Account";
+"Registration successful. Please wait a few minutes before logging in." = "Registration successful. Please wait a few minutes before logging in.";
 
 // MARK: - Settings Screen
 "Account" = "Account";
