@@ -352,7 +352,7 @@ struct ProfileEditView: View {
         username = appUser.username ?? ""
         alias = appUser.name ?? ""
         profile = appUser.profile ?? ""
-        hostId = appUser.hostIds?.first ?? ""
+        hostId = "" // Always leave hostId empty when profile editor opens
         avatarId = appUser.avatar
         cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description
         domainToShare = appUser.domainToShare ?? ""
@@ -461,8 +461,9 @@ struct ProfileEditView: View {
         // Prevent repeated submission
         guard !isSubmitting else { return }
         
-        // Validation
-        if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 0 && hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != Constants.MIMEI_ID_LENGTH {
+        // Validation: if hostId is provided, it must be exactly 27 characters
+        let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedHostId.isEmpty && trimmedHostId.count != Constants.MIMEI_ID_LENGTH {
             errorMessage = String(format: NSLocalizedString("Host ID must be %d characters if provided.", comment: "Validation error"), Constants.MIMEI_ID_LENGTH)
             return
         }
@@ -499,12 +500,16 @@ struct ProfileEditView: View {
                 let trimmedShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
                 let shareDomainValue = trimmedShareDomain.isEmpty ? nil : trimmedShareDomain
                 
+                // If hostId is empty, pass nil to ignore hostIds field
+                let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
+                let hostIdValue = trimmedHostId.isEmpty ? nil : trimmedHostId
+                
                 try await onSubmit(
                     username,
                     password.isEmpty ? nil : password,
                     alias.isEmpty ? nil : alias,
                     profile.isEmpty ? nil : profile,
-                    hostId,
+                    hostIdValue,
                     portValue,
                     shareDomainValue
                 )

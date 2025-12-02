@@ -5521,7 +5521,9 @@ final class HproseInstance: ObservableObject {
             cloudDrivePort: cloudDrivePort,
             domainToShare: finalShareDomain
         )
-        if let hostId = hostId, !hostId.isEmpty {
+        // Only set hostIds if hostId is provided and not empty
+        // If hostId is nil or empty, hostIds field will be ignored (not included in JSON)
+        if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             updatedUser.hostIds = [hostId]
         }
         
@@ -5581,8 +5583,12 @@ final class HproseInstance: ObservableObject {
                     if let profile = profile {
                         self.appUser.profile = profile
                     }
-                    if let hostId = hostId, !hostId.isEmpty {
+                    // Update hostIds: if hostId is provided, set it; if nil/empty, clear hostIds
+                    if let hostId = hostId, !hostId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         self.appUser.hostIds = [hostId]
+                    } else {
+                        // Clear hostIds when hostId is empty/nil
+                        self.appUser.hostIds = nil
                     }
                     // CRITICAL: Update cloudDrivePort
                     self.appUser.cloudDrivePort = cloudDrivePort
