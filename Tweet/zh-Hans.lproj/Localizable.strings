@@ -495,6 +495,7 @@
 "Passwords do not match." = "密码不匹配。";
 "Host ID must be %d characters if provided." = "主机 ID 如果提供，必须是 %d 个字符。";
 "Cloud Drive Port must be between 8000 and 9000." = "云盘端口必须在 8000 到 9000 之间。";
+"Cloud Drive Port must be between 8000 and 65535." = "云盘端口必须在 8000 到 65535 之间。";
 
 // MARK: - Backend Error Messages
 "Unknown error occurred" = "发生未知错误";

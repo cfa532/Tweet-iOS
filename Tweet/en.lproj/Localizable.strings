@@ -503,6 +503,7 @@
 "Passwords do not match." = "Passwords do not match.";
 "Host ID must be %d characters if provided." = "Host ID must be %d characters if provided.";
 "Cloud Drive Port must be between 8000 and 9000." = "Cloud Drive Port must be between 8000 and 9000.";
+"Cloud Drive Port must be between 8000 and 65535." = "Cloud Drive Port must be between 8000 and 65535.";
 
 // MARK: - Backend Error Messages
 "Unknown error occurred" = "Unknown error occurred";

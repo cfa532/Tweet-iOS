@@ -529,6 +529,8 @@
 "Invalid HLS structure" = "無効なHLS構造";
 "App ID mismatch" = "アプリIDが一致しません";
 
+"Cloud Drive Port must be between 8000 and 65535." = "クラウドドライブポートは8000から65535の間である必要があります。";
+
 // MARK: - Cloud Drive Limit
 "Tweet Limit Reached" = "ツイート制限に達しました";
 "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "これはWeb3ツイートアプリです。善意でホストされているツイートの最大数に達しました。独自のノードを設定するか、友人に今後のツイートをホストしてもらってください。";
