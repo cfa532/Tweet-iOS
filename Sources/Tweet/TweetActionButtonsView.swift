@@ -102,7 +102,7 @@ struct TweetActionButtonsView: View {
     // Preview is now generated on-demand only when user taps the share button
     // private func preloadAttachmentPreview() { ... }
     
-    private func retweet(tweetId: String, authorId: String) async throws {
+    private func retweet(tweetId: String, authorId: String, originalCount: Int) async throws {
         // Get the tweet instance at execution time to ensure we have the correct one
         guard let tweet = Tweet.getInstance(for: tweetId) else {
             print("❌ [Retweet] Tweet instance not found for ID: \(tweetId)")
@@ -115,23 +115,17 @@ struct TweetActionButtonsView: View {
             throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Tweet identity mismatch"])
         }
         
-        // Save original count for rollback
-        let originalCount = tweet.retweetCount ?? 0
-        
-        print("🔄 [Retweet] Starting retweet for tweet: \(tweet.mid), current count: \(originalCount)")
+        // Verify optimistic update is in place (should be originalCount + 1)
+        let currentCount = tweet.retweetCount ?? 0
+        print("🔄 [Retweet] Starting retweet for tweet: \(tweet.mid), original count: \(originalCount), current (optimistic) count: \(currentCount)")
         
         do {
-            // Optimistic UI update - increment retweet count immediately on MainActor
-            await MainActor.run {
-                tweet.retweetCount = originalCount + 1
-                print("🔄 [Retweet] Optimistically incremented count to: \(tweet.retweetCount ?? 0) for tweet: \(tweet.mid)")
-            }
-            
             // Upload the retweet and update count (matches Android flow)
             // HproseInstance.retweet() now handles:
             // 1. Upload retweet
             // 2. Update retweet count of original tweet
             // 3. Cache the updated original tweet
+            // Note: Optimistic update already happened in button handler
             print("🔄 [Retweet] Calling hproseInstance.retweet for tweet: \(tweet.mid)")
             guard let retweet = try await hproseInstance.retweet(tweet) else {
                 // Retweet upload failed - rollback on MainActor
@@ -390,13 +384,45 @@ struct TweetActionButtonsView: View {
                     print("🔵 [Retweet Button] Button pressed for tweet: \(tweetId), author: \(authorId)")
                     
                     Task {
+                        // Store original count for rollback
+                        let originalCount = tweet.retweetCount ?? 0
+                        
+                        // Optimistic UI update - increment retweet count immediately on MainActor
+                        // This ensures instant feedback before any network calls (non-blocking)
+                        await MainActor.run {
+                            tweet.retweetCount = originalCount + 1
+                            print("🔄 [Retweet] Optimistically incremented count to: \(tweet.retweetCount ?? 0) for tweet: \(tweetId)")
+                        }
+                        
                         print("🔄 [Retweet Task] Starting async task for tweet: \(tweetId), author: \(authorId)")
                         
                         do {
                             // Pass immutable values, not the tweet object
-                            try await retweet(tweetId: tweetId, authorId: authorId)
+                            // Note: optimistic update already happened above
+                            try await retweet(tweetId: tweetId, authorId: authorId, originalCount: originalCount)
                         } catch {
-                            print("❌ [Retweet] Retweet failed for tweet: \(tweetId)")
+                            print("❌ [Retweet] Retweet failed for tweet: \(tweetId), error: \(error)")
+                            // Rollback optimistic update on failure
+                            await MainActor.run {
+                                if let tweetInstance = Tweet.getInstance(for: tweetId) {
+                                    tweetInstance.retweetCount = originalCount
+                                    print("🔄 [Retweet] Rolled back count to: \(originalCount) for tweet: \(tweetId)")
+                                }
+                            }
+                            
+                            // Show error toast only after all retries are exhausted
+                            // Note: uploadTweet() uses withRetry() which does 2 retries internally,
+                            // so this error is only reached after final retry fails
+                            await MainActor.run {
+                                showToast = true
+                                toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                                toastType = .error
+                                
+                                // Show error toast for 3 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                    showToast = false
+                                }
+                            }
                         }
                     }
                 }
