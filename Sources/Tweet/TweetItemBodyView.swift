@@ -73,7 +73,7 @@ struct TweetItemBodyView: View {
                         .padding(.bottom, 4)
                         .font(.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(isExpanded ? nil : 10)
+                        .lineLimit(isExpanded ? nil : 7)
                         .if(enableTap) { $0.contentShape(Rectangle()) }
                     if content.count > 500 && !isExpanded {
                         Button(action: { isExpanded = true }) {
