@@ -567,7 +567,29 @@ extension Tweet {
                     }
                 }
             }
-            return tweet
+            
+            // CRITICAL: Use singleton pattern for Tweet instance as well
+            // This ensures that the same tweet loaded from cache vs server uses the same instance
+            // Without this, profile view (from cache) and main feed (from server) would have different instances
+            // causing retweet count updates to not sync across views
+            return Tweet.getInstance(
+                mid: tweet.mid,
+                authorId: tweet.authorId,
+                content: tweet.content,
+                timestamp: tweet.timestamp,
+                title: tweet.title,
+                originalTweetId: tweet.originalTweetId,
+                originalAuthorId: tweet.originalAuthorId,
+                author: tweet.author,
+                favorites: tweet.favorites,
+                favoriteCount: tweet.favoriteCount ?? 0,
+                bookmarkCount: tweet.bookmarkCount ?? 0,
+                retweetCount: tweet.retweetCount ?? 0,
+                commentCount: tweet.commentCount ?? 0,
+                attachments: tweet.attachments,
+                isPrivate: tweet.isPrivate,
+                downloadable: tweet.downloadable
+            )
         }
         throw NSError(domain: "TweetCacheManager", code: -1,
                       userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
