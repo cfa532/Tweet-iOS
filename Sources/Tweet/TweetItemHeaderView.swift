@@ -265,6 +265,15 @@ struct TweetMenu: View {
                     if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
                         // Cache the updated original tweet with its authorId as the cache key
                         TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
+                        
+                        // Refresh original tweet from server to ensure all views get the updated count
+                        if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                            await MainActor.run {
+                                if let existingTweet = Tweet.getInstance(for: originalTweetId) {
+                                    try? existingTweet.update(from: refreshedTweet)
+                                }
+                            }
+                        }
                     }
                 }
             } else {
@@ -273,6 +282,19 @@ struct TweetMenu: View {
             }
         } catch {
             print("DEBUG: [TweetItemHeaderView] Tweet deletion failed for \(tweet.mid): \(error)")
+            
+            // If deletion fails and this was a retweet, refresh original tweet to restore correct retweetCount
+            if let originalTweetId = tweet.originalTweetId,
+               let originalAuthorId = tweet.originalAuthorId {
+                if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                    await MainActor.run {
+                        if let existingTweet = Tweet.getInstance(for: originalTweetId) {
+                            try? existingTweet.update(from: refreshedTweet)
+                        }
+                    }
+                }
+            }
+            
             // If deletion fails, post restoration notification
             NotificationCenter.default.post(
                 name: .tweetRestored,

@@ -141,12 +141,16 @@ struct TweetActionButtonsView: View {
                 throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid retweet ID from server"])
             }
             
-            // Refresh original tweet from server to ensure all views (including retweet views) get the updated count
-            // Since retweets use the same original tweet instance, refreshing ensures consistency
+            // Refresh original tweet from server to ensure all views get the updated count
+            // updateRetweetCount() already updated it, but refresh ensures we have the latest from server
+            // and that all instances in the list see the update
             if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
                 await MainActor.run {
-                    try? tweet.update(from: refreshedTweet)
-                    print("✅ [Retweet] Refreshed original tweet from server, retweetCount: \(tweet.retweetCount ?? 0)")
+                    // refreshTweet() returns the singleton instance, so update from it to sync all properties
+                    if let existingTweet = Tweet.getInstance(for: tweet.mid) {
+                        try? existingTweet.update(from: refreshedTweet)
+                    }
+                    print("✅ [Retweet] Refreshed original tweet from server, retweetCount: \(refreshedTweet.retweetCount ?? 0)")
                 }
             }
             
