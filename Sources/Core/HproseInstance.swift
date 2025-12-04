@@ -39,6 +39,11 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// The backend domain from check_upgrade (for placeholder use)
+    var backendDomainToShare: String {
+        return _domainToShare
+    }
+    
     @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
     var appUser: User {
         get { 
@@ -5514,6 +5519,17 @@ final class HproseInstance: ObservableObject {
         let sanitizedDomain = domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalShareDomain = sanitizedDomain?.isEmpty == true ? nil : sanitizedDomain
         
+        // Determine domainToShare value: if explicitly provided (even if empty/nil), use it; otherwise preserve existing
+        // Empty string "" is converted to nil, which will exclude the field from JSON (encodeIfPresent)
+        let domainToShareValue: String?
+        if domainToShare != nil {
+            // Parameter was explicitly provided (even if empty string), use finalShareDomain (nil if empty)
+            domainToShareValue = finalShareDomain
+        } else {
+            // Parameter was not provided, preserve existing value
+            domainToShareValue = appUser.domainToShare
+        }
+        
         // Create a copy of the user object with all existing properties
         let updatedUser = User(
             mid: appUser.mid,
@@ -5521,7 +5537,7 @@ final class HproseInstance: ObservableObject {
             password: password ?? appUser.password,
             profile: profile ?? appUser.profile,
             cloudDrivePort: cloudDrivePort,
-            domainToShare: finalShareDomain ?? appUser.domainToShare
+            domainToShare: domainToShareValue
         )
         // Copy other properties from appUser
         updatedUser.baseUrl = appUser.baseUrl

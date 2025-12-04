@@ -59,7 +59,11 @@ struct ProfileEditView: View {
     }
 
     private var shareDomainPlaceholder: String {
-        let domain = hproseInstance.domainToShare
+        // Use backend domain from check_upgrade (not user's override) for placeholder
+        let domain = hproseInstance.backendDomainToShare
+        if domain.isEmpty {
+            return ""
+        }
         if domain.hasPrefix("https://") {
             return String(domain.dropFirst("https://".count))
         } else if domain.hasPrefix("http://") {
@@ -375,7 +379,12 @@ struct ProfileEditView: View {
         hostId = "" // Always leave hostId empty when profile editor opens
         avatarId = appUser.avatar
         cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description // Show existing cloudDrivePort value in the field
-        domainToShare = "" // Always leave domainToShare empty when profile editor opens
+        // Show appUser.domainToShare if not empty, otherwise leave empty (placeholder will show system default)
+        if let userDomain = appUser.domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines), !userDomain.isEmpty {
+            domainToShare = userDomain
+        } else {
+            domainToShare = ""
+        }
         
         // Store original values to send if user doesn't provide new input
         originalHostId = appUser.hostIds?.first
@@ -389,7 +398,7 @@ struct ProfileEditView: View {
             "profile": profile,
             "hostId": hostId,
             "cloudDrivePort": cloudDrivePort,
-            "domainToShare": domainToShare
+            "domainToShare": domainToShare // This will be the user's domainToShare if not empty, or empty string
         ]
     }
 
@@ -527,8 +536,9 @@ struct ProfileEditView: View {
                 let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
                 let hostIdValue = trimmedHostId.isEmpty ? originalHostId : trimmedHostId
                 
+                // For domainToShare: if empty, send empty string (will be converted to nil and excluded from JSON)
                 let trimmedShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
-                let shareDomainValue = trimmedShareDomain.isEmpty ? originalDomainToShare : trimmedShareDomain
+                let shareDomainValue = trimmedShareDomain.isEmpty ? "" : trimmedShareDomain
                 
                 // For cloudDrivePort: if empty, use original value (or 0 if original was 0); if provided, use it
                 let trimmedPort = cloudDrivePort.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -558,7 +568,7 @@ struct ProfileEditView: View {
                         "profile": profile,
                         "hostId": hostId,
                         "cloudDrivePort": cloudDrivePort,
-                        "domainToShare": shareDomainValue ?? ""
+                        "domainToShare": shareDomainValue
                     ]
                     
                     // Reset password fields since they were saved
@@ -573,7 +583,7 @@ struct ProfileEditView: View {
                     onSubmissionStateChange?(false)
                     
                     // Normalize share domain field to trimmed value
-                    domainToShare = shareDomainValue ?? ""
+                    domainToShare = shareDomainValue
                     
                     // Show success toast and close the screen
                     showToastMessage(NSLocalizedString("Profile updated successfully", comment: "Success message"), type: .success)
