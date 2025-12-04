@@ -56,6 +56,10 @@ extension Notification.Name {
     static let scrollToTop = Notification.Name("ScrollToTop")
     /// Posted when navigation visibility changes (for scroll-based hiding/showing)
     static let navigationVisibilityChanged = Notification.Name("NavigationVisibilityChanged")
+    /// Posted when a deeplink URL is received
+    static let deeplinkReceived = Notification.Name("DeeplinkReceived")
+    /// Posted when a deeplink tweet is not found
+    static let deeplinkTweetNotFound = Notification.Name("DeeplinkTweetNotFound")
     
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")

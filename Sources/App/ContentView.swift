@@ -290,6 +290,29 @@ struct ContentView: View {
             // Check for pending uploads when app returns to foreground
             checkForPendingUpload()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .deeplinkReceived)) { notification in
+            // Handle deeplink navigation
+            print("[ContentView] ✅ Received deeplink notification")
+            if let url = notification.userInfo?["url"] as? URL {
+                print("[ContentView] URL from notification: \(url.absoluteString)")
+                handleDeeplink(url)
+            } else {
+                print("[ContentView] ⚠️ No URL found in notification userInfo")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .deeplinkTweetNotFound)) { notification in
+            // Show error toast when deeplink tweet is not found
+            if let message = notification.userInfo?["message"] as? String {
+                toastMessage = message
+                toastType = .error
+                showToast = true
+                
+                // Auto-hide toast after 5 seconds for errors
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
         .environmentObject(hproseInstance)
         .environmentObject(themeManager)
     }
@@ -390,6 +413,39 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     withAnimation { self.showToast = false }
                 }
+            }
+        }
+    }
+    
+    // MARK: - Deeplink Handling
+    
+    private func handleDeeplink(_ url: URL) {
+        print("[ContentView] Handling deeplink: \(url.absoluteString)")
+        
+        // Parse the URL
+        let deeplinkType = DeeplinkManager.shared.parseURL(url)
+        
+        // Switch to home tab if needed (for navigation)
+        // Use a small delay to ensure tab switch completes before navigation
+        if selectedTab != 0 {
+            selectedTab = 0
+            // Wait a bit for tab switch animation
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                await DeeplinkManager.shared.handleDeeplink(
+                    deeplinkType,
+                    navigationPath: $navigationPath,
+                    hproseInstance: hproseInstance
+                )
+            }
+        } else {
+            // Already on home tab, navigate immediately
+            Task {
+                await DeeplinkManager.shared.handleDeeplink(
+                    deeplinkType,
+                    navigationPath: $navigationPath,
+                    hproseInstance: hproseInstance
+                )
             }
         }
     }

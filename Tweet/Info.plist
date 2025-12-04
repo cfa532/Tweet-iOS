@@ -30,5 +30,16 @@
 	<string>We need access to your photo library to select photos and videos to share in your posts.</string>
 	<key>NSUserNotificationUsageDescription</key>
 	<string>We need to send you notifications about new messages, replies, and interactions.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>tweet</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>com.tweet.deeplink</string>
+		</dict>
+	</array>
 </dict>
 </plist>

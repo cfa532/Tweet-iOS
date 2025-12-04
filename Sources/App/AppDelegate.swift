@@ -41,6 +41,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         LocalHTTPServer.shared.start()
         print("[AppDelegate] LocalHTTPServer started on app launch")
         
+        // Handle URL if app was launched from a deeplink
+        if let url = launchOptions?[.url] as? URL {
+            print("[AppDelegate] App launched from URL: \(url.absoluteString)")
+            // Delay posting notification to ensure ContentView is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NotificationCenter.default.post(
+                    name: .deeplinkReceived,
+                    object: nil,
+                    userInfo: ["url": url]
+                )
+            }
+        }
+        
         // Request notification permissions
         Task {
             await requestNotificationPermission()
@@ -550,6 +563,45 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.loadingWindow?.isHidden = true
             self.loadingWindow = nil
         }
+    }
+    
+    // MARK: - URL Handling (Deeplinks)
+    
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+        print("[AppDelegate] ✅ Received deeplink URL (app running): \(url.absoluteString)")
+        print("[AppDelegate] URL scheme: \(url.scheme ?? "nil"), host: \(url.host ?? "nil"), path: \(url.path)")
+        
+        // Post notification with URL for ContentView to handle
+        // Use async dispatch to ensure ContentView is ready
+        DispatchQueue.main.async {
+            print("[AppDelegate] Posting deeplink notification...")
+            NotificationCenter.default.post(
+                name: .deeplinkReceived,
+                object: nil,
+                userInfo: ["url": url]
+            )
+            print("[AppDelegate] Deeplink notification posted")
+        }
+        
+        return true
+    }
+    
+    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
+        // Handle Universal Links
+        if userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+           let url = userActivity.webpageURL {
+            print("[AppDelegate] Received Universal Link: \(url.absoluteString)")
+            
+            NotificationCenter.default.post(
+                name: .deeplinkReceived,
+                object: nil,
+                userInfo: ["url": url]
+            )
+            
+            return true
+        }
+        
+        return false
     }
 }
 
