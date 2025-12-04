@@ -45,6 +45,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         Task {
             await requestNotificationPermission()
         }
+
+        // Listen for app initialization to check messages
+        setupMessageCheckOnInitialization()
+
+        // Schedule initial background message check
+        print("[AppDelegate] 🚀 Scheduling initial background message check on app launch")
+        scheduleNextMessageCheck()
         
         // CRITICAL: Clear any stale background timestamp from previous session
         // This ensures we can distinguish app startup from returning from background
@@ -75,41 +82,46 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func registerBackgroundTasks() {
         // Register background task for checking new messages every 15 minutes
         BGTaskScheduler.shared.register(forTaskWithIdentifier: "com.example.ZZ.messageCheck", using: nil) { task in
+            print("[AppDelegate] 🎯 Background task triggered: \(task.identifier)")
             self.handleMessageCheckBackgroundTask(task: task as! BGAppRefreshTask)
         }
-        
-        print("[AppDelegate] Background tasks registered")
+
+        print("[AppDelegate] 📋 Background tasks registered")
     }
     
     private func handleMessageCheckBackgroundTask(task: BGAppRefreshTask) {
+        print("[AppDelegate] 🔄 Background message check task STARTED")
+
         // Schedule the next background task
         scheduleNextMessageCheck()
-        
+
         // Set up task expiration handler
         task.expirationHandler = {
+            print("[AppDelegate] ⏰ Background message check task EXPIRED")
             task.setTaskCompleted(success: false)
         }
-        
+
         // Perform the message check
         Task {
+            print("[AppDelegate] 📨 Starting background message check...")
             // Check for new messages from all chat sessions
             await ChatSessionManager.shared.checkBackendForNewMessages()
-            
+
             // Mark task as completed successfully
             task.setTaskCompleted(success: true)
-            print("[AppDelegate] Background message check completed successfully")
+            print("[AppDelegate] ✅ Background message check completed successfully")
         }
     }
     
     private func scheduleNextMessageCheck() {
         let request = BGAppRefreshTaskRequest(identifier: "com.example.ZZ.messageCheck")
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60) // 15 minutes from now
-        
+
         do {
             try BGTaskScheduler.shared.submit(request)
-            print("[AppDelegate] Next background message check scheduled for 15 minutes from now")
+            print("[AppDelegate] 📅 Next background message check scheduled for \(request.earliestBeginDate ?? Date())")
         } catch {
-            print("[AppDelegate] Failed to schedule background message check: \(error)")
+            print("[AppDelegate] ❌ Failed to schedule background message check: \(error)")
         }
     }
     
@@ -242,7 +254,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
-        
+
+        // Perform immediate background message check when entering background
+        print("[AppDelegate] 🚀 Performing IMMEDIATE background message check on app background")
+        performImmediateBackgroundCheck()
+
         // DON'T stop LocalHTTPServer - iOS keeps network listeners alive for short backgrounds
         // Only stop for long backgrounds (>5 min) to avoid race conditions and port changes
         
@@ -263,6 +279,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // This ensures we don't use stale IPs if the server changed while app was suspended
         Task {
             await refreshAppUserIP()
+        }
+
+        // Check for new messages when returning to foreground (only updates badge, no notifications)
+        Task {
+            print("[AppDelegate] 📬 Checking for new messages on foreground return")
+            await checkMessagesForBadgeOnly()
         }
         
         // Check how long app was in background
@@ -431,8 +453,63 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] Video infrastructure restart complete (async) in \(String(format: "%.2f", elapsed))s")
     }
     
+    private func performImmediateBackgroundCheck() {
+        print("[AppDelegate] ⚡ Performing immediate background message check")
+        Task {
+            await ChatSessionManager.shared.checkBackendForNewMessages()
+            print("[AppDelegate] ✅ Immediate background message check completed")
+
+            // Also schedule the regular background task for future checks
+            scheduleNextMessageCheck()
+        }
+    }
+
+    /// Setup message checking when app is initialized
+    private func setupMessageCheckOnInitialization() {
+        // Listen for app user ready notification
+        NotificationCenter.default.addObserver(
+            forName: .appUserReady,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Check for new messages after app is initialized (only updates badge, no notifications)
+            Task {
+                print("[AppDelegate] 📬 Checking for new messages after app initialization")
+                await self?.checkMessagesForBadgeOnly()
+            }
+        }
+    }
+
+    /// Check for new messages and update badge only (no notifications)
+    /// Used when app starts or returns to foreground
+    private func checkMessagesForBadgeOnly() async {
+        // Only check if user is not guest
+        let hproseInstance = HproseInstance.shared
+        guard !hproseInstance.appUser.isGuest else {
+            print("[AppDelegate] Skipping message check for guest user")
+            return
+        }
+
+        // Check for new messages without triggering notifications
+        // This will update the unreadMessageCount which automatically updates the badge
+        await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
+        print("[AppDelegate] ✅ Badge-only message check completed")
+    }
+
+    // MARK: - Test Methods (for debugging)
+
+    /// Test method to manually trigger background message check
+    func testBackgroundMessageCheck() {
+        print("[AppDelegate] 🧪 Manually triggering background message check for testing")
+        Task {
+            await ChatSessionManager.shared.checkBackendForNewMessages()
+            print("[AppDelegate] ✅ Manual background message check completed")
+        }
+    }
+
+
     // MARK: - Notification Permission
-    
+
     private func requestNotificationPermission() async {
         let center = UNUserNotificationCenter.current()
         

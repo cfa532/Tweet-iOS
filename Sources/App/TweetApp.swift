@@ -32,6 +32,10 @@ class AppState: ObservableObject {
                 // Load chat sessions after user is properly initialized
                 await ChatSessionManager.shared.loadSessionsWhenUserAvailable()
                 
+                // Check for new messages after sessions are loaded (only updates badge, no notifications)
+                await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
+                print("[TweetApp] ✅ Initial message check completed after app initialization")
+                
                 // Refresh mute state from preferences after HproseInstance is ready
                 MuteState.shared.refreshFromPreferences()
                 
