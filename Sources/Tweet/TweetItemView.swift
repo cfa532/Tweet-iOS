@@ -347,7 +347,7 @@ struct TweetItemView: View, Equatable {
                         TweetItemHeaderView(tweet: tweet)
                         Spacer(minLength: 0)
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
-                            .padding(.trailing, -16)
+                            .padding(.trailing, -24)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
