@@ -446,6 +446,7 @@ struct TweetDetailView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
             }
+            Spacer(minLength: 4)
             TweetItemHeaderView(tweet: displayTweet)
             Spacer(minLength: 0)
             TweetMenu(
