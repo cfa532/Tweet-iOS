@@ -40,18 +40,16 @@ struct MediaCell: View, Equatable {
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
-    let showMuteButton: Bool
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, visibleTweetId: String? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager, visibleTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self.visibleTweetId = visibleTweetId
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
-        self.showMuteButton = showMuteButton
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
     }
@@ -84,18 +82,7 @@ struct MediaCell: View, Equatable {
                 switch attachment.type {
                 case .video, .hls_video:
                     // MediaGrid already sets fixed frame - content should fill parent naturally
-                    // Use ZStack to layer mute button above video (no clipping needed)
-                    ZStack(alignment: .bottomTrailing) {
-                        // Video player content - no clipping, let MediaGridView handle it
-                        videoPlayerViewContent(url: url)
-                        
-                        // Mute button - placed above video in ZStack, always visible
-                        if showMuteButton {
-                            MuteButton()
-                                .padding(.trailing, 12)
-                                .padding(.bottom, 12)
-                        }
-                    }
+                    videoPlayerViewContent(url: url)
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
@@ -306,8 +293,7 @@ struct MediaCell: View, Equatable {
         return lhs.parentTweet.mid == rhs.parentTweet.mid &&
         lhs.attachmentIndex == rhs.attachmentIndex &&
         lhs.aspectRatio == rhs.aspectRatio &&
-        lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
-        lhs.showMuteButton == rhs.showMuteButton
+        lhs.shouldLoadVideo == rhs.shouldLoadVideo
     }
     
     // MARK: - Video Player View

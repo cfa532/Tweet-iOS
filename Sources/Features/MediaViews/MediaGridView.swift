@@ -453,6 +453,16 @@ struct MediaGridView: View {
         .contentShape(Rectangle())
         // Fix the size to prevent any layout shifts during image loading
         .fixedSize(horizontal: false, vertical: true)
+        .overlay(alignment: .bottomTrailing) {
+            // Show mute button only when there's exactly one video attachment
+            if attachments.count == 1,
+               let attachment = attachments.first,
+               attachment.type == .video || attachment.type == .hls_video {
+                MuteButton()
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 12)
+            }
+        }
         .onAppear {
             // Mark the grid as visible
             isVisible = true
