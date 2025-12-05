@@ -209,10 +209,13 @@ struct TweetItemView: View, Equatable {
                             }
                         }
                         
-                        HStack(alignment: .top) {
+                        HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: originalTweet)
+                            Spacer(minLength: 0)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                                .padding(.trailing, -24)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, visibleTweetId: tweet.mid)
                         
@@ -234,10 +237,13 @@ struct TweetItemView: View, Equatable {
                     }
                     
                     VStack(alignment: .leading, spacing: 0) {
-                        HStack(alignment: .top) {
+                        HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: tweet)
+                            Spacer(minLength: 0)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                                .padding(.trailing, -24)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
@@ -277,10 +283,13 @@ struct TweetItemView: View, Equatable {
                 }
                 
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .top) {
+                    HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
+                        Spacer(minLength: 0)
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            .padding(.trailing, -16)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     
                     // Show tweet content if available
                     if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -334,10 +343,13 @@ struct TweetItemView: View, Equatable {
                     }
                 }
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .top) {
+                    HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
+                        Spacer(minLength: 0)
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            .padding(.trailing, -16)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
@@ -346,7 +358,8 @@ struct TweetItemView: View, Equatable {
                 }
             }
         }
-        .padding(.vertical)
+        .padding(.top)
+        .padding(.bottom)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)

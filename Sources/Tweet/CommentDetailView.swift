@@ -157,13 +157,16 @@ struct CommentDetailView: View {
     }
     
     private var commentHeader: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 0) {
             if let user = comment.author {
                 Avatar(user: user)
             }
             TweetItemHeaderView(tweet: comment)
+            Spacer(minLength: 0)
             CommentMenu(comment: comment, parentTweet: parentTweet)
+                .padding(.trailing, -20)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.top)
     }

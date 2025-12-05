@@ -488,8 +488,6 @@ struct TweetActionButtonsView: View {
             }
         }
         .foregroundColor(.themeSecondaryText)
-        .padding(.trailing, 8)
-        .padding(.leading, 0)
         .sheet(isPresented: $showCommentCompose) {
             if let commentsVM = commentsVM {
                 CommentComposeView(tweet: tweet, commentsVM: commentsVM)
@@ -1056,10 +1054,8 @@ struct TweetActionButtonsView: View {
                 switch result {
                 case .succeeded:
                     if let image = image {
-                        print("DEBUG: [SHARE] CGImage generated successfully")
                         continuation.resume(returning: image)
                     } else {
-                        print("DEBUG: [SHARE] CGImage generation succeeded but image is nil")
                         continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -2, userInfo: [NSLocalizedDescriptionKey: "Image is nil"]))
                     }
                 case .failed:
@@ -1076,7 +1072,6 @@ struct TweetActionButtonsView: View {
             }
         }
         
-        print("DEBUG: [SHARE] Creating UIImage from CGImage")
         let image = UIImage(cgImage: cgImage)
         
         // Re-render without alpha channel to avoid iOS warning, then crop
@@ -1092,8 +1087,6 @@ struct TweetActionButtonsView: View {
         
         // Crop to center and resize to 270x270
         let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
-        
-        print("DEBUG: [SHARE] Video frame cropped and resized to 270x270")
         return croppedImage
     }
     

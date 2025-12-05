@@ -53,10 +53,13 @@ struct CommentItemView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
+                HStack(alignment: .top, spacing: 0) {
                     TweetItemHeaderView(tweet: comment)
+                    Spacer(minLength: 0)
                     CommentMenu(comment: comment, parentTweet: parentTweet)
+                        .padding(.trailing, -20)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 
                 TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible, visibleTweetId: comment.mid)
                 

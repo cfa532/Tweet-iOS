@@ -439,7 +439,7 @@ struct TweetDetailView: View {
     }
     
     private var tweetHeader: some View {
-        HStack(alignment: .top, spacing: 4) {
+        HStack(alignment: .top, spacing: 0) {
             if let user = displayTweet.author {
                 NavigationLink(value: user) {
                     Avatar(user: user)
@@ -447,12 +447,15 @@ struct TweetDetailView: View {
                 .buttonStyle(PlainButtonStyle())
             }
             TweetItemHeaderView(tweet: displayTweet)
+            Spacer(minLength: 0)
             TweetMenu(
                 tweet: displayTweet, 
                 isPinned: displayTweet.isPinned(in: pinnedTweets),
                 showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid
             )
+            .padding(.trailing, -20)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.top)
     }
