@@ -207,7 +207,7 @@ struct TweetMenu: View {
                 Image(systemName: "ellipsis")
                     .foregroundColor(isPressed ? .primary : .secondary)
                     .font(.system(size: 16, weight: .medium))
-                    .frame(width: 44, height: 44) // Minimum 44x44 tap target for accessibility
+                    .frame(width: 44, height: 24) // Minimum 44x44 tap target for accessibility
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 8)

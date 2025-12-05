@@ -191,7 +191,7 @@ struct TweetItemView: View, Equatable {
                     }
                     
                     // Show original tweet with retweet menu.
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.2.squarepath")
                                 .font(.caption)
@@ -208,16 +208,13 @@ struct TweetItemView: View, Equatable {
                                     .foregroundColor(.secondary)
                             }
                         }
-                        .padding(.top, -8)
                         
                         HStack(alignment: .top) {
                             TweetItemHeaderView(tweet: originalTweet)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
-                                .padding(.top, -8)
                         }
                         
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, visibleTweetId: tweet.mid)
-                            .padding(.top, -12)
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
@@ -236,14 +233,12 @@ struct TweetItemView: View, Equatable {
                         }
                     }
                     
-                    VStack(alignment: .leading) {
-                        HStack {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .top) {
                             TweetItemHeaderView(tweet: tweet)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                         }
-                        .padding(.top, -8)
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
-                            .padding(.top, -12)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         // NOTE: Videos in embedded tweets are disabled to prevent layout instability
@@ -256,6 +251,8 @@ struct TweetItemView: View, Equatable {
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
+                        .padding(.top, 8)
+                        .padding(.bottom, 8)
                         
                         if !hideActions {
                             TweetActionButtonsView(tweet: tweet)
@@ -265,7 +262,6 @@ struct TweetItemView: View, Equatable {
                 }
             } else {
                 // Regular tweet
-                // Use Group to force re-evaluation when tweet.author changes (@Published)
                 Group {
                     if let user = tweet.author {
                         avatarView(for: user, context: "regular-tweet")
@@ -281,14 +277,12 @@ struct TweetItemView: View, Equatable {
                             )
                     }
                 }
-                VStack(alignment: .leading) {
-                    HStack {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top) {
                         TweetItemHeaderView(tweet: tweet)
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
                     }
-                    .padding(.top, -8)
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
-                        .padding(.top, -12)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
@@ -296,7 +290,7 @@ struct TweetItemView: View, Equatable {
                 }
             }
         }
-        .padding(.vertical) // Add top and bottom padding back
+        .padding(.vertical)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
@@ -372,15 +366,13 @@ struct EmbeddedTweetView: View, Equatable {
                         .frame(width: 40, height: 40)
                 }
             }
-            VStack(alignment: .leading) {
-                HStack {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
                     TweetItemHeaderView(tweet: tweet)
                     Spacer()
                 }
-                .padding(.top, 0)
                 
                 TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid, isEmbedded: isEmbedded)
-                .padding(.top, 0)
             }
         }
         .padding(8)
