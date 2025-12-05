@@ -89,7 +89,6 @@ struct TweetItemBodyView: View {
                 // Use cached grid width for performance
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
                 let gridHeight = max(10, Self.cachedGridWidth / aspect)
-                let hasContentAbove = tweet.content != nil && !tweet.content!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 
                 VStack(alignment: .leading, spacing: 0) {
                     MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
@@ -97,7 +96,7 @@ struct TweetItemBodyView: View {
                         .frame(height: gridHeight) // Fixed height
                         .clipped()
                         .cornerRadius(8)
-                        .padding(.top, hasContentAbove ? 2 : 0) // Only add padding if there's content above
+                        .padding(.top, -8)
                         .padding(.bottom, -8)
                         .id("\(tweet.mid)_grid")
                     

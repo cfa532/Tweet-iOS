@@ -253,6 +253,9 @@ struct TweetItemView: View, Equatable {
                         .padding(.leading, -4)
                         .padding(.top, 8)
                         .padding(.bottom, 8)
+                        .frame(minHeight: 60) // Match placeholder height to prevent layout shifts
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
                         
                         if !hideActions {
                             TweetActionButtonsView(tweet: tweet)
@@ -260,6 +263,59 @@ struct TweetItemView: View, Equatable {
                         }
                     }
                 }
+            } else if isRetweetOrQuotedTweet && !hasLoadedOriginalTweet {
+                // originalTweet is nil and hasn't loaded yet - show placeholder to prevent layout shifts
+                Group {
+                    if let user = tweet.author {
+                        avatarView(for: user, context: "retweet-loading")
+                    } else {
+                        // Show placeholder while author loads
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 40, height: 40)
+                    }
+                }
+                
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top) {
+                        TweetItemHeaderView(tweet: tweet)
+                        TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                    }
+                    
+                    // Show tweet content if available
+                    if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
+                    }
+                    
+                    // Placeholder for embedded tweet with fixed height to prevent layout shifts
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 40, height: 40)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.2))
+                                .frame(height: 20)
+                                .cornerRadius(4)
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.2))
+                                .frame(height: 16)
+                                .cornerRadius(4)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color(.systemGray4).opacity(0.3))
+                    .cornerRadius(8)
+                    .frame(minHeight: 60) // Fixed height placeholder to match actual embedded tweet (smallest size)
+                    .padding(.top, (tweet.content?.isEmpty ?? true) ? 0 : 8)
+                    
+                    if !hideActions {
+                        TweetActionButtonsView(tweet: tweet)
+                            .padding(.top, 8)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
             } else {
                 // Regular tweet
                 Group {

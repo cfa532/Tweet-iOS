@@ -197,6 +197,66 @@ struct TweetActionButtonsView: View {
                 .frame(width: 48, alignment: .leading)
             }
             Spacer(minLength: 12)
+            // Retweet / forward button
+            DebounceButton(
+                cooldownDuration: 0.5,
+                enableAnimation: true,
+                enableVibration: false
+            ) {
+                if hproseInstance.appUser.isGuest {
+                    handleGuestAction()
+                } else {
+                    print("🔵 [Retweet Button] Button pressed for tweet: \(tweet.mid), author: \(tweet.authorId)")
+                    
+                    Task {
+                        // Store original count for optimistic update
+                        let originalCount = tweet.retweetCount ?? 0
+                        
+                        // Optimistic UI update - increment retweet count immediately on MainActor
+                        // This ensures instant feedback before any network calls (non-blocking)
+                        await MainActor.run {
+                            tweet.retweetCount = originalCount + 1
+                            print("🔄 [Retweet] Optimistically incremented count to: \(tweet.retweetCount ?? 0) for tweet: \(tweet.mid)")
+                        }
+                        
+                        print("🔄 [Retweet Task] Starting async task for tweet: \(tweet.mid), author: \(tweet.authorId)")
+                        
+                        do {
+                            // Use the tweet instance we already have (user tapped the button, so tweet is there)
+                            // Note: optimistic update already happened above
+                            try await retweet(tweet: tweet)
+                        } catch {
+                            print("❌ [Retweet] Retweet failed for tweet: \(tweet.mid), error: \(error)")
+                            // Note: retweet() function already refreshes from server on failure, so no manual rollback needed
+                            
+                            // Show error toast only after all retries are exhausted
+                            // Note: uploadTweet() uses withRetry() which does 2 retries internally,
+                            // so this error is only reached after final retry fails
+                            await MainActor.run {
+                                showToast = true
+                                toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                                toastType = .error
+                                
+                                // Show error toast for 3 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                    showToast = false
+                                }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.2.squarepath")
+                        .frame(width: 20)
+                    if let count = tweet.retweetCount, count > 0 {
+                        Text("\(count)")
+                            .frame(minWidth: 20, alignment: .leading)
+                    }
+                }
+                .frame(width: 48, alignment: .leading)
+            }
+            Spacer(minLength: 12)
             // Like button
             DebounceButton(
                 cooldownDuration: 0.3,
@@ -368,66 +428,6 @@ struct TweetActionButtonsView: View {
                     Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
                         .frame(width: 20)
                     if let count = tweet.bookmarkCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
-                }
-                .frame(width: 48, alignment: .leading)
-            }
-            Spacer(minLength: 12)
-            // Retweet / forward button
-            DebounceButton(
-                cooldownDuration: 0.5,
-                enableAnimation: true,
-                enableVibration: false
-            ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
-                    print("🔵 [Retweet Button] Button pressed for tweet: \(tweet.mid), author: \(tweet.authorId)")
-                    
-                    Task {
-                        // Store original count for optimistic update
-                        let originalCount = tweet.retweetCount ?? 0
-                        
-                        // Optimistic UI update - increment retweet count immediately on MainActor
-                        // This ensures instant feedback before any network calls (non-blocking)
-                        await MainActor.run {
-                            tweet.retweetCount = originalCount + 1
-                            print("🔄 [Retweet] Optimistically incremented count to: \(tweet.retweetCount ?? 0) for tweet: \(tweet.mid)")
-                        }
-                        
-                        print("🔄 [Retweet Task] Starting async task for tweet: \(tweet.mid), author: \(tweet.authorId)")
-                        
-                        do {
-                            // Use the tweet instance we already have (user tapped the button, so tweet is there)
-                            // Note: optimistic update already happened above
-                            try await retweet(tweet: tweet)
-                        } catch {
-                            print("❌ [Retweet] Retweet failed for tweet: \(tweet.mid), error: \(error)")
-                            // Note: retweet() function already refreshes from server on failure, so no manual rollback needed
-                            
-                            // Show error toast only after all retries are exhausted
-                            // Note: uploadTweet() uses withRetry() which does 2 retries internally,
-                            // so this error is only reached after final retry fails
-                            await MainActor.run {
-                                showToast = true
-                                toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
-                                toastType = .error
-                                
-                                // Show error toast for 3 seconds
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                                    showToast = false
-                                }
-                            }
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.2.squarepath")
-                        .frame(width: 20)
-                    if let count = tweet.retweetCount, count > 0 {
                         Text("\(count)")
                             .frame(minWidth: 20, alignment: .leading)
                     }
