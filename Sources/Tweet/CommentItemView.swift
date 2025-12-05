@@ -52,22 +52,20 @@ struct CommentItemView: View {
                     .buttonStyle(PlainButtonStyle())
                 }
             }
-            VStack(alignment: .leading) {
-                HStack {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
                     TweetItemHeaderView(tweet: comment)
                     CommentMenu(comment: comment, parentTweet: parentTweet)
                 }
-                .padding(.top, -8)
                 
                 TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible, visibleTweetId: comment.mid)
-                .padding(.top, -12)
                 
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
                     .padding(.top, 8)
             }
         }
-        .padding()
-        .padding(.horizontal, -4)
+        .padding(.vertical)
+        .padding(.horizontal, 16)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
