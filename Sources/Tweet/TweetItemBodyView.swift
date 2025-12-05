@@ -67,19 +67,19 @@ struct TweetItemBodyView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let content = tweet.content, !content.isEmpty {
-                VStack(alignment: .leading) {
-                    Text(content)
-                        .font(.body)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(isExpanded ? nil : 7)
-                        .if(enableTap) { $0.contentShape(Rectangle()) }
-                    if content.count > 500 && !isExpanded {
-                        Button(action: { isExpanded = true }) {
-                            Text(LocalizedStringKey("Show more"))
-                                .font(.subheadline)
-                                .foregroundColor(.blue)
-                        }
+            if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(content)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(isExpanded ? nil : 7)
+                    .if(enableTap) { $0.contentShape(Rectangle()) }
+                    .fixedSize(horizontal: false, vertical: true)
+                
+                if content.count > 500 && !isExpanded {
+                    Button(action: { isExpanded = true }) {
+                        Text(LocalizedStringKey("Show more"))
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
                     }
                 }
             }
@@ -89,22 +89,20 @@ struct TweetItemBodyView: View {
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
                 let gridHeight = max(10, Self.cachedGridWidth / aspect)
                 
-                VStack(alignment: .leading, spacing: 4) {
-                    MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: gridHeight) // Fixed height to prevent shifts
-                        .clipped()
-                        .cornerRadius(8)
-                        .id("\(tweet.mid)_grid")
-                    
-                    if let caption = singleVideoCaption(for: attachments) {
-                        Text(caption)
-                            .font(.footnote)
-                            .foregroundColor(.primary.opacity(0.6))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: gridHeight) // Fixed height to prevent shifts
+                    .clipped()
+                    .cornerRadius(8)
+                    .id("\(tweet.mid)_grid")
+                
+                if let caption = singleVideoCaption(for: attachments) {
+                    Text(caption)
+                        .font(.footnote)
+                        .foregroundColor(.primary.opacity(0.6))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

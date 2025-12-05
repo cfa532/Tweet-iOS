@@ -66,7 +66,7 @@ struct TweetMenu: View {
     }
     
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             Menu {
                 Button(action: {
                     UIPasteboard.general.string = tweet.mid
@@ -207,7 +207,7 @@ struct TweetMenu: View {
                 Image(systemName: "ellipsis")
                     .foregroundColor(isPressed ? .primary : .secondary)
                     .font(.system(size: 16, weight: .medium))
-                    .frame(width: 44, height: 24) // Minimum 44x44 tap target for accessibility
+                    .frame(width: 44, height: 24, alignment: .topLeading) // Minimum 44x44 tap target for accessibility
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 8)
