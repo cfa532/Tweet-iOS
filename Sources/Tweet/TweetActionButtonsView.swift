@@ -15,6 +15,39 @@ struct ShareSheetData: Identifiable {
     let items: [Any]
 }
 
+// Global function to format count with abbreviations
+func formatCount(_ count: Int) -> String {
+    if count < 1000 {
+        return "\(count)"
+    } else if count < 10000 {
+        // 1000-9999: show as 1k, 1.1k, 1.2k, etc. (1 decimal place when needed)
+        let thousands = Double(count) / 1000.0
+        // Check if it's a whole number (e.g., 1000, 2000, 3000)
+        if thousands.truncatingRemainder(dividingBy: 1.0) == 0 {
+            return "\(Int(thousands))k"
+        } else {
+            return String(format: "%.1fk", thousands)
+        }
+    } else if count < 1000000 {
+        // 10000-999999: show as 11k, 12k, etc. (integer only)
+        let thousands = count / 1000
+        return "\(thousands)k"
+    } else if count < 10000000 {
+        // 1000000-9999999: show as 1M, 1.1M, 1.2M, etc. (1 decimal place when needed)
+        let millions = Double(count) / 1000000.0
+        // Check if it's a whole number (e.g., 1000000, 2000000, 3000000)
+        if millions.truncatingRemainder(dividingBy: 1.0) == 0 {
+            return "\(Int(millions))M"
+        } else {
+            return String(format: "%.1fM", millions)
+        }
+    } else {
+        // 10000000+: show as 10M, 11M, etc. (integer only)
+        let millions = count / 1000000
+        return "\(millions)M"
+    }
+}
+
 // Global function to compose attachment type text
 func composeAttachmentTypeText(for tweet: Tweet) -> String {
     // Get attachments from the tweet or its original tweet
@@ -189,7 +222,7 @@ struct TweetActionButtonsView: View {
                 HStack(spacing: 2) {
                     Image(systemName: "bubble.left")
                         .frame(width: 20)
-                    Text((tweet.commentCount ?? 0) > 0 ? "\(tweet.commentCount!)" : "")
+                    Text((tweet.commentCount ?? 0) > 0 ? formatCount(tweet.commentCount!) : "")
                         .font(.system(.subheadline, design: .monospaced))
                         .frame(width: 28, alignment: .leading)
                 }
@@ -248,7 +281,7 @@ struct TweetActionButtonsView: View {
                 HStack(spacing: 2) {
                     Image(systemName: "arrow.2.squarepath")
                         .frame(width: 20)
-                    Text((tweet.retweetCount ?? 0) > 0 ? "\(tweet.retweetCount!)" : "")
+                    Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
                         .font(.system(.subheadline, design: .monospaced))
                         .frame(width: 28, alignment: .leading)
                 }
@@ -336,7 +369,7 @@ struct TweetActionButtonsView: View {
                 HStack(spacing: 2) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
                         .frame(width: 20)
-                    Text((tweet.favoriteCount ?? 0) > 0 ? "\(tweet.favoriteCount!)" : "")
+                    Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
                         .font(.system(.subheadline, design: .monospaced))
                         .frame(width: 28, alignment: .leading)
                 }
@@ -424,7 +457,7 @@ struct TweetActionButtonsView: View {
                 HStack(spacing: 2) {
                     Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
                         .frame(width: 20)
-                    Text((tweet.bookmarkCount ?? 0) > 0 ? "\(tweet.bookmarkCount!)" : "")
+                    Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
                         .font(.system(.subheadline, design: .monospaced))
                         .frame(width: 28, alignment: .leading)
                 }
