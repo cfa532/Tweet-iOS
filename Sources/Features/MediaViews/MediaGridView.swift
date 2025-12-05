@@ -85,7 +85,7 @@ struct MediaGridView: View {
         let actualWidth = Self.cachedGridWidth // Use cached width instead of GeometryReader
         
         // Fixed frame to prevent layout shifts during image loading
-        ZStack(alignment: .top) {
+        ZStack(alignment: .center) {
                 switch attachments.count {
                 case 1:
                     MediaCell(
@@ -97,7 +97,7 @@ struct MediaGridView: View {
                         videoManager: videoManager,
                         visibleTweetId: visibleTweetId
                     )
-                    .frame(width: actualWidth, height: gridHeight, alignment: .top)
+                    .frame(width: actualWidth, height: gridHeight, alignment: .center)
                     .clipped()
                     .contentShape(Rectangle())
                     // identify MediaCell border
