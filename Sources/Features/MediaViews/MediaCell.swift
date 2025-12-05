@@ -100,15 +100,18 @@ struct MediaCell: View, Equatable {
                             Image(uiImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else if isLoading {
                             // Show cached placeholder while loading original image
                             if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
                                 Image(uiImage: cachedImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else {
                                 // Reserve space with placeholder color
                                 Color.gray.opacity(0.3)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
                         } else {
                             // Show cached placeholder if available, otherwise gray background
@@ -116,13 +119,16 @@ struct MediaCell: View, Equatable {
                                 Image(uiImage: cachedImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             } else {
                                 // Reserve space with placeholder color
                                 Color.gray.opacity(0.3)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
                         }
                     }
                     .clipped()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(
                         // Show loading indicator only when loading and no cached image
                         Group {

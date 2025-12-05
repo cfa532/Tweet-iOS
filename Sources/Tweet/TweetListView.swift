@@ -32,6 +32,8 @@ struct TweetListView<RowView: View>: View {
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
     @State private var lastScrollOffset: CGFloat = 0  // For stable scroll delta reporting
+    @State private var isScrolling: Bool = false  // Track if user is actively scrolling
+    @State private var scrollUpdateTask: Task<Void, Never>? = nil  // Deferred update task
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -179,6 +181,8 @@ struct TweetListView<RowView: View>: View {
                     )
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.basedOnSize)
             .safeAreaInset(edge: .top) {
                 Color.clear.frame(height: 0)
             }
@@ -188,16 +192,43 @@ struct TweetListView<RowView: View>: View {
                 // Ignore negative offsets (pull-to-refresh / bounce) to keep header behavior stable
                 guard newValue >= 0, oldValue >= 0 else { return }
                 
-                // Only forward significant changes to reduce jitter in header/show-hide logic
+                // Mark as scrolling when there's movement
                 let effectiveDelta = newValue - lastScrollOffset
-                let threshold: CGFloat = 8  // Minimum movement before notifying parent
+                let threshold: CGFloat = 1  // Lower threshold for more responsive tracking
                 
-                guard abs(effectiveDelta) >= threshold else { return }
+                if abs(effectiveDelta) >= threshold {
+                    // User is actively scrolling
+                    let wasScrolling = isScrolling
+                    isScrolling = true
+                    
+                    if !wasScrolling {
+                        print("🔄 [SCROLL] Started scrolling - offset: \(newValue), delta: \(effectiveDelta)")
+                    }
+                    
+                    // Cancel any pending deferred updates
+                    scrollUpdateTask?.cancel()
+                    
+                    // Schedule scroll end detection after a brief pause (reduced from 150ms to 50ms for smoother feel)
+                    scrollUpdateTask = Task {
+                        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms pause for smoother scroll
+                        if !Task.isCancelled {
+                            await MainActor.run {
+                                print("🔄 [SCROLL] Scroll ended - final offset: \(lastScrollOffset)")
+                                isScrolling = false
+                            }
+                        }
+                    }
+                }
+                
+                // Only forward significant changes to reduce jitter in header/show-hide logic
+                let headerThreshold: CGFloat = 8  // Minimum movement before notifying parent
+                guard abs(effectiveDelta) >= headerThreshold else { return }
                 
                 lastScrollOffset = newValue
                 onScroll?(newValue, effectiveDelta)  // Pass both offset and debounced delta
             }
             .onAppear {
+                print("🔄 [SCROLL] [INIT] TweetListView appeared - resetting scroll offset")
                 lastScrollOffset = 0
                 onScroll?(0, 0)  // Pass both offset and delta
             }
@@ -306,8 +337,8 @@ struct TweetListView<RowView: View>: View {
         let page: UInt = 0
 
         do {
-                // Step 1: Load from cache first for instant UX (always try cache)
-                let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
+            // Step 1: Load from cache first for instant UX (always try cache)
+            let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
             let validCachedTweets = tweetsFromCache.compactMap { $0 }
             
             let hasCachedContent = !validCachedTweets.isEmpty
@@ -335,14 +366,19 @@ struct TweetListView<RowView: View>: View {
             }
             
             // Step 2: Load from server to get the most up-to-date data
+            // For initial load, we update immediately (not deferred) since user hasn't started scrolling
             if hasCachedContent {
                 // If we have cache, load server data but wait for it to complete
                 // before marking as loaded (to prevent premature empty state)
+                // Reduced delay for smoother experience
+                print("🔄 [SCROLL] [INIT LOAD] Has cached content (\(validCachedTweets.count) tweets), waiting 50ms before server fetch")
+                try? await Task.sleep(nanoseconds: 50_000_000) // Reduced from 100ms to 50ms
                 await loadFromServer(page: page, pageSize: pageSize) { _ in
                     // Server load completed - initialLoadComplete will be set in loadFromServer
                 }
             } else {
                 // No cache - wait for server load to complete before marking as loaded
+                print("🔄 [SCROLL] [INIT LOAD] No cached content, loading from server immediately")
                 await loadFromServer(page: page, pageSize: pageSize) { _ in
                     // Server load completed
                 }
@@ -513,57 +549,47 @@ struct TweetListView<RowView: View>: View {
         do {
             let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
             let validServerTweets = tweetsFromServer.compactMap { $0 }
-            let hasValidTweet = !validServerTweets.isEmpty
             
-            await MainActor.run {
-                // Update tweets with server data (existing mergeTweets already preserves cached tweets for failed IDs)
-                if hasValidTweet {
-                    if page == 0 {
-                        // For first page, MERGE instead of replace to prevent scroll jumps
-                        // Only replace if we have NO cached content
-                        if tweets.isEmpty {
-                            tweets = validServerTweets
-                        } else {
-                            // Use mergeTweetsSmoothly to prevent layout shifts when updating cached content
-                            tweets.mergeTweetsSmoothly(validServerTweets)
-                        }
+            // Defer content updates if user is actively scrolling (except for initial load)
+            if page == 0 {
+                // For initial load, always update immediately
+                print("🔄 [SCROLL] [SERVER LOAD] Page 0 - updating immediately (initial load)")
+                await MainActor.run {
+                    updateTweetsWithServerData(
+                        validServerTweets: validServerTweets,
+                        tweetsFromServer: tweetsFromServer,
+                        page: page,
+                        pageSize: pageSize
+                    )
+                }
+            } else {
+                // For subsequent pages, wait for scroll to stop if actively scrolling
+                let wasScrolling = await MainActor.run(body: { isScrolling })
+                if wasScrolling {
+                    print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - waiting for scroll to stop before updating")
+                    // Wait for scrolling to stop (with timeout) - reduced wait time for smoother updates
+                    var waitCount = 0
+                    let maxWait = 10 // Reduced from 20 to 10 (1 second max wait instead of 2 seconds)
+                    while await MainActor.run(body: { isScrolling }) && waitCount < maxWait {
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                        waitCount += 1
+                    }
+                    if waitCount >= maxWait {
+                        print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - timeout waiting for scroll, updating anyway")
                     } else {
-                        // For subsequent pages, use smooth merge to avoid re-sorting
-                        tweets.mergeTweetsSmoothly(validServerTweets)
-                    }
-                    
-                    // Update VideoLoadingManager with new tweet list
-                    let tweetIds = tweets.map { $0.mid }
-                    videoLoadingManager.updateTweetList(tweetIds)
-                    
-                    currentPage = page
-                    
-                    // Mark initial load as complete for page 0 only if we got valid tweets
-                    if page == 0 {
-                        isLoading = false
-                        initialLoadComplete = true
-                    }
-                } else if tweetsFromServer.count < pageSize {
-                    hasMoreTweets = false
-                    // Server returned fewer than pageSize tweets (or empty), so no more pages
-                    // Update VideoLoadingManager even when no tweets
-                    if page == 0 {
-                        if tweets.isEmpty {
-                            videoLoadingManager.updateTweetList([])
-                            // Only mark as complete if we have no tweets at all (no cache, no server)
-                            isLoading = false
-                            initialLoadComplete = true
-                        } else {
-                            // We have cached tweets, so mark as complete (server confirmed no more pages)
-                            isLoading = false
-                            initialLoadComplete = true
-                        }
+                        print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - scroll stopped, updating now (waited \(waitCount * 100)ms)")
                     }
                 } else {
-                    // All tweets are nil but we got a full page, continue to next page
-                    currentPage = page
-                    // Don't mark as complete yet - keep trying next pages
-                    // Don't call loadMoreTweets recursively here, let the normal flow continue
+                    print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - not scrolling, updating immediately")
+                }
+                
+                await MainActor.run {
+                    updateTweetsWithServerData(
+                        validServerTweets: validServerTweets,
+                        tweetsFromServer: tweetsFromServer,
+                        page: page,
+                        pageSize: pageSize
+                    )
                 }
             }
             
@@ -580,6 +606,73 @@ struct TweetListView<RowView: View>: View {
             }
         }
         completion(true)
+    }
+    
+    // Helper function to update tweets with server data
+    private func updateTweetsWithServerData(
+        validServerTweets: [Tweet],
+        tweetsFromServer: [Tweet?],
+        page: UInt,
+        pageSize: UInt
+    ) {
+        let hasValidTweet = !validServerTweets.isEmpty
+        let isCurrentlyScrolling = isScrolling
+        let tweetCountBefore = tweets.count
+        
+        print("🔄 [SCROLL] [UPDATE] Updating tweets for page \(page) - validTweets: \(validServerTweets.count), isScrolling: \(isCurrentlyScrolling), currentCount: \(tweetCountBefore)")
+        
+        // Update tweets with server data (existing mergeTweets already preserves cached tweets for failed IDs)
+        if hasValidTweet {
+            if page == 0 {
+                // For first page, MERGE instead of replace to prevent scroll jumps
+                // Only replace if we have NO cached content
+                if tweets.isEmpty {
+                    tweets = validServerTweets
+                    print("🔄 [SCROLL] [UPDATE] Page 0 - replaced empty tweets with \(validServerTweets.count) tweets")
+                } else {
+                    // Use mergeTweetsSmoothly to prevent layout shifts when updating cached content
+                    tweets.mergeTweetsSmoothly(validServerTweets)
+                    print("🔄 [SCROLL] [UPDATE] Page 0 - merged \(validServerTweets.count) tweets into existing \(tweetCountBefore) tweets")
+                }
+            } else {
+                // For subsequent pages, use smooth merge to avoid re-sorting
+                tweets.mergeTweetsSmoothly(validServerTweets)
+                print("🔄 [SCROLL] [UPDATE] Page \(page) - merged \(validServerTweets.count) tweets (total now: \(tweets.count))")
+            }
+            
+            // Update VideoLoadingManager with new tweet list
+            let tweetIds = tweets.map { $0.mid }
+            videoLoadingManager.updateTweetList(tweetIds)
+            
+            currentPage = page
+            
+            // Mark initial load as complete for page 0 only if we got valid tweets
+            if page == 0 {
+                isLoading = false
+                initialLoadComplete = true
+            }
+        } else if tweetsFromServer.count < pageSize {
+            hasMoreTweets = false
+            // Server returned fewer than pageSize tweets (or empty), so no more pages
+            // Update VideoLoadingManager even when no tweets
+            if page == 0 {
+                if tweets.isEmpty {
+                    videoLoadingManager.updateTweetList([])
+                    // Only mark as complete if we have no tweets at all (no cache, no server)
+                    isLoading = false
+                    initialLoadComplete = true
+                } else {
+                    // We have cached tweets, so mark as complete (server confirmed no more pages)
+                    isLoading = false
+                    initialLoadComplete = true
+                }
+            }
+        } else {
+            // All tweets are nil but we got a full page, continue to next page
+            currentPage = page
+            // Don't mark as complete yet - keep trying next pages
+            // Don't call loadMoreTweets recursively here, let the normal flow continue
+        }
     }
 
     // MARK: - Optimistic UI Methods

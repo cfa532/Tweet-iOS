@@ -81,11 +81,10 @@ struct MediaGridView: View {
         // Use cached dimensions to prevent repeated UIScreen.main calls
         let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
         let gridHeight = max(10, Self.cachedGridWidth / gridAspectRatio)
+        let actualWidth = Self.cachedGridWidth // Use cached width instead of GeometryReader
         
-        GeometryReader { geometry in
-            let actualWidth = max(10, geometry.size.width)
-            
-            ZStack {
+        // Fixed frame to prevent layout shifts during image loading
+        ZStack {
                 switch attachments.count {
                 case 1:
                     MediaCell(
@@ -447,12 +446,12 @@ struct MediaGridView: View {
                         }
                     }
                 }
-            }
-            .frame(width: actualWidth, height: gridHeight)
-            .clipped().contentShape(Rectangle())
         }
-        // Fix the height to prevent layout shifts during scrolling
-        .frame(height: gridHeight)
+        .frame(width: actualWidth, height: gridHeight)
+        .clipped()
+        .contentShape(Rectangle())
+        // Fix the size to prevent any layout shifts during image loading
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear {
             // Mark the grid as visible
             isVisible = true
