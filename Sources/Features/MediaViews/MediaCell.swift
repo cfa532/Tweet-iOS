@@ -84,8 +84,18 @@ struct MediaCell: View, Equatable {
                 switch attachment.type {
                 case .video, .hls_video:
                     // MediaGrid already sets fixed frame - content should fill parent naturally
-                    videoPlayerView(url: url)
-                        .clipped()
+                    // Use ZStack to layer mute button above video (no clipping needed)
+                    ZStack(alignment: .bottomTrailing) {
+                        // Video player content - no clipping, let MediaGridView handle it
+                        videoPlayerViewContent(url: url)
+                        
+                        // Mute button - placed above video in ZStack, always visible
+                        if showMuteButton {
+                            MuteButton()
+                                .padding(.trailing, 12)
+                                .padding(.bottom, 12)
+                        }
+                    }
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
@@ -302,7 +312,7 @@ struct MediaCell: View, Equatable {
     
     // MARK: - Video Player View
     @ViewBuilder
-    private func videoPlayerView(url: URL) -> some View {
+    private func videoPlayerViewContent(url: URL) -> some View {
         SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
@@ -342,22 +352,6 @@ struct MediaCell: View, Equatable {
                         handleVideoReload()
                     }
             )
-            .overlay(
-            // Video controls overlay
-            Group {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        if showMuteButton {
-                            MuteButton()
-                                .padding(.trailing, 8)
-                                .padding(.bottom, 8)
-                        }
-                    }
-                }
-            }
-        )
         .overlay(
             // Loading spinner overlay when opening fullscreen
             Group {
@@ -421,11 +415,15 @@ struct MuteButton: View {
         }) {
             Image(systemName: muteState.isMuted ? "speaker.slash" : "speaker.wave.2")
                 .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(.white)
                 .frame(width: 30, height: 30)
-                .background(Color.gray.opacity(0.4))
-                .clipShape(Circle())
+                .background(
+                    // Semi-transparent dark background for visibility - no shadow
+                    Circle()
+                        .fill(Color.black.opacity(0.5))
+                )
                 .contentShape(Circle())
         }
+        .buttonStyle(PlainButtonStyle()) // Remove default button shadow
     }
 }

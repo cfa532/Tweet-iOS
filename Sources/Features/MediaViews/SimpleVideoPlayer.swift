@@ -118,8 +118,9 @@ class VideoStateCache {
 // MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
     // Cache screen dimensions to avoid repeated UIScreen.main calls
+    // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
-    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
+    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
     
     // MARK: Required Parameters
     let url: URL
@@ -269,11 +270,10 @@ struct SimpleVideoPlayer: View {
                 // MediaCell mode: fill the MediaCell's frame (no GeometryReader, no fixed frame)
                 // MediaGridView sets explicit frames on MediaCells, so the video should fill that frame
                 // Use .fill contentMode to fill the lesser dimension and clip overflow (same as images)
-                // Clip the video to ensure it doesn't expand beyond container and cover mute button
+                // No clipping here - MediaCell ZStack handles layering, MediaGridView clips the grid
                 videoPlayerView()
                     .aspectRatio(videoAR, contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped() // Clip to container bounds to prevent covering mute button
                 
             case .mediaBrowser:
                 // MediaBrowser mode: fullscreen browser - use GeometryReader for dynamic sizing

@@ -296,9 +296,7 @@ struct TweetItemView: View, Equatable {
                 }
             }
         }
-        .padding()
-        .padding(.leading, -4)
-        .padding(.trailing, -8)
+        .padding(.vertical) // Add top and bottom padding back
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)

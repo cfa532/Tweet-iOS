@@ -180,6 +180,7 @@ struct TweetListView<RowView: View>: View {
                         loadMoreTweets: { loadMoreTweets() }
                     )
                 }
+                .padding(.horizontal, 16) // Add horizontal padding to prevent content from expanding beyond screen
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.basedOnSize)

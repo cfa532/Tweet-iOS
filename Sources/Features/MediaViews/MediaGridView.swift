@@ -21,8 +21,9 @@ struct MediaGridView: View {
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
     // Cache screen-based calculations to avoid repeated UIScreen.main calls
+    // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
-    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
+    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], visibleTweetId: String? = nil, isEmbedded: Bool = false) {
         self.parentTweet = parentTweet
@@ -448,7 +449,7 @@ struct MediaGridView: View {
                 }
         }
         .frame(width: actualWidth, height: gridHeight)
-        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 8)) // Add rounded corners to media grid
         .contentShape(Rectangle())
         // Fix the size to prevent any layout shifts during image loading
         .fixedSize(horizontal: false, vertical: true)
