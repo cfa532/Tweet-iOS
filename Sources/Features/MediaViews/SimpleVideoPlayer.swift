@@ -117,6 +117,10 @@ class VideoStateCache {
 
 // MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
+    // Cache screen dimensions to avoid repeated UIScreen.main calls
+    private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
+    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
+    
     // MARK: Required Parameters
     let url: URL
     let mid: String
@@ -257,35 +261,26 @@ struct SimpleVideoPlayer: View {
             .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
     }
     
+    @ViewBuilder
     private var videoContentView: some View {
-        GeometryReader { geometry in
-            let screenWidth = geometry.size.width
-            let screenHeight = geometry.size.height
-            
-            if let videoAR = videoAspectRatio, videoAR > 0 {
-                switch mode {
-                case .mediaCell:
-                    // MediaCell mode: use cell aspect ratio and normal behavior
-                    if let cellAR = cellAspectRatio {
-                        let cellWidth = geometry.size.width
-                        let cellHeight = cellWidth / cellAR
-                        let needsVerticalPadding = videoAR < cellAR
-                        let videoHeight = cellWidth / videoAR
-                        let overflow = videoHeight - cellHeight
-                        let pad = needsVerticalPadding && overflow > 0 ? overflow / 2 : 0
-                        ZStack {
-                            videoPlayerView()
-                                .offset(y: -pad)    // align the video vertically in the middle
-                                .aspectRatio(videoAR, contentMode: .fill)
-                        }
-                    } else {
-                        // Fallback when no cellAspectRatio is available
-                        videoPlayerView()
-                            .aspectRatio(videoAR, contentMode: .fit)
-                        }
+        if let videoAR = videoAspectRatio, videoAR > 0 {
+            switch mode {
+            case .mediaCell:
+                // MediaCell mode: fill the MediaCell's frame (no GeometryReader, no fixed frame)
+                // MediaGridView sets explicit frames on MediaCells, so the video should fill that frame
+                // Use .fill contentMode to fill the lesser dimension and clip overflow (same as images)
+                // Clip the video to ensure it doesn't expand beyond container and cover mute button
+                videoPlayerView()
+                    .aspectRatio(videoAR, contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped() // Clip to container bounds to prevent covering mute button
+                
+            case .mediaBrowser:
+                // MediaBrowser mode: fullscreen browser - use GeometryReader for dynamic sizing
+                GeometryReader { geometry in
+                    let screenWidth = geometry.size.width
+                    let screenHeight = geometry.size.height
                     
-                case .mediaBrowser:
-                    // MediaBrowser mode: fullscreen browser with native controls only
                     if isVideoPortrait {
                         // Portrait video: fit on full screen
                         videoPlayerView()
@@ -302,14 +297,23 @@ struct SimpleVideoPlayer: View {
                                 .background(Color.black)
                         }
                     }
-                    
-                case .tweetDetail:
-                    // TweetDetail mode: single video view with fit aspect ratio
+                }
+                
+            case .tweetDetail:
+                // TweetDetail mode: single video view with fit aspect ratio - use GeometryReader for dynamic sizing
+                GeometryReader { geometry in
+                    let screenWidth = geometry.size.width
+                    let screenHeight = geometry.size.height
                     videoPlayerView()
                         .aspectRatio(videoAR, contentMode: .fit)
+                        .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                 }
-            } else {
-                // Fallback when no aspect ratio is available
+            }
+        } else {
+            // Fallback when no aspect ratio is available
+            GeometryReader { geometry in
+                let screenWidth = geometry.size.width
+                let screenHeight = geometry.size.height
                 videoPlayerView()
                     .aspectRatio(16.0/9.0, contentMode: .fit)
                     .frame(maxWidth: screenWidth, maxHeight: screenHeight)

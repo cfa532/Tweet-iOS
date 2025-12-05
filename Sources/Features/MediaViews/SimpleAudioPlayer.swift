@@ -43,20 +43,21 @@ struct SimpleAudioPlayer: View {
             
             // Progress bar
             VStack(spacing: 8) {
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        // Background track
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.themeSecondaryText.opacity(0.2))
-                            .frame(height: 6)
-                        
-                        // Progress
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.themeAccent)
-                            .frame(width: geometry.size.width * CGFloat(currentTime / max(duration, 1)), height: 6)
-                    }
+                // Remove GeometryReader - use frame-based approach that fills available width
+                ZStack(alignment: .leading) {
+                    // Background track - fills available width
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.themeSecondaryText.opacity(0.2))
+                        .frame(height: 6)
+                    
+                    // Progress - use scaleEffect to scale based on progress ratio
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.themeAccent)
+                        .frame(height: 6)
+                        .scaleEffect(x: CGFloat(currentTime / max(duration, 1)), anchor: .leading)
                 }
                 .frame(height: 6)
+                .frame(maxWidth: .infinity) // Fill available width
                 .padding(.horizontal)
                 
                 // Time labels
