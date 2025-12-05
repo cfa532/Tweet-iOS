@@ -1,5 +1,42 @@
 import SwiftUI
 import AVKit
+import UIKit
+
+// Custom text view that enables text selection without NavigationLink interference
+@available(iOS 16.0, *)
+struct SelectableTextView: UIViewRepresentable {
+    let text: String
+    
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.text = text
+        textView.font = UIFont.preferredFont(forTextStyle: .body)
+        textView.textColor = UIColor.label
+        textView.backgroundColor = .clear
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = false
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.linkTextAttributes = [:] // Prevent links from being tappable
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return textView
+    }
+    
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        if uiView.text != text {
+            uiView.text = text
+        }
+    }
+    
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width - 32 // Account for padding
+        uiView.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return size
+    }
+}
 
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
 @available(iOS 16.0, *)
@@ -465,9 +502,9 @@ struct TweetDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Show text content if available
             if let content = displayTweet.content, !content.isEmpty {
-                Text(content)
-//                    .font(.body)
+                SelectableTextView(text: content)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal)
                     .padding(.vertical, 8)
             }
