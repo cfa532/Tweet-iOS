@@ -83,6 +83,7 @@ struct MediaCell: View, Equatable {
                 case .video, .hls_video:
                     // MediaGrid already sets fixed frame - content should fill parent naturally
                     videoPlayerViewContent(url: url)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)

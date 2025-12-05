@@ -85,7 +85,7 @@ struct MediaGridView: View {
         let actualWidth = Self.cachedGridWidth // Use cached width instead of GeometryReader
         
         // Fixed frame to prevent layout shifts during image loading
-        ZStack(alignment: .topLeading) {
+        ZStack(alignment: .top) {
                 switch attachments.count {
                 case 1:
                     MediaCell(
@@ -97,7 +97,7 @@ struct MediaGridView: View {
                         videoManager: videoManager,
                         visibleTweetId: visibleTweetId
                     )
-                    .frame(width: actualWidth, height: gridHeight, alignment: .topLeading)
+                    .frame(width: actualWidth, height: gridHeight, alignment: .top)
                     .clipped()
                     .contentShape(Rectangle())
                     // identify MediaCell border
@@ -448,11 +448,9 @@ struct MediaGridView: View {
                     }
                 }
         }
-        .frame(width: actualWidth, height: gridHeight, alignment: .topLeading)
+        .frame(width: actualWidth, height: gridHeight, alignment: .top)
         .clipShape(RoundedRectangle(cornerRadius: 8)) // Add rounded corners to media grid
         .contentShape(Rectangle())
-        // Fix the size to prevent any layout shifts during image loading
-        .fixedSize(horizontal: false, vertical: true)
         .overlay(alignment: .bottomTrailing) {
             // Show mute button only when there's exactly one video attachment
             if attachments.count == 1,

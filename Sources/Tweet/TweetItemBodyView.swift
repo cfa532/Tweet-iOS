@@ -74,7 +74,7 @@ struct TweetItemBodyView: View {
                     .lineLimit(isExpanded ? nil : 7)
                     .if(enableTap) { $0.contentShape(Rectangle()) }
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 4)
+                    .padding(.bottom, 2)
                 
                 if content.count > 500 && !isExpanded {
                     Button(action: { isExpanded = true }) {
@@ -89,23 +89,26 @@ struct TweetItemBodyView: View {
                 // Use cached grid width for performance
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
                 let gridHeight = max(10, Self.cachedGridWidth / aspect)
+                let hasContentAbove = tweet.content != nil && !tweet.content!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 0) {
                     MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: gridHeight, alignment: .topLeading) // Fixed height, align to top
+                        .frame(height: gridHeight) // Fixed height
                         .clipped()
                         .cornerRadius(8)
-                        .padding(.top, 4) // Add padding at top of MediaGridView
+                        .padding(.top, hasContentAbove ? 2 : 0) // Only add padding if there's content above
+                        .padding(.bottom, -8)
                         .id("\(tweet.mid)_grid")
                     
                     if let caption = singleVideoCaption(for: attachments) {
                         Text(caption)
-                            .font(.footnote)
+                            .font(.system(size: 14, weight: .regular)) // Use explicit size to control spacing
                             .foregroundColor(.primary.opacity(0.6))
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true) // Prevent extra vertical expansion
                     }
                 }
             }
