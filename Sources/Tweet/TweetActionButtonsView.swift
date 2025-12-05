@@ -186,15 +186,14 @@ struct TweetActionButtonsView: View {
                     onCommentTap?() ?? { showCommentCompose = true }()
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: "bubble.left")
                         .frame(width: 20)
-                    if let count = tweet.commentCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.commentCount ?? 0) > 0 ? "\(tweet.commentCount!)" : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             Spacer(minLength: 12)
             // Retweet / forward button
@@ -246,15 +245,14 @@ struct TweetActionButtonsView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: "arrow.2.squarepath")
                         .frame(width: 20)
-                    if let count = tweet.retweetCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.retweetCount ?? 0) > 0 ? "\(tweet.retweetCount!)" : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             Spacer(minLength: 12)
             // Like button
@@ -335,15 +333,14 @@ struct TweetActionButtonsView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
                         .frame(width: 20)
-                    if let count = tweet.favoriteCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.favoriteCount ?? 0) > 0 ? "\(tweet.favoriteCount!)" : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             Spacer(minLength: 12)
             // Bookmark button
@@ -424,15 +421,14 @@ struct TweetActionButtonsView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
                         .frame(width: 20)
-                    if let count = tweet.bookmarkCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.bookmarkCount ?? 0) > 0 ? "\(tweet.bookmarkCount!)" : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             // Share button
             Spacer(minLength: 16)
