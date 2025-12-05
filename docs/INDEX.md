@@ -41,6 +41,7 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
+| [**fixes/LAYOUT_STABILITY_IMPROVEMENTS.md**](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) | **COMPREHENSIVE**: All layout stability mechanisms - retweet placeholders, scroll debouncing, GeometryReader removal, fixed sizes, drawing groups | Dec 2025 |
 | [**fixes/CACHE_KEY_MIGRATION_DEC_2025.md**](./fixes/CACHE_KEY_MIGRATION_DEC_2025.md) | Cache key migration from "main_feed" to appUser.mid with persistence across logouts | Dec 2025 |
 | [**fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md**](./fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md) | Context-aware sharing: IP-based URLs for Vue HashHistory, accurate video screenshots from detail view | Nov 14, 2025 |
 | [**fixes/CACHED_TWEETS_BLOCKING_FIX.md**](./fixes/CACHED_TWEETS_BLOCKING_FIX.md) | **CURRENT PRODUCTION**: Non-blocking renders, eliminated 34 lines of baseUrl workaround code | Oct 22, 2025 |
@@ -134,6 +135,20 @@ All main documents should include:
 ---
 
 ## 🔄 Recent Updates
+
+### December 2025
+- ✅ **Layout Stability Improvements**: Comprehensive stability mechanisms
+  - **Retweet/Quoted Tweet Stability**: Fixed-height placeholders (280pt) prevent layout shifts when embedded tweets load
+  - **Scroll Debouncing**: Queue server updates during active scrolling, apply after scroll stops
+  - **GeometryReader Removal**: Removed from MediaGridView and SimpleVideoPlayer (mediaCell mode), use cached/fixed dimensions
+  - **Fixed Size Modifiers**: Applied throughout to prevent size changes
+  - **Drawing Group Isolation**: Prevent cascading layout shifts
+  - **Media Grid Stability**: Fixed dimensions, compositing group, stable IDs
+  - **Video Player Stability**: Fixed dimensions for mediaCell mode
+  - **TweetItemBodyView Stability**: Fixed sizes for all content elements
+  - **Result**: Zero layout shifts, smooth scroll experience, professional UX
+  - **Files**: `TweetItemView.swift`, `TweetListView.swift`, `MediaGridView.swift`, `SimpleVideoPlayer.swift`, `TweetItemBodyView.swift`, `MediaCell.swift`
+  - 📄 Updated [fixes/LAYOUT_STABILITY_IMPROVEMENTS.md](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) - Complete documentation of all stability mechanisms
 
 ### October 22, 2025
 - ✅ **CRITICAL RESOLVED**: Cached Tweets Blocking Fix
