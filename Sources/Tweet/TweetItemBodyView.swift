@@ -74,6 +74,7 @@ struct TweetItemBodyView: View {
                     .lineLimit(isExpanded ? nil : 7)
                     .if(enableTap) { $0.contentShape(Rectangle()) }
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 4)
                 
                 if content.count > 500 && !isExpanded {
                     Button(action: { isExpanded = true }) {
@@ -89,20 +90,23 @@ struct TweetItemBodyView: View {
                 let aspect = MediaGridViewModel.aspectRatio(for: attachments)
                 let gridHeight = max(10, Self.cachedGridWidth / aspect)
                 
-                MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: gridHeight, alignment: .topLeading) // Fixed height, align to top
-                    .clipped()
-                    .cornerRadius(8)
-                    .id("\(tweet.mid)_grid")
-                
-                if let caption = singleVideoCaption(for: attachments) {
-                    Text(caption)
-                        .font(.footnote)
-                        .foregroundColor(.primary.opacity(0.6))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                VStack(alignment: .leading, spacing: 2) {
+                    MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: gridHeight, alignment: .topLeading) // Fixed height, align to top
+                        .clipped()
+                        .cornerRadius(8)
+                        .padding(.top, 4) // Add padding at top of MediaGridView
+                        .id("\(tweet.mid)_grid")
+                    
+                    if let caption = singleVideoCaption(for: attachments) {
+                        Text(caption)
+                            .font(.footnote)
+                            .foregroundColor(.primary.opacity(0.6))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
