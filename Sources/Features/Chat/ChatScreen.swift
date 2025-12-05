@@ -331,11 +331,6 @@ struct ChatScreen: View {
             
             print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
         }
-        .onChange(of: selectedPhotos) { _, items in
-            Task {
-                await handlePhotoSelection(items)
-            }
-        }
         .onDisappear {
             // Stop the periodic message refresh timer when leaving the screen
             stopPeriodicMessageRefresh()
