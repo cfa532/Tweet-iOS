@@ -1335,12 +1335,7 @@ final class HproseInstance: ObservableObject {
                 
                 if attempt < maxAttempts {
                     await handleRetryRecovery(for: user)
-                }
-                
-                if attempt < maxAttempts {
-                    // Exponential backoff: 1s, 2s
-                    let delay = UInt64(attempt) * 1_000_000_000
-                    try await Task.sleep(nanoseconds: delay)
+                    // Retry immediately without delay - IP refresh is forced on retry attempts
                 }
             }
         }
