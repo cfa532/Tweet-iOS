@@ -93,7 +93,14 @@ struct ContentView: View {
                 
                 // Chat Tab
                 Button(action: {
-                    selectedTab = 1
+                    if selectedTab != 1 {
+                        selectedTab = 1
+                    } else {
+                        // Already on chat tab - navigate back to chat list
+                        chatNavigationPath.removeLast(chatNavigationPath.count)
+                        isInChatScreen = false
+                        isInProfileFromChat = false
+                    }
                 }) {
                     ZStack {
                         Image(systemName: "message")

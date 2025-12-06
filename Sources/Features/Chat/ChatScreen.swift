@@ -3,6 +3,8 @@ import PhotosUI
 
 struct ChatScreen: View {
     let receiptId: MimeiId
+    @Binding var navigationPath: NavigationPath
+    let onProfileNavigate: (() -> Void)?
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messages: [ChatMessage] = []
@@ -17,6 +19,12 @@ struct ChatScreen: View {
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var messageRefreshTimer: Timer?
+    
+    init(receiptId: MimeiId, navigationPath: Binding<NavigationPath> = .constant(NavigationPath()), onProfileNavigate: (() -> Void)? = nil) {
+        self.receiptId = receiptId
+        self._navigationPath = navigationPath
+        self.onProfileNavigate = onProfileNavigate
+    }
     
     // Pagination states
     @State private var currentOffset = 0
@@ -52,7 +60,16 @@ struct ChatScreen: View {
                 ChatLoadingView(receiptId: receiptId)
             }
             // Header
-            ChatHeaderView(user: user, dismiss: dismiss)
+            ChatHeaderView(
+                user: user,
+                dismiss: dismiss,
+                onAvatarTap: {
+                    if let user = user {
+                        navigationPath.append(user)
+                        onProfileNavigate?()
+                    }
+                }
+            )
             
             // Messages - Take remaining space
             ScrollViewReader { proxy in
@@ -263,6 +280,9 @@ struct ChatScreen: View {
             hideKeyboard()
         }
         .toolbar(.hidden, for: .tabBar)
+        .navigationDestination(for: User.self) { user in
+            ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
+        }
         .overlay(
             // Toast message overlay
             VStack {
@@ -891,6 +911,7 @@ struct ChatLoadingView: View {
 struct ChatHeaderView: View {
     let user: User?
     let dismiss: DismissAction
+    let onAvatarTap: (() -> Void)?
     
     var body: some View {
         HStack {
@@ -911,6 +932,12 @@ struct ChatHeaderView: View {
             if let user = user {
                 HStack(spacing: 8) {
                     Avatar(user: user, size: 36)
+                        .contentShape(Circle())
+                        .highPriorityGesture(
+                            TapGesture().onEnded { _ in
+                                onAvatarTap?()
+                            }
+                        )
                     Text(user.name ?? "@\(user.username ?? "")")
                         .font(.headline)
                 }

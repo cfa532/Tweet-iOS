@@ -53,11 +53,17 @@ struct ChatListScreen: View {
                 }
             }
             .navigationDestination(for: String.self) { receiptId in
-                ChatScreen(receiptId: receiptId)
-                    .onAppear {
-                        // When ChatScreen appears, reset profile flag
-                        onChatNavigate?()
+                ChatScreen(
+                    receiptId: receiptId,
+                    navigationPath: $navigationPath,
+                    onProfileNavigate: {
+                        onProfileNavigate?()
                     }
+                )
+                .onAppear {
+                    // When ChatScreen appears, reset profile flag
+                    onChatNavigate?()
+                }
             }
             .navigationDestination(for: User.self) { user in
                 ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
