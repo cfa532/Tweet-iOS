@@ -31,10 +31,7 @@ struct ChatListScreen: View {
                         ForEach(chatSessionManager.chatSessions
                             .filter { $0.userId == HproseInstance.shared.appUser.mid }
                             .sorted(by: { $0.timestamp > $1.timestamp })) { session in
-                            ChatSessionRow(session: session, onAvatarTap: { user in
-                                navigationPath.append(user)
-                                onProfileNavigate?()
-                            })
+                            ChatSessionRow(session: session)
                         }
                         .onDelete(perform: deleteChatSession)
                     }
@@ -284,15 +281,9 @@ struct FollowingsListForChat: View {
 
 struct ChatSessionRow: View {
     let session: ChatSession
-    let onAvatarTap: ((User) -> Void)?
     @State private var user: User?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var chatSessionManager = ChatSessionManager.shared
-    
-    init(session: ChatSession, onAvatarTap: ((User) -> Void)? = nil) {
-        self.session = session
-        self.onAvatarTap = onAvatarTap
-    }
     
     var body: some View {
         NavigationLink(value: session.receiptId) {
@@ -300,12 +291,6 @@ struct ChatSessionRow: View {
                 // User Avatar
                 if let user = user {
                     Avatar(user: user, size: 44)
-                        .contentShape(Circle())
-                        .highPriorityGesture(
-                            TapGesture().onEnded { _ in
-                                onAvatarTap?(user)
-                            }
-                        )
                 } else {
                     Circle()
                         .fill(Color.gray.opacity(0.3))
