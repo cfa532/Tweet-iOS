@@ -135,32 +135,45 @@ struct TweetItemView: View, Equatable {
                 // print("⚡ [RENDER] Tweet ready (@\(tweet.author?.username ?? "?"))")
             }
         }
-        .onAppear {
+        // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
+        // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
+        .task(id: tweet.originalTweetId) {
             // Load original tweet if this is a retweet/quoted tweet
-            if !hasLoadedOriginalTweet,
-               let originalTweetId = tweet.originalTweetId,
-               let originalAuthorId = tweet.originalAuthorId {
-                hasLoadedOriginalTweet = true
+            guard let originalTweetId = tweet.originalTweetId,
+                  let originalAuthorId = tweet.originalAuthorId else {
+                return
+            }
+            
+            // First, try to restore from cache immediately to prevent layout shifts
+            if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
+                await MainActor.run {
+                    originalTweet = cachedTweet
+                    hasLoadedOriginalTweet = true
+                    VideoLoadingManager.shared.registerRetweetRelationship(
+                        retweetId: tweet.mid,
+                        originalTweetId: cachedTweet.mid
+                    )
+                }
+            }
+            
+            // Then fetch from server to get the latest version
+            if let t = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId
+            ) {
+                VideoLoadingManager.shared.registerRetweetRelationship(
+                    retweetId: tweet.mid,
+                    originalTweetId: t.mid
+                )
                 
-                Task {
-                    if let t = try? await hproseInstance.getTweet(
-                        tweetId: originalTweetId,
-                        authorId: originalAuthorId
-                    ) {
-                        VideoLoadingManager.shared.registerRetweetRelationship(
-                            retweetId: tweet.mid,
-                            originalTweetId: t.mid
-                        )
-                        
-                        await MainActor.run {
-                            originalTweet = t
-                        }
-                    } else {
-                        // Could not fetch original tweet, remove this tweet from the list
-                        await MainActor.run {
-                            onRemove?(tweet.mid)
-                        }
-                    }
+                await MainActor.run {
+                    originalTweet = t
+                    hasLoadedOriginalTweet = true
+                }
+            } else if originalTweet == nil {
+                // Could not fetch original tweet and no cache, remove this tweet from the list
+                await MainActor.run {
+                    onRemove?(tweet.mid)
                 }
             }
         }

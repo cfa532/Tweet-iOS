@@ -359,23 +359,35 @@ struct TweetDetailView: View {
                 dismiss()
             }
         }
-        .onAppear {
+        // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
+        // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
+        .task(id: tweet.originalTweetId) {
             // Load original tweet if this is a retweet/quoted tweet
-            if !hasLoadedOriginalTweet,
-               let originalTweetId = tweet.originalTweetId,
-               let originalAuthorId = tweet.originalAuthorId {
-                hasLoadedOriginalTweet = true
-                Task {
-                    if let originalTweet = try? await hproseInstance.getTweet(
-                        tweetId: originalTweetId,
-                        authorId: originalAuthorId
-                    ) {
-                        await MainActor.run {
-                            self.originalTweet = originalTweet
-                        }
-                    }
+            guard let originalTweetId = tweet.originalTweetId,
+                  let originalAuthorId = tweet.originalAuthorId else {
+                return
+            }
+            
+            // First, try to restore from cache immediately to prevent layout shifts
+            if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
+                await MainActor.run {
+                    originalTweet = cachedTweet
+                    hasLoadedOriginalTweet = true
                 }
             }
+            
+            // Then fetch from server to get the latest version
+            if let originalTweet = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId
+            ) {
+                await MainActor.run {
+                    self.originalTweet = originalTweet
+                    hasLoadedOriginalTweet = true
+                }
+            }
+        }
+        .onAppear {
             
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
