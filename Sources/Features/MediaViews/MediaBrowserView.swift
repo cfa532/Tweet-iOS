@@ -808,25 +808,39 @@ struct SingletonVideoPlayerView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
-                // Show player
-                SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            onUserInteraction()
-                        }
-                    )
-            } else {
-                // Loading placeholder or broken player - attempt to reload
-                ZStack {
+            ZStack {
+                if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
+                    // Show player
+                    SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                onUserInteraction()
+                            }
+                        )
+                } else {
+                    // Loading placeholder or broken player - attempt to reload
                     Color.black
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
                 }
-                .onAppear {
+                
+                // Show buffering spinner when waiting for data (non-interactive overlay)
+                if manager.isBuffering && manager.currentVideoMid == mid {
+                    ZStack {
+                        Color.black.opacity(0.15)
+                        ProgressView()
+                            .scaleEffect(3.0)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .opacity(0.8)
+                    }
+                    .transition(.opacity)
+                    .allowsHitTesting(false) // Don't block touches - allow user to interact with player controls
+                }
+            }
+            .onAppear {
                     // If player is nil or doesn't match current video, reload it
                     if manager.singletonPlayer == nil || manager.currentVideoMid != mid {
                         if !hasAttemptedReload {
@@ -853,7 +867,6 @@ struct SingletonVideoPlayerView: View {
             }
         }
     }
-}
 
 // MARK: - Simple AVPlayerViewController Wrapper
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {

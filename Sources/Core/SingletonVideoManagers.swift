@@ -177,6 +177,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     @Published var currentSourceTweetId: String? // The visible tweet ID in feed (for retweets)
     @Published var currentVideoIndex: Int = 0 // Track current video index within tweet
     @Published var isPlaying = false
+    @Published var isBuffering = false // Track buffering state for spinner
     
     // Closures for finding and navigating to next video
     var findNextVideo: ((String, Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)?)? // Async closure to find next video
@@ -189,6 +190,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     // Retry mechanism for seeking
     private var retryWorkItem: DispatchWorkItem?
     private var bufferObserver: NSKeyValueObservation?
+    
+    // Waiting for data observer
+    private var timeControlStatusObserver: NSKeyValueObservation?
+    private var playbackBufferEmptyObserver: NSKeyValueObservation?
+    private var playbackLikelyToKeepUpObserver: NSKeyValueObservation?
+    private var loadedTimeRangesObserver: NSKeyValueObservation?
+    private var itemStatusObserver: NSKeyValueObservation?
+    private var wasPlayingBeforeWaiting = false
     
     /// Initialize singleton player early (called during app startup)
     func initializePlayerEarly() {
@@ -230,6 +239,20 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         bufferObserver?.invalidate()
         bufferObserver = nil
         
+        // Clean up timeControlStatus observer
+        timeControlStatusObserver?.invalidate()
+        timeControlStatusObserver = nil
+        playbackBufferEmptyObserver?.invalidate()
+        playbackBufferEmptyObserver = nil
+        playbackLikelyToKeepUpObserver?.invalidate()
+        playbackLikelyToKeepUpObserver = nil
+        loadedTimeRangesObserver?.invalidate()
+        loadedTimeRangesObserver = nil
+        itemStatusObserver?.invalidate()
+        itemStatusObserver = nil
+        wasPlayingBeforeWaiting = false
+        isBuffering = false
+        
         // Store current video info
         self.currentVideoMid = mid
         self.currentTweetId = tweetId
@@ -269,6 +292,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     // Setup video completion observer
                     self.setupVideoCompletionObserver(playerItem)
                     
+                    // Setup timeControlStatus observer for buffering detection and autoplay
+                    self.setupTimeControlStatusObserver()
+                    
                     // Start monitoring for stalls during seeking
                     self.startRetryMonitoring()
                     
@@ -300,6 +326,136 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.currentVideoIndex = 0
                     self.isPlaying = false
                 }
+            }
+        }
+    }
+    
+    /// Setup timeControlStatus observer for buffering detection and autoplay
+    private func setupTimeControlStatusObserver() {
+        // Remove old observers
+        timeControlStatusObserver?.invalidate()
+        timeControlStatusObserver = nil
+        playbackBufferEmptyObserver?.invalidate()
+        playbackBufferEmptyObserver = nil
+        playbackLikelyToKeepUpObserver?.invalidate()
+        playbackLikelyToKeepUpObserver = nil
+        loadedTimeRangesObserver?.invalidate()
+        loadedTimeRangesObserver = nil
+        itemStatusObserver?.invalidate()
+        itemStatusObserver = nil
+        wasPlayingBeforeWaiting = false
+        
+        guard let player = singletonPlayer, let playerItem = player.currentItem else {
+            NSLog("⚠️ [FULLSCREEN WAITING] Cannot setup observer - no player or playerItem")
+            return
+        }
+        
+        NSLog("✅ [FULLSCREEN WAITING] Setting up buffering observers for \(currentVideoMid ?? "unknown")")
+        
+        // Helper to update buffering state
+        let updateBufferingState = { [weak self, weak player, weak playerItem] () in
+            guard let self = self, let player = player, let item = playerItem else { return }
+            
+            let isBufferEmpty = item.isPlaybackBufferEmpty
+            let isLikelyToKeepUp = item.isPlaybackLikelyToKeepUp
+            let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            let wasPlaying = player.rate > 0 || self.isPlaying
+            let hasBufferedData = !item.loadedTimeRanges.isEmpty
+            let itemStatus = item.status
+            
+            // Calculate buffered duration
+            var bufferedDuration: Double = 0
+            if hasBufferedData {
+                bufferedDuration = item.loadedTimeRanges.reduce(0.0) { max($0, CMTimeGetSeconds($1.timeRangeValue.duration)) }
+            }
+            
+            // Show spinner if:
+            // 1. Buffer is explicitly empty, OR
+            // 2. Player is explicitly waiting, OR
+            // 3. Item is ready but buffer is empty or very small (< 0.5s) and not likely to keep up
+            let shouldShowSpinner = isBufferEmpty || isWaiting || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
+            
+            NSLog("🔍 [FULLSCREEN WAITING] bufferEmpty: \(isBufferEmpty), likelyToKeepUp: \(isLikelyToKeepUp), waiting: \(isWaiting), hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDuration))s, status: \(itemStatus.rawValue), shouldShow: \(shouldShowSpinner)")
+            
+            if shouldShowSpinner {
+                // Video is waiting for data - track if it was playing
+                if !self.wasPlayingBeforeWaiting && wasPlaying {
+                    self.wasPlayingBeforeWaiting = true
+                    NSLog("🔄 [FULLSCREEN WAITING] Video was playing, will autoplay when ready")
+                }
+                
+                // Show spinner
+                if !self.isBuffering {
+                    self.isBuffering = true
+                    NSLog("🔄 [FULLSCREEN WAITING] Showing spinner")
+                }
+            } else {
+                // Player has enough data - hide spinner
+                if self.isBuffering {
+                    self.isBuffering = false
+                    NSLog("✅ [FULLSCREEN DATA READY] Hiding spinner (buffered: \(String(format: "%.1f", bufferedDuration))s)")
+                }
+                
+                // Autoplay logic: check multiple conditions to ensure we resume when data is ready
+                let hasEnoughBuffer = hasBufferedData && bufferedDuration >= 0.5
+                let isReadyToPlay = itemStatus == .readyToPlay
+                let isNotPlaying = player.rate == 0
+                let wantsToPlay = self.isPlaying || self.wasPlayingBeforeWaiting
+                
+                // If we want to play, have data, and player is not playing, resume
+                if wantsToPlay && isReadyToPlay && hasEnoughBuffer && isNotPlaying {
+                    NSLog("✅ [FULLSCREEN DATA READY] Data ready (buffered: \(String(format: "%.1f", bufferedDuration))s), resuming playback (isPlaying: \(self.isPlaying), wasPlayingBefore: \(self.wasPlayingBeforeWaiting))")
+                    player.play()
+                    self.isPlaying = true
+                    self.wasPlayingBeforeWaiting = false
+                } else if player.timeControlStatus == .playing || player.rate > 0 {
+                    // Already playing - just reset flag
+                    if self.wasPlayingBeforeWaiting {
+                        NSLog("✅ [FULLSCREEN DATA READY] Video already playing, resetting flag")
+                        self.wasPlayingBeforeWaiting = false
+                    }
+                } else if wantsToPlay && isReadyToPlay && hasEnoughBuffer {
+                    // Fallback: try to play even if rate check didn't catch it
+                    NSLog("✅ [FULLSCREEN DATA READY] Fallback: attempting to resume (wantsToPlay: \(wantsToPlay), ready: \(isReadyToPlay), buffer: \(hasEnoughBuffer))")
+                    player.play()
+                    self.isPlaying = true
+                    self.wasPlayingBeforeWaiting = false
+                }
+            }
+        }
+        
+        // Observe playbackBufferEmpty - most reliable indicator
+        playbackBufferEmptyObserver = playerItem.observe(\.isPlaybackBufferEmpty, options: [.new, .initial]) { _, _ in
+            DispatchQueue.main.async {
+                updateBufferingState()
+            }
+        }
+        
+        // Observe playbackLikelyToKeepUp
+        playbackLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new, .initial]) { _, _ in
+            DispatchQueue.main.async {
+                updateBufferingState()
+            }
+        }
+        
+        // Observe loadedTimeRanges to catch when data arrives
+        self.loadedTimeRangesObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { _, _ in
+            DispatchQueue.main.async {
+                updateBufferingState()
+            }
+        }
+        
+        // Observe item status changes
+        self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { _, _ in
+            DispatchQueue.main.async {
+                updateBufferingState()
+            }
+        }
+        
+        // Observe timeControlStatus as backup
+        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new, .initial]) { _, _ in
+            DispatchQueue.main.async {
+                updateBufferingState()
             }
         }
     }
@@ -545,6 +701,20 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Clean up buffer observer
         bufferObserver?.invalidate()
         bufferObserver = nil
+        
+        // Clean up timeControlStatus observer
+        timeControlStatusObserver?.invalidate()
+        timeControlStatusObserver = nil
+        playbackBufferEmptyObserver?.invalidate()
+        playbackBufferEmptyObserver = nil
+        playbackLikelyToKeepUpObserver?.invalidate()
+        playbackLikelyToKeepUpObserver = nil
+        loadedTimeRangesObserver?.invalidate()
+        loadedTimeRangesObserver = nil
+        itemStatusObserver?.invalidate()
+        itemStatusObserver = nil
+        wasPlayingBeforeWaiting = false
+        isBuffering = false
         
         print("DEBUG: [FullScreenVideoManager] Cleared video content (player instance retained)")
         
