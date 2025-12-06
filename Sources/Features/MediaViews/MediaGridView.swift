@@ -24,6 +24,7 @@ struct MediaGridView: View {
     // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
+    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 140) // Narrower width for embedded/quoted tweets
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], visibleTweetId: String? = nil, isEmbedded: Bool = false) {
         self.parentTweet = parentTweet
@@ -81,8 +82,9 @@ struct MediaGridView: View {
     var body: some View {
         // Use cached dimensions to prevent repeated UIScreen.main calls
         let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-        let gridHeight = max(10, Self.cachedGridWidth / gridAspectRatio)
-        let actualWidth = Self.cachedGridWidth // Use cached width instead of GeometryReader
+        // Use different width for embedded vs regular tweets
+        let actualWidth = isEmbedded ? Self.cachedEmbeddedGridWidth : Self.cachedGridWidth
+        let gridHeight = max(10, actualWidth / gridAspectRatio)
         
         // Fixed frame to prevent layout shifts during image loading
         ZStack(alignment: .center) {
@@ -448,7 +450,8 @@ struct MediaGridView: View {
                     }
                 }
         }
-        .frame(width: actualWidth, height: gridHeight, alignment: .top)
+        .frame(width: actualWidth)
+        .aspectRatio(gridAspectRatio, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8)) // Add rounded corners to media grid
         .contentShape(Rectangle())
         .overlay(alignment: .bottomTrailing) {

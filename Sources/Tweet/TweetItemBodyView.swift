@@ -86,18 +86,11 @@ struct TweetItemBodyView: View {
             }
             // MediaGrid to show attachment previews.
             if let attachments = tweet.attachments, !attachments.isEmpty {
-                // Use cached grid width for performance
-                let aspect = MediaGridViewModel.aspectRatio(for: attachments)
-                let gridHeight = max(10, Self.cachedGridWidth / aspect)
-                
                 VStack(alignment: .leading, spacing: 0) {
                     MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(height: gridHeight) // Fixed height
                         .clipped()
                         .cornerRadius(8)
-                        .padding(.top, -8)
-                        .padding(.bottom, -8)
                         .id("\(tweet.mid)_grid")
                     
                     if let caption = singleVideoCaption(for: attachments) {
