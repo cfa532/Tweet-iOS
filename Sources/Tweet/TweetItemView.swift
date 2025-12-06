@@ -19,6 +19,7 @@ struct TweetItemView: View, Equatable {
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
+    @State private var lastLoadedOriginalTweetId: String? = nil // Track last loaded ID for stable state (like Android's remember)
     
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
@@ -135,12 +136,25 @@ struct TweetItemView: View, Equatable {
                 // print("⚡ [RENDER] Tweet ready (@\(tweet.author?.username ?? "?"))")
             }
         }
+        .onChange(of: tweet.originalTweetId) { oldValue, newValue in
+            // Reset state when originalTweetId changes (like Android's remember with stable keys)
+            // This prevents unnecessary refetches and ensures state stability during scrolling
+            if oldValue != newValue {
+                hasLoadedOriginalTweet = false
+                originalTweet = nil
+                lastLoadedOriginalTweetId = nil
+            }
+        }
         .onAppear {
-            // Defer original tweet loading to reduce async operations during scrolling
-            if !hasLoadedOriginalTweet, 
-               let originalTweetId = tweet.originalTweetId, 
-               let originalAuthorId = tweet.originalAuthorId {
+            // Stable state management: Only load if originalTweetId hasn't been loaded yet
+            // This prevents refetches when scrolling up (matches Android's remember pattern)
+            if let originalTweetId = tweet.originalTweetId,
+               let originalAuthorId = tweet.originalAuthorId,
+               originalTweetId != lastLoadedOriginalTweetId {
+                // Mark as loading immediately to prevent duplicate loads
                 hasLoadedOriginalTweet = true
+                lastLoadedOriginalTweetId = originalTweetId
+                
                 // TweetCacheManager already handles caching, so this will be fast
                 Task {
                     if let t = try? await hproseInstance.getTweet(
@@ -270,7 +284,8 @@ struct TweetItemView: View, Equatable {
                     }
                 }
             } else if isRetweetOrQuotedTweet && !hasLoadedOriginalTweet {
-                // originalTweet is nil and hasn't loaded yet - show placeholder to prevent layout shifts
+                // originalTweet is nil and hasn't loaded yet - show fixed-size placeholder to prevent layout shifts
+                // This matches Android's fixed-size loading indicator approach
                 Group {
                     if let user = tweet.author {
                         avatarView(for: user, context: "retweet-loading")
@@ -296,7 +311,8 @@ struct TweetItemView: View, Equatable {
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
                     }
                     
-                    // Placeholder for embedded tweet with fixed height to prevent layout shifts
+                    // Fixed-size placeholder for embedded tweet (matches Android's fixed-size loading indicator)
+                    // Height matches smallest possible embedded tweet to prevent layout shifts
                     HStack(alignment: .top, spacing: 8) {
                         Circle()
                             .fill(Color.gray.opacity(0.3))
@@ -315,7 +331,7 @@ struct TweetItemView: View, Equatable {
                     .padding(8)
                     .background(Color(.systemGray4).opacity(0.3))
                     .cornerRadius(8)
-                    .frame(minHeight: 60) // Fixed height placeholder to match actual embedded tweet (smallest size)
+                    .frame(height: 60) // Fixed height (not minHeight) to match Android's fixed-size approach
                     .padding(.top, (tweet.content?.isEmpty ?? true) ? 0 : 8)
                     
                     if !hideActions {
@@ -374,7 +390,8 @@ struct TweetItemView: View, Equatable {
                lhs.showDeleteButton == rhs.showDeleteButton &&
                lhs.hideActions == rhs.hideActions &&
                lhs.backgroundColor == rhs.backgroundColor &&
-               lhs.originalTweet?.mid == rhs.originalTweet?.mid
+               lhs.originalTweet?.mid == rhs.originalTweet?.mid &&
+               lhs.tweet.originalTweetId == rhs.tweet.originalTweetId // Include originalTweetId for stable comparison
     }
 }
 
