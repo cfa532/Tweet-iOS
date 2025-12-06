@@ -31,9 +31,7 @@ struct TweetListView<RowView: View>: View {
     @State private var initialLoadComplete = false
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
-    @State private var lastScrollOffset: CGFloat = 0  // For stable scroll delta reporting
-    @State private var isScrolling: Bool = false  // Track if user is actively scrolling
-    @State private var scrollUpdateTask: Task<Void, Never>? = nil  // Deferred update task
+    @State private var lastScrollOffset: CGFloat = 0
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -190,48 +188,20 @@ struct TweetListView<RowView: View>: View {
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentOffset.y
             } action: { oldValue, newValue in
-                // Ignore negative offsets (pull-to-refresh / bounce) to keep header behavior stable
+                // Ignore negative offsets (pull-to-refresh / bounce)
                 guard newValue >= 0, oldValue >= 0 else { return }
                 
-                // Mark as scrolling when there's movement
+                // Only forward significant changes to reduce jitter
                 let effectiveDelta = newValue - lastScrollOffset
-                let threshold: CGFloat = 1  // Lower threshold for more responsive tracking
-                
-                if abs(effectiveDelta) >= threshold {
-                    // User is actively scrolling
-                    let wasScrolling = isScrolling
-                    isScrolling = true
-                    
-                    if !wasScrolling {
-                        print("🔄 [SCROLL] Started scrolling - offset: \(newValue), delta: \(effectiveDelta)")
-                    }
-                    
-                    // Cancel any pending deferred updates
-                    scrollUpdateTask?.cancel()
-                    
-                    // Schedule scroll end detection after a brief pause (reduced from 150ms to 50ms for smoother feel)
-                    scrollUpdateTask = Task {
-                        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms pause for smoother scroll
-                        if !Task.isCancelled {
-                            await MainActor.run {
-                                print("🔄 [SCROLL] Scroll ended - final offset: \(lastScrollOffset)")
-                                isScrolling = false
-                            }
-                        }
-                    }
-                }
-                
-                // Only forward significant changes to reduce jitter in header/show-hide logic
-                let headerThreshold: CGFloat = 8  // Minimum movement before notifying parent
+                let headerThreshold: CGFloat = 20
                 guard abs(effectiveDelta) >= headerThreshold else { return }
                 
                 lastScrollOffset = newValue
-                onScroll?(newValue, effectiveDelta)  // Pass both offset and debounced delta
+                onScroll?(newValue, effectiveDelta)
             }
             .onAppear {
-                print("🔄 [SCROLL] [INIT] TweetListView appeared - resetting scroll offset")
                 lastScrollOffset = 0
-                onScroll?(0, 0)  // Pass both offset and delta
+                onScroll?(0, 0)
             }
             
             if showToast {
@@ -367,23 +337,7 @@ struct TweetListView<RowView: View>: View {
             }
             
             // Step 2: Load from server to get the most up-to-date data
-            // For initial load, we update immediately (not deferred) since user hasn't started scrolling
-            if hasCachedContent {
-                // If we have cache, load server data but wait for it to complete
-                // before marking as loaded (to prevent premature empty state)
-                // Reduced delay for smoother experience
-                print("🔄 [SCROLL] [INIT LOAD] Has cached content (\(validCachedTweets.count) tweets), waiting 50ms before server fetch")
-                try? await Task.sleep(nanoseconds: 50_000_000) // Reduced from 100ms to 50ms
-                await loadFromServer(page: page, pageSize: pageSize) { _ in
-                    // Server load completed - initialLoadComplete will be set in loadFromServer
-                }
-            } else {
-                // No cache - wait for server load to complete before marking as loaded
-                print("🔄 [SCROLL] [INIT LOAD] No cached content, loading from server immediately")
-                await loadFromServer(page: page, pageSize: pageSize) { _ in
-                    // Server load completed
-                }
-            }
+            await loadFromServer(page: page, pageSize: pageSize) { _ in }
             
             // Trigger preloading after initial load completes
             if hasMoreTweets {
@@ -469,13 +423,10 @@ struct TweetListView<RowView: View>: View {
         // Load first page immediately
         loadSinglePage(page: startPage) { success in
             if success && self.hasMoreTweets {
-                // Load second page after 1.5 seconds to prevent scroll jumpiness
-                // Reduced from 3s for better responsiveness while still allowing UI to settle
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                // Load second page after a short delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     if self.hasMoreTweets && !self.isLoadingMore {
-                        self.loadSinglePage(page: startPage + 1) { _ in
-                            // Second page load complete
-                        }
+                        self.loadSinglePage(page: startPage + 1) { _ in }
                     }
                 }
             }
@@ -551,47 +502,13 @@ struct TweetListView<RowView: View>: View {
             let tweetsFromServer = try await tweetFetcher(page, pageSize, false)
             let validServerTweets = tweetsFromServer.compactMap { $0 }
             
-            // Defer content updates if user is actively scrolling (except for initial load)
-            if page == 0 {
-                // For initial load, always update immediately
-                print("🔄 [SCROLL] [SERVER LOAD] Page 0 - updating immediately (initial load)")
-                await MainActor.run {
-                    updateTweetsWithServerData(
-                        validServerTweets: validServerTweets,
-                        tweetsFromServer: tweetsFromServer,
-                        page: page,
-                        pageSize: pageSize
-                    )
-                }
-            } else {
-                // For subsequent pages, wait for scroll to stop if actively scrolling
-                let wasScrolling = await MainActor.run(body: { isScrolling })
-                if wasScrolling {
-                    print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - waiting for scroll to stop before updating")
-                    // Wait for scrolling to stop (with timeout) - reduced wait time for smoother updates
-                    var waitCount = 0
-                    let maxWait = 10 // Reduced from 20 to 10 (1 second max wait instead of 2 seconds)
-                    while await MainActor.run(body: { isScrolling }) && waitCount < maxWait {
-                        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-                        waitCount += 1
-                    }
-                    if waitCount >= maxWait {
-                        print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - timeout waiting for scroll, updating anyway")
-                    } else {
-                        print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - scroll stopped, updating now (waited \(waitCount * 100)ms)")
-                    }
-                } else {
-                    print("🔄 [SCROLL] [SERVER LOAD] Page \(page) - not scrolling, updating immediately")
-                }
-                
-                await MainActor.run {
-                    updateTweetsWithServerData(
-                        validServerTweets: validServerTweets,
-                        tweetsFromServer: tweetsFromServer,
-                        page: page,
-                        pageSize: pageSize
-                    )
-                }
+            await MainActor.run {
+                updateTweetsWithServerData(
+                    validServerTweets: validServerTweets,
+                    tweetsFromServer: tweetsFromServer,
+                    page: page,
+                    pageSize: pageSize
+                )
             }
             
         } catch {
@@ -617,28 +534,13 @@ struct TweetListView<RowView: View>: View {
         pageSize: UInt
     ) {
         let hasValidTweet = !validServerTweets.isEmpty
-        let isCurrentlyScrolling = isScrolling
-        let tweetCountBefore = tweets.count
         
-        print("🔄 [SCROLL] [UPDATE] Updating tweets for page \(page) - validTweets: \(validServerTweets.count), isScrolling: \(isCurrentlyScrolling), currentCount: \(tweetCountBefore)")
-        
-        // Update tweets with server data (existing mergeTweets already preserves cached tweets for failed IDs)
+        // Update tweets with server data
         if hasValidTweet {
-            if page == 0 {
-                // For first page, MERGE instead of replace to prevent scroll jumps
-                // Only replace if we have NO cached content
-                if tweets.isEmpty {
-                    tweets = validServerTweets
-                    print("🔄 [SCROLL] [UPDATE] Page 0 - replaced empty tweets with \(validServerTweets.count) tweets")
-                } else {
-                    // Use mergeTweetsSmoothly to prevent layout shifts when updating cached content
-                    tweets.mergeTweetsSmoothly(validServerTweets)
-                    print("🔄 [SCROLL] [UPDATE] Page 0 - merged \(validServerTweets.count) tweets into existing \(tweetCountBefore) tweets")
-                }
+            if page == 0 && tweets.isEmpty {
+                tweets = validServerTweets
             } else {
-                // For subsequent pages, use smooth merge to avoid re-sorting
-                tweets.mergeTweetsSmoothly(validServerTweets)
-                print("🔄 [SCROLL] [UPDATE] Page \(page) - merged \(validServerTweets.count) tweets (total now: \(tweets.count))")
+                tweets.mergeTweets(validServerTweets)
             }
             
             // Update VideoLoadingManager with new tweet list
@@ -655,15 +557,12 @@ struct TweetListView<RowView: View>: View {
         } else if tweetsFromServer.count < pageSize {
             hasMoreTweets = false
             // Server returned fewer than pageSize tweets (or empty), so no more pages
-            // Update VideoLoadingManager even when no tweets
             if page == 0 {
                 if tweets.isEmpty {
                     videoLoadingManager.updateTweetList([])
-                    // Only mark as complete if we have no tweets at all (no cache, no server)
                     isLoading = false
                     initialLoadComplete = true
                 } else {
-                    // We have cached tweets, so mark as complete (server confirmed no more pages)
                     isLoading = false
                     initialLoadComplete = true
                 }
@@ -671,8 +570,6 @@ struct TweetListView<RowView: View>: View {
         } else {
             // All tweets are nil but we got a full page, continue to next page
             currentPage = page
-            // Don't mark as complete yet - keep trying next pages
-            // Don't call loadMoreTweets recursively here, let the normal flow continue
         }
     }
 
@@ -728,7 +625,7 @@ struct TweetListContentView<RowView: View>: View {
                 .padding()
             } else {
                 // Show tweets
-                // Small spacer to maintain layout stability
+                // Small spacer
                 Rectangle()
                     .fill(Color.clear)
                     .frame(height: 1)
@@ -742,7 +639,7 @@ struct TweetListContentView<RowView: View>: View {
                                 .foregroundColor(Color(.systemGray).opacity(0.4))
                         }
                         rowView(tweet)
-                            // Add stable identity to prevent unnecessary re-composition
+                            // Add identity for view reuse
                             .id("tweet_\(tweet.mid)")
                             .onAppear {
                                 // Update VideoLoadingManager when tweet becomes visible
@@ -755,18 +652,9 @@ struct TweetListContentView<RowView: View>: View {
                 Color.clear
                     .frame(height: 40)
                     .onAppear {
-                        print("[TweetListContentView] Bottom view appeared - initialLoadComplete: \(initialLoadComplete), isLoadingMore: \(isLoadingMore)")
                         if initialLoadComplete && !isLoadingMore {
-                            print("[TweetListContentView] Setting hasMoreTweets to true")
                             hasMoreTweets = true
-                            print("[TweetListContentView] Scheduling batch load of next two pages")
-                            // Use shorter delay like ProfileView
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                if initialLoadComplete && !isLoadingMore {
-                                    print("[TweetListContentView] Calling loadMoreTweets (batch mode)")
-                                    loadMoreTweets()
-                                }
-                            }
+                            loadMoreTweets()
                         }
                     }
                 

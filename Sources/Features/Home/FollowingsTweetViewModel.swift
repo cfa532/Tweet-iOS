@@ -65,8 +65,7 @@ class FollowingsTweetViewModel: ObservableObject {
             }
             
             await MainActor.run {
-                // Use mergeTweetsSmoothly to prevent layout shifts
-                tweets.mergeTweetsSmoothly(filteredTweets)
+                tweets.mergeTweets(filteredTweets)
             }
             
             // Cache main feed tweets under appUser.mid for efficient loading
@@ -84,8 +83,7 @@ class FollowingsTweetViewModel: ObservableObject {
                         entry: "update_following_tweets"    // check for new tweets have not been synced.
                     )
                     await MainActor.run {
-                        // Use mergeTweetsSmoothly to prevent layout shifts from background updates
-                        tweets.mergeTweetsSmoothly(newTweets.compactMap{ $0 })
+                        tweets.mergeTweets(newTweets.compactMap{ $0 })
                     }
                 }
             }

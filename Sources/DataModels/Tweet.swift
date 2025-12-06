@@ -552,11 +552,6 @@ extension Array where Element == Tweet {
     mutating func mergeTweets(_ newTweets: [Tweet]) {
         mergeTweetsInternal(newTweets)
     }
-    
-    /// Merge new tweets smoothly, preserving existing positions when ordering does not need to change.
-    mutating func mergeTweetsSmoothly(_ newTweets: [Tweet]) {
-        mergeTweetsInternal(newTweets)
-    }
 }
 
 extension Tweet: Equatable {

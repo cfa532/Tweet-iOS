@@ -218,7 +218,6 @@ struct TweetDetailView: View {
     @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
-    @State private var lastLoadedOriginalTweetId: String? = nil // Track last loaded ID for stable state (like Android's remember)
     
     // Scroll detection state for top navigation bar
     @State private var isTopNavigationVisible = true
@@ -360,39 +359,12 @@ struct TweetDetailView: View {
                 dismiss()
             }
         }
-        .onChange(of: tweet.originalTweetId) { oldValue, newValue in
-            // Reset state when originalTweetId changes (like Android's remember with stable keys)
-            // This prevents unnecessary refetches and ensures state stability
-            if oldValue != newValue {
-                hasLoadedOriginalTweet = false
-                originalTweet = nil
-                lastLoadedOriginalTweetId = nil
-                cachedDisplayTweet = nil
-            }
-        }
         .onAppear {
-            print("DEBUG: [TweetDetailView] ===== VIEW APPEARED =====")
-            print("DEBUG: [TweetDetailView] Tweet ID: \(tweet.mid)")
-            print("DEBUG: [TweetDetailView] Attachments count: \(tweet.attachments?.count ?? 0)")
-            
-            // Don't stop videos - let them naturally pause when scrolled off screen
-            // Posting stopAllVideos causes player conflicts when MediaCell and TweetDetailView share the same player
-            print("DEBUG: [TweetDetailView] View appeared - not posting stopAllVideos to avoid player conflicts")
-            
-            // Log all attachments
-            if let attachments = tweet.attachments {
-                for (index, attachment) in attachments.enumerated() {
-                    print("DEBUG: [TweetDetailView] Attachment \(index): \(attachment.type), mid: \(attachment.mid)")
-                }
-            }
-            
-            // Stable state management: Only load if originalTweetId hasn't been loaded yet
-            // This prevents refetches when view reappears (matches Android's remember pattern)
-            if let originalTweetId = tweet.originalTweetId,
-               let originalAuthorId = tweet.originalAuthorId,
-               originalTweetId != lastLoadedOriginalTweetId {
+            // Load original tweet if this is a retweet/quoted tweet
+            if !hasLoadedOriginalTweet,
+               let originalTweetId = tweet.originalTweetId,
+               let originalAuthorId = tweet.originalAuthorId {
                 hasLoadedOriginalTweet = true
-                lastLoadedOriginalTweetId = originalTweetId
                 Task {
                     if let originalTweet = try? await hproseInstance.getTweet(
                         tweetId: originalTweetId,
