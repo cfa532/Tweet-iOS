@@ -2227,6 +2227,7 @@ struct SimpleVideoPlayer: View {
             player?.isMuted = MuteState.shared.isMuted
         }
         
+        // Call onVideoFinished to trigger sequential playback progression
         onVideoFinished?()
     }
     
@@ -2310,6 +2311,12 @@ struct SimpleVideoPlayer: View {
         let shouldCheckLoading = mode == .mediaCell ? shouldLoadVideo : true
         
         if autoPlay && isVisible && player != nil && !loadingState.isLoading && shouldCheckLoading {
+            
+            // CRITICAL: Don't restart finished videos in sequential playback
+            if mode == .mediaCell && playbackState == .finished {
+                print("DEBUG: [VIDEO PLAYBACK] Video \(mid) is finished - preventing restart")
+                return
+            }
             
             // Activate audio session for video playback
             AudioSessionManager.shared.activateForVideoPlayback()
