@@ -92,6 +92,7 @@ struct TweetItemBodyView: View {
                         .clipped()
                         .cornerRadius(8)
                         .id("\(tweet.mid)_grid")
+                        .padding(.top, 4)
                     
                     if let caption = singleVideoCaption(for: attachments) {
                         Text(caption)
@@ -101,6 +102,7 @@ struct TweetItemBodyView: View {
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true) // Prevent extra vertical expansion
+                            .padding(.top, 2)
                     }
                 }
             }
