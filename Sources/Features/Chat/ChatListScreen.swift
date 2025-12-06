@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct ChatListScreen: View {
+    @Binding var navigationPath: NavigationPath
+    let onProfileNavigate: (() -> Void)?
+    let onChatNavigate: (() -> Void)?
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messageCheckTimer: Timer?
@@ -10,6 +13,12 @@ struct ChatListScreen: View {
     @State private var isLoadingFollowings = false
     @State private var showStartNewChat = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    init(navigationPath: Binding<NavigationPath>, onProfileNavigate: (() -> Void)? = nil, onChatNavigate: (() -> Void)? = nil) {
+        self._navigationPath = navigationPath
+        self.onProfileNavigate = onProfileNavigate
+        self.onChatNavigate = onChatNavigate
+    }
     
     var body: some View {
         VStack {
@@ -22,7 +31,10 @@ struct ChatListScreen: View {
                         ForEach(chatSessionManager.chatSessions
                             .filter { $0.userId == HproseInstance.shared.appUser.mid }
                             .sorted(by: { $0.timestamp > $1.timestamp })) { session in
-                            ChatSessionRow(session: session)
+                            ChatSessionRow(session: session, onAvatarTap: { user in
+                                navigationPath.append(user)
+                                onProfileNavigate?()
+                            })
                         }
                         .onDelete(perform: deleteChatSession)
                     }
@@ -42,6 +54,13 @@ struct ChatListScreen: View {
             }
             .navigationDestination(for: String.self) { receiptId in
                 ChatScreen(receiptId: receiptId)
+                    .onAppear {
+                        // When ChatScreen appears, reset profile flag
+                        onChatNavigate?()
+                    }
+            }
+            .navigationDestination(for: User.self) { user in
+                ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
             }
             .sheet(isPresented: $showStartNewChat) {
                 NavigationStack {
@@ -259,9 +278,15 @@ struct FollowingsListForChat: View {
 
 struct ChatSessionRow: View {
     let session: ChatSession
+    let onAvatarTap: ((User) -> Void)?
     @State private var user: User?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var chatSessionManager = ChatSessionManager.shared
+    
+    init(session: ChatSession, onAvatarTap: ((User) -> Void)? = nil) {
+        self.session = session
+        self.onAvatarTap = onAvatarTap
+    }
     
     var body: some View {
         NavigationLink(value: session.receiptId) {
@@ -269,6 +294,12 @@ struct ChatSessionRow: View {
                 // User Avatar
                 if let user = user {
                     Avatar(user: user, size: 44)
+                        .contentShape(Circle())
+                        .highPriorityGesture(
+                            TapGesture().onEnded { _ in
+                                onAvatarTap?(user)
+                            }
+                        )
                 } else {
                     Circle()
                         .fill(Color.gray.opacity(0.3))

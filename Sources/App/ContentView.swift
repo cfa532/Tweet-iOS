@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var navigationPath = NavigationPath()
     @State private var chatNavigationPath = NavigationPath()
     @State private var isInChatScreen = false
+    @State private var isInProfileFromChat = false
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .success
@@ -40,10 +41,27 @@ struct ContentView: View {
                     }
                 } else if selectedTab == 1 {
                     NavigationStack(path: $chatNavigationPath) {
-                        ChatListScreen()
+                        ChatListScreen(
+                            navigationPath: $chatNavigationPath,
+                            onProfileNavigate: {
+                                isInProfileFromChat = true
+                            },
+                            onChatNavigate: {
+                                isInProfileFromChat = false
+                                isInChatScreen = true
+                            }
+                        )
                     }
                     .onChange(of: chatNavigationPath.count) { _, count in
-                        isInChatScreen = count > 0
+                        if count == 0 {
+                            // Reset all flags when back at root
+                            isInChatScreen = false
+                            isInProfileFromChat = false
+                        } else if !isInProfileFromChat {
+                            // If count > 0 and we haven't explicitly set profile flag, assume it's ChatScreen
+                            isInChatScreen = true
+                        }
+                        // If isInProfileFromChat is true, keep tab bar visible (isInChatScreen stays false)
                     }
                 } else if selectedTab == 3 {
                     SearchScreen()
@@ -55,8 +73,8 @@ struct ContentView: View {
                     .frame(height: 40)
             }
             
-            // Custom Tab Bar - Hide when in chat screen
-            if !isInChatScreen {
+            // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
+            if !isInChatScreen || isInProfileFromChat {
                 HStack(spacing: 0) {
                 // Home Tab
                 Button(action: {
