@@ -2355,11 +2355,14 @@ struct SimpleVideoPlayer: View {
                 }
             }
         } else {
-            // autoPlay is false - pause this video if it's playing (for sequential playback)
-            if mode == .mediaCell, let player = player, player.rate > 0 {
-                print("DEBUG: [VIDEO PLAYBACK] Pausing video \(mid) because autoPlay became false (sequential playback)")
-                player.pause()
-                playbackState = .paused
+            // autoPlay is false
+            // For MediaCell mode: Videos should pause when off-screen (handled by visibility changes)
+            // This preserves resources while maintaining playback state for correct resume
+            // The sequential playback state is preserved in VideoManager, so when user scrolls back,
+            // the correct video will resume from where it was paused
+            if mode == .mediaCell {
+                // SimpleVideoPlayer's handleVisibilityChange already handles pausing when invisible
+                // We don't need to do anything here - the visibility system handles it
             }
         }
     }

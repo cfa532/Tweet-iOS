@@ -537,21 +537,20 @@ struct MediaGridView: View {
             // Mark the grid as not visible
             isVisible = false
             
-            // Save current video index before stopping (for persistence)
+            // Save current video index before disappearing (for persistence)
+            // This preserves which video was playing so we can resume when scrolling back
             if videoManager.isSequentialPlaybackEnabled && videoManager.currentVideoIndex >= 0 {
                 videoManager.saveCurrentIndex(for: parentTweet.mid)
             }
             
-            // TIMER DISABLED - no timer to invalidate
-            shouldLoadVideo = false
-            videoManager.stopSequentialPlayback()
+            // Don't stop sequential playback state - preserve it so videos resume correctly when scrolling back
+            // SimpleVideoPlayer will handle pausing the actual playback when it becomes invisible
+            // This gives us: paused playback (resource-efficient) + preserved state (correct resume)
         }
         .onChange(of: isVisible) { _, newVisibility in
             // Handle visibility changes
-            if !newVisibility {
-                // Grid became invisible - stop video playback
-                videoManager.stopSequentialPlayback()
-            }
+            // Don't stop sequential playback state when visibility changes
+            // SimpleVideoPlayer handles pausing/resuming the actual playback based on visibility
         }
         .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
             if let tweetId = notification.userInfo?["tweetId"] as? String,
