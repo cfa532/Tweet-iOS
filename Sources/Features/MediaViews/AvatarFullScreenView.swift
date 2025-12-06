@@ -1,18 +1,15 @@
 import SwiftUI
 
 struct AvatarFullScreenView: View {
-    let user: User
+    @ObservedObject var user: User
     @Binding var isPresented: Bool
     @State private var imageState: AvatarImageState = .loading
     @State private var showCopyToast = false
     @State private var copyToastMessage = ""
     
-    private let baseUrl: URL
-    
     init(user: User, isPresented: Binding<Bool>) {
-        self.user = user
+        self._user = ObservedObject(wrappedValue: user)
         self._isPresented = isPresented
-        self.baseUrl = user.baseUrl ?? HproseInstance.baseUrl
     }
 
     var body: some View {
@@ -28,6 +25,13 @@ struct AvatarFullScreenView: View {
                     )
                     .onAppear {
                         loadAvatarImageIfNeeded(url: url)
+                    }
+                    .onChange(of: user.baseUrl) { _, _ in
+                        // Reload avatar when baseUrl changes (e.g., after IP resolution)
+                        // avatarUrl is computed from baseUrl, so it will also change
+                        if let newAvatarUrl = user.avatarUrl, let newUrl = URL(string: newAvatarUrl) {
+                            loadAvatarImageIfNeeded(url: newUrl)
+                        }
                     }
                 } else {
                     Image("manyone")
@@ -105,27 +109,24 @@ struct AvatarFullScreenView: View {
     }
     
     private func loadAvatarImageIfNeeded(url: URL) {
-        // Show compressed image as placeholder first (from cache)
-        let cacheKey = user.avatar ?? url.lastPathComponent
-        let avatarAttachment = MimeiFileType(
-            mid: cacheKey,
-            mediaType: .image
-        )
+        // Always start with loading state - bypass cache entirely for full-screen view
+        imageState = .loading
         
-        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
-            imageState = .placeholder(compressedImage)
-        } else {
-            imageState = .loading
-        }
-        
-        // Load original image directly from URL (bypass cache for full-size view)
+        // Load original image directly from source, bypassing all caches
         Task {
             do {
                 var request = URLRequest(url: url)
+                // Bypass all caches (memory, disk, and network cache)
                 request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
                 request.timeoutInterval = 15
                 
-                let (data, response) = try await URLSession.shared.data(for: request)
+                // Use URLSession with ephemeral configuration to ensure no caching
+                let config = URLSessionConfiguration.ephemeral
+                config.urlCache = nil
+                config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                let session = URLSession(configuration: config)
+                
+                let (data, response) = try await session.data(for: request)
                 
                 guard let httpResponse = response as? HTTPURLResponse,
                       (200...299).contains(httpResponse.statusCode),
