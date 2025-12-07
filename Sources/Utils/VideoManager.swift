@@ -4,7 +4,6 @@ import AVKit
 class VideoManager: ObservableObject {
     @Published var currentVideoIndex: Int = -1
     @Published var videoMids: [String] = []
-    @Published var isSequentialPlaybackEnabled: Bool = false
     
     // Static cache to persist current video index per tweet
     // Key: tweet ID, Value: (video MIDs array, current index, last access time)
@@ -58,7 +57,6 @@ class VideoManager: ObservableObject {
     
     func setupSequentialPlayback(for mids: [String], tweetId: String? = nil) {
         videoMids = mids
-        isSequentialPlaybackEnabled = mids.count > 1
         
         // Check if we have saved state for this tweet
         if let tweetId = tweetId, let savedState = Self.getSavedState(for: tweetId) {
@@ -172,7 +170,6 @@ class VideoManager: ObservableObject {
     func stopSequentialPlayback() {
         videoMids = []
         currentVideoIndex = -1
-        isSequentialPlaybackEnabled = false
     }
     
     func forceReset() {
@@ -185,11 +182,11 @@ class VideoManager: ObservableObject {
         guard !videoMids.isEmpty else { return }
         
         currentVideoIndex = 0 // Reset to first video
-        isSequentialPlaybackEnabled = videoMids.count > 1
         print("DEBUG: [VideoManager] Restarted sequential playback from beginning")
     }
     
     func onVideoFinished(tweetId: String? = nil) {
+        print("DEBUG: [VideoManager] onVideoFinished called - currentVideoIndex: \(currentVideoIndex), videoMids.count: \(videoMids.count), tweetId: \(tweetId ?? "nil")")
         let nextIndex = currentVideoIndex + 1
         if nextIndex < videoMids.count {
             currentVideoIndex = nextIndex
@@ -208,29 +205,22 @@ class VideoManager: ObservableObject {
             // Clear the state to stop any further playback
             videoMids = []
             currentVideoIndex = -1
-            isSequentialPlaybackEnabled = false
         }
     }
     
     func shouldPlayVideo(for mid: String) -> Bool {
-        // If sequential playback is enabled, only play the current video in sequence
-        if isSequentialPlaybackEnabled {
-            guard currentVideoIndex >= 0 && currentVideoIndex < videoMids.count else { 
-                print("DEBUG: [VideoManager] Invalid currentVideoIndex: \(currentVideoIndex), videoMids count: \(videoMids.count)")
-                return false 
-            }
-            let shouldPlay = videoMids[currentVideoIndex] == mid
-            print("DEBUG: [VideoManager] Sequential playback - video \(mid) should play: \(shouldPlay) (current index: \(currentVideoIndex))")
-            return shouldPlay
+        // MediaGrid always uses sequential playback (even for single videos)
+        // Only play the video at the current index in the sequence
+        guard currentVideoIndex >= 0 && currentVideoIndex < videoMids.count else { 
+            print("DEBUG: [VideoManager] Invalid currentVideoIndex: \(currentVideoIndex), videoMids count: \(videoMids.count)")
+            return false 
         }
         
-        // If sequential playback is not enabled but we have video MIDs, 
-        // it means we have a single video that should play
-        if !videoMids.isEmpty && videoMids.contains(mid) {
-            let shouldPlay = videoMids[0] == mid // Single video should always be the first one
-            return shouldPlay
-        }
-        return false
+        let shouldPlay = videoMids[currentVideoIndex] == mid
+        let videoCount = videoMids.count
+        let videoWord = videoCount == 1 ? "video" : "videos"
+        print("DEBUG: [VideoManager] Sequential playback (\(videoCount) \(videoWord)) - video \(mid) should play: \(shouldPlay) (current index: \(currentVideoIndex))")
+        return shouldPlay
     }
     
     func getCurrentVideoMid() -> String? {

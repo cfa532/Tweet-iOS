@@ -382,8 +382,30 @@ struct SimpleVideoPlayer: View {
             }
         }
         
-        // Remove observers to prevent memory leaks
-        removePlayerObservers()
+        // CRITICAL: For MediaCell mode, KEEP video completion observer active
+        // Videos can finish while off-screen, and we need to catch that for sequential playback
+        // Only remove KVO observers to prevent crashes if player item changes
+        if mode == .mediaCell {
+            NSLog("DEBUG: [OBSERVER LIFECYCLE] Keeping videoCompletionObserver active for off-screen playback: \(mid)")
+            // Remove KVO observers only (these can cause crashes if playerItem changes)
+            playerItemStatusObserver?.invalidate()
+            playerItemStatusObserver = nil
+            playerItemBufferObserver?.invalidate()
+            playerItemBufferObserver = nil
+            
+            // Remove time observer to save resources
+            if let timeObserver = timeObserver {
+                player?.removeTimeObserver(timeObserver)
+                self.timeObserver = nil
+            }
+            
+            // KEEP videoCompletionObserver, videoErrorObserver, and playerItem reference active!
+            // These are needed to handle videos finishing/failing while off-screen
+            // playerItem reference is kept so setupPlayerObservers() can detect if already set up
+        } else {
+            // For other modes (mediaBrowser, tweetDetail), remove all observers
+            removePlayerObservers()
+        }
 
         // Cache the current video state (MediaCell only, NOT TweetDetail or MediaBrowser)
         // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
@@ -1655,7 +1677,46 @@ struct SimpleVideoPlayer: View {
         // Check if player is actually changing
         let playerChanged = self.player !== cachedState.player
         
-        // Restore the cached player (AFTER setting mute state)
+        // CRITICAL: Check if video already finished while off-screen BEFORE setting up observers
+        // This prevents race conditions where video finishes between observer removal and re-setup
+        var videoAlreadyFinished = false
+        if let playerItem = cachedState.player.currentItem, mode == .mediaCell {
+            let currentTime = cachedState.player.currentTime()
+            let duration = playerItem.duration
+            if duration.isNumeric && currentTime.isNumeric {
+                let currentSeconds = CMTimeGetSeconds(currentTime)
+                let durationSeconds = CMTimeGetSeconds(duration)
+                // If within 0.5s of end, consider it finished
+                if durationSeconds > 0 && currentSeconds >= durationSeconds - 0.5 {
+                    NSLog("🎬 [VIDEO CACHE] Video already at end (\(String(format: "%.1f", currentSeconds))s/\(String(format: "%.1f", durationSeconds))s): \(mid)")
+                    videoAlreadyFinished = true
+                }
+            }
+        }
+        
+        // CRITICAL: Always set up observers for cached player
+        // This is essential for sequential video playback - without observers, onVideoFinished never fires!
+        NSLog("DEBUG: [VIDEO CACHE] Setting up observers for cached player: \(mid)")
+        removePlayerObservers()
+        setupPlayerObservers(cachedState.player)
+        
+        // Verify observer was set up successfully
+        if mode == .mediaCell && videoCompletionObserver == nil && cachedState.player.currentItem != nil {
+            NSLog("⚠️ [VIDEO CACHE] videoCompletionObserver is nil after setupPlayerObservers for \(mid) - retrying")
+            setupPlayerObservers(cachedState.player)
+        }
+        
+        // If video already finished, trigger the callback now
+        if videoAlreadyFinished {
+            NSLog("🎬 [VIDEO CACHE] Triggering onVideoFinished for already-completed video: \(mid)")
+            self.playbackState = .finished
+            // Trigger immediately since everything is set up
+            DispatchQueue.main.async {
+                self.handleVideoFinished()
+            }
+        }
+        
+        // Restore the cached player (AFTER setting mute state and observers)
         self.player = cachedState.player
         
         // Only increment representableId if the player actually changed (different player object)
@@ -1833,6 +1894,13 @@ struct SimpleVideoPlayer: View {
         }
         
         
+        // CRITICAL: Verify observers are set up, retry if needed
+        // This handles the case where setupPlayerObservers() returned early due to nil currentItem
+        if mode == .mediaCell && videoCompletionObserver == nil && player.currentItem != nil {
+            NSLog("⚠️ [VIDEO CONFIGURE] videoCompletionObserver is nil but currentItem exists for \(mid) - retrying observer setup")
+            setupPlayerObservers(player)
+        }
+        
         // Start playback if needed
         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
     }
@@ -1871,12 +1939,25 @@ struct SimpleVideoPlayer: View {
     }
     
     private func setupPlayerObservers(_ player: AVPlayer) {
-        guard let playerItem = player.currentItem else { return }
+        guard let playerItem = player.currentItem else { 
+            NSLog("⚠️ [OBSERVER SETUP] Cannot setup observers for \(mid) - currentItem is nil")
+            return 
+        }
+        
+        // Check if observers are already set up for this exact playerItem
+        let alreadySetup = (self.playerItem === playerItem && videoCompletionObserver != nil)
+        
+        if alreadySetup {
+            NSLog("✅ [OBSERVER SETUP] Observers already attached to this playerItem for \(mid) - skipping")
+            return
+        }
+        
+        NSLog("✅ [OBSERVER SETUP] Setting up observers for \(mid), playerItem status: \(playerItem.status.rawValue)")
         
         // Store reference for cleanup
         self.playerItem = playerItem
         
-        // Remove existing observers if any
+        // Remove existing observers if any (they're for a different playerItem)
         removePlayerObservers()
         
         // Video finished observer
@@ -1887,6 +1968,8 @@ struct SimpleVideoPlayer: View {
         ) { _ in
             self.handleVideoFinished()
         }
+        
+        NSLog("✅ [OBSERVER SETUP] videoCompletionObserver attached for \(mid)")
         
         // Error observer
         videoErrorObserver = NotificationCenter.default.addObserver(
@@ -1985,6 +2068,18 @@ struct SimpleVideoPlayer: View {
                     return 
                 }
                 
+                // CRITICAL: Ensure notification observers are set up when player becomes ready
+                // This handles the case where currentItem was nil during initial setupPlayerObservers() call
+                // which happens when restoring players from VideoStateCache
+                if self.videoCompletionObserver == nil {
+                    NSLog("⚠️ [KVO STATUS] Player ready but videoCompletionObserver is nil for \(mid) - setting up observers now")
+                    DispatchQueue.main.async {
+                        if let player = self.player {
+                            self.setupPlayerObservers(player)
+                        }
+                    }
+                }
+                
                 // CRITICAL: For HLS videos, .readyToPlay fires BEFORE data is buffered
                 // Check if we have buffered data before acting
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
@@ -2035,25 +2130,22 @@ struct SimpleVideoPlayer: View {
                     if hasEnoughData && loadingState.isLoading {
                         NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.2f", bufferedDurationAhead))s buffered), showing first frame")
                         
-                        // Force player to render first frame by calling play() then checking if we should pause
-                        if player.rate == 0 {
+                        // CRITICAL: Only play() if video should actually be playing
+                        // For sequential playback, check with VideoManager first
+                        // This prevents videos from playing to completion prematurely (especially short videos)
+                        let shouldPlay = shouldAutoPlay && (self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? true)
+                        
+                        if shouldPlay && player.rate == 0 {
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
                                 NSLog("🔇 [PLAYER MUTE] First frame render - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
                             }
                             player.play()
-                            NSLog("▶️ [FIRST FRAME] Triggered play() to render first frame for \(mid)")
-                            
-                            // If not in autoplay mode, pause after first frame renders
-                            if !shouldAutoPlay {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    if player.rate > 0 {
-                                        player.pause()
-                                        NSLog("⏸️ [FIRST FRAME] Paused after rendering first frame for \(mid)")
-                                    }
-                                }
-                            }
+                            NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (approved by VideoManager)")
+                        } else if !shouldPlay {
+                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - waiting for approval from VideoManager")
+                            // First frame will render when player is ready, no need to play()
                         }
                         
                         loadingState = .loaded
@@ -2227,7 +2319,8 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleVideoFinished() {
-        print("DEBUG: [SimpleVideoPlayer] Video finished playing for \(mid)")
+        print("🎬 [VIDEO FINISHED] Video finished playing for \(mid), mode: \(mode)")
+        print("🎬 [VIDEO FINISHED] onVideoFinished callback: \(onVideoFinished != nil ? "SET" : "NIL")")
         resetProgressiveBufferTarget(for: player?.currentItem)
         
         // Just pause and mark as finished - no automatic rewind
@@ -2240,7 +2333,12 @@ struct SimpleVideoPlayer: View {
         }
         
         // Call onVideoFinished to trigger sequential playback progression
-        onVideoFinished?()
+        if let callback = onVideoFinished {
+            print("🎬 [VIDEO FINISHED] Calling onVideoFinished callback for \(mid)")
+            callback()
+        } else {
+            print("⚠️ [VIDEO FINISHED] No onVideoFinished callback set for \(mid)")
+        }
     }
     
     private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
@@ -2324,10 +2422,21 @@ struct SimpleVideoPlayer: View {
         
         if autoPlay && isVisible && player != nil && !loadingState.isLoading && shouldCheckLoading {
             
-            // CRITICAL: Don't restart finished videos in sequential playback
-            if mode == .mediaCell && playbackState == .finished {
-                print("DEBUG: [VIDEO PLAYBACK] Video \(mid) is finished - preventing restart")
-                return
+            // CRITICAL: For sequential playback, check with VideoManager before playing
+            // This prevents videos that finished prematurely from restarting
+            if mode == .mediaCell {
+                // Check if this video is approved by VideoManager for sequential playback
+                let approved = videoManager?.shouldPlayVideo(for: mid) ?? true
+                if !approved {
+                    print("DEBUG: [VIDEO PLAYBACK] Video \(mid) not approved by VideoManager - preventing playback")
+                    return
+                }
+                
+                // Don't restart finished videos in sequential playback
+                if playbackState == .finished {
+                    print("DEBUG: [VIDEO PLAYBACK] Video \(mid) is finished - preventing restart")
+                    return
+                }
             }
             
             // Activate audio session for video playback
@@ -2373,6 +2482,13 @@ struct SimpleVideoPlayer: View {
             // The sequential playback state is preserved in VideoManager, so when user scrolls back,
             // the correct video will resume from where it was paused
             if mode == .mediaCell {
+                // CRITICAL: If video finished prematurely (e.g., during first frame render), 
+                // reset it back to start so it's ready when its turn comes in sequential playback
+                if playbackState == .finished {
+                    NSLog("🔄 [VIDEO RESET] Resetting prematurely finished video to start: \(mid)")
+                    player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                    playbackState = .notStarted
+                }
                 // SimpleVideoPlayer's handleVisibilityChange already handles pausing when invisible
                 // We don't need to do anything here - the visibility system handles it
             }

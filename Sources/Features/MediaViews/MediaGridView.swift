@@ -76,6 +76,7 @@ struct MediaGridView: View {
     }
     
     private func onVideoFinished() {
+        print("DEBUG: [MediaGridView] onVideoFinished called for tweet \(parentTweet.mid)")
         videoManager.onVideoFinished(tweetId: parentTweet.mid)
     }
     
@@ -483,30 +484,28 @@ struct MediaGridView: View {
                 return nil
             }
             
-            // Always stop any existing playback first to handle reuse scenarios
-            // But save current index before stopping if we're just disappearing temporarily
-            if videoManager.isSequentialPlaybackEnabled && videoManager.currentVideoIndex >= 0 {
-                videoManager.saveCurrentIndex(for: parentTweet.mid)
+            // Only stop sequential playback if we're switching to a different video set
+            // This preserves state when multiple MediaGrids exist during scrolling
+            if videoManager.videoMids != videoMids {
+                print("DEBUG: [MediaGridView] Switching video set, stopping current playback")
+                videoManager.stopSequentialPlayback()
             }
-            videoManager.stopSequentialPlayback()
             
-            if videoMids.count > 1 {
+            // Setup sequential playback for all videos (1 or more)
+            // Single video is just sequential playback with 1 item
+            if videoMids.count >= 1 {
                 videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
-                print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
-            } else if videoMids.count == 1 {
-                // For single videos, set up the video MID but don't enable sequential playback
-                let wasEmpty = videoManager.videoMids.isEmpty
-                let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
-                videoManager.videoMids = videoMids
-                videoManager.isSequentialPlaybackEnabled = false
-                videoManager.currentVideoIndex = 0
                 
-                if isNewSequence {
-                    print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
-                    // Reset handled by SimpleVideoPlayer's internal state management
-                } else {
-                    print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
+                // If all videos were finished (saved index >= count), restart from beginning
+                if videoManager.currentVideoIndex >= videoMids.count {
+                    print("DEBUG: [MediaGridView] All videos finished, restarting from beginning")
+                    videoManager.currentVideoIndex = 0
+                    videoManager.saveCurrentIndex(for: parentTweet.mid)
                 }
+                
+                let videoCount = videoMids.count
+                let videoWord = videoCount == 1 ? "video" : "videos"
+                print("DEBUG: [MediaGridView] Setup sequential playback for \(videoCount) \(videoWord) at index \(videoManager.currentVideoIndex)")
             }
             
             // Start media loading if this grid contains videos or audio
@@ -537,15 +536,16 @@ struct MediaGridView: View {
             // Mark the grid as not visible
             isVisible = false
             
-            // Save current video index before disappearing (for persistence)
-            // This preserves which video was playing so we can resume when scrolling back
-            if videoManager.isSequentialPlaybackEnabled && videoManager.currentVideoIndex >= 0 {
+            // Save current video index to resume later
+            if videoManager.currentVideoIndex >= 0 && !videoManager.videoMids.isEmpty {
+                print("DEBUG: [MediaGridView] onDisappear - Saving state for tweet \(parentTweet.mid), index: \(videoManager.currentVideoIndex)")
                 videoManager.saveCurrentIndex(for: parentTweet.mid)
+            } else {
+                print("DEBUG: [MediaGridView] onDisappear - NOT saving state for tweet \(parentTweet.mid), currentVideoIndex: \(videoManager.currentVideoIndex), videoMids.isEmpty: \(videoManager.videoMids.isEmpty)")
             }
             
             // Don't stop sequential playback state - preserve it so videos resume correctly when scrolling back
             // SimpleVideoPlayer will handle pausing the actual playback when it becomes invisible
-            // This gives us: paused playback (resource-efficient) + preserved state (correct resume)
         }
         .onChange(of: isVisible) { _, newVisibility in
             // Handle visibility changes
