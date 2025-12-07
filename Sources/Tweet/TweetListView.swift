@@ -320,6 +320,10 @@ struct TweetListView<RowView: View>: View {
                     // Use direct assignment (not merge) to avoid re-sorting cached content
                     tweets = validCachedTweets
                     
+                    // Set hasMoreTweets based on cache - if we got a full page, there might be more
+                    hasMoreTweets = tweetsFromCache.count >= pageSize
+                    print("[TweetListView] Initial cache load: got \(tweetsFromCache.count) tweets, hasMoreTweets=\(hasMoreTweets)")
+                    
                     // Update VideoLoadingManager with new tweet list
                     let tweetIds = tweets.map { $0.mid }
                     videoLoadingManager.updateTweetList(tweetIds)
@@ -408,11 +412,14 @@ struct TweetListView<RowView: View>: View {
     }
 
     func loadMoreTweets(page: UInt? = nil) {
-        guard hasMoreTweets, !isLoadingMore, initialLoadComplete else { 
+        print("[TweetListView] loadMoreTweets called: hasMoreTweets=\(hasMoreTweets), isLoadingMore=\(isLoadingMore), initialLoadComplete=\(initialLoadComplete), currentPage=\(currentPage)")
+        guard hasMoreTweets, !isLoadingMore, initialLoadComplete else {
+            print("[TweetListView] loadMoreTweets guard failed - returning early")
             return 
         }
         
         let nextPage = page ?? (currentPage + 1)
+        print("[TweetListView] loadMoreTweets proceeding with page \(nextPage)")
         
         // Load next two pages in advance, separated by 3 seconds
         loadNextTwoPages(startingFrom: nextPage)
@@ -460,6 +467,13 @@ struct TweetListView<RowView: View>: View {
                 
                 await MainActor.run {
                     tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
+                    
+                    // Set hasMoreTweets based on cache - if we got a full page, there might be more
+                    // This is optimistic - server update will correct it if needed
+                    if tweetsFromCache.count >= pageSize {
+                        hasMoreTweets = true
+                        print("[TweetListView] LoadMore cache: got full page (\(tweetsFromCache.count) >= \(pageSize)), setting hasMoreTweets=true")
+                    }
                     
                     // Update VideoLoadingManager with new tweet list
                     let tweetIds = tweets.map { $0.mid }
@@ -549,6 +563,16 @@ struct TweetListView<RowView: View>: View {
             
             currentPage = page
             
+            // Set hasMoreTweets based on whether we got a full page
+            // If we got a full page, there might be more tweets
+            if tweetsFromServer.count >= pageSize {
+                hasMoreTweets = true
+                print("[TweetListView] Got full page (\(tweetsFromServer.count) >= \(pageSize)), setting hasMoreTweets=true")
+            } else {
+                hasMoreTweets = false
+                print("[TweetListView] Got partial page (\(tweetsFromServer.count) < \(pageSize)), setting hasMoreTweets=false")
+            }
+            
             // Mark initial load as complete for page 0 only if we got valid tweets
             if page == 0 {
                 isLoading = false
@@ -556,6 +580,7 @@ struct TweetListView<RowView: View>: View {
             }
         } else if tweetsFromServer.count < pageSize {
             hasMoreTweets = false
+            print("[TweetListView] No valid tweets and partial page (\(tweetsFromServer.count) < \(pageSize)), setting hasMoreTweets=false")
             // Server returned fewer than pageSize tweets (or empty), so no more pages
             if page == 0 {
                 if tweets.isEmpty {
@@ -570,6 +595,8 @@ struct TweetListView<RowView: View>: View {
         } else {
             // All tweets are nil but we got a full page, continue to next page
             currentPage = page
+            hasMoreTweets = true
+            print("[TweetListView] Full page with all nil tweets, setting hasMoreTweets=true to continue searching")
         }
     }
 
@@ -648,6 +675,7 @@ struct TweetListContentView<RowView: View>: View {
                     }
                 }
                 
+                // Load-more trigger and spinner - matches working commit 9667bda5cbcbfe18a2932c6d4c31280556dba55c
                 // Always present view to detect bottom scrolling
                 Color.clear
                     .frame(height: 40)
@@ -658,11 +686,26 @@ struct TweetListContentView<RowView: View>: View {
                         }
                     }
                 
-                // Loading indicator for more tweets
+                // Loading indicator for more tweets - shown as list item for smooth scrolling
                 if hasMoreTweets {
-                    ProgressView()
-                        .frame(height: 40)
-                        .padding(.top, -40) // Move spinner up by 40 dp
+                    if isLoadingMore {
+                        // Show spinner when loading
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .scaleEffect(1.0)
+                        }
+                        .frame(height: 60)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                    } else {
+                        // Empty space when not loading to maintain consistent spacing
+                        Color.clear
+                            .frame(height: 40)
+                    }
+                } else {
+                    // Small spacer at bottom when no more tweets
+                    Color.clear
+                        .frame(height: 60)
                 }
             }
         }
