@@ -558,15 +558,58 @@ struct SimpleVideoPlayer: View {
         // DON'T pause here - shared players might be in use by fullscreen/detail
         // Let visibility changes and VideoManager's sequential playback handle pausing
         if mode == .mediaCell {
+            // Check if this video should play according to VideoManager
+            let shouldPlayAccordingToManager = videoManager?.shouldPlayVideo(for: mid) ?? false
+            
+            // CRITICAL: If video just finished and is no longer approved, immediately pause and stop
+            // This prevents flicker by ensuring finished videos don't try to restart or cause view updates
+            if !shouldPlayAccordingToManager && playbackState == .finished {
+                // Video finished and is no longer the active video - ensure it's paused
+                // Don't do ANYTHING else - no state changes, no view updates, just keep it paused
+                // This prevents flicker during sequential video transitions
+                if (player?.rate ?? 0) > 0 {
+                    player?.pause()
+                }
+                return
+            }
+            
+            // CRITICAL: Also skip if video is finished and shouldAutoPlay is false
+            // This handles the case where VideoManager updates but the finished video shouldn't react
+            if playbackState == .finished && !shouldAutoPlay {
+                return
+            }
+            
             // CRITICAL: If already initialized and player is set up, skip work to prevent recomposition
             // This is key for smooth scrolling - once a video is initialized, don't recompose it
-            if hasInitialized && player != nil && loadingState.isLoaded {
+            // BUT: Always allow state changes for sequential playback transitions
+            let isSequentialTransition = shouldPlayAccordingToManager && shouldAutoPlay
+            let shouldSkip = hasInitialized && player != nil && loadingState.isLoaded && !isSequentialTransition
+            
+            if shouldSkip {
                 // Only update if the playback state actually needs to change
                 let currentShouldPlay = shouldAutoPlay && isVisible
                 let isCurrentlyPlaying = (player?.rate ?? 0) > 0
                 
                 // If state matches, do nothing to prevent recomposition
                 if currentShouldPlay == isCurrentlyPlaying {
+                    return
+                }
+            }
+            
+            // CRITICAL: For sequential playback transitions, ensure player is ready before playing
+            // This prevents flicker and ensures smooth transitions
+            if shouldAutoPlay && isVisible && isSequentialTransition {
+                // Ensure player is loaded and ready
+                if player == nil || !loadingState.isLoaded {
+                    print("⏳ [VIDEO TRANSITION] Next video not ready yet, waiting for load: \(mid)")
+                    // Player will start automatically when ready via checkPlaybackConditions
+                    return
+                }
+                
+                // If player exists but item is not ready, wait a bit
+                if let playerItem = player?.currentItem, playerItem.status != .readyToPlay {
+                    print("⏳ [VIDEO TRANSITION] Player item not ready, status: \(playerItem.status.rawValue) for \(mid)")
+                    // Will retry when status changes
                     return
                 }
             }
@@ -2380,19 +2423,28 @@ struct SimpleVideoPlayer: View {
         print("🎬 [VIDEO FINISHED] onVideoFinished callback: \(onVideoFinished != nil ? "SET" : "NIL")")
         resetProgressiveBufferTarget(for: player?.currentItem)
         
-        // Just pause and mark as finished - no automatic rewind
+        // CRITICAL: Immediately pause to prevent flicker when next video starts
+        // This ensures smooth transition between videos
         player?.pause()
         playbackState = .finished
         
-        // For MediaCell mode, ensure mute state is correct
+        // For MediaCell mode, ensure mute state is correct and prevent any view updates
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
+            // CRITICAL: Don't trigger any view updates for finished videos
+            // The video layer should remain static showing the last frame
+            // Any representableId changes would cause flicker
         }
         
-        // Call onVideoFinished to trigger sequential playback progression
+        // CRITICAL: For MediaCell sequential playback, call callback to advance to next video
+        // Use a small delay to ensure the pause and state update complete first
+        // This prevents the finished video from causing view updates during transition
         if let callback = onVideoFinished {
             print("🎬 [VIDEO FINISHED] Calling onVideoFinished callback for \(mid)")
-            callback()
+            // Small delay to ensure pause completes and prevent flicker
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                callback()
+            }
         } else {
             print("⚠️ [VIDEO FINISHED] No onVideoFinished callback set for \(mid)")
         }
@@ -2489,10 +2541,13 @@ struct SimpleVideoPlayer: View {
                     return
                 }
                 
-                // Don't restart finished videos in sequential playback
+                // CRITICAL: If video was finished but is now approved to play (next in sequence),
+                // reset it to allow playback - this handles sequential video transitions
                 if playbackState == .finished {
-                    print("DEBUG: [VIDEO PLAYBACK] Video \(mid) is finished - preventing restart")
-                    return
+                    print("🔄 [VIDEO PLAYBACK] Video \(mid) was finished but is now next in sequence - resetting for playback")
+                    playbackState = .notStarted
+                    // Seek to start to ensure clean state
+                    player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
                 }
             }
             
@@ -2508,12 +2563,14 @@ struct SimpleVideoPlayer: View {
             
             // CRITICAL: For mediaCell mode, if video was never actually played (only first frame shown),
             // seek to start to ensure clean state before playing
+            // Also handle case where video was reset from finished state for sequential playback
             if mode == .mediaCell && playbackState == .notStarted {
                 NSLog("🔄 [PLAYBACK] Seeking to start for clean playback: \(mid)")
                 player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                // Brief delay to let seek complete
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    if self.player?.rate == 0 {
+                // Brief delay to let seek complete, then start playing
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    // Double-check conditions haven't changed
+                    if self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
                         NSLog("▶️ [PLAYBACK] Starting playback after seek: \(self.mid)")
                         self.player?.play()
                         self.playbackState = .playing
@@ -2998,7 +3055,7 @@ struct AVPlayerLayerView: UIViewRepresentable {
             // Different player - detach old, attach new
             playerView.playerLayer.player = nil
             playerView.playerLayer.player = player
-        } else if playerView.playerLayer.player == nil {
+        } else if currentPlayer == nil {
             // No current player but we have one - attach it
             playerView.playerLayer.player = player
         }
