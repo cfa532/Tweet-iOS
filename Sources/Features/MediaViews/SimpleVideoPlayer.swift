@@ -772,8 +772,10 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // Player is healthy, restore cached state
+                // CRITICAL: Don't call checkPlaybackConditions here - let the normal flow handle it
+                // Just like the first time, KVO handlers will fire when ready and check VideoManager
                 restoreCachedVideoState()
-                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: visible)
+                // checkPlaybackConditions will be called by KVO handlers or handleAutoPlayChange
             }
         } else {
             // When becoming invisible, cache state but don't pause here
@@ -1775,14 +1777,15 @@ struct SimpleVideoPlayer: View {
             setupPlayerObservers(cachedState.player)
         }
         
-        // If video already finished, trigger the callback now
+        // CRITICAL: If video already finished, DON'T trigger callback here
+        // The observer is already set up and will fire when the video finishes again
+        // OR if we need to advance sequential playback, let VideoManager handle it
+        // Directly calling handleVideoFinished here causes duplicate callbacks
         if videoAlreadyFinished {
-            NSLog("🎬 [VIDEO CACHE] Triggering onVideoFinished for already-completed video: \(mid)")
+            NSLog("🎬 [VIDEO CACHE] Video \(mid) was already finished - marking as finished, observer will handle completion")
             self.playbackState = .finished
-            // Trigger immediately since everything is set up
-            DispatchQueue.main.async {
-                self.handleVideoFinished()
-            }
+            // DON'T call handleVideoFinished here - it will be called by the observer if video finishes again
+            // Or VideoManager will handle advancing to next video if needed
         }
         
         // Restore the cached player (AFTER setting mute state and observers)
@@ -1829,22 +1832,23 @@ struct SimpleVideoPlayer: View {
             self.loadingState = isReadyForDisplay ? .loaded : .loading
             self.playbackState = .notStarted
         } else {
-            // For MediaCell, seek to cached position
+            // For MediaCell, restore position but DON'T auto-play here
+            // Let the normal flow (KVO handlers → checkPlaybackConditions) handle playback
+            // This ensures the 2nd round behaves exactly like the 1st round
+            
+            // CRITICAL: Pause immediately to ensure videos start in the same state as first time
+            // The normal KVO flow will handle playback, just like the first time
+            if mode == .mediaCell {
+                cachedState.player.pause()
+            }
             
             // Use seek with tolerance for better reliability
             let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
             cachedState.player.seek(to: cachedState.time, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
                 if finished {
-                    // Resume playback if VideoManager approves
-                    if cachedState.wasPlaying && self.isVisible && self.currentAutoPlay && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
-                        // CRITICAL: Always ensure muteState is correct before playing in MediaCell
-                        if self.mode == .mediaCell {
-                            cachedState.player.isMuted = MuteState.shared.isMuted
-                            NSLog("🔇 [PLAYER MUTE] restoreFromCache - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
-                        }
-                        cachedState.player.play()
-                        NSLog("DEBUG: [VIDEO CACHE] ✅ Resumed playback from cache for \(self.mid) - VideoManager approved")
-                    }
+                    // Don't auto-play here - let KVO handlers handle it (same as first time)
+                    // KVO handlers will fire when ready and check VideoManager via checkPlaybackConditions
+                    NSLog("DEBUG: [VIDEO CACHE] Seek completed for \(self.mid), waiting for KVO handlers (same as first time)")
                 } else {
                     NSLog("DEBUG: [VIDEO CACHE] ⚠️ Seek did not finish for \(self.mid)")
                 }
@@ -2026,7 +2030,8 @@ struct SimpleVideoPlayer: View {
             return 
         }
         
-        // Check if observers are already set up for this exact playerItem
+        // CRITICAL: Check if observer is already attached to this exact playerItem
+        // Use object identity (===) to ensure we're checking the same instance
         let alreadySetup = (self.playerItem === playerItem && videoCompletionObserver != nil)
         
         if alreadySetup {
@@ -2036,18 +2041,24 @@ struct SimpleVideoPlayer: View {
         
         NSLog("✅ [OBSERVER SETUP] Setting up observers for \(mid), playerItem status: \(playerItem.status.rawValue)")
         
-        // Store reference for cleanup
-        self.playerItem = playerItem
-        
-        // Remove existing observers if any (they're for a different playerItem)
+        // CRITICAL: Remove existing observers FIRST to prevent duplicates
+        // This must happen before storing the new playerItem reference
         removePlayerObservers()
         
+        // Store reference for cleanup (AFTER removing old observers)
+        self.playerItem = playerItem
+        
         // Video finished observer
+        // CRITICAL: Since SimpleVideoPlayer is a struct, we can't use weak self
+        // The guard in handleVideoFinished prevents duplicate calls
+        // We observe a specific playerItem object, so notifications are scoped correctly
         videoCompletionObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
         ) { _ in
+            // The notification is already scoped to playerItem, so this will only fire for our item
+            // The guard in handleVideoFinished prevents duplicate processing
             self.handleVideoFinished()
         }
         
@@ -2176,14 +2187,22 @@ struct SimpleVideoPlayer: View {
                     }
                     
                     if shouldAutoPlay {
-                        // CRITICAL: Always ensure muteState is correct before playing in MediaCell
-                        if self.mode == .mediaCell {
-                            player.isMuted = MuteState.shared.isMuted
-                            NSLog("🔇 [PLAYER MUTE] KVO status ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                        // CRITICAL: For MediaCell, check VideoManager before playing (same as first time)
+                        // This ensures only the current video plays in sequential playback
+                        let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
+                        
+                        if approved {
+                            // CRITICAL: Always ensure muteState is correct before playing in MediaCell
+                            if self.mode == .mediaCell {
+                                player.isMuted = MuteState.shared.isMuted
+                                NSLog("🔇 [PLAYER MUTE] KVO status ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                            }
+                            // Start playing automatically
+                            player.play()
+                            NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
+                        } else {
+                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - not approved by VideoManager")
                         }
-                        // Start playing automatically
-                        player.play()
-                        NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData))")
                     } else {
                         // Preroll to render first frame without playing
                         player.preroll(atRate: 0.0) { finished in
@@ -2215,7 +2234,8 @@ struct SimpleVideoPlayer: View {
                         // CRITICAL: Only play() if video should actually be playing
                         // For sequential playback, check with VideoManager first
                         // This prevents videos from playing to completion prematurely (especially short videos)
-                        let shouldPlay = shouldAutoPlay && (self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? true)
+                        // CRITICAL: Default to false for MediaCell to prevent both videos from playing
+                        let shouldPlay = shouldAutoPlay && (self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? false)
                         
                         if shouldPlay && player.rate == 0 {
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
@@ -2273,13 +2293,21 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 if shouldAutoPlay {
-                    // CRITICAL: Always ensure muteState is correct before playing in MediaCell
-                    if self.mode == .mediaCell {
-                        player.isMuted = MuteState.shared.isMuted
-                        NSLog("🔇 [PLAYER MUTE] Initial check ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                    // CRITICAL: For MediaCell, check VideoManager before playing (same as first time)
+                    // This ensures only the current video plays in sequential playback
+                    let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
+                    
+                    if approved {
+                        // CRITICAL: Always ensure muteState is correct before playing in MediaCell
+                        if self.mode == .mediaCell {
+                            player.isMuted = MuteState.shared.isMuted
+                            NSLog("🔇 [PLAYER MUTE] Initial check ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                        }
+                        player.play()
+                        NSLog("▶️ [VIDEO SETUP] Already ready - auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
+                    } else {
+                        NSLog("⏸️ [VIDEO SETUP] NOT auto-playing \(mid) - not approved by VideoManager")
                     }
-                    player.play()
-                    NSLog("▶️ [VIDEO SETUP] Already ready - auto-playing \(mid) (buffered: \(hasBufferedData))")
                 } else {
                     player.preroll(atRate: 0.0) { finished in
                         guard finished else { 
@@ -2419,6 +2447,13 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleVideoFinished() {
+        // CRITICAL: Prevent duplicate calls - if already finished, ignore
+        // This can happen if the notification fires multiple times or if the video finishes again
+        guard playbackState != .finished else {
+            print("⚠️ [VIDEO FINISHED] Video \(mid) already marked as finished - ignoring duplicate finish event")
+            return
+        }
+        
         print("🎬 [VIDEO FINISHED] Video finished playing for \(mid), mode: \(mode)")
         print("🎬 [VIDEO FINISHED] onVideoFinished callback: \(onVideoFinished != nil ? "SET" : "NIL")")
         resetProgressiveBufferTarget(for: player?.currentItem)
