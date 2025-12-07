@@ -99,6 +99,11 @@ struct MediaBrowserView: View {
             }
             .onDisappear {
                 FullScreenVideoManager.shared.clearSingletonPlayer()
+                
+                // CRITICAL: Resume MediaCell videos when exiting fullscreen
+                // This allows videos that were playing before fullscreen to resume
+                NotificationCenter.default.post(name: .resumeMediaCellVideos, object: nil)
+                print("DEBUG: [MediaBrowserView] Posted resumeMediaCellVideos notification to resume MediaCell videos")
             }
     }
     

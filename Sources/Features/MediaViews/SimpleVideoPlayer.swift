@@ -252,6 +252,7 @@ struct SimpleVideoPlayer: View {
             .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
             .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
+            .onReceive(NotificationCenter.default.publisher(for: .resumeMediaCellVideos)) { _ in handleResumeMediaCellVideos() }
             .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
             .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
             .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
@@ -811,10 +812,68 @@ struct SimpleVideoPlayer: View {
     private func handleStopAllVideos() {
         // Only pause MediaCell videos - TweetDetail and MediaBrowser are immune
         if mode == .mediaCell {
-            player?.pause()
-            player?.isMuted = true
+            // Store playback state before pausing so we can resume later
+            if let player = player {
+                let wasPlaying = player.rate > 0
+                if wasPlaying {
+                    // CRITICAL: Keep playbackState as .playing so we know it was playing
+                    // Don't change to .paused - we'll use .playing to determine if we should resume
+                    // Only pause the player, not the state
+                    NSLog("DEBUG: [STOP ALL VIDEOS] Paused \(mid) - was playing (keeping playbackState: .playing), will resume when fullscreen closes")
+                }
+                player.pause()
+                player.isMuted = true
+            }
         }
         // TweetDetail and MediaBrowser: DO NOTHING
+    }
+    
+    private func handleResumeMediaCellVideos() {
+        // Only resume MediaCell videos that should be playing
+        guard mode == .mediaCell else { return }
+        
+        // CRITICAL: Check if video was playing before pause (playbackState == .playing)
+        // VideoManager state might have been cleared by MediaGridView.stopAllVideos handler
+        // So we check playbackState first, then check VideoManager
+        let wasPlaying = playbackState == .playing
+        
+        if wasPlaying && isVisible, let player = player {
+            // Video was playing before fullscreen - check if VideoManager approves it now
+            // If VideoManager state was cleared, it might not approve, but we should still resume
+            // since the video was playing before
+            let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
+            
+            if approved {
+                // Video was playing and is still approved - resume playback
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("🔇 [RESUME VIDEOS] Applied global mute state: \(MuteState.shared.isMuted) for \(mid)")
+                
+                if player.rate == 0 {
+                    player.play()
+                    NSLog("DEBUG: [RESUME VIDEOS] ✅ Resumed playback for \(mid) after fullscreen exit")
+                }
+            } else {
+                // Video was playing but VideoManager doesn't approve (state might have been cleared)
+                // Still resume if it was playing - VideoManager will handle sequential playback
+                player.isMuted = MuteState.shared.isMuted
+                NSLog("🔇 [RESUME VIDEOS] Applied global mute state: \(MuteState.shared.isMuted) for \(mid)")
+                
+                // Use checkPlaybackConditions to let VideoManager decide
+                checkPlaybackConditions(autoPlay: true, isVisible: isVisible)
+                NSLog("DEBUG: [RESUME VIDEOS] Checked playback conditions for \(mid) (VideoManager state may have been cleared)")
+            }
+        } else if !wasPlaying && isVisible {
+            // Video wasn't playing but should check if it should play now
+            let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
+            if approved {
+                checkPlaybackConditions(autoPlay: true, isVisible: isVisible)
+                NSLog("DEBUG: [RESUME VIDEOS] Checked playback conditions for \(mid)")
+            } else {
+                NSLog("DEBUG: [RESUME VIDEOS] NOT resuming \(mid) - wasPlaying: \(wasPlaying), isVisible: \(isVisible), approved: \(approved), playbackState: \(playbackState)")
+            }
+        } else {
+            NSLog("DEBUG: [RESUME VIDEOS] NOT resuming \(mid) - wasPlaying: \(wasPlaying), isVisible: \(isVisible), playbackState: \(playbackState)")
+        }
     }
     
     private func handleWillResignActive() {
