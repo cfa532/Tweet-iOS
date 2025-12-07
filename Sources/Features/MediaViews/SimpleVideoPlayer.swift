@@ -1039,18 +1039,46 @@ struct SimpleVideoPlayer: View {
                         self.representableId += 1
                         print("✅ [VIDEO RECOVERY] Player recreated and reattached for \(self.mid)")
                         
-                        // Restore position if needed
+                        // Restore position and resume if was playing
                         if wasPlaying && CMTimeGetSeconds(currentTime) > 0 {
                             player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                                if finished && self.isVisible {
-                                    // Resume playback if was playing and is visible
+                                if finished {
+                                    // Resume playback if was playing
+                                    // For MediaCell, check VideoManager approval
                                     if self.mode == .mediaCell {
                                         player.isMuted = MuteState.shared.isMuted
+                                        let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
+                                        if approved && self.isVisible {
+                                            player.play()
+                                            self.playbackState = .playing
+                                            print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (MediaCell, approved)")
+                                        } else {
+                                            print("⏳ [VIDEO RECOVERY] Video was playing but not approved yet or not visible - will resume when approved")
+                                        }
+                                    } else {
+                                        // For other modes, resume if visible
+                                        if self.isVisible {
+                                            player.play()
+                                            self.playbackState = .playing
+                                            print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid)")
+                                        }
                                     }
+                                }
+                            }
+                        } else if wasPlaying {
+                            // Video was playing but no time to restore - just resume
+                            if self.mode == .mediaCell {
+                                player.isMuted = MuteState.shared.isMuted
+                                let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
+                                if approved && self.isVisible {
                                     player.play()
                                     self.playbackState = .playing
-                                    print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid)")
+                                    print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (MediaCell, approved, no seek)")
                                 }
+                            } else if self.isVisible {
+                                player.play()
+                                self.playbackState = .playing
+                                print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (no seek)")
                             }
                         }
                     } else {
@@ -1099,43 +1127,67 @@ struct SimpleVideoPlayer: View {
                 player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             
-            // CRITICAL: For MediaCell, check VideoManager approval if video was playing
-            // For other modes, resume if was playing
-            let shouldResume: Bool
-            if mode == .mediaCell {
-                // Check if VideoManager approves AND video was playing
-                let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
-                shouldResume = cachedState.wasPlaying && approved && isVisible
-            } else {
-                shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
-            }
-            
-            if shouldResume {
-                // CRITICAL: Always ensure muteState is correct before playing
+            // CRITICAL: Resume video if it was playing before backgrounding
+            // For MediaCell, check VideoManager approval
+            // For other modes, resume if was playing and should load
+            if cachedState.wasPlaying {
                 if mode == .mediaCell {
-                    player.isMuted = MuteState.shared.isMuted
-                    NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
-                }
-                
-                // Validate player is ready before playing
-                if playerItem.status == .readyToPlay {
-                    player.play()
-                    playbackState = .playing
-                    print("✅ [VIDEO RECOVERY] Resumed playback for \(mid)")
-                } else {
-                    // Player not ready yet - wait for it to become ready
-                    print("⏳ [VIDEO RECOVERY] Player not ready yet (status: \(playerItem.status.rawValue)), will resume when ready")
-                    // Set up observer to resume when ready
-                    Task { @MainActor in
-                        var attempts = 0
-                        while playerItem.status != .readyToPlay && attempts < 50 {
-                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                            attempts += 1
-                        }
-                        if playerItem.status == .readyToPlay && self.isVisible {
+                    // For MediaCell, check VideoManager approval
+                    let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
+                    if approved && isVisible {
+                        // CRITICAL: Always ensure muteState is correct before playing
+                        player.isMuted = MuteState.shared.isMuted
+                        NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                        
+                        // Validate player is ready before playing
+                        if playerItem.status == .readyToPlay {
                             player.play()
-                            self.playbackState = .playing
-                            print("✅ [VIDEO RECOVERY] Resumed playback after waiting for ready state for \(self.mid)")
+                            playbackState = .playing
+                            print("✅ [VIDEO RECOVERY] Resumed playback for \(mid) (MediaCell, approved)")
+                        } else {
+                            // Player not ready yet - wait for it to become ready
+                            print("⏳ [VIDEO RECOVERY] Player not ready yet (status: \(playerItem.status.rawValue)), will resume when ready")
+                            Task { @MainActor in
+                                var attempts = 0
+                                while playerItem.status != .readyToPlay && attempts < 50 {
+                                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                                    attempts += 1
+                                }
+                                if playerItem.status == .readyToPlay && self.isVisible && (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) {
+                                    player.isMuted = MuteState.shared.isMuted
+                                    player.play()
+                                    self.playbackState = .playing
+                                    print("✅ [VIDEO RECOVERY] Resumed playback after waiting for ready state for \(self.mid)")
+                                }
+                            }
+                        }
+                    } else {
+                        print("⏳ [VIDEO RECOVERY] Video was playing but not approved yet or not visible - will resume when approved")
+                    }
+                } else {
+                    // For other modes, resume if was playing
+                    let shouldResume = (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
+                    if shouldResume {
+                        // Validate player is ready before playing
+                        if playerItem.status == .readyToPlay {
+                            player.play()
+                            playbackState = .playing
+                            print("✅ [VIDEO RECOVERY] Resumed playback for \(mid)")
+                        } else {
+                            // Player not ready yet - wait for it to become ready
+                            print("⏳ [VIDEO RECOVERY] Player not ready yet (status: \(playerItem.status.rawValue)), will resume when ready")
+                            Task { @MainActor in
+                                var attempts = 0
+                                while playerItem.status != .readyToPlay && attempts < 50 {
+                                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                                    attempts += 1
+                                }
+                                if playerItem.status == .readyToPlay {
+                                    player.play()
+                                    self.playbackState = .playing
+                                    print("✅ [VIDEO RECOVERY] Resumed playback after waiting for ready state for \(self.mid)")
+                                }
+                            }
                         }
                     }
                 }
