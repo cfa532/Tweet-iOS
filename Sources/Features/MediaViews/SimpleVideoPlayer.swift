@@ -2458,14 +2458,29 @@ struct SimpleVideoPlayer: View {
                 NSLog("🔇 [PLAYER MUTE] checkPlaybackConditions - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
             }
             
+            // CRITICAL: For mediaCell mode, if video was never actually played (only first frame shown),
+            // seek to start to ensure clean state before playing
+            if mode == .mediaCell && playbackState == .notStarted {
+                NSLog("🔄 [PLAYBACK] Seeking to start for clean playback: \(mid)")
+                player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                // Brief delay to let seek complete
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    if self.player?.rate == 0 {
+                        NSLog("▶️ [PLAYBACK] Starting playback after seek: \(self.mid)")
+                        self.player?.play()
+                        self.playbackState = .playing
+                    }
+                }
+                return
+            }
+            
             // CRITICAL: Check actual player position before playing
             let currentTime = player!.currentTime().seconds
             let duration = player!.currentItem?.duration.seconds ?? 0
             let atEnd = isVideoAtEnd(player!)
             NSLog("🔍 [PLAYBACK CHECK] Video \(mid): playbackState=\(playbackState), time=\(String(format: "%.2f", currentTime))s/\(String(format: "%.2f", duration))s, atEnd=\(atEnd)")
             
-            // CRITICAL: If video is at or near the end, rewind it FIRST
-            // Do this synchronously to ensure it's done before playing
+            // If video is at or near the end, rewind it FIRST
             if atEnd || currentTime > duration - 0.5 {
                 NSLog("🔄 [PLAYBACK REWIND] Video at end, rewinding to start before playing: \(mid)")
                 player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
@@ -2512,15 +2527,10 @@ struct SimpleVideoPlayer: View {
             // The sequential playback state is preserved in VideoManager, so when user scrolls back,
             // the correct video will resume from where it was paused
             if mode == .mediaCell {
-                // CRITICAL: If video finished prematurely (e.g., during first frame render), 
-                // reset it back to start so it's ready when its turn comes in sequential playback
-                if playbackState == .finished {
-                    NSLog("🔄 [VIDEO RESET] Resetting prematurely finished video to start: \(mid)")
-                    player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                    playbackState = .notStarted
-                }
-                // SimpleVideoPlayer's handleVisibilityChange already handles pausing when invisible
-                // We don't need to do anything here - the visibility system handles it
+                // Don't reset finished videos here - they may have legitimately played to completion
+                // The AVPlayer instance might be shared between multiple SimpleVideoPlayer views
+                // Resetting one video could corrupt the state of another video using the same player
+                // Let each video manage its own state when it becomes active
             }
         }
     }

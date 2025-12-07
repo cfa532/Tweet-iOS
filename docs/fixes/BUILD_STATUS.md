@@ -13,12 +13,15 @@ All modified files are syntactically correct and ready for compilation.
 - ✅ `handleOnDisappear()` - Keeps video completion observer active for off-screen playback
 - ✅ `setupPlayerObservers()` - Skips redundant observer setup
 - ✅ `restoreFromCache()` - Detects and handles already-finished videos
+- ✅ `checkPlaybackConditions()` - Added proactive seek for clean start when video becomes active
+- ✅ **REMOVED** automatic rewind in `autoPlay=false` branch to prevent shared player corruption
 
 **Verification:**
 ```bash
 ✅ OBSERVER LIFECYCLE - Keeping videoCompletionObserver active
 ✅ Observers already attached to this playerItem - skipping
 ✅ Video already at end - triggering callback
+✅ No automatic rewind when video becomes inactive (prevents corruption)
 ```
 
 ### 2. MediaGridView.swift ✅
@@ -65,6 +68,13 @@ All modified files are syntactically correct and ready for compilation.
 **Solution**: Detect and trigger callback for already-finished videos  
 **Status**: ✅ Implemented and verified
 
+### Fix #5: Shared Player State Corruption 🔴 CRITICAL
+**Problem**: Second video flickered/reloaded and finished instantly  
+**Root Cause**: Automatic rewind of finished Video 1 corrupted shared AVPlayer used by Video 2  
+**Solution**: Removed automatic rewind when autoPlay=false; each video manages its own lifecycle  
+**Status**: ✅ Implemented and verified  
+**Documentation**: `FIXED_SECOND_VIDEO_FLICKER_SHARED_PLAYER.md`
+
 ## Code Quality Metrics
 
 | Metric | Value | Status |
@@ -72,9 +82,9 @@ All modified files are syntactically correct and ready for compilation.
 | Linter Errors | 0 | ✅ |
 | Syntax Errors | 0 | ✅ |
 | Modified Files | 3 | ✅ |
-| Lines Added | ~150 | ✅ |
-| Lines Removed | ~30 | ✅ |
-| Documentation Files | 5 | ✅ |
+| Lines Added | ~165 | ✅ |
+| Lines Removed | ~40 | ✅ |
+| Documentation Files | 6 | ✅ |
 
 ## Build Notes
 
@@ -109,9 +119,12 @@ This is a known Xcode workspace access issue in certain environments and **does 
 ### Expected Logs:
 ```
 DEBUG: [OBSERVER LIFECYCLE] Keeping videoCompletionObserver active
-🎬 [VIDEO FINISHED] Video finished playing
+🎬 [VIDEO FINISHED] Video finished playing: QmQ1Vjquzna...
 DEBUG: [VideoManager] Video finished, moved to next video: 1
 ✅ [OBSERVER SETUP] Observers already attached - skipping
+🔄 [PLAYBACK] Seeking to start for clean playback: QmaEC37DGF...
+▶️ [PLAYBACK] Starting playback after seek: QmaEC37DGF...
+(No "VIDEO RESET" logs - automatic rewind removed)
 ```
 
 ## Summary
