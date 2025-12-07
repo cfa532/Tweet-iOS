@@ -918,25 +918,43 @@ struct SimpleVideoPlayer: View {
     
     /// SANITY CHECK: Detects if player is broken
     private func isPlayerBroken() -> Bool {
-        guard let player = player else { return true }
-        guard let playerItem = player.currentItem else { return true }
-        
-        // Check 1: Status is failed
-        if playerItem.status == .failed {
+        // Check 1: Player or item is missing
+        guard let player = player else {
+            print("⚠️ [SANITY CHECK] Player is nil for \(mid)")
+            return true
+        }
+        guard let playerItem = player.currentItem else {
+            print("⚠️ [SANITY CHECK] Player item is nil for \(mid)")
             return true
         }
         
-        // Check 2: For screen lock recovery, don't check loadedTimeRanges alone
+        // Check 2: Status is failed
+        if playerItem.status == .failed {
+            print("⚠️ [SANITY CHECK] Player item status is failed for \(mid)")
+            return true
+        }
+        
+        // Check 3: Status is unknown (might be broken, but give it a chance)
+        // Only consider unknown as broken if it's been a while since recovery
+        if playerItem.status == .unknown {
+            // Unknown status might be temporary - don't immediately mark as broken
+            // Let it transition to readyToPlay or failed
+            print("⚠️ [SANITY CHECK] Player item status is unknown for \(mid) - will check again")
+            return false // Give it a chance
+        }
+        
+        // Check 4: For screen lock recovery, don't check loadedTimeRanges alone
         // iOS might temporarily clear this data after screen lock, but it will reload
         // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
         // This prevents false positives where player is healthy but temporarily has no ranges
         if playerItem.status == .readyToPlay && 
            playerItem.loadedTimeRanges.isEmpty && 
            !playerItem.duration.isValid {
-            print("⚠️ [SANITY CHECK] Player ready but no loaded data AND invalid duration - likely broken")
+            print("⚠️ [SANITY CHECK] Player ready but no loaded data AND invalid duration - likely broken for \(mid)")
             return true
         }
         
+        // Check 5: Progressive player is stalled
         if shouldForceProgressiveReload(player: player, item: playerItem) {
             NSLog("⚠️ [SANITY CHECK] Progressive player stalled, marking as broken for \(mid)")
             return true
@@ -974,131 +992,11 @@ struct SimpleVideoPlayer: View {
         // Mark that we've recovered (but don't reattach yet)
         hasRecoveredThisCycle = true
         
-        // SMART RECOVERY STRATEGY:
-        // - Screen lock (didEnterBackground=false): AGGRESSIVE - always recreate MediaCell players
-        // - App background (didEnterBackground=true): GENTLE - only recreate if broken
+        // CONSERVATIVE RECOVERY STRATEGY:
+        // Only recreate players that are actually broken, leave healthy ones alone
+        // This prevents unnecessary work and potential issues with working players
         
-        let isScreenLock = !didEnterBackground
-        
-        let isProgressive = (mediaType == .video)
-        
-        if mode == .mediaCell && isProgressive && player != nil && shouldLoadVideo && isScreenLock && isVisible {
-            // SCREEN LOCK RECOVERY FOR VISIBLE VIDEOS: Force complete player recreation
-            print("DEBUG: [VIDEO RECOVERY] Screen lock for VISIBLE video - forcing complete refresh")
-            
-            let currentTime = player?.currentTime() ?? .zero
-            
-            // Clean up observer
-            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
-                observerPlayer.removeTimeObserver(observer)
-            }
-            timeObserver = nil
-            timeObserverPlayer = nil
-            
-            // CRITICAL: Remove from SharedAssetCache to force fresh creation
-            SharedAssetCache.shared.removeInvalidPlayer(for: mid)
-            
-            player?.pause()
-            player = nil
-            loadingState = .idle
-            playbackState = .notStarted
-            
-            // Recreate completely fresh player (not from cache)
-            setupPlayer()
-            
-            // Wait for player to be ready, then restore position and autoplay
-            Task { @MainActor in
-                // Poll for player to be ready (setupPlayer is async internally)
-                var attempts = 0
-                while player == nil && !loadingState.hasFailed && attempts < 50 {
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                    attempts += 1
-                }
-                
-                // Restore position and autoplay for visible video
-                if let player = player {
-                    // CRITICAL: Always ensure muteState is correct before playing
-                    if self.mode == .mediaCell {
-                        player.isMuted = MuteState.shared.isMuted
-                        NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
-                    }
-                    print("DEBUG: [VIDEO RECOVERY] Player ready, restoring position and autoplaying")
-                    player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                        if finished {
-                            // Always autoplay visible videos after aggressive recovery
-                            player.play()
-                            print("DEBUG: [VIDEO RECOVERY] Autoplaying visible video after recovery")
-                        }
-                    }
-                    
-                    // Reattach player after successful recovery
-                    self.isPlayerDetached = false
-                    print("✅ [VIDEO RECOVERY] Player reattached after validation")
-                } else {
-                    print("⚠️ [VIDEO RECOVERY] Player failed to initialize after aggressive recovery")
-                }
-            }
-            
-            print("DEBUG: [VIDEO RECOVERY] Visible video recreated from scratch")
-            return
-        }
-        
-        // APP BACKGROUND or non-MediaCell: More aggressive recovery for short backgrounds
-        // After clearVideoPlayersForBackgroundRecovery(), currentItem is set to nil
-        // We need to be more aggressive to ensure all videos recover properly
-        
-        // CRITICAL: Check if player or currentItem is missing first (common after background)
-        // After clearVideoPlayersForBackgroundRecovery(), currentItem is set to nil
-        let playerIsMissing = player == nil || player?.currentItem == nil
-        
-        // For MediaCell with app background, be more aggressive - always recreate if player exists but currentItem is nil
-        // This handles the case where clearVideoPlayersForBackgroundRecovery() was called
-        let shouldForceRecreate = mode == .mediaCell && player != nil && player?.currentItem == nil
-        
-        if playerIsMissing || shouldForceRecreate {
-            print("⚠️ [VIDEO RECOVERY] Player or currentItem missing after background (playerIsMissing: \(playerIsMissing), shouldForceRecreate: \(shouldForceRecreate)), recreating for \(mid)")
-            
-            // Clean up observers
-            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
-                observerPlayer.removeTimeObserver(observer)
-            }
-            timeObserver = nil
-            timeObserverPlayer = nil
-            
-            // Remove from SharedAssetCache to force fresh creation
-            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
-            
-            player?.pause()
-            player = nil
-            loadingState = .idle
-            playbackState = .notStarted
-            
-            if shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser {
-                setupPlayer()
-                
-                // Wait for player to be ready before reattaching
-                Task { @MainActor in
-                    var attempts = 0
-                    while player == nil && !loadingState.hasFailed && attempts < 50 {
-                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                        attempts += 1
-                    }
-                    
-                    if player != nil {
-                        // Reattach player after successful recreation
-                        self.isPlayerDetached = false
-                        // Force view refresh
-                        self.representableId += 1
-                        print("✅ [VIDEO RECOVERY] Player recreated and reattached for \(self.mid)")
-                    } else {
-                        print("⚠️ [VIDEO RECOVERY] Failed to recreate player for \(self.mid)")
-                    }
-                }
-            }
-            return
-        }
-        
-        // Gentle recovery: only recreate if actually broken
+        // Check if player is broken first - this handles missing player/item, failed status, etc.
         if isPlayerBroken() {
             print("⚠️ [VIDEO RECOVERY] Player is broken, recreating for \(mid)")
             
@@ -1112,11 +1010,18 @@ struct SimpleVideoPlayer: View {
             // Remove from SharedAssetCache
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
             
+            let wasPlaying = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            let currentTime = player?.currentTime() ?? .zero
+            
+            player?.pause()
             player = nil
             loadingState = .idle
             playbackState = .notStarted
             
-            if shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser {
+            // Only recreate if video should be loaded or was playing
+            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .tweetDetail || mode == .mediaBrowser)
+            
+            if shouldRecreate {
                 setupPlayer()
                 
                 // Wait for player to be ready before reattaching
@@ -1127,12 +1032,27 @@ struct SimpleVideoPlayer: View {
                         attempts += 1
                     }
                     
-                    if player != nil {
+                    if let player = self.player {
                         // Reattach player after successful recreation
                         self.isPlayerDetached = false
                         // Force view refresh
                         self.representableId += 1
                         print("✅ [VIDEO RECOVERY] Player recreated and reattached for \(self.mid)")
+                        
+                        // Restore position if needed
+                        if wasPlaying && CMTimeGetSeconds(currentTime) > 0 {
+                            player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                                if finished && self.isVisible {
+                                    // Resume playback if was playing and is visible
+                                    if self.mode == .mediaCell {
+                                        player.isMuted = MuteState.shared.isMuted
+                                    }
+                                    player.play()
+                                    self.playbackState = .playing
+                                    print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid)")
+                                }
+                            }
+                        }
                     } else {
                         print("⚠️ [VIDEO RECOVERY] Failed to recreate player for \(self.mid)")
                     }
@@ -1141,30 +1061,14 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Player appears healthy - but validate it can actually play before reattaching
+        // Player appears healthy - validate it can actually play before reattaching
         // CRITICAL: For MediaCell after short backgrounds, iOS may invalidate video layers
-        // even if player object is intact. Always force view refresh and validate playback capability.
-        print("✅ [VIDEO RECOVERY] Player appears healthy - validating playback capability")
+        // even if player object is intact. Force view refresh to ensure video layer is fresh.
+        print("✅ [VIDEO RECOVERY] Player appears healthy - validating and reattaching")
         
-        // Ensure player is in valid state
+        // Ensure player is in valid state (should always pass here since isPlayerBroken() checked)
         guard let player = player, let playerItem = player.currentItem else {
-            print("⚠️ [VIDEO RECOVERY] Player or item missing in healthy path, recreating")
-            self.player = nil
-            loadingState = .idle
-            playbackState = .notStarted
-            if shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser {
-                setupPlayer()
-            }
-            return
-        }
-        
-        // Verify player item status is valid
-        if playerItem.status == .failed || playerItem.status == .unknown {
-            print("⚠️ [VIDEO RECOVERY] Player item status invalid (\(playerItem.status.rawValue)), recreating")
-            self.player = nil
-            loadingState = .idle
-            playbackState = .notStarted
-            setupPlayer()
+            print("⚠️ [VIDEO RECOVERY] Unexpected: Player or item missing in healthy path for \(mid)")
             return
         }
         
@@ -1195,15 +1099,46 @@ struct SimpleVideoPlayer: View {
                 player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             
-            let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
+            // CRITICAL: For MediaCell, check VideoManager approval if video was playing
+            // For other modes, resume if was playing
+            let shouldResume: Bool
+            if mode == .mediaCell {
+                // Check if VideoManager approves AND video was playing
+                let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
+                shouldResume = cachedState.wasPlaying && approved && isVisible
+            } else {
+                shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
+            }
+            
             if shouldResume {
                 // CRITICAL: Always ensure muteState is correct before playing
                 if mode == .mediaCell {
                     player.isMuted = MuteState.shared.isMuted
                     NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
                 }
-                player.play()
-                playbackState = .playing
+                
+                // Validate player is ready before playing
+                if playerItem.status == .readyToPlay {
+                    player.play()
+                    playbackState = .playing
+                    print("✅ [VIDEO RECOVERY] Resumed playback for \(mid)")
+                } else {
+                    // Player not ready yet - wait for it to become ready
+                    print("⏳ [VIDEO RECOVERY] Player not ready yet (status: \(playerItem.status.rawValue)), will resume when ready")
+                    // Set up observer to resume when ready
+                    Task { @MainActor in
+                        var attempts = 0
+                        while playerItem.status != .readyToPlay && attempts < 50 {
+                            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                            attempts += 1
+                        }
+                        if playerItem.status == .readyToPlay && self.isVisible {
+                            player.play()
+                            self.playbackState = .playing
+                            print("✅ [VIDEO RECOVERY] Resumed playback after waiting for ready state for \(self.mid)")
+                        }
+                    }
+                }
             }
         }
         
