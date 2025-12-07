@@ -2821,21 +2821,6 @@ struct VideoManagerObserverModifier: ViewModifier {
                         onVideoIndexChanged(shouldAutoPlay)
                     }
                 }
-                .onReceive(videoManager.$videoMids) { _ in
-                    // When videoMids changes (e.g., after stopSequentialPlayback or setupSequentialPlayback),
-                    // re-evaluate autoPlay state to ensure videos resume correctly after state restoration
-                    if mode == .mediaCell {
-                        let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
-                        onVideoIndexChanged(shouldAutoPlay)
-                    }
-                }
-                .onReceive(videoManager.$isSequentialPlaybackEnabled) { _ in
-                    // When isSequentialPlaybackEnabled changes, re-evaluate autoPlay state
-                    if mode == .mediaCell {
-                        let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
-                        onVideoIndexChanged(shouldAutoPlay)
-                    }
-                }
         } else {
             content
         }
