@@ -655,18 +655,29 @@ struct SimpleVideoPlayer: View {
                 setupPlayer()
             } else {
                 // SANITY CHECK: Run when becoming visible to catch broken players
-                // Check if player or currentItem is missing first (common after long background)
+                // CRITICAL: After background recovery, video layers may be stale even if player exists
+                // Always validate player can actually play, not just that it exists
                 let playerIsMissing = player == nil || player?.currentItem == nil
                 let playerIsBroken = !playerIsMissing && isPlayerBroken()
                 
                 if playerIsMissing || playerIsBroken {
-                    print("⚠️ [VIDEO VISIBILITY] Sanity check failed - player is \(playerIsMissing ? "missing" : "broken"), recreating for \(mid)")
+                    let reason = playerIsMissing ? "missing" : "broken"
+                    print("⚠️ [VIDEO VISIBILITY] Sanity check failed - player is \(reason), recreating for \(mid)")
                     SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
                     player = nil
                     loadingState = .idle
                     playbackState = .notStarted
                     setupPlayer()
                     return
+                }
+                
+                // CRITICAL FIX: For MediaCell videos becoming visible after background,
+                // always force view refresh to prevent stale video layers
+                // This handles the case where player survived background but video layer is invalid
+                if mode == .mediaCell && !hasRecoveredThisCycle {
+                    print("✅ [VIDEO VISIBILITY] MediaCell becoming visible after background - forcing view refresh")
+                    representableId += 1
+                    hasRecoveredThisCycle = true  // Mark as recovered to avoid repeated refreshes
                 }
                 
                 // Player is healthy, restore cached state
@@ -978,13 +989,14 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Player is healthy - validate it before reattaching
-        print("✅ [VIDEO RECOVERY] Player healthy - validating before reattach")
+        // Player appears healthy - but validate it can actually play before reattaching
+        // CRITICAL: For MediaCell after short backgrounds, iOS may invalidate video layers
+        // even if player object is intact. Always force view refresh and validate playback capability.
+        print("✅ [VIDEO RECOVERY] Player appears healthy - validating playback capability")
         
         // Ensure player is in valid state
         guard let player = player, let playerItem = player.currentItem else {
             print("⚠️ [VIDEO RECOVERY] Player or item missing in healthy path, recreating")
-            // This shouldn't happen if checks above are correct, but be safe and recreate
             self.player = nil
             loadingState = .idle
             playbackState = .notStarted
@@ -1004,16 +1016,23 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Player is valid - safe to reattach
-        print("✅ [VIDEO RECOVERY] Player validated successfully, reattaching")
+        // CRITICAL FIX: For MediaCell after short backgrounds, always force view refresh
+        // iOS invalidates video layers unpredictably, even when player object is intact
+        // Force view recreation to ensure video layer is fresh
+        if mode == .mediaCell {
+            print("✅ [VIDEO RECOVERY] MediaCell - forcing view refresh to prevent stale video layers")
+            representableId += 1
+        }
         
+        // Restore mute state
         if mode == .mediaCell && mediaType == .video {
             player.isMuted = MuteState.shared.isMuted
         } else {
             player.isMuted = false
         }
         
-        representableId += 1
+        // Reattach player first (before seeking/playing)
+        isPlayerDetached = false
         
         // Restore playback state
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
@@ -1036,8 +1055,6 @@ struct SimpleVideoPlayer: View {
             }
         }
         
-        // Reattach player after all validation and restoration
-        isPlayerDetached = false
         print("✅ [VIDEO RECOVERY] Player reattached - recovery complete for \(mid)")
     }
     

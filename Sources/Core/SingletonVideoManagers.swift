@@ -259,7 +259,78 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         self.currentSourceTweetId = sourceTweetId
         self.currentVideoIndex = videoIndex
         
-        // Load video asynchronously
+        // CRITICAL: Try to use cached asset from MediaCell for fast loading
+        // AVPlayerItem cannot be shared between players, so we create a NEW playerItem from the cached asset
+        // This allows fullscreen to use its unique singleton player while sharing the cached asset
+        // Fullscreen has unique functionality (auto-advance, retry monitoring, buffering detection)
+        // that requires its own player instance and playerItem
+        if SharedAssetCache.shared.getCachedPlayer(for: mid) != nil {
+            print("DEBUG: [FullScreenVideoManager] ✅ Found cached player from MediaCell for \(mid), creating new playerItem from cached asset")
+            
+            // Load from cached asset asynchronously (fast since asset is cached)
+            Task.detached(priority: .userInitiated) {
+                do {
+                    let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweetId)
+                    let playerItem = await AVPlayerItem(asset: asset)
+                    
+                    await MainActor.run {
+                        // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
+                        AudioSessionManager.shared.activateForVideoPlayback()
+                        
+                        // Create or reuse singleton player (fullscreen's unique player instance)
+                        if self.singletonPlayer == nil {
+                            self.singletonPlayer = AVPlayer(playerItem: playerItem)
+                            print("DEBUG: [FullScreenVideoManager] Created singleton player with new playerItem from cached asset")
+                        } else {
+                            print("DEBUG: [FullScreenVideoManager] Reusing singleton player with new playerItem from cached asset")
+                            self.singletonPlayer?.replaceCurrentItem(with: playerItem)
+                        }
+                        
+                        // Configure fullscreen-specific buffering behavior
+                        if mediaType == .video {
+                            self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = true
+                            playerItem.preferredForwardBufferDuration = max(playerItem.preferredForwardBufferDuration, 30.0)
+                        } else {
+                            self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
+                        }
+                        
+                        // Always unmuted in fullscreen
+                        self.singletonPlayer?.isMuted = false
+                        
+                        // CRITICAL: Setup fullscreen's unique functionality
+                        // These observers are essential for auto-advance, retry monitoring, and buffering detection
+                        self.setupVideoCompletionObserver(playerItem)
+                        self.setupTimeControlStatusObserver()
+                        self.startRetryMonitoring()
+                        
+                        // Check if player item is ready
+                        if playerItem.status == .readyToPlay {
+                            print("DEBUG: [FullScreenVideoManager] Player item ready immediately from cached asset")
+                            // Check position and rewind if at end before playing
+                            self.checkAndRewindIfAtEnd {
+                                self.singletonPlayer?.play()
+                                self.isPlaying = true
+                                print("DEBUG: [FullScreenVideoManager] Started playback with new playerItem from cached asset")
+                            }
+                        } else {
+                            print("DEBUG: [FullScreenVideoManager] Player item not ready yet (status: \(playerItem.status.rawValue)), will play when ready")
+                            self.isPlaying = true // Mark as "should be playing"
+                        }
+                        
+                        print("DEBUG: [FullScreenVideoManager] ✅ Created new playerItem from cached asset for fullscreen - mid: \(mid)")
+                    }
+                } catch {
+                    await MainActor.run {
+                        print("ERROR: [FullScreenVideoManager] Failed to load from cached asset: \(error), falling back to normal load")
+                        // Fall through to normal load path below
+                    }
+                }
+            }
+            // Return early - we're loading asynchronously from cached asset
+            return
+        }
+        
+        // No cached player - load video asynchronously
         Task.detached(priority: .userInitiated) {
             do {
                 let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweetId)
