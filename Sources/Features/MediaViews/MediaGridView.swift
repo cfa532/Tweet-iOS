@@ -486,26 +486,31 @@ struct MediaGridView: View {
             
             // Only stop sequential playback if we're switching to a different video set
             // This preserves state when multiple MediaGrids exist during scrolling
-            if videoManager.videoMids != videoMids {
+            let isSwitchingVideoSet = videoManager.videoMids != videoMids && !videoManager.videoMids.isEmpty
+            if isSwitchingVideoSet {
                 print("DEBUG: [MediaGridView] Switching video set, stopping current playback")
                 videoManager.stopSequentialPlayback()
             }
             
             // Setup sequential playback for all videos (1 or more)
             // Single video is just sequential playback with 1 item
+            // Only setup if not already set up for this exact sequence to prevent duplicate calls
             if videoMids.count >= 1 {
-                videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
-                
-                // If all videos were finished (saved index >= count), restart from beginning
-                if videoManager.currentVideoIndex >= videoMids.count {
-                    print("DEBUG: [MediaGridView] All videos finished, restarting from beginning")
-                    videoManager.currentVideoIndex = 0
-                    videoManager.saveCurrentIndex(for: parentTweet.mid)
+                let alreadySetup = videoManager.videoMids == videoMids && videoManager.currentVideoIndex >= 0
+                if !alreadySetup {
+                    videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                    
+                    // If all videos were finished (saved index >= count), restart from beginning
+                    if videoManager.currentVideoIndex >= videoMids.count {
+                        print("DEBUG: [MediaGridView] All videos finished, restarting from beginning")
+                        videoManager.currentVideoIndex = 0
+                        videoManager.saveCurrentIndex(for: parentTweet.mid)
+                    }
+                    
+                    let videoCount = videoMids.count
+                    let videoWord = videoCount == 1 ? "video" : "videos"
+                    print("DEBUG: [MediaGridView] Setup sequential playback for \(videoCount) \(videoWord) at index \(videoManager.currentVideoIndex)")
                 }
-                
-                let videoCount = videoMids.count
-                let videoWord = videoCount == 1 ? "video" : "videos"
-                print("DEBUG: [MediaGridView] Setup sequential playback for \(videoCount) \(videoWord) at index \(videoManager.currentVideoIndex)")
             }
             
             // Start media loading if this grid contains videos or audio
@@ -526,8 +531,18 @@ struct MediaGridView: View {
                     
                     // Check if this tweet should load media based on VideoLoadingManager
                     let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
-                    if shouldLoadVideo != shouldLoad {
-                        shouldLoadVideo = shouldLoad
+                    
+                    // CRITICAL: Only allow shouldLoadVideo to change from false to true
+                    // Never change from true to false to prevent violent recomposition when scrolling up
+                    // This keeps already-loaded videos loaded, preventing layout instability
+                    if !shouldLoadVideo && shouldLoad {
+                        // Allow enabling loading
+                        shouldLoadVideo = true
+                    } else if shouldLoadVideo && !shouldLoad {
+                        // Prevent disabling loading for already-loaded videos
+                        // This prevents recomposition when scrolling up past retweets with multiple videos
+                        // Videos will stay loaded but paused, which is fine
+                        print("DEBUG: [MediaGridView] Keeping shouldLoadVideo=true for \(parentTweet.mid) to prevent recomposition (already loaded)")
                     }
                 }
             }

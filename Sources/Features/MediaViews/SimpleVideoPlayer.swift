@@ -1861,6 +1861,14 @@ struct SimpleVideoPlayer: View {
         removePlayerObservers()
         setupPlayerObservers(player)
         
+        // CRITICAL: Only increment representableId if player actually changed
+        // This prevents unnecessary view recreation and recomposition during normal scrolling
+        let playerChanged = self.player !== player
+        if playerChanged {
+            self.representableId += 1 // Force VideoPlayerRepresentable to recreate only when player changes
+            self.viewConfigTimestamp = Date().timeIntervalSince1970 // Force unique view ID
+        }
+        
         // CRITICAL: Always update state, even if same player instance
         // This ensures the view's player binding is set when reusing cached players
         self.player = player
@@ -1870,8 +1878,6 @@ struct SimpleVideoPlayer: View {
             self.loadingState = .loading  // Show spinner while video loads
         }
         self.playbackState = .notStarted
-        self.representableId += 1 // Force VideoPlayerRepresentable to recreate
-        self.viewConfigTimestamp = Date().timeIntervalSince1970 // Force unique view ID
         
         // Cache player state in VideoStateCache for sharing (MediaCell only, NOT TweetDetail or MediaBrowser)
         // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
@@ -2966,14 +2972,30 @@ struct VideoManagerObserverModifier: ViewModifier {
     let mid: String
     let mode: Mode
     let onVideoIndexChanged: (Bool) -> Void
+    @State private var lastShouldAutoPlay: Bool? = nil
     
     func body(content: Content) -> some View {
         if let videoManager = videoManager {
             content
                 .onReceive(videoManager.$currentVideoIndex) { _ in
                     // When currentVideoIndex changes, re-evaluate autoPlay state
+                    // Only trigger if the result actually changed to prevent unnecessary recomposition
                     if mode == .mediaCell {
                         let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
+                        // Only call callback if the value actually changed
+                        if lastShouldAutoPlay != shouldAutoPlay {
+                            lastShouldAutoPlay = shouldAutoPlay
+                            onVideoIndexChanged(shouldAutoPlay)
+                        }
+                    }
+                }
+                .onReceive(videoManager.$videoMids) { _ in
+                    // Also listen to videoMids changes (when sequence changes)
+                    // Force re-evaluation when sequence changes
+                    if mode == .mediaCell {
+                        let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
+                        // Always update when sequence changes (videoMids changed)
+                        lastShouldAutoPlay = shouldAutoPlay
                         onVideoIndexChanged(shouldAutoPlay)
                     }
                 }

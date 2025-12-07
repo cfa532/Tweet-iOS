@@ -212,14 +212,14 @@ class VideoManager: ObservableObject {
         // MediaGrid always uses sequential playback (even for single videos)
         // Only play the video at the current index in the sequence
         guard currentVideoIndex >= 0 && currentVideoIndex < videoMids.count else { 
-            print("DEBUG: [VideoManager] Invalid currentVideoIndex: \(currentVideoIndex), videoMids count: \(videoMids.count)")
+            // Only log if this is unexpected (not during normal state transitions)
+            // Suppress logging during normal setup/teardown to reduce noise
             return false 
         }
         
         let shouldPlay = videoMids[currentVideoIndex] == mid
-        let videoCount = videoMids.count
-        let videoWord = videoCount == 1 ? "video" : "videos"
-        print("DEBUG: [VideoManager] Sequential playback (\(videoCount) \(videoWord)) - video \(mid) should play: \(shouldPlay) (current index: \(currentVideoIndex))")
+        // Removed verbose logging - this function is called very frequently
+        // and causes performance issues and recomposition
         return shouldPlay
     }
     
