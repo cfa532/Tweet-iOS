@@ -1,5 +1,8 @@
 # Sequential Video Playback Scrollback Fix (December 7, 2025)
 
+> **⚠️ DEPRECATED**: This document has been consolidated into `SEQUENTIAL_VIDEO_PLAYBACK_COMPLETE.md`.  
+> Please refer to that document for the most up-to-date information.
+
 **Issue**: Sequential video playback works only once. When scrolling away and back to the media grid, only the first video plays - the second video never starts.
 
 **Affected Component**: `SimpleVideoPlayer.swift`

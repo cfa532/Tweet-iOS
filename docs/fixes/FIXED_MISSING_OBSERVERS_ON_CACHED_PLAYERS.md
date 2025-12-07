@@ -1,5 +1,8 @@
 # Fixed Missing Observers on Cached Players (December 7, 2025)
 
+> **⚠️ DEPRECATED**: This document has been consolidated into `SEQUENTIAL_VIDEO_PLAYBACK_COMPLETE.md`.  
+> Please refer to that document for the most up-to-date information.
+
 **Problem**: Sequential video playback worked on the first round but failed on the second round. The second video never played after the first video finished.
 
 ## Root Cause

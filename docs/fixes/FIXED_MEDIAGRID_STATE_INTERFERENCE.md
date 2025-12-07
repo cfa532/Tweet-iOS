@@ -1,5 +1,8 @@
 # Fixed MediaGrid State Interference (December 7, 2025)
 
+> **⚠️ DEPRECATED**: This document has been consolidated into `SEQUENTIAL_VIDEO_PLAYBACK_COMPLETE.md`.  
+> Please refer to that document for the most up-to-date information.
+
 **Problem**: Multiple `MediaGrid` views were interfering with each other's sequential playback state, causing videos to reset unexpectedly and state not being saved properly.
 
 ## Root Cause

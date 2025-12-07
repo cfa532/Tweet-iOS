@@ -1,5 +1,8 @@
 # Removed isSequentialPlaybackEnabled Flag (December 7, 2025)
 
+> **⚠️ DEPRECATED**: This document has been consolidated into `SEQUENTIAL_VIDEO_PLAYBACK_COMPLETE.md`.  
+> Please refer to that document for the most up-to-date information.
+
 **Change**: Removed the `isSequentialPlaybackEnabled` boolean flag - it was redundant since MediaGrid always does sequential playback.
 
 ## Why It Was Unnecessary

@@ -1,5 +1,8 @@
 # Unified Sequential Video Logic (December 7, 2025)
 
+> **⚠️ DEPRECATED**: This document has been consolidated into `SEQUENTIAL_VIDEO_PLAYBACK_COMPLETE.md`.  
+> Please refer to that document for the most up-to-date information.
+
 **Change**: Unified video playback logic - single videos and multiple videos now use the same algorithm.
 
 ## Previous Approach (Inconsistent)

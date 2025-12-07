@@ -1,5 +1,8 @@
 # Sequential Video Playback - Complete Fix Summary (December 7, 2025)
 
+> **⚠️ DEPRECATED**: This document has been consolidated into `SEQUENTIAL_VIDEO_PLAYBACK_COMPLETE.md`.  
+> Please refer to that document for the most up-to-date information.
+
 This document summarizes all the fixes applied to make sequential video playback work correctly in MediaGrid.
 
 ## Problem Statement
