@@ -2150,6 +2150,15 @@ struct SimpleVideoPlayer: View {
                         
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
+                        
+                        // CRITICAL: If video was waiting to play, check playback conditions now
+                        // This handles case where video became approved but was still loading
+                        if self.currentAutoPlay && self.isVisible && self.mode == .mediaCell {
+                            DispatchQueue.main.async {
+                                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
+                            }
+                        }
+                        
                         // Keep observer active to detect stalls - it will be cleaned up when view disappears
                     } else if hasBufferedData && bufferedDurationAhead < firstFrameMinimumBuffer && loadingState.isLoading {
                         NSLog("⏳ [BUFFER DATA] Waiting for more data for \(mid) (\(String(format: "%.2f", bufferedDurationAhead))s buffered)...")
@@ -2443,14 +2452,35 @@ struct SimpleVideoPlayer: View {
             AudioSessionManager.shared.activateForVideoPlayback()
             
             // CRITICAL: Always ensure muteState is correct before playing
-            // For MediaCell, always respect global muteState
+            // For MediaCell, always respect global mute state
             if mode == .mediaCell, let player = player {
                 player.isMuted = MuteState.shared.isMuted
                 NSLog("🔇 [PLAYER MUTE] checkPlaybackConditions - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
             }
             
-            // Check if video is at end before playing - rewind if needed
-            if playbackState.hasFinished || isVideoAtEnd(player!) {
+            // CRITICAL: Check actual player position before playing
+            let currentTime = player!.currentTime().seconds
+            let duration = player!.currentItem?.duration.seconds ?? 0
+            let atEnd = isVideoAtEnd(player!)
+            NSLog("🔍 [PLAYBACK CHECK] Video \(mid): playbackState=\(playbackState), time=\(String(format: "%.2f", currentTime))s/\(String(format: "%.2f", duration))s, atEnd=\(atEnd)")
+            
+            // CRITICAL: If video is at or near the end, rewind it FIRST
+            // Do this synchronously to ensure it's done before playing
+            if atEnd || currentTime > duration - 0.5 {
+                NSLog("🔄 [PLAYBACK REWIND] Video at end, rewinding to start before playing: \(mid)")
+                player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                playbackState = .notStarted
+                // Small delay to ensure seek completes
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    if self.mode == .mediaBrowser {
+                        self.playbackState = .playing
+                    } else {
+                        self.player?.play()
+                        self.playbackState = .playing
+                        NSLog("▶️ [PLAYBACK] Playing after rewind: \(self.mid)")
+                    }
+                }
+            } else if playbackState.hasFinished {
                 player?.seek(to: .zero) { finished in
                     if finished {
                         self.playbackState = .notStarted
