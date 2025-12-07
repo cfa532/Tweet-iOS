@@ -8,15 +8,26 @@
 import SwiftUI
 import AVKit
 
-struct MediaGridView: View {
+struct MediaGridView: View, Equatable {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
     let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
     let isEmbedded: Bool // Flag to indicate this is an embedded tweet (prevents video loading)
     let maxImages: Int = 4
+    
+    // Equatable conformance to help SwiftUI reuse views and prevent unnecessary recomposition
+    static func == (lhs: MediaGridView, rhs: MediaGridView) -> Bool {
+        return lhs.parentTweet.mid == rhs.parentTweet.mid &&
+               lhs.attachments.count == rhs.attachments.count &&
+               lhs.attachments.map { $0.mid } == rhs.attachments.map { $0.mid } &&
+               lhs.visibleTweetId == rhs.visibleTweetId &&
+               lhs.isEmbedded == rhs.isEmbedded
+    }
     @State private var shouldLoadVideo = true
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
+    @State private var hasSetupSequentialPlayback = false // Track if we've already set up sequential playback
+    @State private var hasInitialized = false // Track if we've done initial setup
     @StateObject private var videoManager = VideoManager()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
@@ -455,6 +466,7 @@ struct MediaGridView: View {
         .aspectRatio(gridAspectRatio, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8)) // Add rounded corners to media grid
         .contentShape(Rectangle())
+        .id("mediagrid_\(parentTweet.mid)") // Stable identity to prevent unnecessary recomposition
         .overlay(alignment: .bottomTrailing) {
             // Show mute button only when there's exactly one video attachment
             if attachments.count == 1,
@@ -466,7 +478,16 @@ struct MediaGridView: View {
             }
         }
         .onAppear {
-            // Mark the grid as visible
+            // CRITICAL: If already initialized, do NOTHING to prevent recomposition
+            // This is the key to smooth scrolling - once a retweet is rendered, it stays rendered
+            // No state changes, no checks, no work - just mark as visible
+            if hasInitialized {
+                isVisible = true
+                return
+            }
+            
+            // Mark as initialized immediately to prevent any future work
+            hasInitialized = true
             isVisible = true
             
             // Simulator video playback disabled - uncomment to re-enable
@@ -488,28 +509,28 @@ struct MediaGridView: View {
             // This preserves state when multiple MediaGrids exist during scrolling
             let isSwitchingVideoSet = videoManager.videoMids != videoMids && !videoManager.videoMids.isEmpty
             if isSwitchingVideoSet {
-                print("DEBUG: [MediaGridView] Switching video set, stopping current playback")
                 videoManager.stopSequentialPlayback()
+                hasSetupSequentialPlayback = false // Reset flag when switching
             }
             
             // Setup sequential playback for all videos (1 or more)
             // Single video is just sequential playback with 1 item
-            // Only setup if not already set up for this exact sequence to prevent duplicate calls
+            // CRITICAL: Only setup if not already set up for this exact sequence to prevent duplicate calls
+            // This prevents recomposition when scrolling up past retweets
             if videoMids.count >= 1 {
                 let alreadySetup = videoManager.videoMids == videoMids && videoManager.currentVideoIndex >= 0
-                if !alreadySetup {
+                if !alreadySetup && !hasSetupSequentialPlayback {
                     videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                    hasSetupSequentialPlayback = true
                     
                     // If all videos were finished (saved index >= count), restart from beginning
                     if videoManager.currentVideoIndex >= videoMids.count {
-                        print("DEBUG: [MediaGridView] All videos finished, restarting from beginning")
                         videoManager.currentVideoIndex = 0
                         videoManager.saveCurrentIndex(for: parentTweet.mid)
                     }
-                    
-                    let videoCount = videoMids.count
-                    let videoWord = videoCount == 1 ? "video" : "videos"
-                    print("DEBUG: [MediaGridView] Setup sequential playback for \(videoCount) \(videoWord) at index \(videoManager.currentVideoIndex)")
+                } else if alreadySetup {
+                    // Already set up - mark as done to prevent future checks
+                    hasSetupSequentialPlayback = true
                 }
             }
             
@@ -519,44 +540,40 @@ struct MediaGridView: View {
             let hasMedia = hasVideos || hasAudio
             
             if hasMedia {
-                // CRITICAL: Disable video loading for embedded tweets to prevent layout instability
-                // Embedded tweets are small and loading multiple videos simultaneously causes layout shifts
-                if isEmbedded {
-                    shouldLoadVideo = false
-                    print("DEBUG: [MediaGridView] Embedded tweet detected - disabling video loading for \(parentTweet.mid)")
-                } else {
-                    // Register this tweet as containing media (videos or audio)
-                    // This is important for tweets with multiple attachments to be tracked
-                    videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
-                    
-                    // Check if this tweet should load media based on VideoLoadingManager
-                    let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
-                    
-                    // CRITICAL: Only allow shouldLoadVideo to change from false to true
-                    // Never change from true to false to prevent violent recomposition when scrolling up
-                    // This keeps already-loaded videos loaded, preventing layout instability
-                    if !shouldLoadVideo && shouldLoad {
-                        // Allow enabling loading
-                        shouldLoadVideo = true
-                    } else if shouldLoadVideo && !shouldLoad {
-                        // Prevent disabling loading for already-loaded videos
-                        // This prevents recomposition when scrolling up past retweets with multiple videos
-                        // Videos will stay loaded but paused, which is fine
-                        print("DEBUG: [MediaGridView] Keeping shouldLoadVideo=true for \(parentTweet.mid) to prevent recomposition (already loaded)")
+                    // CRITICAL: Disable video loading for embedded tweets to prevent layout instability
+                    // Embedded tweets are small and loading multiple videos simultaneously causes layout shifts
+                    if isEmbedded {
+                        shouldLoadVideo = false
+                    } else {
+                        // Register this tweet as containing media (videos or audio)
+                        // This is important for tweets with multiple attachments to be tracked
+                        videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                        
+                        // Check if this tweet should load media based on VideoLoadingManager
+                        // CRITICAL: Only check if shouldLoadVideo is false to avoid unnecessary state checks
+                        // This prevents recomposition when scrolling up past already-loaded retweets
+                        if !shouldLoadVideo {
+                            let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
+                            if shouldLoad {
+                                // Allow enabling loading
+                                shouldLoadVideo = true
+                            }
+                        }
+                        // If shouldLoadVideo is already true, don't check or change it
+                        // This keeps already-loaded videos loaded, preventing layout instability
                     }
-                }
             }
         }
         .onDisappear {
-            // Mark the grid as not visible
+            // CRITICAL: Only update visibility, don't do any other work
+            // This prevents state changes that cause recomposition when scrolling
+            // State saving is handled by SimpleVideoPlayer's handleOnDisappear
             isVisible = false
             
-            // Save current video index to resume later
+            // Save current video index to resume later (only if we have valid state)
+            // Do this silently without logging to reduce overhead
             if videoManager.currentVideoIndex >= 0 && !videoManager.videoMids.isEmpty {
-                print("DEBUG: [MediaGridView] onDisappear - Saving state for tweet \(parentTweet.mid), index: \(videoManager.currentVideoIndex)")
                 videoManager.saveCurrentIndex(for: parentTweet.mid)
-            } else {
-                print("DEBUG: [MediaGridView] onDisappear - NOT saving state for tweet \(parentTweet.mid), currentVideoIndex: \(videoManager.currentVideoIndex), videoMids.isEmpty: \(videoManager.videoMids.isEmpty)")
             }
             
             // Don't stop sequential playback state - preserve it so videos resume correctly when scrolling back

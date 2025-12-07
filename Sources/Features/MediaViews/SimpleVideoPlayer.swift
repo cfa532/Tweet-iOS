@@ -1719,17 +1719,13 @@ struct SimpleVideoPlayer: View {
         // Restore the cached player (AFTER setting mute state and observers)
         self.player = cachedState.player
         
-        // CRITICAL: Always increment representableId when restoring from cache for MediaCell
-        // This ensures the AVPlayerLayer is properly reattached, preventing black screens
-        // Even if it's the same player object, the layer needs to be refreshed to ensure proper attachment
-        // This is especially important for retweets where timing issues can cause black screens
-        if mode == .mediaCell {
+        // CRITICAL: Only increment representableId when player actually changed
+        // This prevents unnecessary view recreation and recomposition that causes jumping
+        // The AVPlayerLayerView.updateUIView will handle layer reattachment for the same player
+        // Only force recreation when player object actually changes
+        if playerChanged && mode == .mediaCell {
             self.representableId += 1
-            if playerChanged {
-                print("DEBUG: [VIDEO CACHE] Player changed, incremented representableId to \(representableId)")
-            } else {
-                print("DEBUG: [VIDEO CACHE] Same player restored, incremented representableId to \(representableId) to refresh layer")
-            }
+            print("DEBUG: [VIDEO CACHE] Player changed, incremented representableId to \(representableId)")
         }
         
         // Ensure the player is also cached in SharedAssetCache for consistency
@@ -2953,30 +2949,20 @@ struct AVPlayerLayerView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         guard let playerView = uiView as? PlayerView else { return }
         
-        // CRITICAL: Always detach and re-attach player to ensure proper layer connection
-        // This is especially important for retweets where timing issues can cause black screens
-        // Even if it's the same player, reattaching ensures the layer is properly connected
         let currentPlayer = playerView.playerLayer.player
+        
+        // Only update if player actually changed to prevent unnecessary layer operations
+        // This reduces recomposition and jumping when scrolling
         if currentPlayer !== player {
             // Different player - detach old, attach new
             playerView.playerLayer.player = nil
             playerView.playerLayer.player = player
-        } else if currentPlayer != nil {
-            // Same player but ensure layer is properly connected
-            // Force a refresh by briefly detaching and reattaching
-            // This fixes black screen issues in retweets where layer might be stale
-            playerView.playerLayer.player = nil
-            playerView.playerLayer.player = player
-        } else {
-            // No current player - just attach
+        } else if currentPlayer == nil && player != nil {
+            // No current player but we have one - attach it
             playerView.playerLayer.player = player
         }
-        
-        // Ensure layer is ready to display
-        if let playerItem = player.currentItem, playerItem.status == .readyToPlay {
-            // Player is ready - ensure layer displays
-            playerView.playerLayer.setNeedsDisplay()
-        }
+        // If same player, don't do anything - layer is already connected
+        // This prevents unnecessary operations that cause recomposition
     }
     
     class PlayerView: UIView {
