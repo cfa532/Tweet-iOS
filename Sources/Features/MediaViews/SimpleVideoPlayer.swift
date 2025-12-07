@@ -165,6 +165,7 @@ struct SimpleVideoPlayer: View {
     @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
     @State private var viewConfigTimestamp: TimeInterval = 0 // Timestamp when view was last configured
     @State private var progressiveBufferTargetIndex: Int = 0
+    @State private var hasInitialized = false // Track if player has been initialized to prevent recomposition when scrolling
     
     private let progressiveBufferTargets: [Double] = [8.0, 12.0, 18.0, 24.0, 30.0]
     /// Minimum buffered seconds required before we consider the first frame renderable.
@@ -357,6 +358,12 @@ struct SimpleVideoPlayer: View {
                 // Player item is failed but not marked as failed yet - just log and continue
                 print("DEBUG: [VIDEO APPEAR] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
             }
+            
+            // CRITICAL: If player is already loaded, mark as initialized to prevent recomposition
+            // This is key for smooth scrolling - once initialized, skip unnecessary work
+            if loadingState.isLoaded && !hasInitialized {
+                hasInitialized = true
+            }
         }
         
         // Set up player if needed
@@ -367,6 +374,9 @@ struct SimpleVideoPlayer: View {
                 loadingState = .idle
             }
             setupPlayer()
+        } else if player != nil && loadingState.isLoaded && !hasInitialized {
+            // Player exists and is loaded - mark as initialized
+            hasInitialized = true
         }
     }
     
@@ -544,16 +554,28 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleAutoPlayChange(shouldAutoPlay: Bool) {
-        // Handle autoPlay state changes (reactive to VideoManager)  
+        // Handle autoPlay state changes (reactive to VideoManager)
         // DON'T pause here - shared players might be in use by fullscreen/detail
         // Let visibility changes and VideoManager's sequential playback handle pausing
         if mode == .mediaCell {
-            NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] MediaCell autoPlay changed to \(shouldAutoPlay) for \(mid)")
+            // CRITICAL: If already initialized and player is set up, skip work to prevent recomposition
+            // This is key for smooth scrolling - once a video is initialized, don't recompose it
+            if hasInitialized && player != nil && loadingState.isLoaded {
+                // Only update if the playback state actually needs to change
+                let currentShouldPlay = shouldAutoPlay && isVisible
+                let isCurrentlyPlaying = (player?.rate ?? 0) > 0
+                
+                // If state matches, do nothing to prevent recomposition
+                if currentShouldPlay == isCurrentlyPlaying {
+                    return
+                }
+            }
+            
             // Only check playback conditions, don't pause
             // Pausing here interferes with shared players used by fullscreen/detail
             checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
         } else {
-            NSLog("DEBUG: [VIDEO AUTOPLAY CHANGE] Ignoring VideoManager state change for \(mode) mode \(mid)")
+            // Ignore for other modes
         }
     }
     
@@ -648,6 +670,10 @@ struct SimpleVideoPlayer: View {
                     if loadingState.isLoading {
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
+                        // Mark as initialized to prevent recomposition when scrolling
+                        if mode == .mediaCell {
+                            hasInitialized = true
+                        }
                     }
                     
                     // Check if should auto-play
@@ -1784,6 +1810,12 @@ struct SimpleVideoPlayer: View {
             // Update state
             let isReadyForDisplay = playerItem.status == .readyToPlay || hasBufferedData
             self.loadingState = isReadyForDisplay ? .loaded : .loading
+            
+            // CRITICAL: Mark as initialized when successfully loaded from cache
+            // This prevents recomposition when scrolling back into view
+            if isReadyForDisplay && mode == .mediaCell {
+                self.hasInitialized = true
+            }
             self.playbackState = .notStarted
         }
         
@@ -2158,6 +2190,11 @@ struct SimpleVideoPlayer: View {
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
                         
+                        // Mark as initialized to prevent recomposition when scrolling
+                        if mode == .mediaCell {
+                            hasInitialized = true
+                        }
+
                         // CRITICAL: If video was waiting to play, check playback conditions now
                         // This handles case where video became approved but was still loading
                         if self.currentAutoPlay && self.isVisible && self.mode == .mediaCell {
@@ -2183,6 +2220,10 @@ struct SimpleVideoPlayer: View {
                 if hasBufferedData {
                     loadingState = .loaded
                     retryAttempts = 0  // Reset retry counter on successful load
+                    // Mark as initialized to prevent recomposition when scrolling
+                    if mode == .mediaCell {
+                        hasInitialized = true
+                    }
                     NSLog("🎬 [INITIAL CHECK] Hiding spinner immediately for \(mid)")
                 } else {
                     NSLog("⏳ [INITIAL CHECK] Ready but waiting for buffer data for \(mid)")
@@ -2957,7 +2998,7 @@ struct AVPlayerLayerView: UIViewRepresentable {
             // Different player - detach old, attach new
             playerView.playerLayer.player = nil
             playerView.playerLayer.player = player
-        } else if currentPlayer == nil && player != nil {
+        } else if playerView.playerLayer.player == nil {
             // No current player but we have one - attach it
             playerView.playerLayer.player = player
         }
@@ -2983,6 +3024,7 @@ struct VideoManagerObserverModifier: ViewModifier {
     let mode: Mode
     let onVideoIndexChanged: (Bool) -> Void
     @State private var lastShouldAutoPlay: Bool? = nil
+    @State private var lastVideoMids: [String] = []
     
     func body(content: Content) -> some View {
         if let videoManager = videoManager {
@@ -2999,14 +3041,17 @@ struct VideoManagerObserverModifier: ViewModifier {
                         }
                     }
                 }
-                .onReceive(videoManager.$videoMids) { _ in
+                .onReceive(videoManager.$videoMids) { newVideoMids in
                     // Also listen to videoMids changes (when sequence changes)
-                    // Force re-evaluation when sequence changes
-                    if mode == .mediaCell {
+                    // Only trigger if sequence actually changed to prevent unnecessary recomposition
+                    if mode == .mediaCell && newVideoMids != lastVideoMids {
+                        lastVideoMids = newVideoMids
                         let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
-                        // Always update when sequence changes (videoMids changed)
-                        lastShouldAutoPlay = shouldAutoPlay
-                        onVideoIndexChanged(shouldAutoPlay)
+                        // Only update if value changed
+                        if lastShouldAutoPlay != shouldAutoPlay {
+                            lastShouldAutoPlay = shouldAutoPlay
+                            onVideoIndexChanged(shouldAutoPlay)
+                        }
                     }
                 }
         } else {
