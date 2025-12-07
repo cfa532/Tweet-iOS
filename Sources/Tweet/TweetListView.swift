@@ -705,7 +705,7 @@ struct TweetListContentView<RowView: View>: View {
                 } else {
                     // Small spacer at bottom when no more tweets
                     Color.clear
-                        .frame(height: 60)
+                        .frame(height: 80)
                 }
             }
         }
