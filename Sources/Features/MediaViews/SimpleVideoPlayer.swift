@@ -691,14 +691,9 @@ struct SimpleVideoPlayer: View {
                 )
                 resetProgressiveBufferTarget(for: player.currentItem)
             }
-
-            if mode == .mediaCell {
-                if let player = player, player.rate != 0 {
-                    NSLog("DEBUG: [VIDEO VISIBILITY] MediaCell hidden - pausing playback for \(mid)")
-                    player.pause()
-                    playbackState = .paused
-                }
-            }
+            
+            // NOTE: Pausing is handled in handleOnDisappear() to avoid conflicts
+            // Do NOT pause here - let onDisappear handle it when the view actually disappears
         }
     }
     
