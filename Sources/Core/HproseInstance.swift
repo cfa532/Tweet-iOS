@@ -3502,13 +3502,28 @@ final class HproseInstance: ObservableObject {
                     scaleFilter = "scale=-2:\(targetResolution)"
                 }
                 
+                // Calculate bitrate based on target resolution (720p = 1500k, proportional for others)
+                let bitrateKbps: Int
+                if targetResolution >= 720 {
+                    bitrateKbps = 1500
+                } else if targetResolution >= 480 {
+                    // 480p = 1500 * (480/720) = 1000k
+                    bitrateKbps = 1000
+                } else if targetResolution >= 360 {
+                    // 360p = 1500 * (360/720) = 750k
+                    bitrateKbps = 750
+                } else {
+                    // Lower resolutions = 1500 * (resolution/720)
+                    bitrateKbps = Int(1500.0 * Double(targetResolution) / 720.0)
+                }
+                
                 let command = """
                     -i "\(inputURL.path)" \
                     -c:v libx264 \
                     -c:a aac \
                     -vf "\(scaleFilter)" \
                     -preset fast \
-                    -crf 23 \
+                    -b:v \(bitrateKbps)k \
                     -b:a 128k \
                     -movflags +faststart \
                     -metadata:s:v:0 rotate=0 \
