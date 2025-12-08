@@ -1159,6 +1159,53 @@ struct SimpleVideoPlayer: View {
             return
         }
         
+        // CRITICAL: Double-check player is actually ready after short backgrounds
+        // Sometimes players pass isPlayerBroken() but are still not ready to play
+        // This can happen if currentItem was cleared by AppDelegate but player object still exists
+        if playerItem.status == .unknown {
+            print("⚠️ [VIDEO RECOVERY] Player item status is unknown - treating as potentially broken, recreating for \(mid)")
+            // Unknown status after background usually means player was cleared - recreate it
+            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                observerPlayer.removeTimeObserver(observer)
+            }
+            timeObserver = nil
+            timeObserverPlayer = nil
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            let wasPlaying = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            player.pause()
+            self.player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .tweetDetail || mode == .mediaBrowser)
+            if shouldRecreate {
+                setupPlayer()
+            }
+            return
+        }
+        
+        // CRITICAL: Final safety check before reattaching - currentItem might have been cleared
+        // by AppDelegate's clearVideoPlayersForBackgroundRecovery() after isPlayerBroken() check
+        guard player.currentItem != nil else {
+            print("⚠️ [VIDEO RECOVERY] Player currentItem became nil after health check - recreating for \(mid)")
+            // Player was cleared by AppDelegate - recreate it
+            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                observerPlayer.removeTimeObserver(observer)
+            }
+            timeObserver = nil
+            timeObserverPlayer = nil
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            let wasPlaying = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            player.pause()
+            self.player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+            let shouldRecreate = (shouldLoadVideo || wasPlaying || mode == .tweetDetail || mode == .mediaBrowser)
+            if shouldRecreate {
+                setupPlayer()
+            }
+            return
+        }
+        
         // CRITICAL FIX: For MediaCell after short backgrounds, always force view refresh
         // iOS invalidates video layers unpredictably, even when player object is intact
         // Force view recreation to ensure video layer is fresh
@@ -1182,8 +1229,37 @@ struct SimpleVideoPlayer: View {
             let currentTime = player.currentTime()
             let timeDiff = abs(CMTimeGetSeconds(cachedState.time) - CMTimeGetSeconds(currentTime))
             
-            if timeDiff > 0.5 {
-                player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
+            // Only seek if player is ready and time difference is significant
+            if timeDiff > 0.5 && playerItem.status == .readyToPlay {
+                // Use tolerance for better reliability after background recovery
+                let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+                player.seek(to: cachedState.time, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
+                    if finished {
+                        print("✅ [VIDEO RECOVERY] Seek completed for \(self.mid)")
+                    } else {
+                        print("⚠️ [VIDEO RECOVERY] Seek did not finish for \(self.mid) - player may not be ready")
+                    }
+                }
+            } else if timeDiff > 0.5 {
+                // Player not ready yet - wait for it to become ready before seeking
+                print("⏳ [VIDEO RECOVERY] Player not ready for seek (status: \(playerItem.status.rawValue)), will seek when ready")
+                Task { @MainActor in
+                    var attempts = 0
+                    while playerItem.status != .readyToPlay && attempts < 50 {
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                        attempts += 1
+                    }
+                    if playerItem.status == .readyToPlay {
+                        let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+                        player.seek(to: cachedState.time, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
+                            if finished {
+                                print("✅ [VIDEO RECOVERY] Seek completed after waiting for \(self.mid)")
+                            } else {
+                                print("⚠️ [VIDEO RECOVERY] Seek did not finish after waiting for \(self.mid)")
+                            }
+                        }
+                    }
+                }
             }
             
             // CRITICAL: Resume video if it was playing before backgrounding

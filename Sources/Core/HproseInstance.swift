@@ -4794,11 +4794,19 @@ final class HproseInstance: ObservableObject {
             let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
             let tweetJSON = String(data: jsonData, encoding: .utf8) ?? ""
             
+            // Capture appUser properties on main thread to avoid publishing warnings
+            let hostId = await MainActor.run {
+                self.appUser.hostIds?.first
+            }
+            let client = await MainActor.run {
+                self.appUser.hproseClient
+            }
+            
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
                 "version": "v2",
-                "hostid": appUser.hostIds?.first as Any,
+                "hostid": hostId as Any,
                 "tweet": tweetJSON
             ]
             
@@ -4806,7 +4814,7 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
             print("DEBUG: [uploadTweet] Tweet authorId: \(tweet.authorId), content: \(tweet.content ?? "nil"), attachments count: \(tweet.attachments?.count ?? 0)")
             
-            let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: ["add_tweet", params])
+            let rawResponse = client?.invoke("runMApp", withArgs: ["add_tweet", params])
             
             print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
             
