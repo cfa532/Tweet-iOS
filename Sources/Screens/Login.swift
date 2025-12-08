@@ -165,7 +165,8 @@ struct LoginView: View {
                 errorMessage = NSLocalizedString("Username & password are required.", comment: "Login error message")
                 return
             }
-            if let userId = try await hproseInstance.getUserId(username) {
+            // Use entry URL when calling getUserId during login
+            if let userId = try await hproseInstance.getUserId(username, baseUrl: HproseInstance.baseUrl) {
                 // Force fetch from server with empty baseUrl to ensure fresh data
                 // This prevents the issue where cached user with nil username is returned
                 if let user = try await hproseInstance.updateUserFromServer(userId, baseUrl: "") {

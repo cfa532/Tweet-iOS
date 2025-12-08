@@ -976,11 +976,24 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet not found", comment: "Tweet lookup error")])
     }
     
-    func getUserId(_ username: String) async throws -> String? {
+    func getUserId(_ username: String, baseUrl: URL? = nil) async throws -> String? {
         try await withRetry {
-            guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            let client: HproseClient
+            if let baseUrl = baseUrl {
+                // Use provided baseUrl to create a temporary client
+                let tempClient = HproseHttpClient()
+                tempClient.timeout = 300
+                tempClient.uri = baseUrl.appendingPathComponent("/webapi/").absoluteString
+                client = tempClient
+                defer { tempClient.close() }
+            } else {
+                // Use appUser's client (default behavior)
+                guard let appUserClient = appUser.hproseClient else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+                }
+                client = appUserClient
             }
+            
             let entry = "get_userid"
             let params = [
                 "aid": appId,
