@@ -764,9 +764,9 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // CRITICAL FIX: For MediaCell videos becoming visible after background,
-                // always force view refresh to prevent stale video layers
-                // This handles the case where player survived background but video layer is invalid
-                if mode == .mediaCell && !hasRecoveredThisCycle {
+                // only force view refresh if we actually went to background (not just screen lock/share sheet)
+                // This prevents unnecessary refreshes during normal scrolling that cause black flicker
+                if mode == .mediaCell && didEnterBackground && !hasRecoveredThisCycle {
                     print("✅ [VIDEO VISIBILITY] MediaCell becoming visible after background - forcing view refresh")
                     representableId += 1
                     hasRecoveredThisCycle = true  // Mark as recovered to avoid repeated refreshes
@@ -916,6 +916,51 @@ struct SimpleVideoPlayer: View {
             // willEnterForeground already called recoverFromBackground() which refreshed the view
             // No need to refresh again
         }
+        
+        // CRITICAL: Delayed health check after recovery
+        // Sometimes players appear healthy immediately after recovery but are actually broken
+        // Check again after a short delay to catch these cases
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+            
+            // Check if player is broken or stuck in loading
+            if let player = self.player, let playerItem = player.currentItem {
+                let isBroken = self.isPlayerBroken()
+                let isStuckLoading = self.loadingState.isLoading && playerItem.status == .readyToPlay
+                let hasError = playerItem.error != nil || player.error != nil
+                
+                if isBroken || isStuckLoading || hasError {
+                    print("⚠️ [VIDEO HEALTH CHECK] Player is broken/stuck after recovery for \(self.mid), recreating")
+                    
+                    // Clean up observers
+                    if let observer = self.timeObserver, let observerPlayer = self.timeObserverPlayer {
+                        observerPlayer.removeTimeObserver(observer)
+                    }
+                    self.timeObserver = nil
+                    self.timeObserverPlayer = nil
+                    
+                    // Remove from SharedAssetCache
+                    SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
+                    
+                    let wasPlaying = VideoStateCache.shared.getCachedState(for: self.mid)?.wasPlaying ?? false
+                    
+                    player.pause()
+                    self.player = nil
+                    self.loadingState = .idle
+                    self.playbackState = .notStarted
+                    
+                    // Recreate if needed
+                    let shouldRecreate = (self.shouldLoadVideo || wasPlaying || self.mode == .tweetDetail || self.mode == .mediaBrowser)
+                    if shouldRecreate {
+                        self.setupPlayer()
+                    }
+                } else if self.loadingState.isLoading && playerItem.status == .readyToPlay {
+                    // Player is ready but loadingState is stuck - fix it
+                    print("⚠️ [VIDEO HEALTH CHECK] LoadingState stuck at .loading but player is ready, fixing for \(self.mid)")
+                    self.loadingState = .loaded
+                }
+            }
+        }
     }
     
     /// SANITY CHECK: Detects if player is broken
@@ -936,7 +981,19 @@ struct SimpleVideoPlayer: View {
             return true
         }
         
-        // Check 3: Status is unknown (might be broken, but give it a chance)
+        // Check 3: Player item has an error (even if status isn't .failed yet)
+        if let error = playerItem.error {
+            print("⚠️ [SANITY CHECK] Player item has error: \(error.localizedDescription) for \(mid)")
+            return true
+        }
+        
+        // Check 4: Player has an error
+        if let error = player.error {
+            print("⚠️ [SANITY CHECK] Player has error: \(error.localizedDescription) for \(mid)")
+            return true
+        }
+        
+        // Check 5: Status is unknown (might be broken, but give it a chance)
         // Only consider unknown as broken if it's been a while since recovery
         if playerItem.status == .unknown {
             // Unknown status might be temporary - don't immediately mark as broken
@@ -945,7 +1002,7 @@ struct SimpleVideoPlayer: View {
             return false // Give it a chance
         }
         
-        // Check 4: For screen lock recovery, don't check loadedTimeRanges alone
+        // Check 6: For screen lock recovery, don't check loadedTimeRanges alone
         // iOS might temporarily clear this data after screen lock, but it will reload
         // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
         // This prevents false positives where player is healthy but temporarily has no ranges
@@ -956,7 +1013,7 @@ struct SimpleVideoPlayer: View {
             return true
         }
         
-        // Check 5: Progressive player is stalled
+        // Check 7: Progressive player is stalled
         if shouldForceProgressiveReload(player: player, item: playerItem) {
             NSLog("⚠️ [SANITY CHECK] Progressive player stalled, marking as broken for \(mid)")
             return true
@@ -1195,6 +1252,9 @@ struct SimpleVideoPlayer: View {
                 }
             }
         }
+        
+        // Reset background flag after recovery to prevent stale flags from affecting future visibility changes
+        didEnterBackground = false
         
         print("✅ [VIDEO RECOVERY] Player reattached - recovery complete for \(mid)")
     }

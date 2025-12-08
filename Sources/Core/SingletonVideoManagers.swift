@@ -132,6 +132,22 @@ extension VideoPlayerLifecycleManager {
                 clearBrokenPlayer()
             }
         }
+        
+        // CRITICAL: Delayed health check after recovery
+        // Sometimes players appear healthy immediately after recovery but are actually broken
+        // Check again after a short delay to catch these cases
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+            
+            guard let self = self else { return }
+            let managerName = String(describing: type(of: self))
+            
+            // Check if player is broken
+            if self.isPlayerBroken() {
+                NSLog("⚠️ [\(managerName)] Delayed health check: Player is broken after recovery, clearing")
+                self.clearBrokenPlayer()
+            }
+        }
     }
 }
 
@@ -916,6 +932,18 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return true
         }
         
+        // Check if player item has an error (even if status isn't .failed yet)
+        if let error = currentItem.error {
+            NSLog("DEBUG: [FullScreenVideoManager] Player item has error: \(error.localizedDescription) -> BROKEN")
+            return true
+        }
+        
+        // Check if player has an error
+        if let error = player.error {
+            NSLog("DEBUG: [FullScreenVideoManager] Player has error: \(error.localizedDescription) -> BROKEN")
+            return true
+        }
+        
         // For screen lock recovery, don't check loadedTimeRanges
         // iOS might temporarily clear this data, but it will reload
         // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
@@ -1283,11 +1311,23 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             return true
         }
         
+        // Check if player item has an error (even if status isn't .failed yet)
+        if let error = currentItem.error {
+            NSLog("DEBUG: [DetailVideoManager] Player item has error: \(error.localizedDescription) -> BROKEN")
+            return true
+        }
+        
+        // Check if player has an error
+        if let error = player.error {
+            NSLog("DEBUG: [DetailVideoManager] Player has error: \(error.localizedDescription) -> BROKEN")
+            return true
+        }
+        
         // For screen lock recovery, don't check loadedTimeRanges
         // iOS might temporarily clear this data, but it will reload
         // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
-        if currentItem.status == .readyToPlay && 
-           currentItem.loadedTimeRanges.isEmpty && 
+        if currentItem.status == .readyToPlay &&
+           currentItem.loadedTimeRanges.isEmpty &&
            !currentItem.duration.isValid {
             NSLog("DEBUG: [DetailVideoManager] Player item has no loaded data AND invalid duration -> BROKEN")
             return true

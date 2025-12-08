@@ -158,6 +158,7 @@ struct MediaCell: View, Equatable {
         }
         .onAppear {
             // Set visibility to true immediately when cell appears
+            // onAppear fires when any portion of the view becomes visible
             isVisible = true
             
             // Load image if not already loaded - ONLY for image attachments
@@ -169,7 +170,8 @@ struct MediaCell: View, Equatable {
             // Individual cells just track visibility for playback
         }
         .onDisappear {
-            // Set visibility to false when cell disappears
+            // Set visibility to false immediately when cell disappears
+            // onDisappear fires when the view is scrolled completely off screen
             isVisible = false
             
             // Cancel any ongoing preload tasks
