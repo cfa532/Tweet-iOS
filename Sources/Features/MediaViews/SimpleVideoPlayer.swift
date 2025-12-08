@@ -877,12 +877,14 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleWillResignActive() {
-        // CRITICAL: This handles BOTH screen lock AND app backgrounding
+        // CRITICAL: This handles BOTH screen lock AND app backgrounding AND share sheet
         // Screen lock: willResignActive → (locked) → didBecomeActive
         // App background: willResignActive → didEnterBackground → willEnterForeground → didBecomeActive
+        // Share sheet: willResignActive → (sheet shown) → didBecomeActive (when dismissed)
         print("DEBUG: [VIDEO RESIGN ACTIVE] App will resign active for \(mid), mode: \(mode)")
         
-        // Reset flags
+        // Reset flags to ensure recovery will run when app becomes active again
+        // This is critical for share sheet case where didEnterBackground might not fire
         hasRecoveredThisCycle = false
         didEnterBackground = false  // Reset - will be set to true if didEnterBackground fires
         
