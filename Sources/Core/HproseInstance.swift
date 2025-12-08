@@ -985,7 +985,7 @@ final class HproseInstance: ObservableObject {
                 tempClient.timeout = 300
                 tempClient.uri = baseUrl.appendingPathComponent("/webapi/").absoluteString
                 client = tempClient
-                defer { tempClient.close() }
+                do { tempClient.close() }
             } else {
                 // Use appUser's client (default behavior)
                 guard let appUserClient = appUser.hproseClient else {
