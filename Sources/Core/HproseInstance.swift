@@ -1806,6 +1806,13 @@ final class HproseInstance: ObservableObject {
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
+                        
+                        // Set HproseInstance.baseUrl to appUser's baseUrl after login
+                        if let userBaseUrl = loginUser.baseUrl {
+                            HproseInstance.baseUrl = userBaseUrl
+                            self.client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                            print("✅ [LOGIN] Set HproseInstance.baseUrl to appUser's baseUrl: \(userBaseUrl.absoluteString)")
+                        }
                     }
                     Task {
                         await self.populateUserLists(user: loginUser)
@@ -1827,6 +1834,13 @@ final class HproseInstance: ObservableObject {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         // Update appUser to the logged-in user
                         self.appUser = loginUser
+                        
+                        // Set HproseInstance.baseUrl to appUser's baseUrl after login
+                        if let userBaseUrl = loginUser.baseUrl {
+                            HproseInstance.baseUrl = userBaseUrl
+                            self.client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                            print("✅ [LOGIN] Set HproseInstance.baseUrl to appUser's baseUrl: \(userBaseUrl.absoluteString)")
+                        }
                     }
                     
                     // Populate fans and following lists for the logged-in user
