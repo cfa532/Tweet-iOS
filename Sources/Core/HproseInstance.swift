@@ -5754,32 +5754,67 @@ final class HproseInstance: ObservableObject {
             "mid": mid
         ]
         
-        return try await retryOperation(maxRetries: 3) {
-            let rawResponse = self.client.invoke("runMApp", withArgs: ["get_provider_ip", params])
-            guard rawResponse != nil else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ip: \(mid)"])
-            }
-            
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
-            var ipAddress: String? = nil
-            if let stringResponse = unwrappedResponse as? String {
-                ipAddress = stringResponse
-            } else if let dictResponse = unwrappedResponse as? [String: Any] {
-                ipAddress = dictResponse["data"] as? String
-            }
-            
-            guard let ipAddress = ipAddress else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format for get_provider_ip: \(mid)"])
-            }
-            
-            let trimmed = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Empty provider IP returned for user: \(mid)"])
-            }
-            
-            return trimmed
+        // Fetch the list of IP addresses from the backend
+        let rawResponse = self.client.invoke("runMApp", withArgs: ["get_provider_ips", params])
+        guard rawResponse != nil else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ips: \(mid)"])
         }
+        
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        // Parse the array of IP addresses
+        var ipAddresses: [String] = []
+        if let arrayResponse = unwrappedResponse as? [String] {
+            ipAddresses = arrayResponse
+        } else if let dictResponse = unwrappedResponse as? [String: Any],
+                  let dataArray = dictResponse["data"] as? [String] {
+            ipAddresses = dataArray
+        } else if let stringResponse = unwrappedResponse as? String {
+            // Fallback: single IP returned as string
+            ipAddresses = [stringResponse]
+        } else if let dictResponse = unwrappedResponse as? [String: Any],
+                  let dataString = dictResponse["data"] as? String {
+            // Fallback: single IP in dict format
+            ipAddresses = [dataString]
+        }
+        
+        // Filter and trim IP addresses
+        ipAddresses = ipAddresses
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        
+        guard !ipAddresses.isEmpty else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid provider IPs returned for user: \(mid)"])
+        }
+        
+        print("DEBUG: [getProviderIP] Retrieved \(ipAddresses.count) IP address(es) for user \(mid): \(ipAddresses)")
+        
+        // Try each IP address in sequence
+        var lastError: Error?
+        for (index, ipAddress) in ipAddresses.enumerated() {
+            do {
+                print("DEBUG: [getProviderIP] Attempting IP \(index + 1)/\(ipAddresses.count): \(ipAddress)")
+                
+                // Validate the IP address by attempting to construct a URL
+                let testUrlString = ipAddress.hasPrefix("http") ? ipAddress : "http://\(ipAddress)"
+                guard URL(string: testUrlString) != nil else {
+                    print("WARN: [getProviderIP] Skipping invalid IP address: \(ipAddress)")
+                    continue
+                }
+                
+                // For now, we return the first valid IP
+                // In a more sophisticated implementation, you could validate connectivity here
+                print("DEBUG: [getProviderIP] Successfully selected IP: \(ipAddress)")
+                return ipAddress
+                
+            } catch {
+                lastError = error
+                print("WARN: [getProviderIP] Failed to use IP \(ipAddress): \(error.localizedDescription)")
+            }
+        }
+        
+        // All IPs failed
+        throw lastError ?? NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed for user: \(mid)"])
     }
     
     /// Find IP addresses of given nodeId
