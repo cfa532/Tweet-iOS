@@ -5740,6 +5740,39 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected server response"])
     }
     
+    /// Resolves the first available IP from app initialization URLs
+    /// This is the fallback mechanism used during app initialization
+    /// - Parameter avoidInfiniteLoop: Internal flag to prevent recursive calls
+    /// - Returns: First valid IP address from app URLs, or nil if none found
+    private func resolveFirstIPFromAppUrls(avoidInfiniteLoop: Bool = false) async -> String? {
+        guard !avoidInfiniteLoop else {
+            print("DEBUG: [resolveFirstIPFromAppUrls] Avoiding infinite loop, returning nil")
+            return nil
+        }
+        
+        print("DEBUG: [resolveFirstIPFromAppUrls] Starting fallback IP resolution from app URLs")
+        
+        for url in preferenceHelper?.getAppUrls() ?? [] {
+            do {
+                let html = try await fetchHTML(from: url)
+                let paramData = Gadget.shared.extractParamMap(from: html)
+                
+                guard let addrs = paramData["addrs"] as? String else { continue }
+                
+                if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
+                    print("DEBUG: [resolveFirstIPFromAppUrls] Successfully resolved fallback IP: \(firstIp)")
+                    return firstIp
+                }
+            } catch {
+                print("DEBUG: [resolveFirstIPFromAppUrls] Error processing URL \(url): \(error)")
+                continue
+            }
+        }
+        
+        print("WARN: [resolveFirstIPFromAppUrls] Failed to resolve any IP from app URLs")
+        return nil
+    }
+    
     func getProviderIP(_ mid: String) async throws -> String? {
         // Safety check: never try to get provider IP for GUEST_ID
         if mid == Constants.GUEST_ID {
@@ -5784,6 +5817,15 @@ final class HproseInstance: ObservableObject {
             .filter { !$0.isEmpty }
         
         guard !ipAddresses.isEmpty else {
+            // If this is the appUser and we got no IPs, try the fallback mechanism
+            if mid == appUser.mid {
+                print("WARN: [getProviderIP] No provider IPs returned for appUser, trying fallback mechanism")
+                if let fallbackIP = await resolveFirstIPFromAppUrls(avoidInfiniteLoop: true) {
+                    print("DEBUG: [getProviderIP] Successfully resolved fallback IP for appUser: \(fallbackIP)")
+                    return fallbackIP
+                }
+            }
+            
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid provider IPs returned for user: \(mid)"])
         }
         
@@ -5792,28 +5834,31 @@ final class HproseInstance: ObservableObject {
         // Try each IP address in sequence
         var lastError: Error?
         for (index, ipAddress) in ipAddresses.enumerated() {
-            do {
-                print("DEBUG: [getProviderIP] Attempting IP \(index + 1)/\(ipAddresses.count): \(ipAddress)")
-                
-                // Validate the IP address by attempting to construct a URL
-                let testUrlString = ipAddress.hasPrefix("http") ? ipAddress : "http://\(ipAddress)"
-                guard URL(string: testUrlString) != nil else {
-                    print("WARN: [getProviderIP] Skipping invalid IP address: \(ipAddress)")
-                    continue
-                }
-                
-                // For now, we return the first valid IP
-                // In a more sophisticated implementation, you could validate connectivity here
-                print("DEBUG: [getProviderIP] Successfully selected IP: \(ipAddress)")
-                return ipAddress
-                
-            } catch {
-                lastError = error
-                print("WARN: [getProviderIP] Failed to use IP \(ipAddress): \(error.localizedDescription)")
+            print("DEBUG: [getProviderIP] Attempting IP \(index + 1)/\(ipAddresses.count): \(ipAddress)")
+            
+            // Validate the IP address by attempting to construct a URL
+            let testUrlString = ipAddress.hasPrefix("http") ? ipAddress : "http://\(ipAddress)"
+            guard URL(string: testUrlString) != nil else {
+                print("WARN: [getProviderIP] Skipping invalid IP address: \(ipAddress)")
+                continue
+            }
+            
+            // For now, we return the first valid IP
+            // In a more sophisticated implementation, you could validate connectivity here
+            print("DEBUG: [getProviderIP] Successfully selected IP: \(ipAddress)")
+            return ipAddress
+        }
+        
+        // All IPs failed - if this is the appUser, try the fallback mechanism
+        if mid == appUser.mid {
+            print("WARN: [getProviderIP] All provider IPs failed for appUser, trying fallback mechanism")
+            if let fallbackIP = await resolveFirstIPFromAppUrls(avoidInfiniteLoop: true) {
+                print("DEBUG: [getProviderIP] Successfully resolved fallback IP for appUser: \(fallbackIP)")
+                return fallbackIP
             }
         }
         
-        // All IPs failed
+        // All IPs failed and no fallback available
         throw lastError ?? NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed for user: \(mid)"])
     }
     
