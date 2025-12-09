@@ -379,23 +379,62 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         let hproseInstance = HproseInstance.shared
         
-        // Refresh provider IP in background (non-blocking)
+        // Refresh IP and appUser from server in background (non-blocking)
         Task.detached {
             do {
-                print("[AppDelegate] Refreshing appUser provider IP...")
+                print("[AppDelegate] Step 1: Resolving first IP from app URLs...")
                 
-                // Force IP re-evaluation by passing empty baseUrl
-                let refreshedUser = try await hproseInstance.fetchUser(appUser.mid, baseUrl: "")
-                print("[AppDelegate] Successfully refreshed appUser provider IP")
+                // First, resolve the first IP from app initialization URLs
+                guard let preferenceHelper = hproseInstance.preferenceHelper else {
+                    print("[AppDelegate] ⚠️ PreferenceHelper not available")
+                    return
+                }
                 
-                // Save updated user to cache if fetch was successful
-                if let refreshedUser = refreshedUser {
-                    TweetCacheManager.shared.saveUser(refreshedUser)
-                    print("[AppDelegate] Saved refreshed appUser to cache")
+                var firstIp: String?
+                for url in preferenceHelper.getAppUrls() {
+                    do {
+                        let (data, _) = try await URLSession.shared.data(from: URL(string: url)!)
+                        guard let html = String(data: data, encoding: .utf8) else { continue }
+                        
+                        let paramData = Gadget.shared.extractParamMap(from: html)
+                        guard let addrs = paramData["addrs"] as? String else { continue }
+                        
+                        if let resolvedIp = Gadget.shared.filterIpAddresses(addrs) {
+                            firstIp = resolvedIp
+                            print("[AppDelegate] ✅ Step 1 complete: Resolved first IP: \(resolvedIp)")
+                            break
+                        }
+                    } catch {
+                        print("[AppDelegate] Error processing URL \(url): \(error)")
+                        continue
+                    }
+                }
+                
+                guard let resolvedIp = firstIp else {
+                    print("[AppDelegate] ⚠️ Failed to resolve first IP, aborting refresh")
+                    return
+                }
+                
+                // Update HproseInstance.baseUrl with the resolved IP
+                await MainActor.run {
+                    HproseInstance.baseUrl = URL(string: "http://\(resolvedIp)")!
+                    hproseInstance.client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                    print("[AppDelegate] ✅ Updated HproseInstance.baseUrl to: \(resolvedIp)")
+                }
+                
+                // Step 2: Now refresh appUser from server
+                print("[AppDelegate] Step 2: Refreshing appUser from server...")
+                try await hproseInstance.refreshAppUserFromServer(forceIPRefresh: true)
+                print("[AppDelegate] ✅ Step 2 complete: Successfully refreshed appUser from server")
+                
+                // Save updated user to cache
+                await MainActor.run {
+                    TweetCacheManager.shared.saveUser(hproseInstance.appUser)
+                    print("[AppDelegate] ✅ Saved refreshed appUser to cache")
                 }
             } catch {
-                print("[AppDelegate] ⚠️ Failed to refresh appUser IP: \(error)")
-                // Non-fatal - we'll continue with cached IP and retry on next API call
+                print("[AppDelegate] ⚠️ Failed to refresh IP/appUser: \(error)")
+                // Non-fatal - we'll continue with cached data and retry on next API call
             }
         }
     }

@@ -53,10 +53,10 @@ final class HproseInstance: ObservableObject {
             // Always return the singleton instance for the current app user ID
             let user = User.getInstance(mid: _appUserId)
             
-            // Refresh appUser from server if expired (every 30 minutes) - but not for guest users
+            // Refresh appUser from server if user data is incomplete - but not for guest users
             // fetchUser will handle invalid users (nil username) automatically
-            // Note: hasExpired check removed from synchronous getter to prevent blocking
-            // Cache expiry is now handled in fetchUser() which is called async
+            // Note: This check is async to prevent blocking the getter
+            // Cache expiry is now handled when the app returns to foreground via AppDelegate
             if !user.isGuest && user.username == nil {
                 Task {
                     do {
@@ -130,7 +130,6 @@ final class HproseInstance: ObservableObject {
     
     private var lastInitializationAddresses: String?
     private var lastLoggedUpgradeDomain: String?
-    private var periodicRefreshTask: Task<Void, Never>?
     
     // MARK: - Helper Methods
     
@@ -4679,7 +4678,7 @@ final class HproseInstance: ObservableObject {
     /// - Parameter forceIPRefresh: If true, forces IP re-resolution by passing empty baseUrl. 
     ///   Should be true only during retries when network issues are suspected.
     ///   For normal refreshes after successful operations, use false to use existing baseUrl.
-    private func refreshAppUserFromServer(forceIPRefresh: Bool = false) async throws {
+    func refreshAppUserFromServer(forceIPRefresh: Bool = false) async throws {
         print("DEBUG: [HproseInstance] Refreshing appUser from server... (forceIPRefresh: \(forceIPRefresh))")
         
         guard !appUser.isGuest else {
@@ -4723,37 +4722,7 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    /// Start periodic refresh of appUser every 30 minutes
-    func startPeriodicAppUserRefresh() {
-        if periodicRefreshTask != nil {
-            return
-        }
-        
-        periodicRefreshTask = Task.detached(priority: .background) { [weak self] in
-            guard let self = self else { return }
-            defer { self.periodicRefreshTask = nil }
-            
-            print("DEBUG: [HproseInstance] Started periodic appUser refresh (every 30 minutes)")
-            
-            await self.runAppUserRefreshCycle(trigger: "initial")
-            
-            while !Task.isCancelled {
-                // Wait 30 minutes
-                try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
-                if Task.isCancelled { break }
-                await self.runAppUserRefreshCycle(trigger: "timer")
-            }
-        }
-    }
-    
-    private func runAppUserRefreshCycle(trigger: String) async {
-        do {
-            try await self.refreshAppUserFromServer(forceIPRefresh: true)
-            print("DEBUG: [HproseInstance] Periodic appUser refresh succeeded (\(trigger))")
-        } catch {
-            print("DEBUG: [HproseInstance] Periodic appUser refresh failed (\(trigger)): \(error)")
-        }
-    }
+
     
     // MARK: - Background Upload
     // Background task approach removed - using immediate upload with persistence instead
@@ -5832,7 +5801,6 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: [getProviderIP] Retrieved \(ipAddresses.count) IP address(es) for user \(mid): \(ipAddresses)")
         
         // Try each IP address in sequence
-        var lastError: Error?
         for (index, ipAddress) in ipAddresses.enumerated() {
             print("DEBUG: [getProviderIP] Attempting IP \(index + 1)/\(ipAddresses.count): \(ipAddress)")
             
@@ -5859,7 +5827,7 @@ final class HproseInstance: ObservableObject {
         }
         
         // All IPs failed and no fallback available
-        throw lastError ?? NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed for user: \(mid)"])
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed for user: \(mid)"])
     }
     
     /// Find IP addresses of given nodeId

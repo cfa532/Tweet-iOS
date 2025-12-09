@@ -70,7 +70,6 @@ class AppState: ObservableObject {
             }
             
             // Always start periodic tasks (idempotent inside HproseInstance)
-            HproseInstance.shared.startPeriodicAppUserRefresh()
             HproseInstance.shared.startPeriodicBlackListProcessing()
         }
     }
