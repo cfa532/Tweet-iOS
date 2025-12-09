@@ -44,22 +44,28 @@ final class HproseInstance: ObservableObject {
         return _domainToShare
     }
     
-    @Published private var _appUser: User = User.getInstance(mid: Constants.GUEST_ID)
+    // Store the app user's MID instead of the user object itself
+    // This ensures appUser always returns the singleton instance
+    @Published private var _appUserId: String = Constants.GUEST_ID
+    
     var appUser: User {
         get { 
+            // Always return the singleton instance for the current app user ID
+            let user = User.getInstance(mid: _appUserId)
+            
             // Refresh appUser from server if expired (every 30 minutes) - but not for guest users
             // fetchUser will handle invalid users (nil username) automatically
             // Note: hasExpired check removed from synchronous getter to prevent blocking
             // Cache expiry is now handled in fetchUser() which is called async
-            if !_appUser.isGuest && _appUser.username == nil {
+            if !user.isGuest && user.username == nil {
                 Task {
                     do {
                         // Use cached baseUrl for first attempt, retries will force IP re-resolution
-                        if let refreshedUser = try await fetchUser(_appUser.mid, baseUrl: _appUser.baseUrl?.absoluteString ?? "") {
+                        if let refreshedUser = try await fetchUser(_appUserId, baseUrl: user.baseUrl?.absoluteString ?? "") {
                             // Update appUser's baseUrl to match the refreshed user's baseUrl
                             await MainActor.run {
-                                if refreshedUser.baseUrl != _appUser.baseUrl {
-                                    _appUser.baseUrl = refreshedUser.baseUrl
+                                if refreshedUser.baseUrl != user.baseUrl {
+                                    user.baseUrl = refreshedUser.baseUrl
                                 }
                             }
                         }
@@ -68,10 +74,10 @@ final class HproseInstance: ObservableObject {
                     }
                 }
             }
-            return _appUser 
+            return user
         }
         set {
-            // Get the singleton instance for the new user
+            // Update the singleton instance with new values, then switch to it
             let instance = User.getInstance(mid: newValue.mid)
             Task { @MainActor in
                 // Update the singleton instance with new values
@@ -92,10 +98,14 @@ final class HproseInstance: ObservableObject {
                 instance.commentsCount = newValue.commentsCount
                 
                 instance.hostIds = newValue.hostIds
-                // Update the reference to point to the singleton instance
-                self._appUser = instance
-                // Notify observers that appUser has changed
-                self.objectWillChange.send()
+                
+                // Update the reference to point to the singleton instance by storing its ID
+                // This ensures appUser getter always returns the same singleton instance
+                if self._appUserId != instance.mid {
+                    self._appUserId = instance.mid
+                    // Notify observers that appUser has changed
+                    self.objectWillChange.send()
+                }
             }
         }
     }
@@ -285,14 +295,15 @@ final class HproseInstance: ObservableObject {
         NSLog("🔍 [initializeAppUser] Loaded cached appUser: \(userId), avatar: \(cachedUser.avatar ?? "nil")")
         
         await MainActor.run {
-            // CRITICAL: Update the singleton instance instead of replacing _appUser
+            // CRITICAL: Update the singleton instance instead of replacing appUser
             // This ensures all references to this user get the cached data
             // Safe to call even after cache clear because fetchUser never returns nil
             User.updateUserInstance(with: cachedUser)
-            _appUser = User.getInstance(mid: userId)
+            _appUserId = userId
             
-            // Set following list
-            _appUser.followingList = Gadget.getAlphaIds()
+            // Set following list on the singleton instance
+            let appUserInstance = User.getInstance(mid: userId)
+            appUserInstance.followingList = Gadget.getAlphaIds()
             
             NSLog("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil")")
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
@@ -417,7 +428,7 @@ final class HproseInstance: ObservableObject {
                             await MainActor.run {
                                 isInitializationComplete = true
                                 User.updateUserInstance(with: user)
-                                _appUser = User.getInstance(mid: user.mid)
+                                _appUserId = user.mid
                             }
                             
                             // Ensure the refreshed user with updated baseURL is saved to cache
@@ -448,7 +459,7 @@ final class HproseInstance: ObservableObject {
                             await MainActor.run {
                                 user.baseUrl = HproseInstance.baseUrl
                                 user.followingList = Gadget.getAlphaIds()
-                                _appUser = user
+                                _appUserId = user.mid
                                 
                                 // App is now initialized since appUser has IP address
                                 isInitializationComplete = true
@@ -460,7 +471,7 @@ final class HproseInstance: ObservableObject {
                         await MainActor.run {
                             user.baseUrl = HproseInstance.baseUrl
                             user.followingList = Gadget.getAlphaIds()
-                            _appUser = user
+                            _appUserId = user.mid
                             
                             // App is now initialized since appUser has IP address
                             isInitializationComplete = true
