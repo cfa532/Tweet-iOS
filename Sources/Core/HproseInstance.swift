@@ -48,6 +48,33 @@ final class HproseInstance: ObservableObject {
     // This ensures appUser always returns the singleton instance
     @Published private var _appUserId: String = Constants.GUEST_ID
     
+    /// The current app user singleton instance
+    ///
+    /// This computed property provides access to the current user with automatic refresh capabilities:
+    ///
+    /// **Getter behavior:**
+    /// - Always returns the singleton User instance for the current _appUserId
+    /// - For logged-in users with incomplete data (nil username):
+    ///   - Automatically triggers async refresh from server via fetchUser()
+    ///   - Updates baseUrl if server provides a different IP
+    ///   - Refresh runs in background (non-blocking)
+    /// - For guest users: Returns guest user without refresh
+    ///
+    /// **Cache expiry handling:**
+    /// - User cache expiry is handled when app returns to foreground via AppDelegate
+    /// - AppDelegate.handleAppWillEnterForeground() calls refreshAppUserIP() which:
+    ///   1. Resolves fresh IP addresses from app URLs
+    ///   2. Updates HproseInstance.baseUrl
+    ///   3. Calls refreshAppUserFromServer(forceIPRefresh: true)
+    /// - This ensures stale IPs don't persist after long background periods
+    ///
+    /// **Setter behavior:**
+    /// - Updates the singleton User instance with new values
+    /// - Preserves the singleton pattern by updating getInstance(mid) instance
+    /// - All property changes are applied on MainActor for thread safety
+    ///
+    /// - Note: Always use this property instead of creating new User instances
+    /// - Note: The singleton pattern ensures all parts of the app see the same user data
     var appUser: User {
         get { 
             // Always return the singleton instance for the current app user ID
@@ -239,6 +266,7 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Initialization
+    /// Private initializer ensures singleton pattern
     private init() {}
     
     // Flag to track if app is still initializing to prevent error dialogs during startup
@@ -253,6 +281,21 @@ final class HproseInstance: ObservableObject {
     }
     
     // MARK: - Public Methods
+    
+    /// Main initialization method for HproseInstance
+    /// This method performs the following steps:
+    /// 1. Initializes PreferenceHelper for accessing user preferences
+    /// 2. Calls `initAppEntry()` to:
+    ///    - Resolve backend server IP addresses from app URLs
+    ///    - Set HproseInstance.baseUrl to the resolved IP
+    ///    - Fetch and update appUser data from server (for logged-in users)
+    ///    - Initialize appUser's baseUrl with the resolved provider IP
+    ///    - Post .appUserReady notification when initialization completes
+    /// 3. Cleans up expired tweets from cache
+    /// 4. Clears the isAppInitializing flag to enable error dialogs
+    ///
+    /// - Note: This method is called during app startup by TweetApp.AppState.initialize()
+    /// - Note: Errors during initAppEntry are caught and logged, allowing the app to continue with defaults
     func initialize() async throws {
         print("DEBUG: [HproseInstance] Starting initialization")
         
@@ -376,6 +419,25 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// Initialize app entry and resolve backend server IP addresses
+    ///
+    /// This method is the core initialization routine that:
+    /// 1. Fetches HTML from configured app URLs (from PreferenceHelper)
+    /// 2. Extracts server IP addresses from the HTML response
+    /// 3. Resolves and sets HproseInstance.baseUrl to the first valid IP
+    /// 4. For logged-in users:
+    ///    - Fetches user data from server with forced IP re-resolution
+    ///    - Updates appUser's baseUrl to their provider IP
+    ///    - Saves updated user data to cache
+    ///    - Posts .appUserReady notification
+    ///    - Fetches followings and blacklist in background (non-blocking)
+    /// 5. For guest users:
+    ///    - Sets appUser baseUrl to resolved IP
+    ///    - Fetches alphaId user data in background
+    ///
+    /// - Throws: Network or parsing errors (caught by caller)
+    /// - Note: Called during app initialization by `initialize()` method
+    /// - Note: Sets `isInitializationComplete = true` once baseUrl is resolved
     func initAppEntry() async throws {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
@@ -4674,10 +4736,27 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Network error: All retries failed."])
     }
     
-    /// Refresh appUser from server without full app reinitialization
-    /// - Parameter forceIPRefresh: If true, forces IP re-resolution by passing empty baseUrl. 
-    ///   Should be true only during retries when network issues are suspected.
-    ///   For normal refreshes after successful operations, use false to use existing baseUrl.
+    /// Refresh appUser data from server without full app reinitialization
+    ///
+    /// This method updates the current appUser with fresh data from the backend server:
+    /// 1. Skips refresh for guest users (returns early)
+    /// 2. Resolves the provider IP for the current user
+    /// 3. Calls `updateUserFromServer()` to fetch latest user data
+    /// 4. Updates HproseInstance.baseUrl if the provider IP has changed
+    /// 5. Updates the appUser singleton instance with refreshed data
+    ///
+    /// Use cases:
+    /// - Called after successful tweet upload/delete to update tweet counts
+    /// - Called during retry operations with forceIPRefresh=true
+    /// - Called by AppDelegate when app returns from background
+    ///
+    /// - Parameter forceIPRefresh: If true, forces IP re-resolution by passing empty baseUrl.
+    ///   - Set to `true` during network retries when IP issues are suspected
+    ///   - Set to `false` (default) for normal refreshes after successful operations
+    ///
+    /// - Throws: Network or parsing errors (errors are logged but not thrown to caller)
+    /// - Note: This is a lightweight refresh that doesn't reinitialize the entire app
+    /// - Note: Changes to appUser are applied on MainActor to ensure thread safety
     func refreshAppUserFromServer(forceIPRefresh: Bool = false) async throws {
         print("DEBUG: [HproseInstance] Refreshing appUser from server... (forceIPRefresh: \(forceIPRefresh))")
         

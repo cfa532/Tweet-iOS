@@ -278,6 +278,31 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Background handling is now done by SimpleVideoPlayer's notification observers
     }
     
+    /// Handle app returning to foreground from background state
+    ///
+    /// This method coordinates the app's recovery when returning from background:
+    ///
+    /// **AppUser IP Refresh:**
+    /// - Calls `refreshAppUserIP()` to update server IP addresses
+    /// - Prevents using stale IPs if backend moved during suspension
+    /// - See: `HproseInstance.refreshAppUserFromServer()` for details
+    ///
+    /// **Video Infrastructure Recovery:**
+    /// - Long background (>5 min): Full server restart required
+    ///   - Clears all video players to release old URLs
+    ///   - Shows loading overlay during restart
+    ///   - Posts .videoInfrastructureRestarted when complete
+    /// - Short background (<5 min): Lightweight recovery
+    ///   - Clears players for predictable clean state
+    ///   - Resets connection pool
+    ///   - Ensures LocalHTTPServer is running
+    ///
+    /// **Message Check:**
+    /// - Checks for new messages via `checkMessagesForBadgeOnly()`
+    /// - Updates badge count without showing notifications
+    ///
+    /// - Note: Skips recovery if app hasn't finished launching
+    /// - Note: Duration-based recovery is more reliable than isRunning checks
     @objc private func handleAppWillEnterForeground() {
         NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
         
@@ -367,7 +392,27 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     /// Refresh appUser's provider IP when app returns from background
-    /// This prevents using stale IPs if the server moved while app was suspended
+    ///
+    /// This method ensures the app uses fresh server IP addresses after returning from background:
+    ///
+    /// **Process:**
+    /// 1. Skips refresh for guest users (returns early)
+    /// 2. Resolves first IP from app initialization URLs
+    /// 3. Updates HproseInstance.baseUrl with resolved IP
+    /// 4. Calls `HproseInstance.refreshAppUserFromServer(forceIPRefresh: true)`
+    /// 5. Saves updated user data to cache
+    ///
+    /// **Why this is needed:**
+    /// - Backend servers can change IPs while app is suspended
+    /// - iOS can suspend network connections during long backgrounds
+    /// - Stale IPs would cause network errors after app resumes
+    ///
+    /// **When this runs:**
+    /// - Called by `handleAppWillEnterForeground()` when app returns from background
+    /// - Runs asynchronously (non-blocking) to avoid delaying foreground transition
+    ///
+    /// - Note: Errors are logged but non-fatal - app continues with cached data
+    /// - Note: See `HproseInstance.refreshAppUserFromServer()` for the refresh logic
     private func refreshAppUserIP() async {
         let appUser = HproseInstance.shared.appUser
         
