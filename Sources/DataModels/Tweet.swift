@@ -76,12 +76,30 @@ class Tweet: Identifiable, Codable, ObservableObject {
     var originalAuthorId: MimeiId? // authorId of the forwarded tweet
         
     // Media attachments
-    var attachments: [MimeiFileType]?
+    var attachments: [MimeiFileType]? {
+        didSet {
+            // When attachments change, update them to observe the author's baseUrl
+            updateAttachmentsAuthor()
+        }
+    }
     var isPrivate: Bool?
     var downloadable: Bool?
 
     // Display only properties
-    @Published var author: User?
+    @Published var author: User? {
+        didSet {
+            // When author changes, update all attachments to observe the new author's baseUrl
+            updateAttachmentsAuthor()
+        }
+    }
+    
+    /// Update all attachments to observe the current author's baseUrl
+    private func updateAttachmentsAuthor() {
+        guard let author = author else { return }
+        attachments?.forEach { attachment in
+            attachment.setAuthor(author)
+        }
+    }
     
     // User interaction flags
     @Published var favorites: [Bool]? // [favorite, bookmark, retweeted]
@@ -183,6 +201,11 @@ class Tweet: Identifiable, Codable, ObservableObject {
         self.attachments = attachments
         self.isPrivate = isPrivate
         self.downloadable = downloadable
+        
+        // Update attachments to observe author's baseUrl if both are present
+        if author != nil {
+            updateAttachmentsAuthor()
+        }
     }
     
     func encode(to encoder: Encoder) throws {
