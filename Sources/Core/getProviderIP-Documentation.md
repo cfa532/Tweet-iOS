@@ -94,19 +94,20 @@ Handled by `handleProviderIPFallback(for:)`:
 │ 1. Resolve firstIP from app URLs            │
 │    (via resolveFirstIPFromAppUrls)           │
 │ ↓                                             │
-│ 2. Temporarily set appUser.baseUrl = firstIP │
+│ 2. Temporarily set client.uri = firstIP      │
 │ ↓                                             │
-│ 3. Query backend for appUser's provider IP   │
+│ 3. Query backend for target user's IP        │
+│    (using firstIP client)                    │
 │    (recursive call with attemptNumber: 2)    │
 │ ↓                                             │
-│ 4. Update appUser.baseUrl to resolved IP     │
-│ ↓                                             │
-│ 5a. If target == appUser:                    │
-│     └─ Return appUser IP ✓                   │
+│ 4a. If target == appUser:                    │
+│     ├─ Update client.uri = target's IP       │
+│     ├─ Update appUser.baseUrl = target's IP  │
+│     └─ Return target IP ✓                    │
 │                                               │
-│ 5b. If target != appUser:                    │
-│     └─ Query again for target user's IP      │
-│        └─ Return target IP ✓                 │
+│ 4b. If target != appUser:                    │
+│     ├─ Restore previous client.uri           │
+│     └─ Return target IP ✓                    │
 └──────────────────────────────────────────────┘
 ```
 
@@ -294,7 +295,7 @@ Distinguishes between:
 - **Global issues**: "Network is down" (try fallback)
 
 ### 5. **Careful State Management**
-During fallback, `appUser.baseUrl` is temporarily modified and restored on failure to prevent inconsistent state.
+During fallback, `client.uri` is temporarily modified for the IP query. For appUser targets, both `client.uri` and `appUser.baseUrl` are updated to the resolved IP. For non-appUser targets, `client.uri` is restored to prevent side effects. On failure, previous state is always restored.
 
 ---
 
@@ -305,10 +306,16 @@ During fallback, `appUser.baseUrl` is temporarily modified and restored on failu
 
 **Flow**:
 1. Resolve `firstIP` via `resolveFirstIPFromAppUrls()`
-2. Temporarily set `appUser.baseUrl = firstIP`
-3. Resolve `appUser`'s provider IP (attempt 2)
-4. Update `appUser.baseUrl` to resolved IP
-5. If target ≠ appUser, resolve target's IP with updated baseUrl
+2. Temporarily set `client.uri = firstIP`
+3. Resolve target user's provider IP directly (attempt 2)
+4. If target == appUser:
+   - Update `client.uri` to resolved IP
+   - Update `appUser.baseUrl` to resolved IP
+5. If target != appUser:
+   - Restore previous `client.uri`
+6. Return resolved IP
+
+**Key Insight**: The firstIP client can query for ANY user's provider IP, eliminating the need to resolve appUser's IP first as an intermediate step.
 
 ### `resolveFirstIPFromAppUrls(avoidInfiniteLoop:)`
 **Purpose**: Emergency fallback that resolves IPs directly from app initialization URLs

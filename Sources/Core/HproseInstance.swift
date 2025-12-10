@@ -5945,15 +5945,14 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed health check for user: \(mid) after \(attemptNumber) attempt(s)"])
     }
     
-    /// Shared fallback implementation: resolve firstIP, update client URI, then resolve appUser's and optionally target user's provider IP
+    /// Shared fallback implementation: resolve firstIP, update client URI, then resolve target user's provider IP
     ///
     /// This method implements a fallback mechanism when provider IP resolution fails:
-    /// 1. Resolves firstIP from app URLs
-    /// 2. Temporarily updates `self.client.uri` to use firstIP (avoids modifying `appUser.baseUrl` which is used throughout the app)
-    /// 3. Uses the updated client to resolve appUser's provider IP
-    /// 4. Updates both `self.client.uri` and `appUser.baseUrl` to the resolved provider IP
-    /// 5. If target is not appUser, resolves target user's provider IP using the updated client
-    /// 6. Restores previous client URI on any failure
+    /// 1. Resolves firstIP from app URLs (generic fallback IP)
+    /// 2. Temporarily updates `self.client.uri` to use firstIP
+    /// 3. Uses firstIP client to resolve target user's provider IP (works for any user)
+    /// 4. If target is appUser, also updates `appUser.baseUrl`
+    /// 5. Restores previous client URI on any failure
     ///
     /// - Parameter targetUserId: The user ID to resolve provider IP for (may be appUser or another user)
     /// - Returns: A healthy provider IP address for the target user, or throws if retry fails
@@ -5972,12 +5971,7 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: [handleProviderIPFallback] Resolved firstIP: \(firstIP)")
         
         // Step 2: Convert firstIP to URL
-        let firstIPBaseURL: URL
-        if let url = URL(string: firstIP) {
-            firstIPBaseURL = url
-        } else if let url = URL(string: "http://\(firstIP)") {
-            firstIPBaseURL = url
-        } else {
+        guard let firstIPBaseURL = URL(string: firstIP) ?? URL(string: "http://\(firstIP)") else {
             print("ERROR: [handleProviderIPFallback] Invalid firstIP format: \(firstIP)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid firstIP format"])
         }
@@ -5988,48 +5982,38 @@ final class HproseInstance: ObservableObject {
         client.uri = firstIPUri
         print("DEBUG: [handleProviderIPFallback] Temporarily set self.client.uri to firstIP: \(firstIPUri)")
         
-        // Step 4: Resolve appUser's provider IP using firstIP
+        // Step 4: Use firstIP client to resolve target user's provider IP
         do {
-            guard let appUserProviderIP = try await getProviderIP(appUser.mid, attemptNumber: 2) else {
-                print("ERROR: [handleProviderIPFallback] Failed to resolve appUser's provider IP using firstIP")
+            guard let targetProviderIP = try await getProviderIP(targetUserId, attemptNumber: 2) else {
+                print("ERROR: [handleProviderIPFallback] Failed to resolve provider IP for \(context) using firstIP")
                 // Restore previous client URI
                 client.uri = previousClientUri
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve appUser's provider IP using firstIP"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve provider IP for \(context) using firstIP"])
             }
             
-            print("DEBUG: [handleProviderIPFallback] Resolved appUser's provider IP: \(appUserProviderIP)")
+            print("DEBUG: [handleProviderIPFallback] ✅ Resolved provider IP for \(context): \(targetProviderIP)")
             
-            // Step 5: Update self.client.uri to use the resolved appUser provider IP
-            let appUserResolvedURL: URL
-            if let url = URL(string: appUserProviderIP) {
-                appUserResolvedURL = url
-            } else if let url = URL(string: "http://\(appUserProviderIP)") {
-                appUserResolvedURL = url
-            } else {
-                print("ERROR: [handleProviderIPFallback] Invalid appUser provider IP format: \(appUserProviderIP)")
-                // Restore previous client URI
-                client.uri = previousClientUri
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid appUser provider IP format"])
-            }
-            
-            let appUserProviderUri = appUserResolvedURL.appendingPathComponent("/webapi/").absoluteString
-            client.uri = appUserProviderUri
-            
-            // Also update appUser.baseUrl to reflect the new provider IP
-            await MainActor.run {
-                appUser.baseUrl = appUserResolvedURL
-            }
-            print("DEBUG: [handleProviderIPFallback] Updated self.client.uri and appUser.baseUrl to resolved provider IP: \(appUserResolvedURL.absoluteString)")
-            
-            // Step 6: If target is appUser, return appUser's IP; otherwise resolve target user's IP
+            // If target is appUser, update appUser.baseUrl and client.uri
             if isAppUser {
-                print("DEBUG: [handleProviderIPFallback] ✅ Successfully resolved appUser's provider IP on 2nd attempt: \(appUserProviderIP)")
-                return appUserProviderIP
+                guard let targetResolvedURL = URL(string: targetProviderIP) ?? URL(string: "http://\(targetProviderIP)") else {
+                    print("ERROR: [handleProviderIPFallback] Invalid provider IP format: \(targetProviderIP)")
+                    client.uri = previousClientUri
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid provider IP format"])
+                }
+                
+                let targetProviderUri = targetResolvedURL.appendingPathComponent("/webapi/").absoluteString
+                client.uri = targetProviderUri
+                
+                await MainActor.run {
+                    appUser.baseUrl = targetResolvedURL
+                }
+                print("DEBUG: [handleProviderIPFallback] Updated client.uri and appUser.baseUrl to: \(targetResolvedURL.absoluteString)")
             } else {
-                let targetUserProviderIP = try await getProviderIP(targetUserId, attemptNumber: 2)
-                print("DEBUG: [handleProviderIPFallback] ✅ Successfully found provider IP for target user \(targetUserId) on 2nd attempt: \(targetUserProviderIP ?? "nil")")
-                return targetUserProviderIP
+                // For non-appUser, restore previous client URI
+                client.uri = previousClientUri
             }
+            
+            return targetProviderIP
             
         } catch {
             // Restore previous client URI on failure
