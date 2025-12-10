@@ -283,9 +283,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// This method coordinates the app's recovery when returning from background:
     ///
     /// **AppUser IP Refresh:**
-    /// - Calls `refreshAppUserIP()` to update server IP addresses
+    /// - Calls `refreshAppUserIP()` which delegates to `refreshAppUserFromServer()`
+    /// - Uses `getProviderIP()` for intelligent IP resolution with health checks and automatic fallback
     /// - Prevents using stale IPs if backend moved during suspension
-    /// - See: `HproseInstance.refreshAppUserFromServer()` for details
     ///
     /// **Video Infrastructure Recovery:**
     /// - Long background (>5 min): Full server restart required
@@ -397,10 +397,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     ///
     /// **Process:**
     /// 1. Skips refresh for guest users (returns early)
-    /// 2. Resolves first IP from app initialization URLs
-    /// 3. Updates HproseInstance.baseUrl with resolved IP
-    /// 4. Calls `HproseInstance.refreshAppUserFromServer(forceIPRefresh: true)`
-    /// 5. Saves updated user data to cache
+    /// 2. Calls `HproseInstance.refreshAppUserFromServer(forceIPRefresh: true)` which:
+    ///    - Uses `getProviderIP()` to resolve the user's provider IP with health checks
+    ///    - Automatically falls back to resolving firstIP if needed (via handleProviderIPFallback)
+    ///    - Updates both HproseInstance.baseUrl and appUser.baseUrl
+    /// 3. Saves updated user data to cache
     ///
     /// **Why this is needed:**
     /// - Backend servers can change IPs while app is suspended
@@ -412,7 +413,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// - Runs asynchronously (non-blocking) to avoid delaying foreground transition
     ///
     /// - Note: Errors are logged but non-fatal - app continues with cached data
-    /// - Note: See `HproseInstance.refreshAppUserFromServer()` for the refresh logic
+    /// - Note: No need to manually resolve firstIP - getProviderIP() handles fallback automatically
     private func refreshAppUserIP() async {
         let appUser = HproseInstance.shared.appUser
         
@@ -424,53 +425,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         let hproseInstance = HproseInstance.shared
         
-        // Refresh IP and appUser from server in background (non-blocking)
+        // Refresh appUser from server in background (non-blocking)
+        // getProviderIP() inside refreshAppUserFromServer() will handle all IP resolution
         Task.detached {
             do {
-                print("[AppDelegate] Step 1: Resolving first IP from app URLs...")
-                
-                // First, resolve the first IP from app initialization URLs
-                guard let preferenceHelper = hproseInstance.preferenceHelper else {
-                    print("[AppDelegate] ⚠️ PreferenceHelper not available")
-                    return
-                }
-                
-                var firstIp: String?
-                for url in preferenceHelper.getAppUrls() {
-                    do {
-                        let (data, _) = try await URLSession.shared.data(from: URL(string: url)!)
-                        guard let html = String(data: data, encoding: .utf8) else { continue }
-                        
-                        let paramData = Gadget.shared.extractParamMap(from: html)
-                        guard let addrs = paramData["addrs"] as? String else { continue }
-                        
-                        if let resolvedIp = Gadget.shared.filterIpAddresses(addrs) {
-                            firstIp = resolvedIp
-                            print("[AppDelegate] ✅ Step 1 complete: Resolved first IP: \(resolvedIp)")
-                            break
-                        }
-                    } catch {
-                        print("[AppDelegate] Error processing URL \(url): \(error)")
-                        continue
-                    }
-                }
-                
-                guard let resolvedIp = firstIp else {
-                    print("[AppDelegate] ⚠️ Failed to resolve first IP, aborting refresh")
-                    return
-                }
-                
-                // Update HproseInstance.baseUrl with the resolved IP
-                await MainActor.run {
-                    HproseInstance.baseUrl = URL(string: "http://\(resolvedIp)")!
-                    hproseInstance.client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                    print("[AppDelegate] ✅ Updated HproseInstance.baseUrl to: \(resolvedIp)")
-                }
-                
-                // Step 2: Now refresh appUser from server
-                print("[AppDelegate] Step 2: Refreshing appUser from server...")
+                print("[AppDelegate] Refreshing appUser from server (getProviderIP handles IP resolution)...")
                 try await hproseInstance.refreshAppUserFromServer(forceIPRefresh: true)
-                print("[AppDelegate] ✅ Step 2 complete: Successfully refreshed appUser from server")
+                print("[AppDelegate] ✅ Successfully refreshed appUser from server")
                 
                 // Save updated user to cache
                 await MainActor.run {
@@ -478,7 +439,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     print("[AppDelegate] ✅ Saved refreshed appUser to cache")
                 }
             } catch {
-                print("[AppDelegate] ⚠️ Failed to refresh IP/appUser: \(error)")
+                print("[AppDelegate] ⚠️ Failed to refresh appUser: \(error)")
                 // Non-fatal - we'll continue with cached data and retry on next API call
             }
         }

@@ -63,9 +63,10 @@ final class HproseInstance: ObservableObject {
     /// **Cache expiry handling:**
     /// - User cache expiry is handled when app returns to foreground via AppDelegate
     /// - AppDelegate.handleAppWillEnterForeground() calls refreshAppUserIP() which:
-    ///   1. Resolves fresh IP addresses from app URLs
-    ///   2. Updates HproseInstance.baseUrl
-    ///   3. Calls refreshAppUserFromServer(forceIPRefresh: true)
+    ///   1. Calls refreshAppUserFromServer(forceIPRefresh: true)
+    ///   2. Uses getProviderIP() for intelligent IP resolution with health checks
+    ///   3. Automatically falls back to resolving firstIP if provider IPs are unhealthy
+    ///   4. Updates both HproseInstance.baseUrl and appUser.baseUrl
     /// - This ensures stale IPs don't persist after long background periods
     ///
     /// **Setter behavior:**
