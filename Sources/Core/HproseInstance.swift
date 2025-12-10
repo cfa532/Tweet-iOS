@@ -1344,7 +1344,8 @@ final class HproseInstance: ObservableObject {
         let forceFreshIP = baseUrl.isEmpty || hasExpired
         
         // Only retry if skipRetries is false
-        let maxAttempts = skipRetries ? 1 : 3
+        // 2 attempts = 1 regular run + 1 retry with fresh IP resolution
+        let maxAttempts = skipRetries ? 1 : 2
         
         for attempt in 1...maxAttempts {
             do {
@@ -1353,7 +1354,7 @@ final class HproseInstance: ObservableObject {
                 if attempt == 1 {
                     if !forceFreshIP && userHasBaseUrl, let userBaseUrl = user.baseUrl?.absoluteString {
                         // User has a baseUrl and we're not forcing refresh - use it to avoid false redirect loop detection
-                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Using user's existing baseUrl: \(userBaseUrl) for userId: \(userId) (hasExpired: \(hasExpired))")
+                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) - Using user's existing baseUrl: \(userBaseUrl) for userId: \(userId) (hasExpired: \(hasExpired))")
                         let normalizedBase = try normalizedBaseURL(from: userBaseUrl, context: "existing baseUrl for \(userId)")
                         await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "attempt \(attempt)")
                     } else {
@@ -1367,7 +1368,7 @@ final class HproseInstance: ObservableObject {
                         } else {
                             reason = "no baseUrl"
                         }
-                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl), reason: \(reason)")
+                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) - Resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl), reason: \(reason)")
                         guard let providerIP = try await self.getProviderIP(userId) else {
                             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
                         }
@@ -1380,7 +1381,7 @@ final class HproseInstance: ObservableObject {
                 } else {
                     // Retry attempts: Always force fresh IP resolution
                     let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
-                    print("DEBUG: [updateUserFromServer] Attempt \(attempt)/3 - Re-resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
+                    print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) - Re-resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
                     guard let providerIP = try await self.getProviderIP(userId) else {
                         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
                     }
