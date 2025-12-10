@@ -5880,7 +5880,7 @@ final class HproseInstance: ObservableObject {
             
             // If this is the appUser and first attempt, try fallback mechanism
             if mid == appUser.mid && attemptNumber == 1 {
-                return try await handleAppUserFallback(mid: mid)
+                return try await handleProviderIPFallback(for: mid)
             }
             
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid provider IPs returned for user: \(mid) after \(attemptNumber) attempt(s)"])
@@ -5914,7 +5914,7 @@ final class HproseInstance: ObservableObject {
             if mid == appUser.mid {
                 // If this is the appUser, try fallback mechanism
                 print("WARN: [getProviderIP] All IPs failed health check for appUser on attempt #1, trying fallback mechanism")
-                return try await handleAppUserFallback(mid: mid)
+                return try await handleProviderIPFallback(for: mid)
             } else {
                 // If this is NOT the appUser, check appUser's baseUrl health first
                 print("WARN: [getProviderIP] All IPs failed health check for user \(mid) on attempt #1")
@@ -5931,12 +5931,12 @@ final class HproseInstance: ObservableObject {
                     } else {
                         // AppUser's connection is also unhealthy, try to resolve new firstIP
                         print("WARN: [getProviderIP] ❌ AppUser's baseUrl is unhealthy, attempting to resolve new firstIP")
-                        return try await handleOtherUserFallback(mid: mid)
+                        return try await handleProviderIPFallback(for: mid)
                     }
                 } else {
                     // No appUser baseUrl available, try to resolve new firstIP
                     print("WARN: [getProviderIP] No appUser baseUrl available, attempting to resolve new firstIP")
-                    return try await handleOtherUserFallback(mid: mid)
+                    return try await handleProviderIPFallback(for: mid)
                 }
             }
         }
@@ -5945,63 +5945,62 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed health check for user: \(mid) after \(attemptNumber) attempt(s)"])
     }
     
-    /// Handle fallback for appUser: resolve firstIP from app URLs, use it to resolve appUser's provider IP, then retry backend call
-    /// - Parameter mid: The appUser's member ID
-    /// - Returns: A healthy provider IP address for appUser, or throws if retry fails
-    /// - Note: Uses firstIP to resolve appUser's actual provider IP (similar to initAppEntry)
-    private func handleAppUserFallback(mid: String) async throws -> String? {
-        print("DEBUG: [handleAppUserFallback] Starting fallback mechanism for appUser")
+    /// Shared fallback implementation: resolve firstIP, use it to resolve appUser's provider IP, then optionally resolve target user's IP
+    /// - Parameter targetUserId: The user ID to resolve provider IP for (may be appUser or another user)
+    /// - Returns: A healthy provider IP address for the target user, or throws if retry fails
+    private func handleProviderIPFallback(for targetUserId: String) async throws -> String? {
+        let isAppUser = (targetUserId == appUser.mid)
+        let context = isAppUser ? "appUser" : "non-appUser: \(targetUserId)"
+        print("DEBUG: [handleProviderIPFallback] Starting fallback mechanism for \(context)")
         
-        // Step 1: Resolve firstIP from app URLs (this is used to resolve appUser's IP)
+        // Step 1: Resolve firstIP from app URLs
         guard let firstIP = await resolveFirstIPFromAppUrls(avoidInfiniteLoop: false) else {
-            print("ERROR: [handleAppUserFallback] Failed to resolve firstIP from app URLs")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve firstIP for appUser"])
+            print("ERROR: [handleProviderIPFallback] Failed to resolve firstIP from app URLs")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve firstIP for fallback"])
         }
         
-        print("DEBUG: [handleAppUserFallback] Resolved firstIP: \(firstIP)")
+        print("DEBUG: [handleProviderIPFallback] Resolved firstIP: \(firstIP)")
         
-        // Step 2: Use firstIP to create a temporary client and resolve appUser's provider IP
+        // Step 2: Convert firstIP to URL
         let firstIPBaseURL: URL
         if let url = URL(string: firstIP) {
             firstIPBaseURL = url
         } else if let url = URL(string: "http://\(firstIP)") {
             firstIPBaseURL = url
         } else {
-            print("ERROR: [handleAppUserFallback] Invalid firstIP format: \(firstIP)")
+            print("ERROR: [handleProviderIPFallback] Invalid firstIP format: \(firstIP)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid firstIP format"])
         }
         
         // Store previous appUser baseUrl for restoration on failure
         let previousAppUserBaseUrl = appUser.baseUrl
         
-        // Temporarily update appUser.baseUrl to firstIP to resolve appUser's provider IP
+        // Step 3: Temporarily set appUser.baseUrl to firstIP
         await MainActor.run {
             appUser.baseUrl = firstIPBaseURL
         }
-        print("DEBUG: [handleAppUserFallback] Temporarily set appUser.baseUrl to firstIP: \(firstIPBaseURL.absoluteString)")
+        print("DEBUG: [handleProviderIPFallback] Temporarily set appUser.baseUrl to firstIP: \(firstIPBaseURL.absoluteString)")
         
-        // Step 3: Resolve appUser's provider IP using the firstIP
+        // Step 4: Resolve appUser's provider IP using firstIP
         do {
-            // Get appUser's provider IP using firstIP as the resolution server
             guard let appUserProviderIP = try await getProviderIP(appUser.mid, attemptNumber: 2) else {
-                print("ERROR: [handleAppUserFallback] Failed to resolve appUser's provider IP using firstIP")
-                // Restore previous baseUrl on failure
+                print("ERROR: [handleProviderIPFallback] Failed to resolve appUser's provider IP using firstIP")
                 await MainActor.run {
                     appUser.baseUrl = previousAppUserBaseUrl
                 }
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve appUser's provider IP using firstIP"])
             }
             
-            print("DEBUG: [handleAppUserFallback] Resolved appUser's provider IP: \(appUserProviderIP)")
+            print("DEBUG: [handleProviderIPFallback] Resolved appUser's provider IP: \(appUserProviderIP)")
             
-            // Step 4: Update appUser.baseUrl to the resolved provider IP
+            // Step 5: Update appUser.baseUrl to resolved provider IP
             let appUserResolvedURL: URL
             if let url = URL(string: appUserProviderIP) {
                 appUserResolvedURL = url
             } else if let url = URL(string: "http://\(appUserProviderIP)") {
                 appUserResolvedURL = url
             } else {
-                print("ERROR: [handleAppUserFallback] Invalid appUser provider IP format: \(appUserProviderIP)")
+                print("ERROR: [handleProviderIPFallback] Invalid appUser provider IP format: \(appUserProviderIP)")
                 await MainActor.run {
                     appUser.baseUrl = previousAppUserBaseUrl
                 }
@@ -6011,106 +6010,29 @@ final class HproseInstance: ObservableObject {
             await MainActor.run {
                 appUser.baseUrl = appUserResolvedURL
             }
-            print("DEBUG: [handleAppUserFallback] Updated appUser.baseUrl to resolved provider IP: \(appUserResolvedURL.absoluteString)")
+            print("DEBUG: [handleProviderIPFallback] Updated appUser.baseUrl to resolved provider IP: \(appUserResolvedURL.absoluteString)")
             
-            // Step 5: Return the resolved appUser provider IP (since mid == appUser.mid)
-            print("DEBUG: [handleAppUserFallback] ✅ Successfully resolved appUser's provider IP on 2nd attempt: \(appUserProviderIP)")
-            return appUserProviderIP
+            // Step 6: If target is appUser, return appUser's IP; otherwise resolve target user's IP
+            if isAppUser {
+                print("DEBUG: [handleProviderIPFallback] ✅ Successfully resolved appUser's provider IP on 2nd attempt: \(appUserProviderIP)")
+                return appUserProviderIP
+            } else {
+                let targetUserProviderIP = try await getProviderIP(targetUserId, attemptNumber: 2)
+                print("DEBUG: [handleProviderIPFallback] ✅ Successfully found provider IP for target user \(targetUserId) on 2nd attempt: \(targetUserProviderIP ?? "nil")")
+                return targetUserProviderIP
+            }
             
         } catch {
             // Restore previous appUser baseUrl on failure
             await MainActor.run {
                 appUser.baseUrl = previousAppUserBaseUrl
             }
-            print("ERROR: [handleAppUserFallback] Fallback failed for appUser, restored appUser.baseUrl to: \(previousAppUserBaseUrl?.absoluteString ?? "nil")")
+            print("ERROR: [handleProviderIPFallback] Fallback failed for \(context), restored appUser.baseUrl to: \(previousAppUserBaseUrl?.absoluteString ?? "nil")")
             throw error
         }
     }
     
-    /// Handle fallback for non-appUser when appUser's baseUrl is also unhealthy:
-    /// Resolve firstIP from app URLs, update appUser's baseUrl, then retry backend call
-    /// - Parameter mid: The non-appUser member ID to get provider IP for
-    /// - Returns: A healthy provider IP address, or throws if retry fails
-    /// - Note: This is different from handleAppUserFallback - we're using firstIP to resolve appUser's IP,
-    ///         which then allows us to query for the target user's IP (similar to initAppEntry)
-    private func handleOtherUserFallback(mid: String) async throws -> String? {
-        print("DEBUG: [handleOtherUserFallback] Starting fallback mechanism for non-appUser: \(mid)")
-        
-        // Step 1: Resolve firstIP from app URLs (this is used to resolve appUser's IP)
-        guard let firstIP = await resolveFirstIPFromAppUrls(avoidInfiniteLoop: false) else {
-            print("ERROR: [handleOtherUserFallback] Failed to resolve firstIP from app URLs")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve firstIP for fallback"])
-        }
-        
-        print("DEBUG: [handleOtherUserFallback] Resolved firstIP: \(firstIP)")
-        
-        // Step 2: Use firstIP to create a temporary client and resolve appUser's provider IP
-        let firstIPBaseURL: URL
-        if let url = URL(string: firstIP) {
-            firstIPBaseURL = url
-        } else if let url = URL(string: "http://\(firstIP)") {
-            firstIPBaseURL = url
-        } else {
-            print("ERROR: [handleOtherUserFallback] Invalid firstIP format: \(firstIP)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid firstIP format"])
-        }
-        
-        // Store previous appUser baseUrl for restoration on failure
-        let previousAppUserBaseUrl = appUser.baseUrl
-        
-        // Temporarily update appUser.baseUrl to firstIP to resolve appUser's provider IP
-        await MainActor.run {
-            appUser.baseUrl = firstIPBaseURL
-        }
-        print("DEBUG: [handleOtherUserFallback] Temporarily set appUser.baseUrl to firstIP: \(firstIPBaseURL.absoluteString)")
-        
-        // Step 3: Resolve appUser's provider IP using the firstIP
-        do {
-            // Get appUser's provider IP using firstIP as the resolution server
-            guard let appUserProviderIP = try await getProviderIP(appUser.mid, attemptNumber: 2) else {
-                print("ERROR: [handleOtherUserFallback] Failed to resolve appUser's provider IP using firstIP")
-                // Restore previous baseUrl on failure
-                await MainActor.run {
-                    appUser.baseUrl = previousAppUserBaseUrl
-                }
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve appUser's provider IP using firstIP"])
-            }
-            
-            print("DEBUG: [handleOtherUserFallback] Resolved appUser's provider IP: \(appUserProviderIP)")
-            
-            // Step 4: Update appUser.baseUrl to the resolved provider IP
-            let appUserResolvedURL: URL
-            if let url = URL(string: appUserProviderIP) {
-                appUserResolvedURL = url
-            } else if let url = URL(string: "http://\(appUserProviderIP)") {
-                appUserResolvedURL = url
-            } else {
-                print("ERROR: [handleOtherUserFallback] Invalid appUser provider IP format: \(appUserProviderIP)")
-                await MainActor.run {
-                    appUser.baseUrl = previousAppUserBaseUrl
-                }
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid appUser provider IP format"])
-            }
-            
-            await MainActor.run {
-                appUser.baseUrl = appUserResolvedURL
-            }
-            print("DEBUG: [handleOtherUserFallback] Updated appUser.baseUrl to resolved provider IP: \(appUserResolvedURL.absoluteString)")
-            
-            // Step 5: Now retry getting the target user's provider IP with the updated appUser baseUrl
-            let targetUserProviderIP = try await getProviderIP(mid, attemptNumber: 2)
-            print("DEBUG: [handleOtherUserFallback] ✅ Successfully found provider IP for target user \(mid) on 2nd attempt: \(targetUserProviderIP ?? "nil")")
-            return targetUserProviderIP
-            
-        } catch {
-            // Restore previous appUser baseUrl on failure
-            await MainActor.run {
-                appUser.baseUrl = previousAppUserBaseUrl
-            }
-            print("ERROR: [handleOtherUserFallback] Fallback failed for user \(mid), restored appUser.baseUrl to: \(previousAppUserBaseUrl?.absoluteString ?? "nil")")
-            throw error
-        }
-    }
+
     
     /// Find IP addresses of given nodeId
     func getHostIP(_ nodeId: String, v4Only: String = "false") async -> String? {
