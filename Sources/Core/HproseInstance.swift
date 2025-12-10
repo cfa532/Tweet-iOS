@@ -1522,7 +1522,7 @@ final class HproseInstance: ObservableObject {
             client = existingClient
         } else {
             let newClient = HproseHttpClient()
-            newClient.timeout = 300
+            newClient.timeout = 10  // 10 seconds for health checks (faster than default 300s)
             newClient.uri = baseURL.appendingPathComponent("webapi/").absoluteString
             disposableClient = newClient
             client = newClient
