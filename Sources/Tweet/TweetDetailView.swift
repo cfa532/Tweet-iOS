@@ -48,6 +48,7 @@ struct DetailMediaCell: View {
     @State private var image: UIImage?
     @State private var loading = false
     let showMuteButton: Bool
+    @State private var hasRestoredPosition = false // Track if we've restored position
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
@@ -160,9 +161,50 @@ struct DetailMediaCell: View {
         }
         .onAppear {
             print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid)")
+            
+            // For videos in detail view, check if we need to restore position
+            if attachment.type == .video || attachment.type == .hls_video {
+                if !hasRestoredPosition {
+                    if let savedState = PersistentVideoStateManager.shared.getState(videoMid: attachment.mid),
+                       PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: attachment.mid, context: .detailView) {
+                        
+                        print("🔄 [DetailMediaCell] Found saved state for \(attachment.mid): time=\(savedState.currentTime.seconds)s, wasPlaying=\(savedState.wasPlaying)")
+                        hasRestoredPosition = true
+                        
+                        // Post notification for SimpleVideoPlayer to restore position
+                        // SimpleVideoPlayer will handle the actual seek operation
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("RestoreVideoPosition"),
+                                object: nil,
+                                userInfo: [
+                                    "videoMid": attachment.mid,
+                                    "time": savedState.currentTime,
+                                    "wasPlaying": savedState.wasPlaying
+                                ]
+                            )
+                        }
+                    }
+                }
+            }
+            
             if attachment.type == .image && image == nil {
                 print("DEBUG: [DetailMediaCell] Starting image load for attachment \(attachmentIndex)")
                 loadImage()
+            }
+        }
+        .onDisappear {
+            // For videos in detail view, post notification to save state
+            // SimpleVideoPlayer will handle the actual state capture
+            if attachment.type == .video || attachment.type == .hls_video {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("SaveVideoPosition"),
+                    object: nil,
+                    userInfo: [
+                        "videoMid": attachment.mid,
+                        "context": PersistentVideoStateManager.VideoPlaybackState.VideoContext.detailView.rawValue
+                    ]
+                )
             }
         }
 
@@ -400,6 +442,11 @@ struct TweetDetailView: View {
         .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
+            
+            // CRITICAL: Stop video playback immediately when navigating away
+            // This ensures video doesn't keep playing in background when user leaves detail view
+            DetailVideoManager.shared.clearCurrentVideo()
+            print("DEBUG: [TweetDetailView] Cleared video on view disappear - video stopped")
             
             // Reset top navigation visibility when view disappears
             withAnimation(.easeInOut(duration: 0.3)) {

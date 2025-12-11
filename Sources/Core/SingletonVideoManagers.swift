@@ -79,6 +79,25 @@ extension VideoPlayerLifecycleManager {
         let currentTime = player.currentTime()
         savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
         
+        // CRITICAL: Also save to persistent storage so it survives player recreation
+        if let detailManager = self as? DetailVideoManager,
+           let videoMid = detailManager.currentVideoMid {
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: videoMid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .detailView
+            )
+        } else if let fullscreenManager = self as? FullScreenVideoManager,
+                  let videoMid = fullscreenManager.currentVideoMid {
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: videoMid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .fullScreen
+            )
+        }
+        
         // Pause the player
         pausePlayer()
         setPlaying(false)
@@ -321,11 +340,32 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         // Check if player item is ready
                         if playerItem.status == .readyToPlay {
                             print("DEBUG: [FullScreenVideoManager] Player item ready immediately")
-                            // Check position and rewind if at end before playing
-                            self.checkAndRewindIfAtEnd {
-                                self.singletonPlayer?.play()
-                                self.isPlaying = true
-                                print("DEBUG: [FullScreenVideoManager] Started playback with fresh playerItem")
+                            
+                            // Check for saved position and restore it
+                            if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
+                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid) {
+                                print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
+                                
+                                self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                                    guard finished, let self = self else { return }
+                                    
+                                    Task { @MainActor in
+                                        print("✅ [FullScreenVideoManager] Restored position to \(savedState.currentTime.seconds)s")
+                                        
+                                        if savedState.wasPlaying {
+                                            self.singletonPlayer?.play()
+                                            self.isPlaying = true
+                                            print("▶️ [FullScreenVideoManager] Resumed playback from saved position")
+                                        }
+                                    }
+                                }
+                            } else {
+                                // No saved state, check position and rewind if at end before playing
+                                self.checkAndRewindIfAtEnd {
+                                    self.singletonPlayer?.play()
+                                    self.isPlaying = true
+                                    print("DEBUG: [FullScreenVideoManager] Started playback with fresh playerItem")
+                                }
                             }
                         } else {
                             print("DEBUG: [FullScreenVideoManager] Player item not ready yet (status: \(playerItem.status.rawValue)), will play when ready")
@@ -386,12 +426,33 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     
                     // Check if player item is ready
                     if playerItem.status == .readyToPlay {
-                        print("DEBUG: [FullScreenVideoManager] Player item ready immediately, checking position before playing")
-                        // Check position and rewind if at end before playing
-                        self.checkAndRewindIfAtEnd {
-                            self.singletonPlayer?.play()
-                            self.isPlaying = true
-                            print("DEBUG: [FullScreenVideoManager] Started playback after position check")
+                        print("DEBUG: [FullScreenVideoManager] Player item ready immediately, checking for saved position")
+                        
+                        // Check for saved position and restore it
+                        if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
+                           let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid) {
+                            print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
+                            
+                            self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                                guard finished, let self = self else { return }
+                                
+                                Task { @MainActor in
+                                    print("✅ [FullScreenVideoManager] Restored position to \(savedState.currentTime.seconds)s")
+                                    
+                                    if savedState.wasPlaying {
+                                        self.singletonPlayer?.play()
+                                        self.isPlaying = true
+                                        print("▶️ [FullScreenVideoManager] Resumed playback from saved position")
+                                    }
+                                }
+                            }
+                        } else {
+                            // No saved state, check position and rewind if at end before playing
+                            self.checkAndRewindIfAtEnd {
+                                self.singletonPlayer?.play()
+                                self.isPlaying = true
+                                print("DEBUG: [FullScreenVideoManager] Started playback after position check")
+                            }
                         }
                     } else {
                         print("DEBUG: [FullScreenVideoManager] Player item not ready yet (status: \(playerItem.status.rawValue)), will play when ready via AVPlayerViewController observer")
@@ -764,6 +825,21 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Clear singleton player content (keeps player instance for reuse)
     func clearSingletonPlayer() {
+        // CRITICAL: Save playback state before clearing
+        if let player = singletonPlayer,
+           let videoMid = currentVideoMid {
+            let wasPlaying = player.rate > 0
+            let currentTime = player.currentTime()
+            
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: videoMid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .fullScreen
+            )
+            print("💾 [FULLSCREEN] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+        }
+        
         // Pause and clear the current item, but keep the player instance
         singletonPlayer?.pause()
         singletonPlayer?.replaceCurrentItem(with: nil)
@@ -849,6 +925,19 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if isPlayerBroken() {
             NSLog("DEBUG: [FullScreenVideoManager] Layer 2 (Security): Player is broken - clearing to force recreation")
             
+            // CRITICAL: Save state before clearing so recreation can restore it
+            if let videoMid = currentVideoMid {
+                let wasPlaying = player.rate > 0
+                let currentTime = player.currentTime()
+                PersistentVideoStateManager.shared.saveState(
+                    videoMid: videoMid,
+                    currentTime: currentTime,
+                    wasPlaying: wasPlaying,
+                    context: .fullScreen
+                )
+                NSLog("💾 [FullScreenVideoManager] Saved state before clearing broken player")
+            }
+            
             // Clear broken player
             clearBrokenPlayer()
             currentVideoMid = nil
@@ -869,20 +958,27 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Ensure mute state is correct
         player.isMuted = false
         
-        // Force view refresh by seeking to current position
-        // This is critical to fix black screen issues
-        let currentTime = player.currentTime()
-        let seekTime: CMTime
+        // Try to get persistent state first, fall back to local saved state
         let wasPlaying: Bool
+        let seekTime: CMTime
         
-        if let savedState = savedPlaybackState {
+        if let videoMid = currentVideoMid,
+           let persistentState = PersistentVideoStateManager.shared.getState(videoMid: videoMid),
+           PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen) {
+            // Use persistent state (survives player recreation)
+            wasPlaying = persistentState.wasPlaying
+            seekTime = persistentState.currentTime
+            print("DEBUG: [FullScreenVideoManager] Using persistent state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+        } else if let savedState = savedPlaybackState {
+            // Use local saved state (same session)
             wasPlaying = savedState.wasPlaying
             seekTime = savedState.time
             print("DEBUG: [FullScreenVideoManager] Using saved state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
             savedPlaybackState = nil
         } else {
+            // No saved state, use current
             wasPlaying = isPlaying
-            seekTime = currentTime
+            seekTime = player.currentTime()
             print("DEBUG: [FullScreenVideoManager] No saved state, using current - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
         }
         
@@ -1039,6 +1135,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         
         currentVideoMid = mid
         
+        // Check if we have saved state for this video
+        let hasSavedState = PersistentVideoStateManager.shared.shouldRestorePlayback(
+            videoMid: mid,
+            context: .detailView
+        )
+        
         // Activate audio session for video playback
         AudioSessionManager.shared.activateForVideoPlayback()
         
@@ -1070,15 +1172,29 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                         
                         // Check if player item is ready immediately
                         if playerItem.status == .readyToPlay {
-                            if autoPlay {
+                            // Restore saved position if available
+                            if hasSavedState,
+                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid) {
+                                print("🔄 [DETAIL VIDEO MANAGER] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
+                                self.currentPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                                    guard finished, let self = self else { return }
+                                    Task { @MainActor in
+                                        if autoPlay || savedState.wasPlaying {
+                                            self.currentPlayer?.play()
+                                            self.isPlaying = true
+                                            print("▶️ [DETAIL VIDEO MANAGER] Resumed playback from saved position")
+                                        }
+                                    }
+                                }
+                            } else if autoPlay {
                                 self.currentPlayer?.play()
                                 self.isPlaying = true
                             }
                         }
                     }
                     
-                    // Auto-play immediately if requested
-                    if autoPlay {
+                    // Auto-play immediately if requested and no saved state
+                    if autoPlay && !hasSavedState {
                         self.currentPlayer?.play()
                         self.isPlaying = true
                         print("DEBUG: [DETAIL VIDEO MANAGER] Auto-playing player for mediaID: \(mid)")
@@ -1094,6 +1210,21 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     
     /// Clear current video
     func clearCurrentVideo() {
+        // CRITICAL: Save playback state before clearing
+        if let player = currentPlayer,
+           let videoMid = currentVideoMid {
+            let wasPlaying = player.rate > 0
+            let currentTime = player.currentTime()
+            
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: videoMid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .detailView
+            )
+            print("💾 [DETAIL VIDEO MANAGER] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+        }
+        
         // Remove KVO observer before clearing (only if it was added)
         if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
             playerItem.removeObserver(self, forKeyPath: "status")
@@ -1223,6 +1354,19 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         if isPlayerBroken() {
             NSLog("DEBUG: [DetailVideoManager] Layer 2 (Security): Player is broken - clearing to force recreation")
             
+            // CRITICAL: Save state before clearing so recreation can restore it
+            if let videoMid = currentVideoMid {
+                let wasPlaying = player.rate > 0
+                let currentTime = player.currentTime()
+                PersistentVideoStateManager.shared.saveState(
+                    videoMid: videoMid,
+                    currentTime: currentTime,
+                    wasPlaying: wasPlaying,
+                    context: .detailView
+                )
+                NSLog("💾 [DetailVideoManager] Saved state before clearing broken player")
+            }
+            
             // Clear broken player completely
             clearBrokenPlayer()
             
@@ -1241,16 +1385,25 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         // Ensure mute state is correct
         player.isMuted = false
         
-        // Use saved state if available, otherwise use current state
+        // Try to get persistent state first, fall back to local saved state
         let wasPlaying: Bool
         let seekTime: CMTime
         
-        if let savedState = savedPlaybackState {
+        if let videoMid = currentVideoMid,
+           let persistentState = PersistentVideoStateManager.shared.getState(videoMid: videoMid),
+           PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .detailView) {
+            // Use persistent state (survives player recreation)
+            wasPlaying = persistentState.wasPlaying
+            seekTime = persistentState.currentTime
+            print("DEBUG: [DetailVideoManager] Using persistent state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+        } else if let savedState = savedPlaybackState {
+            // Use local saved state (same session)
             wasPlaying = savedState.wasPlaying
             seekTime = savedState.time
             print("DEBUG: [DetailVideoManager] Using saved state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
             savedPlaybackState = nil
         } else {
+            // No saved state, use current
             wasPlaying = isPlaying
             seekTime = player.currentTime()
             print("DEBUG: [DetailVideoManager] No saved state, using current - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")

@@ -41,6 +41,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ = MuteState.shared
         print("[AppDelegate] MuteState initialized early")
         
+        // CRITICAL: Initialize SimpleVideoPlayerStateHelper early for persistent state
+        _ = SimpleVideoPlayerStateHelper.shared
+        print("[AppDelegate] SimpleVideoPlayerStateHelper initialized for detail view video state")
+        
         // Start LocalHTTPServer early to ensure it's ready before videos load
         LocalHTTPServer.shared.start()
         print("[AppDelegate] LocalHTTPServer started on app launch")
@@ -191,6 +195,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     @objc private func handleAppDidBecomeActive() {
         print("[AppDelegate] App did become active - checking for screen lock recovery")
+        
+        // Clear stale video states (older than 1 hour)
+        PersistentVideoStateManager.shared.clearStaleStates()
         
         // Check if this is a screen lock recovery (not background recovery)
         if let resignActiveDate = UserDefaults.standard.object(forKey: "lastResignActiveTimestamp") as? Date,

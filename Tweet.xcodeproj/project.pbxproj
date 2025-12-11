@@ -45,6 +45,18 @@
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
+		464EA3502EEAE31800FC6AD1 /* PersistentVideoStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */; };
+		464EA3522EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */; };
+		464EA3542EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3532EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md */; };
+		464EA3562EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3552EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md */; };
+		464EA3582EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3572EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md */; };
+		464EA35A2EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3592EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md */; };
+		464EA35C2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA35B2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md */; };
+		464EA35E2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA35D2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md */; };
+		464EA3602EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */; };
+		464EA3622EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3612EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md */; };
+		464EA3642EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3632EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md */; };
+		464EA3662EEAEB8000FC6AD1 /* QUICKSTART.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3652EEAEB8000FC6AD1 /* QUICKSTART.md */; };
 		465553C32E55EDA500702AFF /* TermsOfServiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C12E55EDA500702AFF /* TermsOfServiceView.swift */; };
 		465553CA2E55F6A900702AFF /* ContentFilterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C82E55F6A900702AFF /* ContentFilterView.swift */; };
 		465553CB2E55F6A900702AFF /* ReportTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C92E55F6A900702AFF /* ReportTweetView.swift */; };
@@ -174,6 +186,18 @@
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
+		464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistentVideoStateManager.swift; sourceTree = "<group>"; };
+		464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackSettings.swift; sourceTree = "<group>"; };
+		464EA3532EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_RESUME_FIX_SUMMARY.md; sourceTree = "<group>"; };
+		464EA3552EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_RESUME_IMPLEMENTATION_GUIDE.md; sourceTree = "<group>"; };
+		464EA3572EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TWEETDETAILVIEW_VIDEO_FIX.md; sourceTree = "<group>"; };
+		464EA3592EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SIMPLEVIDEOPLAYER_INTEGRATION.md; sourceTree = "<group>"; };
+		464EA35B2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FINAL_SUMMARY.md; sourceTree = "<group>"; };
+		464EA35D2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FULLSCREEN_VIDEO_STATUS.md; sourceTree = "<group>"; };
+		464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SimpleVideoPlayer+PersistentState.swift"; sourceTree = "<group>"; };
+		464EA3612EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DETAILVIEW_HANDLER_COMPLETE.md; sourceTree = "<group>"; };
+		464EA3632EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = COMPLETE_VIDEO_RESUME_SOLUTION.md; sourceTree = "<group>"; };
+		464EA3652EEAEB8000FC6AD1 /* QUICKSTART.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUICKSTART.md; sourceTree = "<group>"; };
 		465553C12E55EDA500702AFF /* TermsOfServiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TermsOfServiceView.swift; sourceTree = "<group>"; };
 		465553C82E55F6A900702AFF /* ContentFilterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentFilterView.swift; sourceTree = "<group>"; };
 		465553C92E55F6A900702AFF /* ReportTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportTweetView.swift; sourceTree = "<group>"; };
@@ -365,6 +389,18 @@
 				272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */,
 				4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */,
 				4613ABDE2EE9226D002E1582 /* getProviderIP-Documentation.md */,
+				464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */,
+				464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */,
+				464EA3532EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md */,
+				464EA3552EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md */,
+				464EA3572EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md */,
+				464EA3592EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md */,
+				464EA35B2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md */,
+				464EA35D2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md */,
+				464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */,
+				464EA3612EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md */,
+				464EA3632EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md */,
+				464EA3652EEAEB8000FC6AD1 /* QUICKSTART.md */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -669,9 +705,18 @@
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
 				46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */,
+				464EA3542EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md in Resources */,
+				464EA3562EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md in Resources */,
+				464EA3622EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md in Resources */,
+				464EA3662EEAEB8000FC6AD1 /* QUICKSTART.md in Resources */,
+				464EA3582EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md in Resources */,
 				46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
+				464EA35E2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md in Resources */,
 				4613ABDF2EE9226D002E1582 /* getProviderIP-Documentation.md in Resources */,
+				464EA3642EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md in Resources */,
+				464EA35C2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md in Resources */,
+				464EA35A2EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -747,6 +792,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				464EA3502EEAE31800FC6AD1 /* PersistentVideoStateManager.swift in Sources */,
 				E3D452B1D03C4C09827F92B7 /* UploadProgressManager.swift in Sources */,
 				A0F8F09D30F34289B896499E /* UploadProgressOverlay.swift in Sources */,
 				4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */,
@@ -831,11 +877,13 @@
 				460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */,
 				46E5B3632DE1703200AEF31F /* Registration.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */,
+				464EA3602EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift in Sources */,
 				46E5B3572DDF74B500AEF31F /* CommentComposeView.swift in Sources */,
 				46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */,
 				46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */,
 				468F19EF2E5FEA850085BFE5 /* VideoLoadingManager.swift in Sources */,
+				464EA3522EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift in Sources */,
 				465553CA2E55F6A900702AFF /* ContentFilterView.swift in Sources */,
 				465553CB2E55F6A900702AFF /* ReportTweetView.swift in Sources */,
 				4612ED1C2E924A18005D5B8B /* URLExtension.swift in Sources */,
