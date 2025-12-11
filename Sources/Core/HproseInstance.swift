@@ -65,7 +65,7 @@ final class HproseInstance: ObservableObject {
     /// - AppDelegate.handleAppWillEnterForeground() calls refreshAppUserIP() which:
     ///   1. Calls refreshAppUserFromServer(forceIPRefresh: true)
     ///   2. Uses getProviderIP() for intelligent IP resolution with health checks
-    ///   3. Automatically falls back to resolving firstIP if provider IPs are unhealthy
+    ///   3. Automatically falls back to resolving entryIP if provider IPs are unhealthy
     ///   4. Updates both HproseInstance.baseUrl and appUser.baseUrl
     /// - This ensures stale IPs don't persist after long background periods
     ///
@@ -457,9 +457,9 @@ final class HproseInstance: ObservableObject {
                     lastInitializationAddresses = addrs
                 }
                 
-                if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
+                if let entryIP = Gadget.shared.filterIpAddresses(addrs) {
                     
-                    HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
+                    HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
                     client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                     
                     if !appUser.isGuest {
@@ -470,13 +470,13 @@ final class HproseInstance: ObservableObject {
                         
                         if let user = user {
                             // Valid login user is found, use its provider IP as base.
-                            // If user doesn't have a baseUrl, fall back to firstIp
+                            // If user doesn't have a baseUrl, fall back to entryIP
                             if let userBaseUrlString = user.baseUrl?.absoluteString, !userBaseUrlString.isEmpty, let userBaseUrl = URL(string: userBaseUrlString) {
                                 HproseInstance.baseUrl = userBaseUrl
                             } else {
-                                // User doesn't have a valid baseUrl, use the resolved firstIp
-                                print("DEBUG: [initAppEntry] User has no baseUrl, using resolved IP: \(firstIp)")
-                                HproseInstance.baseUrl = URL(string: "http://\(firstIp)")!
+                                // User doesn't have a valid baseUrl, use the resolved entryIP
+                                print("DEBUG: [initAppEntry] User has no baseUrl, using resolved IP: \(entryIP)")
+                                HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
                             }
                             client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
                             
@@ -526,7 +526,7 @@ final class HproseInstance: ObservableObject {
                                 // App is now initialized since appUser has IP address
                                 isInitializationComplete = true
                             }
-                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
+                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
                         }
                     } else {
                         let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -538,7 +538,7 @@ final class HproseInstance: ObservableObject {
                             // App is now initialized since appUser has IP address
                             isInitializationComplete = true
                         }
-                        print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(firstIp)")
+                        print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
                         
                         // For guest users, fetch the alphaId user from backend now that we have proper IP
                         await fetchAlphaIdUserForGuest()
@@ -5794,13 +5794,13 @@ final class HproseInstance: ObservableObject {
     /// This is the fallback mechanism used during app initialization
     /// - Parameter avoidInfiniteLoop: Internal flag to prevent recursive calls
     /// - Returns: First valid IP address from app URLs, or nil if none found
-    private func resolveFirstIPFromAppUrls(avoidInfiniteLoop: Bool = false) async -> String? {
+    private func resolveEntryIPFromAppUrls(avoidInfiniteLoop: Bool = false) async -> String? {
         guard !avoidInfiniteLoop else {
-            print("DEBUG: [resolveFirstIPFromAppUrls] Avoiding infinite loop, returning nil")
+            print("DEBUG: [resolveEntryIPFromAppUrls] Avoiding infinite loop, returning nil")
             return nil
         }
         
-        print("DEBUG: [resolveFirstIPFromAppUrls] Starting fallback IP resolution from app URLs")
+        print("DEBUG: [resolveEntryIPFromAppUrls] Starting fallback IP resolution from app URLs")
         
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
@@ -5809,17 +5809,17 @@ final class HproseInstance: ObservableObject {
                 
                 guard let addrs = paramData["addrs"] as? String else { continue }
                 
-                if let firstIp = Gadget.shared.filterIpAddresses(addrs) {
-                    print("DEBUG: [resolveFirstIPFromAppUrls] Successfully resolved fallback IP: \(firstIp)")
-                    return firstIp
+                if let entryIP = Gadget.shared.filterIpAddresses(addrs) {
+                    print("DEBUG: [resolveEntryIPFromAppUrls] Successfully resolved fallback IP: \(entryIP)")
+                    return entryIP
                 }
             } catch {
-                print("DEBUG: [resolveFirstIPFromAppUrls] Error processing URL \(url): \(error)")
+                print("DEBUG: [resolveEntryIPFromAppUrls] Error processing URL \(url): \(error)")
                 continue
             }
         }
         
-        print("WARN: [resolveFirstIPFromAppUrls] Failed to resolve any IP from app URLs")
+        print("WARN: [resolveEntryIPFromAppUrls] Failed to resolve any IP from app URLs")
         return nil
     }
     
@@ -5931,13 +5931,13 @@ final class HproseInstance: ObservableObject {
                         print("DEBUG: [getProviderIP] ✅ AppUser's baseUrl is healthy, failing for user \(mid)")
                         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed health check for user: \(mid) (appUser connection is healthy)"])
                     } else {
-                        // AppUser's connection is also unhealthy, try to resolve new firstIP
-                        print("WARN: [getProviderIP] ❌ AppUser's baseUrl is unhealthy, attempting to resolve new firstIP")
+                        // AppUser's connection is also unhealthy, try to resolve new entryIP
+                        print("WARN: [getProviderIP] ❌ AppUser's baseUrl is unhealthy, attempting to resolve new entryIP")
                         return try await handleProviderIPFallback(for: mid)
                     }
                 } else {
-                    // No appUser baseUrl available, try to resolve new firstIP
-                    print("WARN: [getProviderIP] No appUser baseUrl available, attempting to resolve new firstIP")
+                    // No appUser baseUrl available, try to resolve new entryIP
+                    print("WARN: [getProviderIP] No appUser baseUrl available, attempting to resolve new entryIP")
                     return try await handleProviderIPFallback(for: mid)
                 }
             }
@@ -5947,12 +5947,12 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed health check for user: \(mid) after \(attemptNumber) attempt(s)"])
     }
     
-    /// Shared fallback implementation: resolve firstIP, update client URI, then resolve target user's provider IP
+    /// Shared fallback implementation: resolve entryIP, update client URI, then resolve target user's provider IP
     ///
     /// This method implements a fallback mechanism when provider IP resolution fails:
-    /// 1. Resolves firstIP from app URLs (generic fallback IP)
-    /// 2. Temporarily updates `self.client.uri` to use firstIP
-    /// 3. Uses firstIP client to resolve target user's provider IP (works for any user)
+    /// 1. Resolves entryIP from app URLs (generic fallback IP)
+    /// 2. Temporarily updates `self.client.uri` to use entryIP
+    /// 3. Uses entryIP client to resolve target user's provider IP (works for any user)
     /// 4. If target is appUser, also updates `appUser.baseUrl`
     /// 5. Restores previous client URI on any failure
     ///
@@ -5964,33 +5964,33 @@ final class HproseInstance: ObservableObject {
         let context = isAppUser ? "appUser" : "non-appUser: \(targetUserId)"
         print("DEBUG: [handleProviderIPFallback] Starting fallback mechanism for \(context)")
         
-        // Step 1: Resolve firstIP from app URLs
-        guard let firstIP = await resolveFirstIPFromAppUrls(avoidInfiniteLoop: false) else {
-            print("ERROR: [handleProviderIPFallback] Failed to resolve firstIP from app URLs")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve firstIP for fallback"])
+        // Step 1: Resolve entryIP from app URLs
+        guard let entryIP = await resolveEntryIPFromAppUrls(avoidInfiniteLoop: false) else {
+            print("ERROR: [handleProviderIPFallback] Failed to resolve entryIP from app URLs")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve entryIP for fallback"])
         }
         
-        print("DEBUG: [handleProviderIPFallback] Resolved firstIP: \(firstIP)")
+        print("DEBUG: [handleProviderIPFallback] Resolved entryIP: \(entryIP)")
         
-        // Step 2: Convert firstIP to URL
-        guard let firstIPBaseURL = URL(string: firstIP) ?? URL(string: "http://\(firstIP)") else {
-            print("ERROR: [handleProviderIPFallback] Invalid firstIP format: \(firstIP)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid firstIP format"])
+        // Step 2: Convert entryIP to URL
+        guard let entryIPBaseURL = URL(string: entryIP) ?? URL(string: "http://\(entryIP)") else {
+            print("ERROR: [handleProviderIPFallback] Invalid entryIP format: \(entryIP)")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid entryIP format"])
         }
         
-        // Step 3: Temporarily update self.client.uri to use firstIP
+        // Step 3: Temporarily update self.client.uri to use entryIP
         let previousClientUri = client.uri
-        let firstIPUri = firstIPBaseURL.appendingPathComponent("/webapi/").absoluteString
-        client.uri = firstIPUri
-        print("DEBUG: [handleProviderIPFallback] Temporarily set self.client.uri to firstIP: \(firstIPUri)")
+        let entryIPUri = entryIPBaseURL.appendingPathComponent("/webapi/").absoluteString
+        client.uri = entryIPUri
+        print("DEBUG: [handleProviderIPFallback] Temporarily set self.client.uri to entryIP: \(entryIPUri)")
         
-        // Step 4: Use firstIP client to resolve target user's provider IP
+        // Step 4: Use entryIP client to resolve target user's provider IP
         do {
             guard let targetProviderIP = try await getProviderIP(targetUserId, attemptNumber: 2) else {
-                print("ERROR: [handleProviderIPFallback] Failed to resolve provider IP for \(context) using firstIP")
+                print("ERROR: [handleProviderIPFallback] Failed to resolve provider IP for \(context) using entryIP")
                 // Restore previous client URI
                 client.uri = previousClientUri
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve provider IP for \(context) using firstIP"])
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve provider IP for \(context) using entryIP"])
             }
             
             print("DEBUG: [handleProviderIPFallback] ✅ Resolved provider IP for \(context): \(targetProviderIP)")
