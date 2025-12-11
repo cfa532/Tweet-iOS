@@ -483,6 +483,25 @@ struct MediaGridView: View, Equatable {
             // No state changes, no checks, no work - just mark as visible
             if hasInitialized {
                 isVisible = true
+                
+                // CRITICAL FIX: Even though initialized, we need to ensure VideoManager state
+                // is correct when grid reappears (e.g., after scrolling away and back)
+                let videoMids = attachments.enumerated().compactMap { index, attachment in
+                    if attachment.type == .video || attachment.type == .hls_video {
+                        return attachment.mid
+                    }
+                    return nil
+                }
+                
+                if videoMids.count >= 1 {
+                    // Check if VideoManager needs to be re-initialized for this tweet
+                    let needsReinit = videoManager.videoMids != videoMids || videoManager.videoMids.isEmpty
+                    if needsReinit {
+                        print("DEBUG: [MediaGridView] Re-initializing VideoManager on reappear for tweet \(parentTweet.mid)")
+                        videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                    }
+                }
+                
                 return
             }
             
@@ -519,18 +538,23 @@ struct MediaGridView: View, Equatable {
             // This prevents recomposition when scrolling up past retweets
             if videoMids.count >= 1 {
                 let alreadySetup = videoManager.videoMids == videoMids && videoManager.currentVideoIndex >= 0
+                print("DEBUG: [MediaGridView] onAppear for tweet \(parentTweet.mid): videoMids=\(videoMids), alreadySetup=\(alreadySetup), currentIndex=\(videoManager.currentVideoIndex)")
+                
                 if !alreadySetup && !hasSetupSequentialPlayback {
                     videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
                     hasSetupSequentialPlayback = true
+                    print("DEBUG: [MediaGridView] ✅ Setup sequential playback for tweet \(parentTweet.mid), currentIndex after setup: \(videoManager.currentVideoIndex)")
                     
                     // If all videos were finished (saved index >= count), restart from beginning
                     if videoManager.currentVideoIndex >= videoMids.count {
                         videoManager.currentVideoIndex = 0
                         videoManager.saveCurrentIndex(for: parentTweet.mid)
+                        print("DEBUG: [MediaGridView] Reset currentVideoIndex to 0 (was >= count)")
                     }
                 } else if alreadySetup {
                     // Already set up - mark as done to prevent future checks
                     hasSetupSequentialPlayback = true
+                    print("DEBUG: [MediaGridView] Already set up for tweet \(parentTweet.mid), currentIndex: \(videoManager.currentVideoIndex)")
                 }
             }
             

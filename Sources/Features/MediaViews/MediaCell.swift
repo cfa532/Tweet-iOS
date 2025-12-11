@@ -40,6 +40,7 @@ struct MediaCell: View, Equatable {
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
+    @State private var shouldAutoPlay = false // Track if video should autoplay
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
@@ -52,6 +53,20 @@ struct MediaCell: View, Equatable {
         self.onVideoFinished = onVideoFinished
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
+        
+        // Initialize shouldAutoPlay based on initial conditions
+        if let attachments = parentTweet.attachments,
+           attachmentIndex >= 0 && attachmentIndex < attachments.count {
+            let attachment = attachments[attachmentIndex]
+            let isVideo = attachment.type == .video || attachment.type == .hls_video
+            if isVideo {
+                self._shouldAutoPlay = State(initialValue: videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo && isVisible)
+            } else {
+                self._shouldAutoPlay = State(initialValue: false)
+            }
+        } else {
+            self._shouldAutoPlay = State(initialValue: false)
+        }
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -161,6 +176,27 @@ struct MediaCell: View, Equatable {
             // onAppear fires when any portion of the view becomes visible
             isVisible = true
             
+            // For video attachments, update autoplay state based on current conditions
+            if isVideoAttachment {
+                let managerSays = videoManager.shouldPlayVideo(for: attachment.mid)
+                shouldAutoPlay = managerSays && shouldLoadVideo
+                print("DEBUG: [MediaCell] onAppear for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), videoManager=\(managerSays), shouldLoadVideo=\(shouldLoadVideo), currentIndex=\(videoManager.currentVideoIndex), videoMids=\(videoManager.videoMids)")
+                
+                // CRITICAL FIX: If this is a new grid that just appeared and has videos,
+                // ensure VideoManager knows to play the first video
+                if !managerSays && shouldLoadVideo {
+                    // Check if this video is in the manager's list
+                    if let videoIndex = videoManager.videoMids.firstIndex(of: attachment.mid) {
+                        // This video is in the list but not set to play
+                        // If it's the current index, we should play it
+                        if videoIndex == videoManager.currentVideoIndex {
+                            print("⚠️ [MediaCell] VideoManager has video at current index but shouldPlayVideo=false. Forcing shouldAutoPlay=true")
+                            shouldAutoPlay = true
+                        }
+                    }
+                }
+            }
+            
             // Load image if not already loaded - ONLY for image attachments
             if attachment.type == .image && image == nil {
                 loadImage()
@@ -181,8 +217,19 @@ struct MediaCell: View, Equatable {
             GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(baseUrl.absoluteString)")
         }
         .onChange(of: isVisible) { _, newValue in
-            // Handle visibility changes - image loading is now handled in onAppear
-            // This prevents conflicts with the onAppear block
+            // Update autoplay state when visibility changes for video attachments
+            if isVideoAttachment && newValue {
+                shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo
+                print("DEBUG: [MediaCell] onChange(isVisible) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
+            }
+        }
+        
+        .onChange(of: shouldLoadVideo) { _, newValue in
+            // Update autoplay state when shouldLoadVideo changes for video attachments
+            if isVideoAttachment && isVisible && newValue {
+                shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid)
+                print("DEBUG: [MediaCell] onChange(shouldLoadVideo) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
+            }
         }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
@@ -308,7 +355,7 @@ struct MediaCell: View, Equatable {
                 parentTweetId: parentTweet.mid,
                 isVisible: isVisible,
                 mediaType: attachment.type,
-                autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
+                autoPlay: shouldAutoPlay, // Use state variable instead of computed value
                 videoManager: videoManager,
                 onVideoFinished: onVideoFinished,
                 cellAspectRatio: CGFloat(aspectRatio),
