@@ -267,15 +267,17 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Trigger video preloading for a tweet
+    /// This works by posting a notification that MediaGridView listens to
+    /// MediaGridView will then set shouldLoadVideo=true, causing MediaCell to load the video
     @MainActor func triggerVideoPreloadingForTweet(_ tweetId: String) {
-        // Find all mediaIDs associated with this tweet and trigger preloading
-        let tweetMediaIDs = getMediaIDsForTweet(tweetId)
-        for mediaID in tweetMediaIDs {
-            // We need to reconstruct the URL from mediaID for preloading
-            // This is a limitation - we might need to store URLs separately for preloading
-            print("DEBUG: [SharedAssetCache] Cannot preload video for mediaID \(mediaID) without URL")
-        }
-        print("DEBUG: [SharedAssetCache] Triggered video preloading for tweet \(tweetId) with \(tweetMediaIDs.count) mediaIDs")
+        // Post notification for MediaGridView to handle
+        // MediaGridView will enable video loading for this tweet
+        NotificationCenter.default.post(
+            name: .triggerVideoPreloading,
+            object: nil,
+            userInfo: ["tweetId": tweetId]
+        )
+        print("DEBUG: [SharedAssetCache] Posted video preloading notification for tweet \(tweetId)")
     }
     
     /// Extract mediaID from URL

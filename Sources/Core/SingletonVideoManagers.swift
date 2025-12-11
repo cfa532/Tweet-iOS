@@ -517,10 +517,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             }
             
             // Show spinner if:
-            // 1. Buffer is explicitly empty, OR
+            // 1. Buffer is explicitly empty AND we don't have significant buffered data (work around AVPlayer bug), OR
             // 2. Player is explicitly waiting, OR
             // 3. Item is ready but buffer is empty or very small (< 0.5s) and not likely to keep up
-            let shouldShowSpinner = isBufferEmpty || isWaiting || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
+            // IMPORTANT: Don't trust isPlaybackBufferEmpty alone - it can be stuck at true after backgrounding
+            // even when we have plenty of buffered data. Only show spinner if buffer is truly insufficient.
+            let hasSignificantBuffer = hasBufferedData && bufferedDuration >= 1.0
+            let shouldShowSpinner = (isBufferEmpty && !hasSignificantBuffer) || isWaiting || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
             
             NSLog("🔍 [FULLSCREEN WAITING] bufferEmpty: \(isBufferEmpty), likelyToKeepUp: \(isLikelyToKeepUp), waiting: \(isWaiting), hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDuration))s, status: \(itemStatus.rawValue), shouldShow: \(shouldShowSpinner)")
             

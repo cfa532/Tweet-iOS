@@ -137,8 +137,9 @@ struct TweetItemView: View, Equatable {
         }
         // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
         // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
-        .task(id: tweet.originalTweetId) {
+        .task(id: tweet.originalTweetId, priority: .userInitiated) {
             // Load original tweet if this is a retweet/quoted tweet
+            // Use .userInitiated priority for faster loading of visible content
             guard let originalTweetId = tweet.originalTweetId,
                   let originalAuthorId = tweet.originalAuthorId else {
                 return

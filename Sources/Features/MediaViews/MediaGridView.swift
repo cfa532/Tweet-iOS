@@ -564,28 +564,25 @@ struct MediaGridView: View, Equatable {
             let hasMedia = hasVideos || hasAudio
             
             if hasMedia {
-                    // CRITICAL: Disable video loading for embedded tweets to prevent layout instability
-                    // Embedded tweets are small and loading multiple videos simultaneously causes layout shifts
-                    if isEmbedded {
-                        shouldLoadVideo = false
-                    } else {
-                        // Register this tweet as containing media (videos or audio)
-                        // This is important for tweets with multiple attachments to be tracked
-                        videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
-                        
-                        // Check if this tweet should load media based on VideoLoadingManager
-                        // CRITICAL: Only check if shouldLoadVideo is false to avoid unnecessary state checks
-                        // This prevents recomposition when scrolling up past already-loaded retweets
-                        if !shouldLoadVideo {
-                            let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
-                            if shouldLoad {
-                                // Allow enabling loading
-                                shouldLoadVideo = true
-                            }
-                        }
-                        // If shouldLoadVideo is already true, don't check or change it
-                        // This keeps already-loaded videos loaded, preventing layout instability
+                // Register this tweet as containing media (videos or audio)
+                // This is important for tweets with multiple attachments to be tracked
+                videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                
+                // Check if this tweet should load media based on VideoLoadingManager
+                // For embedded tweets, still check - if VideoLoadingManager says yes (e.g., it's the original
+                // of a visible retweet), then allow loading
+                // CRITICAL: Only check if shouldLoadVideo is false to avoid unnecessary state checks
+                // This prevents recomposition when scrolling up past already-loaded retweets
+                if !shouldLoadVideo {
+                    let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
+                    if shouldLoad {
+                        // Allow enabling loading even for embedded tweets if VideoLoadingManager approves
+                        // This allows videos in original tweets of visible retweets to load
+                        shouldLoadVideo = true
                     }
+                }
+                // If shouldLoadVideo is already true, don't check or change it
+                // This keeps already-loaded videos loaded, preventing layout instability
             }
         }
         .onDisappear {

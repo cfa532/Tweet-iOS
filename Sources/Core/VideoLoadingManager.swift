@@ -85,14 +85,12 @@ class VideoLoadingManager: ObservableObject {
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldLoadVideos(for tweetId: String) -> Bool {
         
-        // DISABLED: Original tweets of retweets no longer load automatically to prevent layout instability
-        // Videos in embedded tweets cause layout shifts when multiple retweets with videos are visible
-        // Users can still tap to view videos in fullscreen if they want to watch them
-        // let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
-        // if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
-        //     print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing loading")
-        //     return true
-        // }
+        // HIGHEST PRIORITY: Original tweets of visible retweets should load immediately
+        let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
+        if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing loading")
+            return true
+        }
         
         guard let index = allTweetIds.firstIndex(of: tweetId) else { 
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) not found in allTweetIds - denying loading")
@@ -142,12 +140,12 @@ class VideoLoadingManager: ObservableObject {
     /// Check if a tweet should preload videos/audio
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldPreloadVideos(for tweetId: String) -> Bool {
-        // DISABLED: Original tweets of retweets no longer preload automatically to prevent layout instability
-        // let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
-        // if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
-        //     print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing preloading")
-        //     return true
-        // }
+        // HIGHEST PRIORITY: Original tweets of visible retweets should preload
+        let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
+        if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing preloading")
+            return true
+        }
         
         guard let index = allTweetIds.firstIndex(of: tweetId) else { return false }
         
