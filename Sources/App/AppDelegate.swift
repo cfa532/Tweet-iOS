@@ -15,6 +15,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     // Track if app has finished launching to distinguish startup from background recovery
     private var hasFinishedLaunching = false
     
+    // Track ongoing infrastructure restart to prevent overlapping restarts
+    private var infrastructureRestartTask: Task<Void, Never>?
+    private var isRestartingInfrastructure = false
+    
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
         // AV_LOG_ERROR = 16 - only show fatal errors, suppress INFO/WARNING/DEBUG
@@ -175,6 +179,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     @objc private func handleAppWillResignActive() {
         print("[AppDelegate] App will resign active - storing timestamp for screen lock detection")
         
+        // Cancel any ongoing infrastructure restart task
+        infrastructureRestartTask?.cancel()
+        infrastructureRestartTask = nil
+        isRestartingInfrastructure = false
+        
         // Store timestamp when app loses focus (screen lock or background)
         // This helps distinguish between screen lock and background scenarios
         UserDefaults.standard.set(Date(), forKey: "lastResignActiveTimestamp")
@@ -197,13 +206,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     // LONG screen lock (>5min) - full restart needed
                     print("[AppDelegate] Long screen lock (\(Int(timeInactive))s) - forcing full restart")
                     
+                    // Check if already restarting
+                    if isRestartingInfrastructure {
+                        print("[AppDelegate] Infrastructure restart already in progress, skipping")
+                        return
+                    }
+                    
                     SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                     
                     // Show loading indicator (non-blocking - allows user to scroll)
                     showLoadingOverlay()
                     
                     // Restart infrastructure asynchronously (non-blocking)
-                    Task.detached(priority: .userInitiated) {
+                    infrastructureRestartTask = Task.detached(priority: .userInitiated) {
                         // Restart server in background
                         await self.restartVideoInfrastructureAsync()
                         
@@ -229,13 +244,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     } else {
                         // Server killed during screen lock - restart it
                         print("[AppDelegate] Server killed during screen lock, restarting...")
+                        
+                        // Check if already restarting
+                        if isRestartingInfrastructure {
+                            print("[AppDelegate] Infrastructure restart already in progress, skipping")
+                            return
+                        }
+                        
                         SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                         
                         // Show loading indicator (non-blocking)
                         showLoadingOverlay()
                         
                         // Restart server asynchronously (non-blocking)
-                        Task.detached(priority: .userInitiated) {
+                        infrastructureRestartTask = Task.detached(priority: .userInitiated) {
                             // Restart server in background
                             LocalHTTPServer.shared.startAndWait()
                             
@@ -337,12 +359,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 // Even if isRunning=true, the listener may be suspended and unresponsive
                 NSLog("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
                 
+                // Check if already restarting
+                if isRestartingInfrastructure {
+                    NSLog("[AppDelegate] Infrastructure restart already in progress, skipping")
+                    return
+                }
+                
                 // Show loading indicator (non-blocking - allows user to scroll)
                 showLoadingOverlay()
                 
                 // Restart infrastructure asynchronously (non-blocking)
                 // Videos will show loading state until server is ready, but UI remains interactive
-                Task.detached(priority: .userInitiated) {
+                infrastructureRestartTask = Task.detached(priority: .userInitiated) {
                     // Restart server in background
                     await self.restartVideoInfrastructureAsync()
                     
@@ -471,6 +499,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     /// Async restart (non-blocking - allows UI to remain interactive)
     private func restartVideoInfrastructureAsync() async {
+        // Check if already cancelled
+        guard !Task.isCancelled else {
+            print("[AppDelegate] Infrastructure restart cancelled before starting")
+            isRestartingInfrastructure = false
+            return
+        }
+        
+        // Mark as restarting
+        isRestartingInfrastructure = true
+        
         print("[AppDelegate] Restarting video infrastructure asynchronously (non-blocking)")
         let startTime = Date()
         
@@ -486,6 +524,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Reset LocalHTTPServer connection pool (fast operation)
         LocalHTTPServer.shared.resetConnectionPool()
         
+        // Check if cancelled
+        guard !Task.isCancelled else {
+            print("[AppDelegate] Infrastructure restart cancelled during reset")
+            await clearTask.value
+            isRestartingInfrastructure = false
+            return
+        }
+        
         // OPTIMIZATION: Only stop if server is running, skip stop if already stopped
         // This avoids unnecessary wait if server was already stopped
         let needsStop = LocalHTTPServer.shared.isRunning
@@ -496,8 +542,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s instead of 0.5s
         }
         
+        // Check if cancelled
+        guard !Task.isCancelled else {
+            print("[AppDelegate] Infrastructure restart cancelled during stop")
+            await clearTask.value
+            isRestartingInfrastructure = false
+            return
+        }
+        
         // Wait for player clearing to complete (runs in parallel)
         await clearTask.value
+        
+        // Check if cancelled before restarting
+        guard !Task.isCancelled else {
+            print("[AppDelegate] Infrastructure restart cancelled before restart")
+            isRestartingInfrastructure = false
+            return
+        }
         
         // Restart the server - use faster method if possible
         // OPTIMIZATION: If server is already running (rare), skip restart
@@ -509,6 +570,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         let elapsed = Date().timeIntervalSince(startTime)
         print("[AppDelegate] Video infrastructure restart complete (async) in \(String(format: "%.2f", elapsed))s")
+        
+        // Mark as complete
+        isRestartingInfrastructure = false
+        infrastructureRestartTask = nil
     }
     
     private func performImmediateBackgroundCheck() {

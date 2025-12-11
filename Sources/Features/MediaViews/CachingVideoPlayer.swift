@@ -32,6 +32,8 @@ struct CachingVideoPlayer: View {
     @State private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
     @State private var hasRecoveredThisCycle = false
     @State private var playerRefreshID = UUID()
+    @State private var recoveryTask: Task<Void, Never>?
+    @State private var isRecovering = false
     
     init(
         url: URL,
@@ -363,6 +365,11 @@ struct CachingVideoPlayer: View {
     }
     
     private func cleanupPlayer() {
+        // Cancel any ongoing recovery task
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        isRecovering = false
+        
         // Remove video completion observer
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -390,6 +397,11 @@ struct CachingVideoPlayer: View {
     private func handleWillResignActive() {
         print("DEBUG: [CachingVideoPlayer] App will resign active for \(mid)")
         hasRecoveredThisCycle = false
+        
+        // Cancel any ongoing recovery task
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        isRecovering = false
         
         // Save playback state
         if let player = player {
@@ -424,6 +436,15 @@ struct CachingVideoPlayer: View {
     }
     
     private func recoverFromBackground() {
+        // Cancel any ongoing recovery task first
+        recoveryTask?.cancel()
+        
+        // Check if we're already recovering
+        if isRecovering {
+            print("DEBUG: [CachingVideoPlayer] Recovery already in progress for \(mid), skipping")
+            return
+        }
+        
         // Always check if player is broken, even if we don't have one yet
         if let player = player, !isPlayerBroken() {
             // Player is healthy, restore state
@@ -447,25 +468,49 @@ struct CachingVideoPlayer: View {
         // Player is broken or doesn't exist - recreate it
         print("DEBUG: [CachingVideoPlayer] Player is broken or missing for \(mid), recreating...")
         
-        // Clear broken player
-        if let observer = videoCompletionObserver {
-            NotificationCenter.default.removeObserver(observer)
-            videoCompletionObserver = nil
+        // Mark as recovering
+        isRecovering = true
+        
+        // Create recovery task that can be cancelled
+        recoveryTask = Task { @MainActor in
+            // Check if cancelled before proceeding
+            guard !Task.isCancelled else {
+                print("DEBUG: [CachingVideoPlayer] Recovery cancelled before starting for \(mid)")
+                isRecovering = false
+                return
+            }
+            
+            // Clear broken player
+            if let observer = videoCompletionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                videoCompletionObserver = nil
+            }
+            
+            player?.pause()
+            self.player = nil
+            isLoading = true
+            loadFailed = false
+            
+            // Force view refresh when recreating player
+            playerRefreshID = UUID()
+            
+            // Check if cancelled before recreating player
+            guard !Task.isCancelled else {
+                print("DEBUG: [CachingVideoPlayer] Recovery cancelled during cleanup for \(mid)")
+                isRecovering = false
+                return
+            }
+            
+            // Recreate player
+            setupPlayer()
+            
+            savedPlaybackState = nil
+            hasRecoveredThisCycle = true
+            isRecovering = false
+            recoveryTask = nil
+            
+            print("DEBUG: [CachingVideoPlayer] Recovery completed for \(mid)")
         }
-        
-        player?.pause()
-        self.player = nil
-        isLoading = true
-        loadFailed = false
-        
-        // Force view refresh when recreating player
-        playerRefreshID = UUID()
-        
-        // Recreate player
-        setupPlayer()
-        
-        savedPlaybackState = nil
-        hasRecoveredThisCycle = true
     }
     
     private func isPlayerBroken() -> Bool {
