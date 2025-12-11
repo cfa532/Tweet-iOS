@@ -17,7 +17,7 @@ enum Mode {
 }
 
 // MARK: - Consolidated State Enums
-enum LoadingState {
+enum LoadingState: Equatable {
     case idle
     case loading
     case loaded
@@ -262,6 +262,7 @@ struct SimpleVideoPlayer: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
             .onTapGesture { handleTap() }
             .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
+            .task(id: loadingState) { await performPeriodicHealthCheck() }
     }
     
     @ViewBuilder
@@ -956,8 +957,20 @@ struct SimpleVideoPlayer: View {
                     }
                 } else if self.loadingState.isLoading && playerItem.status == .readyToPlay {
                     // Player is ready but loadingState is stuck - fix it
-                    print("⚠️ [VIDEO HEALTH CHECK] LoadingState stuck at .loading but player is ready, fixing for \(self.mid)")
-                    self.loadingState = .loaded
+                    // CRITICAL: Also check if there's buffered data before declaring it loaded
+                    let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                    let bufferedDuration = self.bufferedTimeAhead(for: playerItem, player: player)
+                    
+                    if hasBufferedData && bufferedDuration >= self.firstFrameMinimumBuffer {
+                        print("⚠️ [VIDEO HEALTH CHECK] LoadingState stuck at .loading but player is ready with sufficient buffer (\(String(format: "%.2f", bufferedDuration))s), fixing for \(self.mid)")
+                        self.loadingState = .loaded
+                        self.retryAttempts = 0
+                        if self.mode == .mediaCell {
+                            self.hasInitialized = true
+                        }
+                    } else {
+                        print("⏳ [VIDEO HEALTH CHECK] LoadingState at .loading, player ready but waiting for more buffer data (\(String(format: "%.2f", bufferedDuration))s < \(String(format: "%.2f", self.firstFrameMinimumBuffer))s required)")
+                    }
                 }
             }
         }
@@ -2138,7 +2151,13 @@ struct SimpleVideoPlayer: View {
         self.player = player
         // DON'T set loadingState = .loaded here! Let the KVO observers handle it based on actual readiness
         // CRITICAL: Don't overwrite .loaded state (tweetDetail sets it before calling this)
-        if !self.loadingState.isLoaded {
+        // BUT: If player is already ready with data, set to .loaded immediately to prevent stuck spinner
+        if let playerItem = player.currentItem,
+           playerItem.status == .readyToPlay,
+           !playerItem.loadedTimeRanges.isEmpty {
+            self.loadingState = .loaded
+            NSLog("✅ [VIDEO CONFIGURE] Player already ready with buffered data, setting loadingState to .loaded for \(mid)")
+        } else if !self.loadingState.isLoaded {
             self.loadingState = .loading  // Show spinner while video loads
         }
         self.playbackState = .notStarted
@@ -2461,10 +2480,12 @@ struct SimpleVideoPlayer: View {
             NSLog("🔍 [INITIAL CHECK] Player status: \(playerItem.status.rawValue), buffered: \(!playerItem.loadedTimeRanges.isEmpty) for \(mid)")
             if playerItem.status == .readyToPlay {
                 let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-                NSLog("✅ [INITIAL CHECK] Already ready for \(mid) - buffered: \(hasBufferedData)")
+                let bufferedDuration = self.bufferedTimeAhead(for: playerItem, player: player)
+                NSLog("✅ [INITIAL CHECK] Already ready for \(mid) - buffered: \(hasBufferedData), duration: \(String(format: "%.2f", bufferedDuration))s")
                 
                 // Hide spinner if we have buffered data
-                if hasBufferedData {
+                // CRITICAL FIX: Check bufferedDuration >= firstFrameMinimumBuffer to ensure enough data
+                if hasBufferedData && bufferedDuration >= firstFrameMinimumBuffer {
                     loadingState = .loaded
                     retryAttempts = 0  // Reset retry counter on successful load
                     // Mark as initialized to prevent recomposition when scrolling
@@ -2472,6 +2493,8 @@ struct SimpleVideoPlayer: View {
                         hasInitialized = true
                     }
                     NSLog("🎬 [INITIAL CHECK] Hiding spinner immediately for \(mid)")
+                } else if hasBufferedData && bufferedDuration < firstFrameMinimumBuffer {
+                    NSLog("⏳ [INITIAL CHECK] Ready but waiting for more buffer data for \(mid) (only \(String(format: "%.2f", bufferedDuration))s buffered)")
                 } else {
                     NSLog("⏳ [INITIAL CHECK] Ready but waiting for buffer data for \(mid)")
                 }
@@ -2701,6 +2724,57 @@ struct SimpleVideoPlayer: View {
             return 0
         }
         return seconds
+    }
+    
+    /// Periodic health check to detect and fix stuck loading states while app is in foreground
+    /// This catches edge cases where KVO observers don't fire properly with cached players
+    @MainActor
+    private func performPeriodicHealthCheck() async {
+        // Only run health check when in loading state
+        guard loadingState.isLoading else { return }
+        
+        // Wait 3 seconds before checking - gives KVO observers time to fire normally
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        
+        // Re-check loading state after sleep (might have changed)
+        guard loadingState.isLoading else { return }
+        
+        // Check if player is actually ready with buffered data
+        guard let player = player,
+              let playerItem = player.currentItem,
+              playerItem.status == .readyToPlay,
+              !playerItem.loadedTimeRanges.isEmpty else {
+            // Player not ready yet or no buffered data - this is expected, keep waiting
+            return
+        }
+        
+        // Calculate buffered duration
+        let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player)
+        
+        // If we have enough buffered data, fix the stuck loading state
+        if bufferedDuration >= firstFrameMinimumBuffer {
+            NSLog("⚠️ [HEALTH CHECK] LoadingState stuck at .loading but player is ready with \(String(format: "%.2f", bufferedDuration))s buffered - fixing for \(mid)")
+            loadingState = .loaded
+            retryAttempts = 0
+            if mode == .mediaCell {
+                hasInitialized = true
+            }
+            
+            // Check if video should be playing
+            if currentAutoPlay && isVisible {
+                let approved = mode == .mediaCell ? (videoManager?.shouldPlayVideo(for: mid) ?? false) : true
+                if approved && player.rate == 0 {
+                    if mode == .mediaCell {
+                        player.isMuted = MuteState.shared.isMuted
+                    }
+                    player.play()
+                    playbackState = .playing
+                    NSLog("▶️ [HEALTH CHECK] Started playback after fixing stuck state for \(mid)")
+                }
+            }
+        } else {
+            NSLog("⏳ [HEALTH CHECK] Player ready but still buffering (\(String(format: "%.2f", bufferedDuration))s < \(String(format: "%.2f", firstFrameMinimumBuffer))s required) for \(mid)")
+        }
     }
     
     private func restoreCachedVideoState() {
