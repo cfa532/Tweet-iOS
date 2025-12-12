@@ -1146,22 +1146,8 @@ final class HproseInstance: ObservableObject {
             return cachedUser
         }
         
-        // If baseUrl is empty, force update from server to re-resolve provider IP
-        if effectiveBaseUrl.isEmpty && cachedUser.username != nil {
-            print("DEBUG: [fetchUser] 🔄 baseUrl is empty, forcing IP re-evaluation for userId: \(userId), current baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
-        }
-        
-        // If cached user has nil baseUrl (old cache data or newly created user), resolve IP
-        if cachedUser.username != nil && cachedUser.baseUrl == nil {
-            print("DEBUG: [fetchUser] Cached user has nil baseUrl (old data or new user), resolving IP for userId: \(userId)")
-            // Fall through to updateUserFromServer to resolve IP
-        }
-        
         // Track if we resolved a new IP that should be used for server fetch
         var ipResolved = false
-        
-        // Don't resolve IP here when expired - let updateUserFromServer handle it
-        // This prevents duplicate IP resolution and false redirect loop detection
         
         print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
         
@@ -1171,10 +1157,9 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [fetchUser] User has nil username, fetching synchronously without retries for userId: \(userId)")
             // Fall through to synchronous fetch without retries
         }
-        
         // CRITICAL: If cached user has nil baseUrl, ALWAYS resolve it (even if app not initialized)
         // This handles old cache data (before IP caching) or newly created users
-        if cachedUser.username != nil && cachedUser.baseUrl == nil {
+        else if cachedUser.username != nil && cachedUser.baseUrl == nil {
             print("DEBUG: [fetchUser] User has nil baseUrl (old cache or new user), resolving IP for userId: \(userId)")
             
             // Check if another task is already resolving this user's baseUrl
@@ -1497,11 +1482,15 @@ final class HproseInstance: ObservableObject {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
                 }
                 let ip = await _getProviderIP(appUser.mid, hproseClient: clientPool.getClient(for: entryIP))
-                appUser.baseUrl = URL(string: "http://\(String(describing: ip))")
+                if let ip = ip {
+                    appUser.baseUrl = URL(string: "http://\(ip)")
+                }
                 return await _getProviderIP(mid)
             }
+            // Server is healthy but initial lookup returned nil - return nil
+            // This allows caller to handle "provider not found" case
+            return nil
         }
-        return nil
     }
     
     private func _getProviderIP(
