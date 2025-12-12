@@ -1408,9 +1408,15 @@ final class HproseInstance: ObservableObject {
                 lastError = error
                 print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) failed for userId: \(userId): \(error)")
                 
-                // Check if this is a redirect loop error (code -2) - don't retry in this case
-                if let nsError = error as NSError?, nsError.code == -2 {
+                // Check if this is a redirect loop error - don't retry in this case
+                if case HproseError.redirectLoop = error {
                     print("DEBUG: [updateUserFromServer] Redirect loop detected, stopping retries for userId: \(userId)")
+                    throw error
+                }
+                
+                // Also check for NSError with code -2 for backwards compatibility
+                if let nsError = error as NSError?, nsError.code == -2 {
+                    print("DEBUG: [updateUserFromServer] Redirect loop detected (NSError), stopping retries for userId: \(userId)")
                     throw error
                 }
                 
@@ -1574,7 +1580,19 @@ final class HproseInstance: ObservableObject {
     
     /// Internal method that performs the actual server communication
     private func updateUserFromServerInternal(_ user: User) async throws {
-        let entry = "get_user"
+        let response = try await fetchUserFromServer(user)
+        try await processUserResponse(response, for: user)
+    }
+    
+    // MARK: - Helper Methods (Cleaner separation of concerns)
+    
+    /// Fetches raw user data from server
+    private func fetchUserFromServer(_ user: User) async throws -> Any {
+        guard let hproseClient = user.hproseClient else {
+            print("DEBUG: [fetchUserFromServer] No hprose client available for user: \(user.mid)")
+            throw HproseError.noClient(userId: user.mid)
+        }
+        
         let params = [
             "aid": appId,
             "ver": "last",
@@ -1582,162 +1600,164 @@ final class HproseInstance: ObservableObject {
             "userid": user.mid,
         ]
         
-        // Call runMApp following the sample code pattern
-        guard let hproseClient = user.hproseClient else {
-            print("DEBUG: [updateUserFromServer] No hprose client available for user: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available for user: \(user.mid)"])
+        guard let rawResponse = hproseClient.invoke("runMApp", withArgs: ["get_user", params]) else {
+            print("DEBUG: [fetchUserFromServer] No response from server for user: \(user.mid)")
+            throw HproseError.noResponse(userId: user.mid)
         }
         
-        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
-        guard let response = rawResponse else {
-            print("DEBUG: [updateUserFromServer] No response from server for user: \(user.mid)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for user: \(user.mid)"])
+        return try Self.unwrapV2Response(rawResponse)
+    }
+    
+    /// Processes server response and handles redirects
+    private func processUserResponse(_ response: Any, for user: User) async throws {
+        // Try to extract IP redirect
+        if let redirectIP = extractRedirectIP(from: response) {
+            try await handleRedirect(redirectIP, for: user)
+            return
         }
         
-        // Unwrap v2 response - handle IP redirects which may be strings
-        let unwrappedResponse: Any?
-        do {
-            unwrappedResponse = try Self.unwrapV2Response(response)
-        } catch {
-            print("DEBUG: [updateUserFromServer] Error unwrapping v2 response: \(error)")
-            throw error
+        // Try to parse as user dictionary
+        if let userDict = response as? [String: Any] {
+            try await updateUserFromDict(userDict, for: user)
+            return
         }
         
-        // Check for IP address response first (user not found on this node)
-        // IP address can be returned directly as string or wrapped in v2 format
-        var ipAddress: String? = nil
-        if let ipString = unwrappedResponse as? String, !ipString.isEmpty {
-            ipAddress = ipString
-        } else if let dict = unwrappedResponse as? [String: Any], let data = dict["data"] as? String {
-            ipAddress = data
+        // Unexpected response
+        print("DEBUG: [processUserResponse] Unexpected response type: \(type(of: response))")
+        throw HproseError.unexpectedResponse(response: response)
+    }
+    
+    /// Extracts redirect IP from response if present
+    private func extractRedirectIP(from response: Any) -> String? {
+        if let ipString = response as? String, !ipString.isEmpty {
+            return ipString
+        }
+        if let dict = response as? [String: Any], let data = dict["data"] as? String, !data.isEmpty {
+            return data
+        }
+        return nil
+    }
+    
+    /// Handles redirect to another server
+    private func handleRedirect(_ redirectIP: String, for user: User) async throws {
+        let normalizedRedirect = normalizeIP(redirectIP)
+        let normalizedCurrent = normalizeIP(user.baseUrl?.absoluteString ?? "")
+        
+        // Check for redirect loop
+        if normalizedRedirect == normalizedCurrent && !normalizedCurrent.isEmpty {
+            print("DEBUG: [handleRedirect] Redirect loop detected for \(user.mid)")
+            throw HproseError.redirectLoop(ip: redirectIP)
         }
         
-        if let ipAddress = ipAddress, !ipAddress.isEmpty {
-            // Check if we're being redirected to the same IP we're already on (redirect loop)
-            // Normalize both IPs for comparison (remove http:// prefix, ensure format consistency)
-            let normalizedRedirectIp: String
-            if ipAddress.hasPrefix("http://") {
-                normalizedRedirectIp = String(ipAddress.dropFirst(7))
-            } else if ipAddress.hasPrefix("http") {
-                normalizedRedirectIp = String(ipAddress.dropFirst(4))
-            } else {
-                normalizedRedirectIp = ipAddress
+        print("DEBUG: [handleRedirect] \(user.mid) redirecting to: \(redirectIP)")
+        
+        // Update user's baseUrl
+        if let redirectURL = URL(string: "http://\(redirectIP)") {
+            await applyBaseUrlIfNeeded(user, url: redirectURL, reason: "redirect")
+        }
+        
+        // Fetch from redirected server
+        guard let redirectedClient = user.hproseClient else {
+            print("DEBUG: [handleRedirect] Failed to create client for redirected IP: \(redirectIP)")
+            throw HproseError.noClient(userId: user.mid)
+        }
+        
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "userid": user.mid,
+        ]
+        
+        guard let rawResponse = redirectedClient.invoke("runMApp", withArgs: ["get_user", params]) else {
+            throw HproseError.noResponse(userId: user.mid)
+        }
+        
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        // Handle second redirect (potential loop)
+        if let secondRedirectIP = extractRedirectIP(from: unwrappedResponse) {
+            let normalizedSecond = normalizeIP(secondRedirectIP)
+            if normalizedSecond == normalizedRedirect {
+                print("DEBUG: [handleRedirect] Second redirect loop detected for \(user.mid)")
+                throw HproseError.redirectLoop(ip: secondRedirectIP)
+            }
+            throw HproseError.userNotFound(userId: user.mid, reason: "second redirect to \(secondRedirectIP)")
+        }
+        
+        // Parse user from redirected response
+        guard let userDict = unwrappedResponse as? [String: Any] else {
+            throw HproseError.userNotFound(userId: user.mid, reason: "invalid response after redirect")
+        }
+        
+        try await updateUserFromDict(userDict, for: user, preserveBaseUrl: true)
+    }
+    
+    /// Updates user from dictionary response
+    private func updateUserFromDict(_ dict: [String: Any], for user: User, preserveBaseUrl: Bool = false) async throws {
+        try await MainActor.run {
+            let originalBaseUrl = user.baseUrl
+            let updatedUser = try User.from(dict: dict)
+            
+            // Preserve baseUrl if needed (e.g., after redirect)
+            if preserveBaseUrl || originalBaseUrl != nil {
+                updatedUser.baseUrl = originalBaseUrl
             }
             
-            let currentBaseUrlString = user.baseUrl?.absoluteString ?? ""
-            let normalizedCurrentIp = currentBaseUrlString.hasPrefix("http://") ? String(currentBaseUrlString.dropFirst(7)) : currentBaseUrlString
+            print("DEBUG: [updateUserFromDict] Updated user: \(updatedUser.username ?? "nil") (\(updatedUser.mid))")
             
-            // Compare normalized IPs (should match if redirecting to same server)
-            if normalizedCurrentIp == normalizedRedirectIp {
-                // Redirect loop detected - being redirected to the same IP we're already on
-                print("DEBUG: [updateUserFromServer] Redirect loop detected for \(user.mid) - redirected to same IP: \(ipAddress) (current: \(currentBaseUrlString))")
-                throw NSError(domain: "HproseClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Redirect loop detected - redirected to same IP: \(ipAddress)"])
+            User.updateUserInstance(with: updatedUser)
+            TweetCacheManager.shared.saveUser(updatedUser)
+        }
+    }
+    
+    /// Normalizes IP address for comparison
+    private func normalizeIP(_ urlString: String) -> String {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("http://") {
+            return String(trimmed.dropFirst(7))
+        }
+        if trimmed.hasPrefix("https://") {
+            return String(trimmed.dropFirst(8))
+        }
+        return trimmed
+    }
+    
+    // MARK: - Error Types
+    
+    private enum HproseError: LocalizedError {
+        case noClient(userId: String)
+        case noResponse(userId: String)
+        case redirectLoop(ip: String)
+        case userNotFound(userId: String, reason: String)
+        case unexpectedResponse(response: Any)
+        
+        var errorDescription: String? {
+            switch self {
+            case .noClient(let userId):
+                return "No hprose client available for user: \(userId)"
+            case .noResponse(let userId):
+                return "No response from server for user: \(userId)"
+            case .redirectLoop(let ip):
+                return "Redirect loop detected - redirected to same IP: \(ip)"
+            case .userNotFound(let userId, let reason):
+                return "User \(userId) not found: \(reason)"
+            case .unexpectedResponse(let response):
+                return "Unexpected response from server: \(String(describing: response))"
             }
-            
-            print("DEBUG: [updateUserFromServer] \(user.mid) not found on current node, redirecting to IP: \(ipAddress)")
-            // the user is not found on this node, a provider IP of the user is returned.
-            // point server to this new IP.
-            if let redirectedURL = URL(string: "http://\(ipAddress)") {
-                await applyBaseUrlIfNeeded(user, url: redirectedURL, reason: "redirect")
+        }
+        
+        var nsError: NSError {
+            let code: Int
+            switch self {
+            case .redirectLoop:
+                code = -2
+            default:
+                code = -1
             }
-            
-            // Use the user's computed hproseClient property which automatically creates client based on baseUrl
-            guard let redirectedClient = user.hproseClient else {
-                print("DEBUG: [updateUserFromServer] Failed to create client for redirected IP: \(ipAddress)")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create client for redirected IP"])
-            }
-            
-            // Call runMApp with the redirected client
-            let newRawResponse = redirectedClient.invoke("runMApp", withArgs: [entry, params])
-            let newResponse = try Self.unwrapV2Response(newRawResponse)
-            
-            if let newUserDict = newResponse as? [String: Any] {
-                // Valid user dictionary returned from redirected server - update cached user
-                do {
-                    try await MainActor.run {
-                        // Capture the redirected IP before User.from() potentially overwrites it
-                        let redirectedBaseUrl = user.baseUrl
-                        let updatedUser = try User.from(dict: newUserDict)
-                        // Restore the redirected baseUrl after User.from() potentially overwrote it
-                        updatedUser.baseUrl = redirectedBaseUrl
-                        
-                    print("DEBUG: [updateUserFromServer] After User.from: name=\(updatedUser.name ?? "nil"), username=\(updatedUser.username ?? "nil"), mid=\(updatedUser.mid)")
-                    
-                    // Update the singleton instance so @ObservedObject views update
-                    User.updateUserInstance(with: updatedUser)
-                    
-                    // Save the user with the correct redirected IP to cache
-                    TweetCacheManager.shared.saveUser(updatedUser)
-                    }
-                } catch {
-                    print("DEBUG: [updateUserFromServer] Error updating user with new service: \(error)")
-                    throw error  // Re-throw to trigger retry logic
-                }
-            } else if let newIpAddress = newResponse as? String {
-                // Second redirect returned - check if it's the same IP (redirect loop)
-                let newNormalizedIp: String
-                if newIpAddress.hasPrefix("http://") {
-                    newNormalizedIp = String(newIpAddress.dropFirst(7))
-                } else if newIpAddress.hasPrefix("http") {
-                    newNormalizedIp = String(newIpAddress.dropFirst(4))
-                } else {
-                    newNormalizedIp = newIpAddress
-                }
-                
-                // Compare with the redirect IP we just tried
-                if newNormalizedIp == normalizedRedirectIp {
-                    // Redirect loop - same IP returned twice
-                    print("DEBUG: [updateUserFromServer] Redirect loop detected for \(user.mid) - redirected server returned same IP: \(newIpAddress) (same as first redirect: \(ipAddress))")
-                    throw NSError(domain: "HproseClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Redirect loop detected - redirected server returned same IP: \(newIpAddress)"])
-                }
-                // Second redirect returned - user not found on this server either
-                print("DEBUG: [updateUserFromServer] \(user.mid) not found on redirected IP: \(newIpAddress)")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "userid not found after redirect - second IP returned: \(newIpAddress)"])
-            } else {
-                // Nil or unexpected response from redirected server
-                print("DEBUG: [updateUserFromServer] \(user.mid) not found - nil or unexpected response from redirected server")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "userid not found after redirect - nil response"])
-            }
-        } else if let userDict = unwrappedResponse as? [String: Any] {
-            // User found on current node
-            do {
-                try await MainActor.run {
-                    let updatedUser = try User.from(dict: userDict)
-                    // Preserve the baseUrl that was set before the server call
-                    updatedUser.baseUrl = user.baseUrl
-                    
-                    print("DEBUG: [updateUserFromServer] After User.from: name=\(updatedUser.name ?? "nil"), username=\(updatedUser.username ?? "nil"), mid=\(updatedUser.mid)")
-                    
-                    // Update the singleton instance so @ObservedObject views update
-                    User.updateUserInstance(with: updatedUser)
-                    
-                    // Save the user to cache
-                    TweetCacheManager.shared.saveUser(updatedUser)
-                }
-            } catch {
-                print("DEBUG: [updateUserFromServer] Error updating user: \(error)")
-                print("DEBUG: [updateUserFromServer] Response that caused error: \(response)")
-                throw error  // Re-throw to trigger retry logic
-            }
-        } else {
-            print("DEBUG: [updateUserFromServer] Unexpected response type: \(type(of: unwrappedResponse)), value: \(String(describing: unwrappedResponse))")
-            
-            do {
-                if let providerIP = try await self.getProviderIP(user.mid) {
-                    let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
-                    if let resolvedUrl = URL(string: resolvedUrlString) {
-                        await applyBaseUrlIfNeeded(user, url: resolvedUrl, reason: "unexpected response recovery")
-                    } else {
-                        print("DEBUG: [updateUserFromServer] Unable to construct URL from provider IP \(providerIP) after unexpected response for userId: \(user.mid)")
-                    }
-                } else {
-                    print("DEBUG: [updateUserFromServer] Provider IP lookup returned nil after unexpected response for userId: \(user.mid)")
-                }
-            } catch {
-                print("DEBUG: [updateUserFromServer] Error refreshing provider IP after unexpected response for userId: \(user.mid): \(error)")
-            }
-            
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response from server: \(String(describing: unwrappedResponse))"])
+            return NSError(domain: "HproseClient", code: code, userInfo: [
+                NSLocalizedDescriptionKey: errorDescription ?? "Unknown error"
+            ])
         }
     }
     
