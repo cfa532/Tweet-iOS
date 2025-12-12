@@ -33,7 +33,6 @@
 		4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED242E925803005D5B8B /* LocalHTTPServer.swift */; };
 		4612ED272E937091005D5B8B /* DiskCacheCleanupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */; };
 		4612ED2A2E925803005D5B8B /* MemoryCapManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */; };
-		4613ABDF2EE9226D002E1582 /* getProviderIP-Documentation.md in Resources */ = {isa = PBXBuildFile; fileRef = 4613ABDE2EE9226D002E1582 /* getProviderIP-Documentation.md */; };
 		461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438162E3E426A002D1B22 /* ChatCacheManager.swift */; };
 		461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438182E3EEE2D002D1B22 /* MimeiId.swift */; };
 		4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4614381A2E3F5E97002D1B22 /* BlackList.swift */; };
@@ -47,16 +46,8 @@
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
 		464EA3502EEAE31800FC6AD1 /* PersistentVideoStateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */; };
 		464EA3522EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */; };
-		464EA3542EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3532EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md */; };
-		464EA3562EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3552EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md */; };
-		464EA3582EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3572EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md */; };
-		464EA35A2EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3592EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md */; };
-		464EA35C2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA35B2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md */; };
-		464EA35E2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA35D2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md */; };
 		464EA3602EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */; };
-		464EA3622EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3612EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md */; };
-		464EA3642EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3632EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md */; };
-		464EA3662EEAEB8000FC6AD1 /* QUICKSTART.md in Resources */ = {isa = PBXBuildFile; fileRef = 464EA3652EEAEB8000FC6AD1 /* QUICKSTART.md */; };
+		465209862EEC5FEB00FA6DBA /* HproseClientPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465209852EEC5FEB00FA6DBA /* HproseClientPool.swift */; };
 		465553C32E55EDA500702AFF /* TermsOfServiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C12E55EDA500702AFF /* TermsOfServiceView.swift */; };
 		465553CA2E55F6A900702AFF /* ContentFilterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C82E55F6A900702AFF /* ContentFilterView.swift */; };
 		465553CB2E55F6A900702AFF /* ReportTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C92E55F6A900702AFF /* ReportTweetView.swift */; };
@@ -174,7 +165,6 @@
 		4612ED242E925803005D5B8B /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
 		4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskCacheCleanupManager.swift; sourceTree = "<group>"; };
 		4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCapManager.swift; sourceTree = "<group>"; };
-		4613ABDE2EE9226D002E1582 /* getProviderIP-Documentation.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "getProviderIP-Documentation.md"; sourceTree = "<group>"; };
 		461438162E3E426A002D1B22 /* ChatCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCacheManager.swift; sourceTree = "<group>"; };
 		461438182E3EEE2D002D1B22 /* MimeiId.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiId.swift; sourceTree = "<group>"; };
 		4614381A2E3F5E97002D1B22 /* BlackList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackList.swift; sourceTree = "<group>"; };
@@ -188,16 +178,8 @@
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
 		464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistentVideoStateManager.swift; sourceTree = "<group>"; };
 		464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackSettings.swift; sourceTree = "<group>"; };
-		464EA3532EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_RESUME_FIX_SUMMARY.md; sourceTree = "<group>"; };
-		464EA3552EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_RESUME_IMPLEMENTATION_GUIDE.md; sourceTree = "<group>"; };
-		464EA3572EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TWEETDETAILVIEW_VIDEO_FIX.md; sourceTree = "<group>"; };
-		464EA3592EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SIMPLEVIDEOPLAYER_INTEGRATION.md; sourceTree = "<group>"; };
-		464EA35B2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FINAL_SUMMARY.md; sourceTree = "<group>"; };
-		464EA35D2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FULLSCREEN_VIDEO_STATUS.md; sourceTree = "<group>"; };
 		464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SimpleVideoPlayer+PersistentState.swift"; sourceTree = "<group>"; };
-		464EA3612EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DETAILVIEW_HANDLER_COMPLETE.md; sourceTree = "<group>"; };
-		464EA3632EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = COMPLETE_VIDEO_RESUME_SOLUTION.md; sourceTree = "<group>"; };
-		464EA3652EEAEB8000FC6AD1 /* QUICKSTART.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUICKSTART.md; sourceTree = "<group>"; };
+		465209852EEC5FEB00FA6DBA /* HproseClientPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HproseClientPool.swift; sourceTree = "<group>"; };
 		465553C12E55EDA500702AFF /* TermsOfServiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TermsOfServiceView.swift; sourceTree = "<group>"; };
 		465553C82E55F6A900702AFF /* ContentFilterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentFilterView.swift; sourceTree = "<group>"; };
 		465553C92E55F6A900702AFF /* ReportTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportTweetView.swift; sourceTree = "<group>"; };
@@ -388,19 +370,10 @@
 				4608E2D72DD5CA640051A92D /* HproseInstance.swift */,
 				272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */,
 				4608E2DC2DD5CA640051A92D /* VideoConversionService.swift */,
-				4613ABDE2EE9226D002E1582 /* getProviderIP-Documentation.md */,
 				464EA34F2EEAE31800FC6AD1 /* PersistentVideoStateManager.swift */,
 				464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */,
-				464EA3532EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md */,
-				464EA3552EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md */,
-				464EA3572EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md */,
-				464EA3592EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md */,
-				464EA35B2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md */,
-				464EA35D2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md */,
 				464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */,
-				464EA3612EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md */,
-				464EA3632EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md */,
-				464EA3652EEAEB8000FC6AD1 /* QUICKSTART.md */,
+				465209852EEC5FEB00FA6DBA /* HproseClientPool.swift */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -705,18 +678,8 @@
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
 				46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */,
-				464EA3542EEAE3BD00FC6AD1 /* VIDEO_RESUME_FIX_SUMMARY.md in Resources */,
-				464EA3562EEAE40400FC6AD1 /* VIDEO_RESUME_IMPLEMENTATION_GUIDE.md in Resources */,
-				464EA3622EEAEB4000FC6AD1 /* DETAILVIEW_HANDLER_COMPLETE.md in Resources */,
-				464EA3662EEAEB8000FC6AD1 /* QUICKSTART.md in Resources */,
-				464EA3582EEAE67300FC6AD1 /* TWEETDETAILVIEW_VIDEO_FIX.md in Resources */,
 				46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
-				464EA35E2EEAE7BC00FC6AD1 /* FULLSCREEN_VIDEO_STATUS.md in Resources */,
-				4613ABDF2EE9226D002E1582 /* getProviderIP-Documentation.md in Resources */,
-				464EA3642EEAEB6F00FC6AD1 /* COMPLETE_VIDEO_RESUME_SOLUTION.md in Resources */,
-				464EA35C2EEAE6CD00FC6AD1 /* FINAL_SUMMARY.md in Resources */,
-				464EA35A2EEAE6AA00FC6AD1 /* SIMPLEVIDEOPLAYER_INTEGRATION.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -843,6 +806,7 @@
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
 				468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */,
 				4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */,
+				465209862EEC5FEB00FA6DBA /* HproseClientPool.swift in Sources */,
 				4614381D2E3F69AD002D1B22 /* CoreDataManager.swift in Sources */,
 				46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */,
 				46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */,

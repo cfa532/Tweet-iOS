@@ -13,7 +13,6 @@ final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
-    // Removed _HproseClient as we now use client directly
     private var _domainToShare: String = AppConfig.baseUrl
     
     /// The domain to use for sharing links
@@ -154,6 +153,11 @@ final class HproseInstance: ObservableObject {
         client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
         client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
         return client
+    }()
+    
+    // MARK: - Client Pool Management
+    private lazy var clientPool: HproseClientPool = {
+        return HproseClientPool(maxClientsPerURL: 5)
     }()
     
     private var lastInitializationAddresses: String?
@@ -434,12 +438,11 @@ final class HproseInstance: ObservableObject {
     ///    - Fetches followings and blacklist in background (non-blocking)
     /// 5. For guest users:
     ///    - Sets appUser baseUrl to resolved IP
-    ///    - Fetches alphaId user data in background
+    /// Finds and returns an entry IP address from app URLs
     ///
-    /// - Throws: Network or parsing errors (caught by caller)
-    /// - Note: Called during app initialization by `initialize()` method
-    /// - Note: Sets `isInitializationComplete = true` once baseUrl is resolved
-    func initAppEntry() async throws {
+    /// - Returns: A valid IP address string, or nil if none could be resolved
+    /// - Note: Updates `appId` and `lastInitializationAddresses` as a side effect
+    private func findEntryIP() async throws -> String? {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
                 let html = try await fetchHTML(from: url)
@@ -458,101 +461,112 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 if let entryIP = Gadget.shared.filterIpAddresses(addrs) {
-                    
-                    HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
-                    client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                    
-                    if !appUser.isGuest {
-                        // Always force refresh of appUser's baseURL on app start to ensure we have the latest IP
-                        // Pass empty string to force IP re-resolution and bypass cache
-                        let user = try await fetchUser(appUser.mid, baseUrl: "")
-                        print("✅ [INIT] appUser data fetched: \(String(describing: user))")
-                        
-                        if let user = user {
-                            // Valid login user is found, use its provider IP as base.
-                            // If user doesn't have a baseUrl, fall back to entryIP
-                            if let userBaseUrlString = user.baseUrl?.absoluteString, !userBaseUrlString.isEmpty, let userBaseUrl = URL(string: userBaseUrlString) {
-                                HproseInstance.baseUrl = userBaseUrl
-                            } else {
-                                // User doesn't have a valid baseUrl, use the resolved entryIP
-                                print("DEBUG: [initAppEntry] User has no baseUrl, using resolved IP: \(entryIP)")
-                                HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
-                            }
-                            client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                            
-                            // CRITICAL: Set user.baseUrl on MainActor to avoid publishing warnings
-                            let realIP = HproseInstance.baseUrl
-                            await MainActor.run {
-                                user.baseUrl = realIP
-                            }
-                            
-                            // App is now initialized with base connectivity
-                            await MainActor.run {
-                                isInitializationComplete = true
-                                User.updateUserInstance(with: user)
-                                _appUserId = user.mid
-                            }
-                            
-                            // Ensure the refreshed user with updated baseURL is saved to cache
-                            TweetCacheManager.shared.saveUser(user)
-                            print("✅ [INIT] App initialized with real IP: \(HproseInstance.baseUrl.absoluteString)")
-                            
-                            // Notify UI that app is ready (tweets can now render with real IP)
-                            await MainActor.run {
-                                NotificationCenter.default.post(name: .appUserReady, object: nil)
-                            }
-                            
-                            // Fetch followings and blacklist in background (non-blocking)
-                            print("🔄 [INIT] Fetching followings and blacklist in background...")
-                            Task.detached(priority: .background) {
-                                let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
-                                print("✅ [INIT] Followings fetched: \(followings.count)")
-                                let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
-                                print("✅ [INIT] Blacklist fetched: \(blackList.count)")
-                                await MainActor.run {
-                                    user.followingList = followings
-                                    user.userBlackList = blackList
-                                    self.printAppUserContent("After background data loaded")
-                                }
-                            }
-                        } else {
-                            print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
-                            let user = User.getInstance(mid: Constants.GUEST_ID)
-                            await MainActor.run {
-                                user.baseUrl = HproseInstance.baseUrl
-                                user.followingList = Gadget.getAlphaIds()
-                                _appUserId = user.mid
-                                
-                                // App is now initialized since appUser has IP address
-                                isInitializationComplete = true
-                            }
-                            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
-                        }
-                    } else {
-                        let user = User.getInstance(mid: Constants.GUEST_ID)
-                        await MainActor.run {
-                            user.baseUrl = HproseInstance.baseUrl
-                            user.followingList = Gadget.getAlphaIds()
-                            _appUserId = user.mid
-                            
-                            // App is now initialized since appUser has IP address
-                            isInitializationComplete = true
-                        }
-                        print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
-                        
-                        // For guest users, fetch the alphaId user from backend now that we have proper IP
-                        await fetchAlphaIdUserForGuest()
-                    }
-                    // Step 6: Schedule background tasks
-                    scheduleBackgroundTasks()
-                    return
+                    return entryIP
                 }
             } catch {
                 print("Error processing URL \(url): \(error)")
                 continue
             }
         }
+        return nil
+    }
+    
+    ///    - Fetches alphaId user data in background
+    ///
+    /// - Throws: Network or parsing errors (caught by caller)
+    /// - Note: Called during app initialization by `initialize()` method
+    /// - Note: Sets `isInitializationComplete = true` once baseUrl is resolved
+    func initAppEntry() async throws {
+        guard let entryIP = try await findEntryIP() else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
+        }
+        
+        HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
+        client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+        
+        if !appUser.isGuest {
+            // Always force refresh of appUser's baseURL on app start to ensure we have the latest IP
+            // Pass empty string to force IP re-resolution and bypass cache
+            let user = try await fetchUser(appUser.mid, baseUrl: "")
+            print("✅ [INIT] appUser data fetched: \(String(describing: user))")
+            
+            if let user = user {
+                // Valid login user is found, use its provider IP as base.
+                // If user doesn't have a baseUrl, fall back to entryIP
+                if let userBaseUrlString = user.baseUrl?.absoluteString, !userBaseUrlString.isEmpty, let userBaseUrl = URL(string: userBaseUrlString) {
+                    HproseInstance.baseUrl = userBaseUrl
+                } else {
+                    // User doesn't have a valid baseUrl, use the resolved entryIP
+                    print("DEBUG: [initAppEntry] User has no baseUrl, using resolved IP: \(entryIP)")
+                    HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
+                }
+                client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
+                
+                // CRITICAL: Set user.baseUrl on MainActor to avoid publishing warnings
+                let realIP = HproseInstance.baseUrl
+                await MainActor.run {
+                    user.baseUrl = realIP
+                }
+                
+                // App is now initialized with base connectivity
+                await MainActor.run {
+                    isInitializationComplete = true
+                    User.updateUserInstance(with: user)
+                    _appUserId = user.mid
+                }
+                
+                // Ensure the refreshed user with updated baseURL is saved to cache
+                TweetCacheManager.shared.saveUser(user)
+                print("✅ [INIT] App initialized with real IP: \(HproseInstance.baseUrl.absoluteString)")
+                
+                // Notify UI that app is ready (tweets can now render with real IP)
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .appUserReady, object: nil)
+                }
+                
+                // Fetch followings and blacklist in background (non-blocking)
+                print("🔄 [INIT] Fetching followings and blacklist in background...")
+                Task.detached(priority: .background) {
+                    let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
+                    print("✅ [INIT] Followings fetched: \(followings.count)")
+                    let blackList = (try? await self.getListByType(user: user, entry: .BLACK_LIST)) ?? []
+                    print("✅ [INIT] Blacklist fetched: \(blackList.count)")
+                    await MainActor.run {
+                        user.followingList = followings
+                        user.userBlackList = blackList
+                        self.printAppUserContent("After background data loaded")
+                    }
+                }
+            } else {
+                print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
+                let user = User.getInstance(mid: Constants.GUEST_ID)
+                await MainActor.run {
+                    user.baseUrl = HproseInstance.baseUrl
+                    user.followingList = Gadget.getAlphaIds()
+                    _appUserId = user.mid
+                    
+                    // App is now initialized since appUser has IP address
+                    isInitializationComplete = true
+                }
+                print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
+            }
+        } else {
+            let user = User.getInstance(mid: Constants.GUEST_ID)
+            await MainActor.run {
+                user.baseUrl = HproseInstance.baseUrl
+                user.followingList = Gadget.getAlphaIds()
+                _appUserId = user.mid
+                
+                // App is now initialized since appUser has IP address
+                isInitializationComplete = true
+            }
+            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
+            
+            // For guest users, fetch the alphaId user from backend now that we have proper IP
+            await fetchAlphaIdUserForGuest()
+        }
+        // Step 6: Schedule background tasks
+        scheduleBackgroundTasks()
     }
     
     func fetchComments(
@@ -1499,102 +1513,84 @@ final class HproseInstance: ObservableObject {
         }
     }
     
-    private func isServerHealthy(_ baseURL: URL, logFailures: Bool = true) async -> Bool {
-        guard let host = baseURL.host else {
-            if logFailures {
-                print("DEBUG: [updateUserFromServer] Server health check skipped - invalid host in \(baseURL)")
-            }
-            return false
-        }
-        
-        let entry = "health"
-        let params: [String: Any] = [
+    private func _getProviderIP(
+        _ mid: MimeiId,
+        hproseClient: HproseClient? = HproseInstance.shared.appUser.hproseClient
+    ) async -> String? {
+        let entry = "get_provider_ips"
+        let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": appUser.mid
+            "mid": mid
         ]
         
-        let client: HproseClient
-        var disposableClient: HproseHttpClient?
-        
-        if let appBase = appUser.baseUrl,
-           appBase == baseURL,
-           let existingClient = appUser.hproseClient {
-            client = existingClient
-        } else {
-            let newClient = HproseHttpClient()
-            newClient.timeout = 10  // 10 seconds for health checks (faster than default 300s)
-            newClient.uri = baseURL.appendingPathComponent("webapi/").absoluteString
-            disposableClient = newClient
-            client = newClient
+        guard let hproseClient = hproseClient else {
+            print("DEBUG: [_getProviderIP] No hprose client available")
+            return nil
         }
         
-        defer {
-            disposableClient?.close()
-        }
-        
-        // Call invoke - it returns Any? and can be nil if endpoint doesn't exist or server error
-        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-        
-        // Handle nil response - health endpoint may not exist on server
+        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
         guard let response = rawResponse else {
-            if logFailures {
-                print("DEBUG: [updateUserFromServer] Server health check for \(host) - nil response (endpoint may not exist), treating as healthy")
-            }
-            // If health endpoint doesn't exist, don't treat it as unhealthy
-            // The IP is correct and other endpoints work, so server is functional
-            return true
+            print("DEBUG: [updateUserFromServer] No response from server.")
+            return nil
         }
         
-        // Unwrap v2 response if needed
+        // Unwrap v2 response - handle IP redirects which may be strings
         let unwrappedResponse: Any?
         do {
             unwrappedResponse = try Self.unwrapV2Response(response)
         } catch {
-            // If unwrapping fails, treat as unhealthy
-            if logFailures {
-                print("DEBUG: [updateUserFromServer] Server health check for \(host) - error unwrapping v2 response: \(error)")
+            print("DEBUG: [_getProviderIP] Error unwrapping v2 response: \(error)")
+            return nil
+        }
+        
+        if let ipList = unwrappedResponse as? [String] {
+            // Filter and trim IP addresses
+            let ipAddresses = ipList
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            // Check each IP for health and return the first healthy one
+            for ip in ipAddresses {
+                let urlString = "http://\(ip)/webapi/"
+                let client = clientPool.getClient(for: urlString)
+                
+                let isHealthy = await isServerHealthy(client)
+                
+                // Release client back to pool
+                clientPool.releaseClient(client, for: urlString)
+                
+                if isHealthy {
+                    print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip)")
+                    return ip
+                }
+            }
+            
+            // If no healthy IP found, throw error
+            print("DEBUG: [_getProviderIP] No healthy provider IP found in list: \(ipList)")
+            return nil
+        }
+        print("DEBUG: [_getProviderIP] Invalid IpList response format")
+        return nil
+    }
+    
+    private func isServerHealthy(_ hproseClient: HproseClient) async -> Bool {
+        let entry = "health"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last"
+        ]
+        
+        // Perform the invoke in a Task to avoid blocking
+        return await Task {
+            let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
+            if let responseDict = rawResponse as? [String: Any] {
+                if let success = responseDict["success"] as? Bool, success {
+                    return true
+                }
             }
             return false
-        }
-        
-        // Check if response is a dictionary with status: "ok"
-        // For v2 format, status might be in data field or directly in response
-        if let responseDict = unwrappedResponse as? [String: Any] {
-            // Check for status directly in response (legacy format)
-            if let status = (responseDict["status"] as? String)?.lowercased(), status == "ok" {
-                return true
-            }
-            // Check for status in data field (v2 format)
-            if let data = responseDict["data"] as? [String: Any],
-               let status = (data["status"] as? String)?.lowercased(), status == "ok" {
-                return true
-            }
-            // Check for success field (v2 format)
-            if let success = responseDict["success"] as? Bool, success {
-                return true
-            }
-            if logFailures {
-                print("DEBUG: [updateUserFromServer] Server health check for \(host) failed - payload: \(responseDict)")
-            }
-            return false
-        }
-        
-        // Response is not a dictionary - could be string, error, etc.
-        // If it's a string response (like an IP redirect), server is responding, consider it healthy
-        if response is String {
-            if logFailures {
-                print("DEBUG: [updateUserFromServer] Server health check for \(host) returned string response (likely redirect), treating as healthy")
-            }
-            return true
-        }
-        
-        // Unknown response type - be lenient and assume healthy if server responded
-        if logFailures {
-            print("DEBUG: [updateUserFromServer] Server health check for \(host) returned unexpected type \(type(of: response)), treating as healthy")
-        }
-        return true
+        }.value
     }
     
     /// Internal method that performs the actual server communication
@@ -5828,88 +5824,22 @@ final class HproseInstance: ObservableObject {
     /// - Parameter attemptNumber: Internal parameter to track retry attempts (1 or 2)
     /// - Returns: A healthy provider IP address, or nil if none found
     /// - Throws: Error only after both attempts fail
-    func getProviderIP(_ mid: String, attemptNumber: Int = 1) async throws -> String? {
+    func getProviderIP(_ mid: String) async throws -> String? {
         // Safety check: never try to get provider IP for GUEST_ID
         if mid == Constants.GUEST_ID {
             print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
         }
         
-        print("DEBUG: [getProviderIP] Attempt #\(attemptNumber) for user: \(mid)")
-        
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "mid": mid
-        ]
-        
-        // Fetch the list of IP addresses from the backend using appUser's client
-        guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "AppUser client not initialized for get_provider_ips"])
+        let providerIP = await _getProviderIP(mid)
+        if (providerIP != nil) {
+            return providerIP
+        }
+
+        if (mid == appUser.mid) {
+            let entryIP = find¥
         }
         
-        let rawResponse = client.invoke("runMApp", withArgs: ["get_provider_ips", params])
-        guard rawResponse != nil else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server for get_provider_ips: \(mid)"])
-        }
-        
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        
-        // Parse the array of IP addresses
-        var ipAddresses: [String] = []
-        if let arrayResponse = unwrappedResponse as? [String] {
-            ipAddresses = arrayResponse
-        } else if let dictResponse = unwrappedResponse as? [String: Any],
-                  let dataArray = dictResponse["data"] as? [String] {
-            ipAddresses = dataArray
-        } else if let stringResponse = unwrappedResponse as? String {
-            // Fallback: single IP returned as string
-            ipAddresses = [stringResponse]
-        } else if let dictResponse = unwrappedResponse as? [String: Any],
-                  let dataString = dictResponse["data"] as? String {
-            // Fallback: single IP in dict format
-            ipAddresses = [dataString]
-        }
-        
-        // Filter and trim IP addresses
-        ipAddresses = ipAddresses
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        
-        guard !ipAddresses.isEmpty else {
-            print("WARN: [getProviderIP] No provider IPs returned for user \(mid) on attempt #\(attemptNumber)")
-            
-            // If this is the appUser and first attempt, try fallback mechanism
-            if mid == appUser.mid && attemptNumber == 1 {
-                return try await handleProviderIPFallback(for: mid)
-            }
-            
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No valid provider IPs returned for user: \(mid) after \(attemptNumber) attempt(s)"])
-        }
-        
-        print("DEBUG: [getProviderIP] Retrieved \(ipAddresses.count) IP address(es) for user \(mid): \(ipAddresses)")
-        
-        // Try each IP address with health check
-        for (index, ipAddress) in ipAddresses.enumerated() {
-            print("DEBUG: [getProviderIP] Testing IP \(index + 1)/\(ipAddresses.count): \(ipAddress)")
-            
-            // Validate the IP address format by attempting to construct a URL
-            let testUrlString = ipAddress.hasPrefix("http") ? ipAddress : "http://\(ipAddress)"
-            guard let testURL = URL(string: testUrlString) else {
-                print("WARN: [getProviderIP] Skipping invalid IP format: \(ipAddress)")
-                continue
-            }
-            
-            // Perform health check on this IP
-            let isHealthy = await isServerHealthy(testURL, logFailures: false)
-            if isHealthy {
-                print("DEBUG: [getProviderIP] ✅ Found healthy IP on attempt #\(attemptNumber): \(ipAddress)")
-                return ipAddress
-            } else {
-                print("DEBUG: [getProviderIP] ❌ IP \(ipAddress) failed health check")
-            }
-        }
         
         // All IPs failed health check
         if attemptNumber == 1 {
