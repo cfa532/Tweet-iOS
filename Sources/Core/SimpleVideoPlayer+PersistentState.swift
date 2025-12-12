@@ -37,7 +37,9 @@ class SimpleVideoPlayerStateHelper: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleSavePosition(notification)
+            Task { @MainActor in
+                self?.handleSavePosition(notification)
+            }
         }
         
         // Listen for restore requests from DetailMediaCell
@@ -46,7 +48,9 @@ class SimpleVideoPlayerStateHelper: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleRestorePosition(notification)
+            Task { @MainActor in
+                self?.handleRestorePosition(notification)
+            }
         }
         
         // Listen for position requests (from views that need current position)
@@ -55,7 +59,9 @@ class SimpleVideoPlayerStateHelper: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handlePositionRequest(notification)
+            Task { @MainActor in
+                self?.handlePositionRequest(notification)
+            }
         }
     }
     
