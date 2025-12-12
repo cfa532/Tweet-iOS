@@ -1433,11 +1433,6 @@ final class HproseInstance: ObservableObject {
                 if skipRetries {
                     throw error
                 }
-                
-                if attempt < maxAttempts {
-                    await handleRetryRecovery(for: user)
-                    // Retry immediately without delay - IP refresh is forced on retry attempts
-                }
             }
         }
         
@@ -1470,47 +1465,43 @@ final class HproseInstance: ObservableObject {
         ])
     }
     
-    private func handleRetryRecovery(for user: User) async {
-        do {
-            if var appBase = appUser.baseUrl {
-                var isHealthy = await isServerHealthy(appBase)
-                if !isHealthy {
-                    print("WARN: [updateUserFromServer] App base \(appBase.absoluteString) unhealthy, reinitializing")
-                    try await initAppEntry()
-                    if let refreshedBase = appUser.baseUrl {
-                        if refreshedBase != appBase {
-                            print("DEBUG: [updateUserFromServer] App base updated to \(refreshedBase.absoluteString) after reinit")
-                        }
-                        appBase = refreshedBase
-                    }
-                    isHealthy = await isServerHealthy(appBase, logFailures: false)
-                    if !isHealthy {
-                        print("WARN: [updateUserFromServer] App base \(appBase.absoluteString) still unhealthy after reinit")
-                    }
-                }
-                
-                if HproseInstance.baseUrl != appBase {
-                    HproseInstance.baseUrl = appBase
-                    client.uri = appBase.appendingPathComponent("/webapi/").absoluteString
-                }
-                
-                if let providerIP = try await getProviderIP(user.mid) {
-                    let resolved = try normalizedBaseURL(from: providerIP, context: "retry provider IP for \(user.mid)")
-                    await applyBaseUrlIfNeeded(user, url: resolved, reason: "retry provider IP")
-                }
-            } else if let base = user.baseUrl {
-                let healthy = await isServerHealthy(base)
-                if !healthy {
-                    print("WARN: [updateUserFromServer] User base \(base.absoluteString) unhealthy, reinitializing app")
-                    try await initAppEntry()
-                    if let refreshedBase = appUser.baseUrl {
-                        await applyBaseUrlIfNeeded(user, url: refreshedBase, reason: "initApp recovery")
-                    }
-                }
-            }
-        } catch {
-            print("DEBUG: [updateUserFromServer] Retry recovery encountered error: \(error)")
+    /// Get provider IP for a user with health checking and fallback retry
+    /// - Parameter mid: User's member ID
+    /// - Parameter attemptNumber: Internal parameter to track retry attempts (1 or 2)
+    /// - Returns: A healthy provider IP address, or nil if none found
+    /// - Throws: Error only after both attempts fail
+    func getProviderIP(_ mid: String) async throws -> String? {
+        // Safety check: never try to get provider IP for GUEST_ID
+        if mid == Constants.GUEST_ID {
+            print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
         }
+        
+        let providerIP = await _getProviderIP(mid)
+        if (providerIP != nil) {
+            return providerIP
+        }
+
+        if (mid == appUser.mid) {
+            guard let entryIP = try await findEntryIP() else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
+            }
+            return await _getProviderIP(mid, hproseClient: clientPool.getClient(for: entryIP))
+        } else {
+            guard let appUserClient = appUser.hproseClient else {
+                print("ERROR: [getProviderIP] appUser.hproseClient is nil")
+                return nil
+            }
+            if (await isServerHealthy(appUserClient) != true) {
+                guard let entryIP = try await findEntryIP() else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
+                }
+                let ip = await _getProviderIP(appUser.mid, hproseClient: clientPool.getClient(for: entryIP))
+                appUser.baseUrl = URL(string: "http://\(String(describing: ip))")
+                return await _getProviderIP(mid)
+            }
+        }
+        return nil
     }
     
     private func _getProviderIP(
@@ -1552,13 +1543,12 @@ final class HproseInstance: ObservableObject {
                 .filter { !$0.isEmpty }
             // Check each IP for health and return the first healthy one
             for ip in ipAddresses {
-                let urlString = "http://\(ip)/webapi/"
-                let client = clientPool.getClient(for: urlString)
+                let client = clientPool.getClient(for: ip)
                 
                 let isHealthy = await isServerHealthy(client)
                 
                 // Release client back to pool
-                clientPool.releaseClient(client, for: urlString)
+                clientPool.releaseClient(client, for: ip)
                 
                 if isHealthy {
                     print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip)")
@@ -5818,144 +5808,6 @@ final class HproseInstance: ObservableObject {
         print("WARN: [resolveEntryIPFromAppUrls] Failed to resolve any IP from app URLs")
         return nil
     }
-    
-    /// Get provider IP for a user with health checking and fallback retry
-    /// - Parameter mid: User's member ID
-    /// - Parameter attemptNumber: Internal parameter to track retry attempts (1 or 2)
-    /// - Returns: A healthy provider IP address, or nil if none found
-    /// - Throws: Error only after both attempts fail
-    func getProviderIP(_ mid: String) async throws -> String? {
-        // Safety check: never try to get provider IP for GUEST_ID
-        if mid == Constants.GUEST_ID {
-            print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
-        }
-        
-        let providerIP = await _getProviderIP(mid)
-        if (providerIP != nil) {
-            return providerIP
-        }
-
-        if (mid == appUser.mid) {
-            let entryIP = find¥
-        }
-        
-        
-        // All IPs failed health check
-        if attemptNumber == 1 {
-            if mid == appUser.mid {
-                // If this is the appUser, try fallback mechanism
-                print("WARN: [getProviderIP] All IPs failed health check for appUser on attempt #1, trying fallback mechanism")
-                return try await handleProviderIPFallback(for: mid)
-            } else {
-                // If this is NOT the appUser, check appUser's baseUrl health first
-                print("WARN: [getProviderIP] All IPs failed health check for user \(mid) on attempt #1")
-                
-                // Check if appUser has a valid baseUrl to test
-                if let appUserBaseUrl = appUser.baseUrl {
-                    print("DEBUG: [getProviderIP] Checking health of appUser's baseUrl: \(appUserBaseUrl.absoluteString)")
-                    let isAppUserHealthy = await isServerHealthy(appUserBaseUrl, logFailures: false)
-                    
-                    if isAppUserHealthy {
-                        // AppUser's connection is healthy, so the issue is specific to this user's IPs
-                        print("DEBUG: [getProviderIP] ✅ AppUser's baseUrl is healthy, failing for user \(mid)")
-                        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed health check for user: \(mid) (appUser connection is healthy)"])
-                    } else {
-                        // AppUser's connection is also unhealthy, try to resolve new entryIP
-                        print("WARN: [getProviderIP] ❌ AppUser's baseUrl is unhealthy, attempting to resolve new entryIP")
-                        return try await handleProviderIPFallback(for: mid)
-                    }
-                } else {
-                    // No appUser baseUrl available, try to resolve new entryIP
-                    print("WARN: [getProviderIP] No appUser baseUrl available, attempting to resolve new entryIP")
-                    return try await handleProviderIPFallback(for: mid)
-                }
-            }
-        }
-        
-        // All IPs failed and no fallback available
-        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All provider IPs failed health check for user: \(mid) after \(attemptNumber) attempt(s)"])
-    }
-    
-    /// Shared fallback implementation: resolve entryIP, update client URI, then resolve target user's provider IP
-    ///
-    /// This method implements a fallback mechanism when provider IP resolution fails:
-    /// 1. Resolves entryIP from app URLs (generic fallback IP)
-    /// 2. Temporarily updates `self.client.uri` to use entryIP
-    /// 3. Uses entryIP client to resolve target user's provider IP (works for any user)
-    /// 4. If target is appUser, also updates `appUser.baseUrl`
-    /// 5. Restores previous client URI on any failure
-    ///
-    /// - Parameter targetUserId: The user ID to resolve provider IP for (may be appUser or another user)
-    /// - Returns: A healthy provider IP address for the target user, or throws if retry fails
-    /// - Note: Modifies `self.client.uri` temporarily to avoid race conditions from changing `appUser.baseUrl`
-    private func handleProviderIPFallback(for targetUserId: String) async throws -> String? {
-        let isAppUser = (targetUserId == appUser.mid)
-        let context = isAppUser ? "appUser" : "non-appUser: \(targetUserId)"
-        print("DEBUG: [handleProviderIPFallback] Starting fallback mechanism for \(context)")
-        
-        // Step 1: Resolve entryIP from app URLs
-        guard let entryIP = await resolveEntryIPFromAppUrls(avoidInfiniteLoop: false) else {
-            print("ERROR: [handleProviderIPFallback] Failed to resolve entryIP from app URLs")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve entryIP for fallback"])
-        }
-        
-        print("DEBUG: [handleProviderIPFallback] Resolved entryIP: \(entryIP)")
-        
-        // Step 2: Convert entryIP to URL
-        guard let entryIPBaseURL = URL(string: entryIP) ?? URL(string: "http://\(entryIP)") else {
-            print("ERROR: [handleProviderIPFallback] Invalid entryIP format: \(entryIP)")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid entryIP format"])
-        }
-        
-        // Step 3: Temporarily update self.client.uri to use entryIP
-        let previousClientUri = client.uri
-        let entryIPUri = entryIPBaseURL.appendingPathComponent("/webapi/").absoluteString
-        client.uri = entryIPUri
-        print("DEBUG: [handleProviderIPFallback] Temporarily set self.client.uri to entryIP: \(entryIPUri)")
-        
-        // Step 4: Use entryIP client to resolve target user's provider IP
-        do {
-            guard let targetProviderIP = try await getProviderIP(targetUserId, attemptNumber: 2) else {
-                print("ERROR: [handleProviderIPFallback] Failed to resolve provider IP for \(context) using entryIP")
-                // Restore previous client URI
-                client.uri = previousClientUri
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to resolve provider IP for \(context) using entryIP"])
-            }
-            
-            print("DEBUG: [handleProviderIPFallback] ✅ Resolved provider IP for \(context): \(targetProviderIP)")
-            
-            // If target is appUser, update appUser.baseUrl and client.uri
-            if isAppUser {
-                guard let targetResolvedURL = URL(string: targetProviderIP) ?? URL(string: "http://\(targetProviderIP)") else {
-                    print("ERROR: [handleProviderIPFallback] Invalid provider IP format: \(targetProviderIP)")
-                    client.uri = previousClientUri
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid provider IP format"])
-                }
-                
-                let targetProviderUri = targetResolvedURL.appendingPathComponent("/webapi/").absoluteString
-                client.uri = targetProviderUri
-                
-                await MainActor.run {
-                    appUser.baseUrl = targetResolvedURL
-                }
-                print("DEBUG: [handleProviderIPFallback] Updated client.uri and appUser.baseUrl to: \(targetResolvedURL.absoluteString)")
-            } else {
-                // For non-appUser, restore previous client URI
-                client.uri = previousClientUri
-            }
-            
-            return targetProviderIP
-            
-        } catch {
-            // Restore previous client URI on failure
-            client.uri = previousClientUri
-            print("ERROR: [handleProviderIPFallback] Fallback failed for \(context), restored self.client.uri to: \(previousClientUri ?? "nil")")
-            throw error
-        }
-    }
-    
-
     
     /// Find IP addresses of given nodeId
     func getHostIP(_ nodeId: String, v4Only: String = "false") async -> String? {
