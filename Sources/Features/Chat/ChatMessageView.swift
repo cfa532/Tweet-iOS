@@ -306,7 +306,7 @@ struct ChatImageThumbnail: View {
                 }
         } else if isLoading {
             // Show loading state with cached placeholder
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
                 Image(uiImage: cachedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -339,7 +339,7 @@ struct ChatImageThumbnail: View {
             }
         } else {
             // Show cached placeholder if available, otherwise fallback
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
                 Image(uiImage: cachedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -398,7 +398,7 @@ struct ChatImageThumbnail: View {
         guard let url = attachment.getUrl(baseUrl) else { return }
         
         // First, try to get cached image immediately
-        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             self.image = cachedImage
             return
         }
@@ -406,7 +406,7 @@ struct ChatImageThumbnail: View {
         // If no cached image, start loading
         isLoading = true
         Task {
-            if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
+            if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment) {
                 await MainActor.run {
                     self.image = loadedImage
                     self.isLoading = false
