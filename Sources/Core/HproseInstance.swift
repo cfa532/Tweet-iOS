@@ -13,6 +13,7 @@ import ffmpegkit
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
+    static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     private var _domainToShare: String = AppConfig.baseUrl
     
     /// The domain to use for sharing links
@@ -149,7 +150,7 @@ final class HproseInstance: ObservableObject {
     private let blackList = BlackList.shared
     
     // MARK: - Client Pool Management
-    private lazy var clientPool: HproseClientPool = {
+    lazy var clientPool: HproseClientPool = {
         return HproseClientPool(maxClientsPerURL: 5)
     }()
     
@@ -452,6 +453,7 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 if let entryIP = Gadget.shared.filterIpAddresses(addrs) {
+                    HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
                     return entryIP
                 }
             } catch {
@@ -471,7 +473,7 @@ final class HproseInstance: ObservableObject {
         guard let entryIP = try await findEntryIP() else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
         }
-                
+        
         if !appUser.isGuest {
             // Always force refresh of appUser's baseURL on app start to ensure we have the latest IP
             // Pass empty string to force IP re-resolution and bypass cache

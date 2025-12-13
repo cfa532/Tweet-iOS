@@ -116,7 +116,7 @@ struct MediaCell: View, Equatable {
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else if isLoading {
                             // Show cached placeholder while loading original image
-                            if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
                                 Image(uiImage: cachedImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
@@ -128,7 +128,7 @@ struct MediaCell: View, Equatable {
                             }
                         } else {
                             // Show cached placeholder if available, otherwise gray background
-                            if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
                                 Image(uiImage: cachedImage)
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
@@ -145,7 +145,7 @@ struct MediaCell: View, Equatable {
                     .overlay(
                         // Show loading indicator only when loading and no cached image
                         Group {
-                            if isLoading, imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) == nil {
+                            if isLoading, imageCache.getCompressedImage(for: attachment) == nil {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle())
                                     .scaleEffect(1.2)
@@ -158,7 +158,7 @@ struct MediaCell: View, Equatable {
                                     .padding(4)
                             }
                         },
-                        alignment: isLoading && imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) != nil ? .topTrailing : .center
+                        alignment: isLoading && imageCache.getCompressedImage(for: attachment) != nil ? .topTrailing : .center
                     )
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -310,7 +310,7 @@ struct MediaCell: View, Equatable {
         }
         
         // First, try to get cached image immediately
-        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cachedImage = imageCache.getCompressedImage(for: attachment) {
             self.image = cachedImage
             self.isLoading = false
             return

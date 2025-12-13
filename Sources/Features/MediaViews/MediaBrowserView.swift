@@ -462,7 +462,7 @@ struct MediaBrowserView: View {
         print("DEBUG: [MediaBrowserView] loadImageIfNeeded called for \(loadId)")
         
         // First, try to get compressed image immediately
-        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             print("DEBUG: [MediaBrowserView] Found cached image for \(loadId)")
             imageStates[index] = .loaded(compressedImage)
             return
@@ -500,7 +500,7 @@ struct MediaBrowserView: View {
 
     
     private func getCachedPlaceholder(for attachment: MimeiFileType) -> UIImage? {
-        return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
+        return ImageCacheManager.shared.getCompressedImage(for: attachment)
     }
     
     private static func cleanupImageStates(attachments: [MimeiFileType], imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
