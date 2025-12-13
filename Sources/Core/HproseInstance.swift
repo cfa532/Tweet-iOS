@@ -414,7 +414,7 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [HproseInstance] Successfully fetched alphaId user for guest")
             await MainActor.run {
-                User.updateUserInstance(with: alphaUser)
+                User.updateUserInstance(with: alphaUser, true)
                 // Notify FollowingsTweetView to refresh
                 NotificationCenter.default.post(name: .appUserReady, object: nil)
             }
@@ -490,41 +490,21 @@ final class HproseInstance: ObservableObject {
             print("✅ [INIT] appUser data fetched: \(String(describing: user))")
             
             if let user = user {
-                // Valid login user is found, use its provider IP as base.
-                // If user doesn't have a baseUrl, fall back to entryIP
-                if let userBaseUrlString = user.baseUrl?.absoluteString, !userBaseUrlString.isEmpty, let userBaseUrl = URL(string: userBaseUrlString) {
-                    HproseInstance.baseUrl = userBaseUrl
-                } else {
-                    // User doesn't have a valid baseUrl, use the resolved entryIP
-                    print("DEBUG: [initAppEntry] User has no baseUrl, using resolved IP: \(entryIP)")
-                    HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
-                }
-                client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                
-                // CRITICAL: Set user.baseUrl on MainActor to avoid publishing warnings
-                let realIP = HproseInstance.baseUrl
-                await MainActor.run {
-                    user.baseUrl = realIP
-                }
-                
                 // App is now initialized with base connectivity
                 await MainActor.run {
                     isInitializationComplete = true
                     User.updateUserInstance(with: user, true)
                     _appUserId = user.mid
+                    
+                    // Notify UI that app is ready (tweets can now render with real IP)
+                    NotificationCenter.default.post(name: .appUserReady, object: nil)
                 }
                 
                 // Ensure the refreshed user with updated baseURL is saved to cache
                 TweetCacheManager.shared.saveUser(user)
                 print("✅ [INIT] App initialized with real IP: \(HproseInstance.baseUrl.absoluteString)")
                 
-                // Notify UI that app is ready (tweets can now render with real IP)
-                await MainActor.run {
-                    NotificationCenter.default.post(name: .appUserReady, object: nil)
-                }
-                
                 // Fetch followings and blacklist in background (non-blocking)
-                print("🔄 [INIT] Fetching followings and blacklist in background...")
                 Task.detached(priority: .background) {
                     let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
                     print("✅ [INIT] Followings fetched: \(followings.count)")
@@ -1313,6 +1293,12 @@ final class HproseInstance: ObservableObject {
                     throw HproseError.noResponse(userId: user.mid)
                 }
                 
+                // Check if the response is an error object (network failure case)
+                if let error = rawResponse as? Error {
+                    print("ERROR: [\(logPrefix)] Network error during get_user: userId: \(user.mid), error: \(error.localizedDescription)")
+                    throw error
+                }
+                
                 print("DEBUG: [\(logPrefix)] get_user rawResponse received for \(user.mid)")
                 
                 // Unwrap and process response
@@ -1418,6 +1404,12 @@ final class HproseInstance: ObservableObject {
         
         guard let retryRawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
             throw HproseError.noResponse(userId: user.mid)
+        }
+        
+        // Check if the response is an error object (network failure case)
+        if let error = retryRawResponse as? Error {
+            print("ERROR: [handleRedirectAndRetry] Network error after redirect: userId: \(user.mid), error: \(error.localizedDescription)")
+            throw error
         }
         
         let retryResponse = try Self.unwrapV2Response(retryRawResponse)
@@ -1904,7 +1896,7 @@ final class HproseInstance: ObservableObject {
         ChatCacheManager.shared.clearAllCache()
         
         // Clear all video cache files from disk
-        await CachingPlayerItem.clearAllCache()
+        // await CachingPlayerItem.clearAllCache()
         
         // Reset appUser to guest user
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)
