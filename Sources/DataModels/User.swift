@@ -1,5 +1,4 @@
  import Foundation
-import Combine
 import hprose
 
 class User: ObservableObject, Codable, Identifiable, Hashable {
@@ -155,72 +154,52 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var hostIds: [MimeiId]? // List of MimeiId
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
-    private var _hproseClient: HproseClient?
+    
     public var hproseClient: HproseClient? {
         get {
             guard let baseUrl = baseUrl else { 
                 return nil 
             }
-
-            if let cached = _hproseClient {
-                return cached
-            } else {
-                if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                    // Create a new client since the shared one is private
-                    let client = HproseHttpClient()
-                    client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
-                    client.uri = "\(baseUrl)/webapi/"
-                    _hproseClient = client
-                    return client
-                } else {
-                    let client = HproseHttpClient()
-                    client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
-                    client.uri = "\(baseUrl)/webapi/"
-                    _hproseClient = client
-                    return client
-                }
-            }
+            
+            let urlString = "\(baseUrl)/webapi/"
+            let client = HproseInstance.shared.clientPool.getClientByUrl(for: urlString)
+            
+            // Configure timeout for regular operations (5 minutes)
+            client.timeout = 300000  // 5 minutes in milliseconds
+            
+            return client
         }
     }
-    private var _uploadClient: HproseClient?
+    
     public var uploadClient: HproseClient? {
         get {
             guard let writableUrl = writableUrl else { 
                 return nil 
             }
-
-            if let cached = _uploadClient {
-                return cached
-            } else {
-                if writableUrl == HproseInstance.shared.appUser.baseUrl {
-                    // Use the main hprose client if available, otherwise create a new one
-                    // Create a new client for upload
-                    let client = HproseHttpClient()
-                    client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
-                    client.uri = "\(writableUrl)/webapi/"
-                    _uploadClient = client
-                    return client
-                } else {
-                    let client = HproseHttpClient()
-                    client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
-                    client.uri = "\(writableUrl)/webapi/"
-                    _uploadClient = client
-                    return client
-                }
-            }
+            
+            let urlString = "\(writableUrl)/webapi/"
+            let client = HproseInstance.shared.clientPool.getClientByUrl(for: urlString)
+            
+            // Configure timeout for upload operations (50 minutes for large uploads)
+            client.timeout = 3000000  // 50 minutes for large uploads
+            
+            return client
         }
     }
     
     @MainActor
     func resetClients() {
-        if let httpClient = _hproseClient as? HproseHttpClient {
-            httpClient.close()
+        // With clientPool, we don't need to manually close clients
+        // The pool manages lifecycle. We can clear the pool for specific URLs if needed
+        if let baseUrl = baseUrl {
+            let urlString = "\(baseUrl)/webapi/"
+            HproseInstance.shared.clientPool.clear(for: urlString)
         }
-        if let uploadClient = _uploadClient as? HproseHttpClient {
-            uploadClient.close()
+        
+        if let writableUrl = writableUrl {
+            let urlString = "\(writableUrl)/webapi/"
+            HproseInstance.shared.clientPool.clear(for: urlString)
         }
-        _hproseClient = nil
-        _uploadClient = nil
     }
     
     @Published var fansList: [MimeiId]? // List of MimeiId
@@ -268,9 +247,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     var id: String { mid }  // Computed property that returns mid
     
-    private var baseUrlCancellable: AnyCancellable?
-    private var writableUrlCancellable: AnyCancellable?
-    
     // MARK: - Initialization
     init(
         mid: MimeiId = Constants.GUEST_ID,
@@ -308,18 +284,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.hostIds = hostIds
         self.publicKey = publicKey
         self.hasAcceptedTerms = hasAcceptedTerms
-        // Observe baseUrl changes to clear cached clients
-        baseUrlCancellable = $baseUrl
-            .sink { [weak self] _ in
-                self?._hproseClient = nil
-                self?._uploadClient = nil
-            }
-        
-        // Observe writableUrl changes to clear upload client cache
-        writableUrlCancellable = $writableUrl
-            .sink { [weak self] _ in
-                self?._uploadClient = nil
-            }
     }
     
     // MARK: - Factory Methods

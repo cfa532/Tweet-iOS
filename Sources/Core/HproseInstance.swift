@@ -1793,7 +1793,7 @@ final class HproseInstance: ObservableObject {
         
         return try await retryOperation(maxRetries: 3) {
             let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            newClient.timeout = 30  // 30s
+            newClient.timeout = 30000  // 30s
             
             defer { newClient.close() }
             
@@ -2084,16 +2084,6 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         
-        var newClient: HproseClient? = nil
-        if let baseUrl = user.baseUrl, baseUrl != appUser.baseUrl {
-            print("DEBUG: [HproseInstance] getUserTweetsByType - Creating new client for different baseUrl: \(baseUrl)")
-            let newHproseClient = HproseHttpClient()
-            newHproseClient.timeout = 300
-            newHproseClient.uri = "\(baseUrl)/webapi/"
-            client = newHproseClient
-            newClient = newHproseClient
-        }
-        
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
         
         // Unwrap v2 response
@@ -2125,7 +2115,6 @@ final class HproseInstance: ObservableObject {
                 }
             }
         } else {
-            newClient?.close()
             print("DEBUG: [HproseInstance] getUserTweetsByType - Invalid response format: \(String(describing: unwrappedResponse))")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in getUserTweetsByType"])
         }
@@ -2156,8 +2145,6 @@ final class HproseInstance: ObservableObject {
                 tweetsWithAuthors.append(nil)
             }
         }
-        
-        newClient?.close()
         
         // Sort tweets in descending order by timestamp (most recent first)
         let sortedTweets = tweetsWithAuthors.sorted { tweet1, tweet2 in
