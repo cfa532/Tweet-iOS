@@ -313,28 +313,21 @@ class ImageCacheManager: @unchecked Sendable {
         }
     }
     
-    private func getCacheKey(for attachment: MimeiFileType, baseUrl: URL) -> String {
+    private func getCacheKey(for attachment: MimeiFileType) -> String? {
         // ALWAYS use mid as the cache key (stable identifier)
         // If mid is somehow empty, this is a programming error that should be fixed at the source
         if !attachment.mid.isEmpty {
             return attachment.mid
         }
-        
-        // Fallback: This should never happen in production
-        // If it does, log a warning so we can fix the root cause
-        print("WARNING: [ImageCacheManager] MimeiFileType has empty mid! Using URL fallback. This should be fixed.")
-        if let url = attachment.getUrl(baseUrl) {
-            return url.lastPathComponent
-        }
-        return UUID().uuidString
+        return nil
     }
     
     private func getCompressedCacheFileURL(for key: String) -> URL {
         return cacheDirectory.appendingPathComponent("\(key)_compressed.jpg")
     }
     
-    func getCompressedImage(for attachment: MimeiFileType, baseUrl: URL) -> UIImage? {
-        let key = getCacheKey(for: attachment, baseUrl: baseUrl)
+    func getCompressedImage(for attachment: MimeiFileType) -> UIImage? {
+        guard let key = getCacheKey(for: attachment) else { return nil }
         let cacheKey = "\(key)_compressed"
         
         // Check memory cache first
@@ -376,8 +369,11 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     @discardableResult
-    func cacheImageData(_ data: Data, for attachment: MimeiFileType, baseUrl: URL) -> UIImage? {
-        let key = getCacheKey(for: attachment, baseUrl: baseUrl)
+    func cacheImageData(_ data: Data, for attachment: MimeiFileType) -> UIImage? {
+        guard let key = getCacheKey(for: attachment) else { 
+            print("DEBUG: [ImageCacheManager] Cannot cache image - no cache key available")
+            return nil 
+        }
         
         let targetImage: UIImage
         if let downsampled = downsampleImageData(data, maxDimension: maxDownsampleDimension) {
@@ -465,8 +461,11 @@ class ImageCacheManager: @unchecked Sendable {
         return data
     }
     
-    func loadAndCacheImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
-        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl)
+    func loadAndCacheImage(from url: URL, for attachment: MimeiFileType) async -> UIImage? {
+        guard let cacheKey = getCacheKey(for: attachment) else {
+            print("DEBUG: [ImageCacheManager] Cannot load image - no cache key available")
+            return nil
+        }
         
         // Check if there's already an ongoing request for this image
         let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
@@ -505,10 +504,10 @@ class ImageCacheManager: @unchecked Sendable {
                     }
                     
                     let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
-                    self.cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                    self.cacheImageData(data, for: attachment)
                     try? FileManager.default.removeItem(at: tempURL)
                     
-                    return self.getCompressedImage(for: attachment, baseUrl: baseUrl)
+                    return self.getCompressedImage(for: attachment)
                 }
             } catch {
                 print("Error loading image from \(url): \(error.localizedDescription)")
@@ -533,7 +532,11 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
-        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl) + "_original"
+        guard let key = getCacheKey(for: attachment) else {
+            print("DEBUG: [ImageCacheManager] Cannot load original image - no cache key available")
+            return nil
+        }
+        let cacheKey = key + "_original"
         
         // Check if there's already an ongoing request for this original image
         let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
@@ -604,10 +607,13 @@ class ImageCacheManager: @unchecked Sendable {
     
     /// Load avatar with concurrency throttling to prevent network congestion
     func loadAndCacheAvatar(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
-        let cacheKey = getCacheKey(for: attachment, baseUrl: baseUrl)
+        guard let cacheKey = getCacheKey(for: attachment) else {
+            print("DEBUG: [ImageCacheManager] Cannot load avatar - no cache key available")
+            return nil
+        }
         
         // Check memory cache first (fast path)
-        if let cached = getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cached = getCompressedImage(for: attachment) {
             return cached
         }
         
@@ -666,10 +672,10 @@ class ImageCacheManager: @unchecked Sendable {
                     }
                     
                     let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
-                    self.cacheImageData(data, for: attachment, baseUrl: baseUrl)
+                    self.cacheImageData(data, for: attachment)
                     try? FileManager.default.removeItem(at: tempURL)
                     
-                    return self.getCompressedImage(for: attachment, baseUrl: baseUrl)
+                    return self.getCompressedImage(for: attachment)
                 }
             } catch {
                 print("DEBUG: [ImageCacheManager] Error loading avatar from \(url): \(error.localizedDescription)")

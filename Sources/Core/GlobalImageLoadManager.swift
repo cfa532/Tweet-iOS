@@ -272,7 +272,7 @@ class GlobalImageLoadManager: ObservableObject {
     private func startLoading(_ request: ImageLoadRequest) {
         let task = Task {
             // Check if image is already cached
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment, baseUrl: request.baseUrl) {
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                 await MainActor.run {
                     request.completion(cachedImage)
                     self.completedRequests.insert(request.id)
@@ -333,7 +333,7 @@ class GlobalImageLoadManager: ObservableObject {
                 return nil
             }
             
-            if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment, baseUrl: request.baseUrl) {
+            if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment) {
                 return image
             }
             
@@ -375,7 +375,7 @@ class GlobalImageLoadManager: ObservableObject {
         let task = Task {
             do {
                 // Check if image is already cached
-                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment, baseUrl: request.baseUrl) {
+                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                     await MainActor.run {
                         request.completion(cachedImage)
                         self.completedRequests.insert(request.id)
@@ -436,7 +436,7 @@ class GlobalImageLoadManager: ObservableObject {
             let resizedImage = resizeImage(originalImage, toFit: maxSize)
             
             if let resizedData = resizedImage.jpegData(compressionQuality: 0.8) {
-                if let cachedImage = ImageCacheManager.shared.cacheImageData(resizedData, for: request.attachment, baseUrl: request.baseUrl) {
+                if let cachedImage = ImageCacheManager.shared.cacheImageData(resizedData, for: request.attachment) {
                     return cachedImage
                 }
             }

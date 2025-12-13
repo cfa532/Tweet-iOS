@@ -655,8 +655,7 @@ struct TweetActionButtonsView: View {
                 fullImage = cached
             } else if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
                 print("DEBUG: [SHARE] Loading image from URL: \(url.absoluteString)")
-                let cacheBase = baseURL ?? url.deletingLastPathComponent()
-                fullImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: cacheBase)
+                fullImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment)
                 print("DEBUG: [SHARE] Image loaded: \(fullImage != nil ? "YES" : "NO")")
             }
             

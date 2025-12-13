@@ -108,11 +108,9 @@ struct Avatar: View {
             mid: cacheKey,
             mediaType: .image
         )
-        
-        let baseUrl = user.baseUrl ?? HproseInstance.baseUrl
-        
+                
         // Check cache first
-        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
+        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
             cachedImage = cached
             return
         }
@@ -129,7 +127,7 @@ struct Avatar: View {
                 return
             }
             
-            let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: baseUrl)
+            let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment)
             
             await MainActor.run {
                 if let image = result {

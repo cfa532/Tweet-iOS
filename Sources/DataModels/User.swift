@@ -607,8 +607,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         if let avatar = avatar {
             // Use user's baseUrl if available, otherwise fallback to HproseInstance.baseUrl
             // baseUrl now usually available (cached from disk), fallback for edge cases
-            let effectiveBaseUrl = baseUrl ?? HproseInstance.baseUrl
-            return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(effectiveBaseUrl)/ipfs/\(avatar)" :  "\(effectiveBaseUrl)/mm/\(avatar)"
+            if let baseUrl = baseUrl {
+                return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
+            }
         }
         return nil
     }

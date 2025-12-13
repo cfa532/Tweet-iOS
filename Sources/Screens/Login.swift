@@ -166,7 +166,7 @@ struct LoginView: View {
                 return
             }
             // Use entry URL when calling getUserId during login
-            if let userId = try await hproseInstance.getUserId(username, baseUrl: HproseInstance.baseUrl) {
+            if let userId = try await hproseInstance.getUserId(username) {
                 // Force fetch from server with empty baseUrl to ensure fresh data
                 // This prevents the issue where cached user with nil username is returned
                 if let user = try await hproseInstance.fetchUser(userId, baseUrl: "") {

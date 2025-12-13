@@ -1032,24 +1032,8 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Tweet not found", comment: "Tweet lookup error")])
     }
     
-    func getUserId(_ username: String, baseUrl: URL? = nil) async throws -> String? {
+    func getUserId(_ username: String) async throws -> String? {
         try await withRetry {
-            let client: HproseClient
-            if let baseUrl = baseUrl {
-                // Use provided baseUrl to create a temporary client
-                let tempClient = HproseHttpClient()
-                tempClient.timeout = 300
-                tempClient.uri = baseUrl.appendingPathComponent("/webapi/").absoluteString
-                client = tempClient
-                do { tempClient.close() }
-            } else {
-                // Use appUser's client (default behavior)
-                guard let appUserClient = appUser.hproseClient else {
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-                }
-                client = appUserClient
-            }
-            
             let entry = "get_userid"
             let params = [
                 "aid": appId,
@@ -1057,6 +1041,10 @@ final class HproseInstance: ObservableObject {
                 "version": "v2",
                 "username": username,
             ]
+            guard let client = appUser.hproseClient else {
+                print("[getUserId] Invalid hproseClient")
+                return nil
+            }
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
