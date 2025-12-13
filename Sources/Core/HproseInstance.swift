@@ -4660,8 +4660,12 @@ final class HproseInstance: ObservableObject {
         
         print("DEBUG: [HproseInstance] Refreshing appUser from server... (forceIPRefresh: \(forceIPRefresh))")
         do {
+            // Determine baseUrl: empty string forces IP re-resolution, otherwise use existing
+            let baseUrlToUse = forceIPRefresh ? "" : (appUser.baseUrl?.absoluteString ?? "")
+            
             // Call fetchUser to fetch from server (force refresh)
-            if let refreshedUser = try await fetchUser(appUser.mid, forceRefresh: true) {
+            // When forceIPRefresh is true, passing empty baseUrl triggers getProviderIP() call
+            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: baseUrlToUse, forceRefresh: true) {
                 
                 // Update appUser with refreshed data
                 await MainActor.run {
