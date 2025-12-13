@@ -407,23 +407,17 @@ final class HproseInstance: ObservableObject {
                 print("fetchAlphaIdUserForGuest: alphaUser.mid is null")
                 return
             }
-            guard var alphaUser = try await fetchUser(alphaUserId, baseUrl: "", forceRefresh: true) else {
+            guard let alphaUser = try await fetchUser(alphaUserId, baseUrl: "", forceRefresh: true) else {
                 print("fetchAlphaIdUserForGuest: alphaUser is null")
                 return
             }
             
+            print("DEBUG: [HproseInstance] Successfully fetched alphaId user for guest")
             await MainActor.run {
                 User.updateUserInstance(with: alphaUser)
-                alphaUser.baseUrl = HproseInstance.baseUrl
-            }
-            
-            print("DEBUG: [HproseInstance] Successfully fetched alphaId user for guest")
-            
-            // Notify FollowingsTweetView to refresh
-            await MainActor.run {
+                // Notify FollowingsTweetView to refresh
                 NotificationCenter.default.post(name: .appUserReady, object: nil)
             }
-            
         } catch {
             print("DEBUG: [HproseInstance] Failed to fetch alphaId user for guest: \(error)")
         }
@@ -1921,9 +1915,7 @@ final class HproseInstance: ObservableObject {
         }
         
         // Fetch alphaId user for guest and notify FollowingsTweetView
-        Task {
-            await fetchAlphaIdUserForGuest()
-        }
+        await fetchAlphaIdUserForGuest()
     }
     
     /*
