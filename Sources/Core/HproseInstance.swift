@@ -62,7 +62,7 @@ final class HproseInstance: ObservableObject {
     /// **Cache expiry handling:**
     /// - User cache expiry is handled when app returns to foreground via AppDelegate
     /// - AppDelegate.handleAppWillEnterForeground() calls refreshAppUserIP() which:
-    ///   1. Calls refreshAppUserFromServer(forceIPRefresh: true)
+    ///   1. Calls refreshAppUserFromServer()
     ///   2. Uses getProviderIP() for intelligent IP resolution with health checks
     ///   3. Automatically falls back to resolving entryIP if provider IPs are unhealthy
     ///   4. Updates both HproseInstance.baseUrl and appUser.baseUrl
@@ -4623,8 +4623,8 @@ final class HproseInstance: ObservableObject {
                     try await Task.sleep(nanoseconds: delay)
                     
                     // Refresh appUser from server instead of full app reinitialization
-                    // Force IP re-resolution during retries in case of network/IP issues
-                    try await refreshAppUserFromServer(forceIPRefresh: true)
+                    // IP re-resolution is automatically handled by fetchUser's internal retry mechanism
+                    try await refreshAppUserFromServer()
                 }
             }
         }
@@ -4642,30 +4642,28 @@ final class HproseInstance: ObservableObject {
     ///
     /// Use cases:
     /// - Called after successful tweet upload/delete to update tweet counts
-    /// - Called during retry operations with forceIPRefresh=true
+    /// - Called during retry operations
     /// - Called by AppDelegate when app returns from background
-    ///
-    /// - Parameter forceIPRefresh: If true, forces IP re-resolution by passing empty baseUrl.
-    ///   - Set to `true` during network retries when IP issues are suspected
-    ///   - Set to `false` (default) for normal refreshes after successful operations
     ///
     /// - Throws: Network or parsing errors (errors are logged but not thrown to caller)
     /// - Note: This is a lightweight refresh that doesn't reinitialize the entire app
     /// - Note: Changes to appUser are applied on MainActor to ensure thread safety
-    func refreshAppUserFromServer(forceIPRefresh: Bool = false) async throws {
+    /// - Note: IP re-resolution is automatically handled by fetchUser's internal retry mechanism
+    func refreshAppUserFromServer() async throws {
         guard !appUser.isGuest else {
             print("DEBUG: [HproseInstance] Skipping refresh for guest user")
             return
         }
         
-        print("DEBUG: [HproseInstance] Refreshing appUser from server... (forceIPRefresh: \(forceIPRefresh))")
+        print("DEBUG: [HproseInstance] Refreshing appUser from server...")
         do {
-            // Determine baseUrl: empty string forces IP re-resolution, otherwise use existing
-            let baseUrlToUse = forceIPRefresh ? "" : (appUser.baseUrl?.absoluteString ?? "")
+            // fetchUser's internal retry mechanism (maxRetries: 2) automatically re-resolves IP on second attempt if first fails.
+            // This means:
+            // - Attempt 1: Uses existing appUser.baseUrl (may be stale)
+            // - If attempt 1 fails: Attempt 2 automatically calls getProviderIP() for fresh IP
             
-            // Call fetchUser to fetch from server (force refresh)
-            // When forceIPRefresh is true, passing empty baseUrl triggers getProviderIP() call
-            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: baseUrlToUse, forceRefresh: true) {
+            // Call fetchUser to fetch from server (force refresh bypasses cache)
+            if let refreshedUser = try await fetchUser(appUser.mid, forceRefresh: true) {
                 
                 // Update appUser with refreshed data
                 await MainActor.run {

@@ -432,7 +432,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     ///
     /// **Process:**
     /// 1. Skips refresh for guest users (returns early)
-    /// 2. Calls `HproseInstance.refreshAppUserFromServer(forceIPRefresh: true)` which:
+    /// 2. Calls `HproseInstance.refreshAppUserFromServer()` which:
     ///    - Uses `getProviderIP()` to resolve the user's provider IP with health checks
     ///    - Automatically falls back to resolving firstIP if needed (via handleProviderIPFallback)
     ///    - Updates both HproseInstance.baseUrl and appUser.baseUrl
@@ -465,7 +465,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         Task.detached {
             do {
                 print("[AppDelegate] Refreshing appUser from server (getProviderIP handles IP resolution)...")
-                try await hproseInstance.refreshAppUserFromServer(forceIPRefresh: true)
+                try await hproseInstance.refreshAppUserFromServer()
                 print("[AppDelegate] ✅ Successfully refreshed appUser from server")
                 
                 // Save updated user to cache
