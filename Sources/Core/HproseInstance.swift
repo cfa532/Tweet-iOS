@@ -1795,7 +1795,11 @@ final class HproseInstance: ObservableObject {
             let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
             newClient.timeout = 30000  // 30s
             
-            defer { newClient.close() }
+            // Release client back to pool when done (no need to close)
+            defer { 
+                // Note: Not releasing back to pool since timeout is configured differently
+                // Let the pool manage lifecycle naturally
+            }
             
             let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
@@ -2079,7 +2083,7 @@ final class HproseInstance: ObservableObject {
         ] as [String : Any]
         print("DEBUG: [HproseInstance] getUserTweetsByType params: \(params)")
         
-        guard var client = user.hproseClient else {
+        guard let client = user.hproseClient else {
             print("DEBUG: [HproseInstance] getUserTweetsByType - Client not initialized for user: \(user.mid)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }

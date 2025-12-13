@@ -1,4 +1,5 @@
  import Foundation
+import Foundation
 import hprose
 
 class User: ObservableObject, Codable, Identifiable, Hashable {
@@ -161,11 +162,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 return nil 
             }
             
-            let urlString = "\(baseUrl)/webapi/"
-            let client = HproseInstance.shared.clientPool.getClientByUrl(for: urlString)
+            let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
             
             // Configure timeout for regular operations (5 minutes)
-            client.timeout = 300000  // 5 minutes in milliseconds
+            client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
             
             return client
         }
@@ -177,11 +177,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 return nil 
             }
             
-            let urlString = "\(writableUrl)/webapi/"
-            let client = HproseInstance.shared.clientPool.getClientByUrl(for: urlString)
+            let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
             
             // Configure timeout for upload operations (50 minutes for large uploads)
-            client.timeout = 3000000  // 50 minutes for large uploads
+            client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
             
             return client
         }

@@ -35,7 +35,8 @@ class HproseClientPool {
         return client
     }
     
-    func getClientByUrl(for urlString: String) -> HproseClient {
+    func getClientByUrl(for url: String) -> HproseClient {
+        let urlString = "\(url)/webapi/"
         lock.lock()
         defer { lock.unlock() }
         
