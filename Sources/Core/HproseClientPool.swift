@@ -15,9 +15,27 @@ class HproseClientPool {
     /// Get a client for a specific URL. Creates a new one if needed.
     /// - Parameter urlString: The URL string for the server endpoint
     /// - Returns: A configured HproseClient instance
-    func getClient(for ip: String) -> HproseClient {
+    func getClientByIP(for ip: String) -> HproseClient {
         let urlString = "http://\(ip)/webapi/"
 
+        lock.lock()
+        defer { lock.unlock() }
+        
+        // Try to reuse an available client for this URL
+        if var clients = availableClients[urlString], !clients.isEmpty {
+            let client = clients.removeLast()
+            availableClients[urlString] = clients
+            return client
+        }
+        
+        // Create a new client
+        let client = HproseHttpClient()
+        client.timeout = 30  // 30 seconds timeout for health checks
+        client.uri = urlString
+        return client
+    }
+    
+    func getClientByUrl(for urlString: String) -> HproseClient {
         lock.lock()
         defer { lock.unlock() }
         

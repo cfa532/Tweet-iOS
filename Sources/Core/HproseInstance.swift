@@ -13,7 +13,6 @@ import ffmpegkit
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
-    static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     private var _domainToShare: String = AppConfig.baseUrl
     
     /// The domain to use for sharing links
@@ -148,13 +147,6 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - BlackList Management
     private let blackList = BlackList.shared
-    
-    lazy var client: HproseClient = {
-        let client = HproseHttpClient()
-        client.timeout = 300  // Increased from 60 to 300 seconds for large uploads
-        client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-        return client
-    }()
     
     // MARK: - Client Pool Management
     private lazy var clientPool: HproseClientPool = {
@@ -479,10 +471,7 @@ final class HproseInstance: ObservableObject {
         guard let entryIP = try await findEntryIP() else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
         }
-        
-        HproseInstance.baseUrl = URL(string: "http://\(entryIP)")!
-        client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-        
+                
         if !appUser.isGuest {
             // Always force refresh of appUser's baseURL on app start to ensure we have the latest IP
             // Pass empty string to force IP re-resolution and bypass cache
@@ -502,7 +491,7 @@ final class HproseInstance: ObservableObject {
                 
                 // Ensure the refreshed user with updated baseURL is saved to cache
                 TweetCacheManager.shared.saveUser(user)
-                print("✅ [INIT] App initialized with real IP: \(HproseInstance.baseUrl.absoluteString)")
+                print("✅ [INIT] App initialized with real IP: \(entryIP)")
                 
                 // Fetch followings and blacklist in background (non-blocking)
                 Task.detached(priority: .background) {
@@ -520,19 +509,20 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
                 let user = User.getInstance(mid: Constants.GUEST_ID)
                 await MainActor.run {
-                    user.baseUrl = HproseInstance.baseUrl
+                    user.baseUrl = URL(string: "http://\(entryIP)")
                     user.followingList = Gadget.getAlphaIds()
                     _appUserId = user.mid
                     
                     // App is now initialized since appUser has IP address
                     isInitializationComplete = true
                 }
+                await fetchAlphaIdUserForGuest()
                 print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
             }
         } else {
             let user = User.getInstance(mid: Constants.GUEST_ID)
             await MainActor.run {
-                user.baseUrl = HproseInstance.baseUrl
+                user.baseUrl = URL(string: "http://\(entryIP)")
                 user.followingList = Gadget.getAlphaIds()
                 _appUserId = user.mid
                 
@@ -1105,60 +1095,76 @@ final class HproseInstance: ObservableObject {
         forceRefresh: Bool = false,
         skipRetryAndBlacklist: Bool = false
     ) async throws -> User? {
-        // Never make network calls for GUEST_ID
+        // Guard against fetching the guest user - GUEST_ID should never make network calls
+        // as it represents an unauthenticated state
         guard userId != Constants.GUEST_ID else {
             print("DEBUG: [fetchUser] Null userId, returning nil")
             return nil
         }
         
-        // Check blacklist
+        // Check if this user has been blacklisted due to repeated failures
+        // Skip this check if we're in internal retry logic to prevent double-checking
         if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
             print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning nil")
             return nil
         }
         
-        // Check cache first (if not forcing refresh)
+        // Attempt to return cached data if we're not forcing a fresh fetch
         if !forceRefresh {
+            // Fetch the user from the local cache
             let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+            
+            // Verify that we have a complete cached user with required fields
             if cachedUser.username != nil && cachedUser.baseUrl != nil {
                 let hasExpired = await cachedUser.hasExpired()
                 
+                // Return cached user if it's still valid and we have a baseUrl
                 if !hasExpired && !baseUrl.isEmpty {
                     return cachedUser
                 } else if hasExpired {
-                    // Start background refresh if not already running
+                    // User data has expired, but we can return stale data while refreshing in the background
+                    // Check if a background refresh is already in progress using thread-safe queue
                     let shouldStartBackgroundRefresh = userUpdateQueue.sync {
                         if !ongoingUserUpdates.contains(userId) {
+                            // Mark this user as being updated to prevent duplicate refreshes
                             ongoingUserUpdates.insert(userId)
                             return true
                         }
                         return false
                     }
                     
+                    // Kick off background refresh if we're the first to notice expiration
                     if shouldStartBackgroundRefresh {
                         Task {
                             await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
                         }
                     }
                     
+                    // Return the stale cached user immediately for better UX
                     return cachedUser
                 }
             }
         }
         
-        // Check if update already in progress
+        // Check if an update for this user is already in progress to prevent duplicate network calls
+        // Use a synchronized queue to safely check and update the ongoing updates set
         let shouldProceed = userUpdateQueue.sync {
             if ongoingUserUpdates.contains(userId) {
+                // Another fetch is already in progress
                 return false
             }
+            // Mark this user as being updated
             ongoingUserUpdates.insert(userId)
             return true
         }
         
+        // If another fetch is in progress, wait for it to complete and return the cached result
         if !shouldProceed {
             return try await waitForConcurrentUpdate(userId, baseUrl: baseUrl, maxRetries: maxRetries, forceRefresh: forceRefresh)
         }
         
+        // Ensure we always remove this user from the ongoing updates set when we're done
+        // This executes regardless of how we exit (success, error, or early return)
         defer {
             _ = userUpdateQueue.sync {
                 ongoingUserUpdates.remove(userId)
@@ -1166,27 +1172,35 @@ final class HproseInstance: ObservableObject {
         }
         
         do {
+            // Get or create a User instance for this userId
             let user = User.getInstance(mid: userId)
             
-            // Determine base URL
+            // Determine the base URL to use for fetching user data
             let finalBaseUrl: String
             if baseUrl.isEmpty {
+                // No baseUrl provided, so resolve it from the provider IP service
                 if let providerIP = try await getProviderIP(userId) {
+                    // Ensure the IP has the proper http:// prefix
                     finalBaseUrl = ensureHttpPrefix(providerIP)
                 } else {
+                    // Cannot proceed without a valid baseUrl - provider IP resolution failed
                     print("DEBUG: [fetchUser] Cannot fetch user \(userId): no valid baseUrl available")
                     return nil
                 }
             } else {
+                // Use the provided baseUrl directly
                 finalBaseUrl = baseUrl
             }
             
+            // Apply the resolved baseUrl to the user object if valid
             if let url = URL(string: finalBaseUrl) {
                 await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser initial setup")
             }
             
+            // Perform the actual user data fetch with retry logic and error handling
             return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser")
         } catch {
+            // Catch and log any exceptions during the fetch process
             print("DEBUG: [fetchUser] Exception in fetchUser: userId: \(userId), error: \(error)")
             return nil
         }
@@ -1310,7 +1324,6 @@ final class HproseInstance: ObservableObject {
                 if success {
                     return user
                 }
-                
             } catch {
                 lastError = error
                 print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), error: \(error.localizedDescription)")
@@ -1523,7 +1536,7 @@ final class HproseInstance: ObservableObject {
             guard let entryIP = try await findEntryIP() else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
             }
-            return await _getProviderIP(mid, hproseClient: clientPool.getClient(for: entryIP))
+            return await _getProviderIP(mid, hproseClient: clientPool.getClientByIP(for: entryIP))
         } else {
             guard let appUserClient = appUser.hproseClient else {
                 print("ERROR: [getProviderIP] appUser.hproseClient is nil")
@@ -1533,7 +1546,7 @@ final class HproseInstance: ObservableObject {
                 guard let entryIP = try await findEntryIP() else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
                 }
-                let ip = await _getProviderIP(appUser.mid, hproseClient: clientPool.getClient(for: entryIP))
+                let ip = await _getProviderIP(appUser.mid, hproseClient: clientPool.getClientByIP(for: entryIP))
                 if let ip = ip {
                     appUser.baseUrl = URL(string: "http://\(ip)")
                 }
@@ -1584,7 +1597,7 @@ final class HproseInstance: ObservableObject {
                 .filter { !$0.isEmpty }
             // Check each IP for health and return the first healthy one
             for ip in ipAddresses {
-                let client = clientPool.getClient(for: ip)
+                let client = clientPool.getClientByIP(for: ip)
                 
                 let isHealthy = await isServerHealthy(client)
                 
@@ -1783,10 +1796,14 @@ final class HproseInstance: ObservableObject {
             "password": loginUser.password!
         ]
         
+        guard let baseUrl = loginUser.baseUrl else {
+            print("[login] Nil user baseUrl")
+            return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
+        }
+        
         return try await retryOperation(maxRetries: 3) {
-            let newClient = HproseHttpClient()
-            newClient.timeout = 300  // Increased from 60 to 300 seconds for large uploads
-            newClient.uri = "\(loginUser.baseUrl!.absoluteString)/webapi/"
+            let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
+            newClient.timeout = 30  // 30s
             
             defer { newClient.close() }
             
@@ -1809,48 +1826,10 @@ final class HproseInstance: ObservableObject {
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
-                        
-                        // Set HproseInstance.baseUrl to appUser's baseUrl after login
-                        if let userBaseUrl = loginUser.baseUrl {
-                            HproseInstance.baseUrl = userBaseUrl
-                            self.appUser.hproseClient?.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                            print("✅ [LOGIN] Set HproseInstance.baseUrl to appUser's baseUrl: \(userBaseUrl.absoluteString)")
-                        }
                     }
                     Task {
-                        await self.populateUserLists(user: loginUser)
+                        await self.populateFellowLists(user: loginUser)
                     }
-                    return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
-                }
-            }
-            
-            if let status = response["status"] as? String {
-                if status == "failure" {
-                    if let reason = response["reason"] as? String {
-                        let localizedReason = self.localizeLoginError(reason)
-                        return ["reason": localizedReason, "status": "failure"]
-                    }
-                    return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
-                } else if status == "success" {
-                    await MainActor.run {
-                        // Update the appUser reference to point to the new user instance
-                        self.preferenceHelper?.setUserId(loginUser.mid)
-                        // Update appUser to the logged-in user
-                        self.appUser = loginUser
-                        
-                        // Set HproseInstance.baseUrl to appUser's baseUrl after login
-                        if let userBaseUrl = loginUser.baseUrl {
-                            HproseInstance.baseUrl = userBaseUrl
-                            self.appUser.hproseClient?.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                            print("✅ [LOGIN] Set HproseInstance.baseUrl to appUser's baseUrl: \(userBaseUrl.absoluteString)")
-                        }
-                    }
-                    
-                    // Populate fans and following lists for the logged-in user
-                    Task {
-                        await self.populateUserLists(user: loginUser)
-                    }
-                    
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
@@ -2022,7 +2001,7 @@ final class HproseInstance: ObservableObject {
     /**
      * Populate fans and following lists for a given user
      */
-    func populateUserLists(user: User) async {
+    func populateFellowLists(user: User) async {
         do {
             // Get followings (users that the user is following)
             let followings = try await getFollowings(user: user)
@@ -4674,36 +4653,18 @@ final class HproseInstance: ObservableObject {
     /// - Note: This is a lightweight refresh that doesn't reinitialize the entire app
     /// - Note: Changes to appUser are applied on MainActor to ensure thread safety
     func refreshAppUserFromServer(forceIPRefresh: Bool = false) async throws {
-        print("DEBUG: [HproseInstance] Refreshing appUser from server... (forceIPRefresh: \(forceIPRefresh))")
-        
         guard !appUser.isGuest else {
             print("DEBUG: [HproseInstance] Skipping refresh for guest user")
             return
         }
         
+        print("DEBUG: [HproseInstance] Refreshing appUser from server... (forceIPRefresh: \(forceIPRefresh))")
         do {
-            // Get provider IP for the current user
-            guard let providerIp = try await getProviderIP(appUser.mid) else {
-                print("DEBUG: [HproseInstance] No provider IP found for user: \(appUser.mid)")
-                return
-            }
-            
-            print("DEBUG: [HproseInstance] Refreshing user from provider IP: \(providerIp)")
-            
             // Call fetchUser to fetch from server (force refresh)
-            // Only force IP re-resolution during retries when network issues are suspected
-            // For normal refreshes after successful operations, use existing baseUrl
-            let baseUrlToUse = forceIPRefresh ? "" : (appUser.baseUrl?.absoluteString ?? "")
-            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: baseUrlToUse, forceRefresh: true) {
-                // Update base URL to the resolved provider IP
-                if HproseInstance.baseUrl.absoluteString != "http://\(providerIp)" {
-                    HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!
-                    client.uri = HproseInstance.baseUrl.appendingPathComponent("/webapi/").absoluteString
-                }
+            if let refreshedUser = try await fetchUser(appUser.mid, forceRefresh: true) {
                 
                 // Update appUser with refreshed data
                 await MainActor.run {
-                    refreshedUser.baseUrl = HproseInstance.baseUrl
                     self.appUser = refreshedUser
                 }
                 
@@ -5746,7 +5707,7 @@ final class HproseInstance: ObservableObject {
             "nodeid": nodeId,
             "v4only": v4Only
         ]
-        let rawResponse = client.invoke("runMApp", withArgs: ["get_node_ip", params])
+        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: ["get_node_ip", params])
         guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
             return nil
         }

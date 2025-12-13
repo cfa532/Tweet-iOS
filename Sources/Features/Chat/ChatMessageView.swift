@@ -612,7 +612,7 @@ struct ChatAttachmentLoader: View {
     @State private var isLoading = true
     @State private var loadError = false
     
-    private let baseUrl = HproseInstance.baseUrl
+    //private let baseUrl = HproseInstance.baseUrl
     
     var body: some View {
         Group {
