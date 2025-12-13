@@ -1,4 +1,5 @@
 import Foundation
+import Foundation
 import hprose
 import PhotosUI
 import AVFoundation
@@ -401,16 +402,20 @@ final class HproseInstance: ObservableObject {
         guard appUser.isGuest else { return }
         
         do {
-            print("DEBUG: [HproseInstance] Fetching alphaId user for guest user: \(Gadget.getAlphaIds().first ?? "")")
-            
-            // Create alphaId user with proper baseUrl
-            let alphaUser = User.getInstance(mid: Gadget.getAlphaIds().first ?? "")
-            await MainActor.run {
-                alphaUser.baseUrl = HproseInstance.baseUrl
+            // Fetch user data from server
+            guard let alphaUserId = Gadget.getAlphaIds().first else {
+                print("fetchAlphaIdUserForGuest: alphaUser.mid is null")
+                return
+            }
+            guard var alphaUser = try await fetchUser(alphaUserId, baseUrl: "", forceRefresh: true) else {
+                print("fetchAlphaIdUserForGuest: alphaUser is null")
+                return
             }
             
-            // Fetch user data from server
-            _ = try await updateUserFromServer(alphaUser.mid)
+            await MainActor.run {
+                User.updateUserInstance(with: alphaUser)
+                alphaUser.baseUrl = HproseInstance.baseUrl
+            }
             
             print("DEBUG: [HproseInstance] Successfully fetched alphaId user for guest")
             
@@ -511,7 +516,7 @@ final class HproseInstance: ObservableObject {
                 // App is now initialized with base connectivity
                 await MainActor.run {
                     isInitializationComplete = true
-                    User.updateUserInstance(with: user)
+                    User.updateUserInstance(with: user, true)
                     _appUserId = user.mid
                 }
                 
@@ -727,7 +732,7 @@ final class HproseInstance: ObservableObject {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
                     // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
-                    // The singleton reference will see updates when updateUserFromServer completes
+                    // The singleton reference will see updates when fetch completes
                     do {
                         let author = try await fetchUser(originalTweet.authorId)
                         await MainActor.run {
@@ -859,7 +864,7 @@ final class HproseInstance: ObservableObject {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
                     // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
-                    // The singleton reference will see updates when updateUserFromServer completes
+                    // The singleton reference will see updates when fetch completes
                     do {
                         let author = try await fetchUser(originalTweet.authorId)
                         await MainActor.run {
@@ -1111,204 +1116,63 @@ final class HproseInstance: ObservableObject {
     ///
     /// - Parameters:
     ///   - userId: The user ID to fetch
-    ///   - baseUrl: Initial baseUrl (use "" to skip cache and force IP resolution)
-    /// - Note: First attempt uses provided baseUrl; retries automatically force fresh IP resolution
-    ///
-    /// Do not really need to return the user, for user instance with the same mid has been updated or created.
-    func fetchUser(
-        _ userId: String,
-        baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? ""
-    ) async throws -> User? {
-        // Step 0: Never make network calls for GUEST_ID (broken tweets with null user)
-        if userId == Constants.GUEST_ID {
-            print("DEBUG: [fetchUser] Skipping GUEST_ID, returning guest user instance")
-            return User.getInstance(mid: Constants.GUEST_ID)
-        }
-        
-        // Step 1: Check if userId is blacklisted
-        if blackList.isBlacklisted(userId) {
-            print("DEBUG: [fetchUser] userId \(userId) is blacklisted, returning cached user only")
-            return await TweetCacheManager.shared.fetchUser(mid: userId)
-        }
-        
-        // Step 1: Check user cache in Core Data first (async, non-blocking)
-        let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
-        
-        // Check if cached user has expired (async, non-blocking)
-        let hasExpired = await cachedUser.hasExpired()
-        
-        // If we have a valid cached user that hasn't expired, return it
-        // BUT: If baseUrl is nil (old cache data or new user), we need to resolve IP
-        // ALSO: If baseUrl is empty string, force refresh to re-resolve provider IP
-        var effectiveBaseUrl = baseUrl
-        
-        if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil && !effectiveBaseUrl.isEmpty {
-            return cachedUser
-        }
-        
-        // Track if we resolved a new IP that should be used for server fetch
-        var ipResolved = false
-        
-        print("DEBUG: [fetchUser] Cache miss for userId: \(userId), username: \(cachedUser.username ?? "nil"), hasExpired: \(hasExpired)")
-        
-        // If current object is invalid (nil username), fetch synchronously without retries
-        // Username searches don't need retries - if the first attempt fails, it's likely the user doesn't exist
-        if cachedUser.username == nil {
-            print("DEBUG: [fetchUser] User has nil username, fetching synchronously without retries for userId: \(userId)")
-            // Fall through to synchronous fetch without retries
-        }
-        // CRITICAL: If cached user has nil baseUrl, ALWAYS resolve it (even if app not initialized)
-        // This handles old cache data (before IP caching) or newly created users
-        else if cachedUser.username != nil && cachedUser.baseUrl == nil {
-            print("DEBUG: [fetchUser] User has nil baseUrl (old cache or new user), resolving IP for userId: \(userId)")
-            
-            // Check if another task is already resolving this user's baseUrl
-            let shouldResolve = baseUrlResolutionQueue.sync {
-                if ongoingBaseUrlResolutions.contains(userId) {
-                    return false
-                }
-                ongoingBaseUrlResolutions.insert(userId)
-                return true
-            }
-            
-            if !shouldResolve {
-                print("DEBUG: [fetchUser] Another task is already resolving baseUrl for userId: \(userId), returning cached user")
-                return cachedUser
-            }
-            
-            // Ensure cleanup happens even if we return early
-            defer {
-                _ = baseUrlResolutionQueue.sync {
-                    ongoingBaseUrlResolutions.remove(userId)
-                }
-            }
-            
-            // SPECIAL CASE: If this is the appUser, use appUser's baseUrl directly
-            if userId == appUser.mid {
-                if let appUserBaseUrl = appUser.baseUrl {
-                    await MainActor.run {
-                        cachedUser.baseUrl = appUserBaseUrl
-                        print("DEBUG: [fetchUser] ✅ Using appUser's baseUrl for userId: \(userId) -> \(appUserBaseUrl.absoluteString)")
-                    }
-                    return cachedUser
-                } else {
-                    print("DEBUG: [fetchUser] AppUser also has nil baseUrl, returning cached user for userId: \(userId)")
-                    return cachedUser
-                }
-            }
-            
-            // For other users, resolve provider IP
-            do {
-                guard let providerIP = try await self.getProviderIP(userId) else {
-                    print("DEBUG: [fetchUser] Failed to get provider IP for userId: \(userId)")
-                    return cachedUser
-                }
-                let resolvedUrlString = providerIP.hasPrefix("http") ? providerIP : "http://\(providerIP)"
-                await MainActor.run {
-                    cachedUser.baseUrl = URL(string: resolvedUrlString)
-                    print("DEBUG: [fetchUser] ✅ Resolved baseUrl for userId: \(userId) to \(providerIP)")
-                }
-                effectiveBaseUrl = resolvedUrlString
-                ipResolved = true
-                // Don't return early - fall through to try fetching with new IP if app is initialized or if we need to
-                // Only return early if app is not initialized and we don't want to fetch yet
-                if !isInitializationComplete {
-                    print("DEBUG: [fetchUser] App not initialized, returning cached user with newly resolved IP for userId: \(userId)")
-                    return cachedUser
-                }
-                // Fall through to updateUserFromServer below
-            } catch {
-                print("DEBUG: [fetchUser] Error resolving baseUrl for userId: \(userId): \(error)")
-                return cachedUser
-            }
-        }
-        
-        // If app is not initialized, but we resolved a new IP OR baseUrl param is empty (forcing refresh), still try to fetch
-        // Otherwise return cached user (with valid baseUrl from above)
-        if !isInitializationComplete {
-            // Force refresh if baseUrl parameter is empty (e.g., during app init)
-            let shouldForceRefresh = baseUrl.isEmpty
-            if ipResolved && !effectiveBaseUrl.isEmpty {
-                // We resolved a new IP, so fetch with it even if app is not initialized
-                print("DEBUG: [fetchUser] App not initialized but IP resolved, fetching with new IP for userId: \(userId)")
-                // Fall through to updateUserFromServer below
-            } else if shouldForceRefresh {
-                // baseUrl parameter is empty, force refresh even if app is not initialized
-                print("DEBUG: [fetchUser] App not initialized but baseUrl param is empty, forcing refresh for userId: \(userId)")
-                // Fall through to updateUserFromServer below
-            } else {
-                print("DEBUG: [fetchUser] App not initialized, returning cached user for userId: \(userId)")
-                return cachedUser
-            }
-        }
-        
-        // Step 2: Fetch from server with retry logic. No instance available in memory or cache.
-        do {
-            // Pass the original baseUrl parameter to updateUserFromServer to preserve caller's intent
-            // If baseUrl is empty, updateUserFromServer will force fresh IP resolution on first attempt
-            // If baseUrl is not empty, updateUserFromServer will use it on first attempt
-            // Skip retries if username is nil (searching for potential username)
-            let skipRetries = cachedUser.username == nil
-            let user = try await updateUserFromServer(userId, baseUrl: baseUrl, skipRetries: skipRetries)
-            // Successfully fetched user - remove from blacklist candidates if it was there
-            // Skip blacklist update when searching for potential username (skipRetries is true)
-            if let user = user {
-                if !skipRetries {
-                    blackList.recordSuccess(userId)
-                }
-                // User singleton's @Published properties are updated via User.updateUserInstance
-                // Views observing the User singleton will update automatically - no need to iterate all tweets
-                // Only update tweets that have nil author (not yet loaded) - but this should be handled lazily by TweetItemView
-                // Post notification for any views that want to explicitly refresh
-                await MainActor.run {
-                    NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": userId, "user": user])
-                }
-            }
-            return user
-        } catch {
-            // After all retries failed, add userId to blacklist
-            // Skip blacklist update when searching for potential username (skipRetries is true)
-            let skipRetries = cachedUser.username == nil
-            if !skipRetries {
-                print("DEBUG: [fetchUser] All retries failed for userId: \(userId), adding to blacklist")
-                blackList.recordFailure(userId)
-            } else {
-                print("DEBUG: [fetchUser] Server fetch failed for userId: \(userId) (potential username search, no blacklist update)")
-            }
-            
-            // Return skeleton instead of cached user when server fetch fails
-            // This indicates to the UI that something is wrong and the user data couldn't be fetched
-            print("DEBUG: [fetchUser] Server fetch failed for userId: \(userId), returning skeleton to indicate error")
-            return User.getInstance(mid: userId)
-        }
-    }
-    
-    // Track ongoing user updates to prevent concurrent calls for the same user
-    private var ongoingUserUpdates: Set<String> = []
-    private let userUpdateQueue = DispatchQueue(label: "user.update.queue")
-    
-    // Track ongoing baseUrl resolutions to prevent concurrent calls for the same user
-    private var ongoingBaseUrlResolutions: Set<String> = []
-    private let baseUrlResolutionQueue = DispatchQueue(label: "baseurl.resolution.queue")
-    
-    /// Updates user from server with baseUrl resolution and retry logic
+    /// Fetches user data with caching, blacklist checking, and concurrent update management
     /// - Parameters:
     ///   - userId: The user ID to fetch
-    ///   - baseUrl: BaseUrl to use for FIRST attempt. Retries always force fresh IP resolution.
-    ///   - skipRetries: If true, only attempt once without retries (useful for username searches)
-    /// - Note: Pass empty string "" to force fresh IP resolution from first attempt (e.g., app init, explicit refresh)
-    func updateUserFromServer(
+    ///   - baseUrl: Initial baseUrl (use "" to force IP resolution and bypass cache)
+    ///   - maxRetries: Maximum number of retry attempts (default: 2)
+    ///   - forceRefresh: If true, bypasses cache and fetches fresh data
+    ///   - skipRetryAndBlacklist: If true, skips retry logic and blacklist management (for internal use)
+    /// - Returns: User object or nil if user cannot be fetched
+    func fetchUser(
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? "",
-        skipRetries: Bool = false
+        maxRetries: Int = 2,
+        forceRefresh: Bool = false,
+        skipRetryAndBlacklist: Bool = false
     ) async throws -> User? {
-        // Never update GUEST_ID from server
-        if userId == Constants.GUEST_ID {
-            print("DEBUG: [updateUserFromServer] Skipping GUEST_ID, returning guest instance")
-            return User.getInstance(mid: Constants.GUEST_ID)
+        // Never make network calls for GUEST_ID
+        guard userId != Constants.GUEST_ID else {
+            print("DEBUG: [fetchUser] Null userId, returning nil")
+            return nil
         }
         
-        // Check if we're already updating this user
+        // Check blacklist
+        if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
+            print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning nil")
+            return nil
+        }
+        
+        // Check cache first (if not forcing refresh)
+        if !forceRefresh {
+            let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+            if cachedUser.username != nil && cachedUser.baseUrl != nil {
+                let hasExpired = await cachedUser.hasExpired()
+                
+                if !hasExpired && !baseUrl.isEmpty {
+                    return cachedUser
+                } else if hasExpired {
+                    // Start background refresh if not already running
+                    let shouldStartBackgroundRefresh = userUpdateQueue.sync {
+                        if !ongoingUserUpdates.contains(userId) {
+                            ongoingUserUpdates.insert(userId)
+                            return true
+                        }
+                        return false
+                    }
+                    
+                    if shouldStartBackgroundRefresh {
+                        Task {
+                            await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
+                        }
+                    }
+                    
+                    return cachedUser
+                }
+            }
+        }
+        
+        // Check if update already in progress
         let shouldProceed = userUpdateQueue.sync {
             if ongoingUserUpdates.contains(userId) {
                 return false
@@ -1317,10 +1181,8 @@ final class HproseInstance: ObservableObject {
             return true
         }
         
-        // If another update is in progress, wait for it and return cached result
         if !shouldProceed {
-            print("DEBUG: [updateUserFromServer] Update already in progress for userId: \(userId), returning cached user")
-            return await TweetCacheManager.shared.fetchUser(mid: userId)
+            return try await waitForConcurrentUpdate(userId, baseUrl: baseUrl, maxRetries: maxRetries, forceRefresh: forceRefresh)
         }
         
         defer {
@@ -1329,132 +1191,330 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        let user = User.getInstance(mid: userId)
+        do {
+            let user = User.getInstance(mid: userId)
+            
+            // Determine base URL
+            let finalBaseUrl: String
+            if baseUrl.isEmpty {
+                if let providerIP = try await getProviderIP(userId) {
+                    finalBaseUrl = ensureHttpPrefix(providerIP)
+                } else {
+                    print("DEBUG: [fetchUser] Cannot fetch user \(userId): no valid baseUrl available")
+                    return nil
+                }
+            } else {
+                finalBaseUrl = baseUrl
+            }
+            
+            if let url = URL(string: finalBaseUrl) {
+                await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser initial setup")
+            }
+            
+            return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser")
+        } catch {
+            print("DEBUG: [fetchUser] Exception in fetchUser: userId: \(userId), error: \(error)")
+            return nil
+        }
+    }
+    
+    // Track ongoing user updates to prevent concurrent calls for the same user
+    private var ongoingUserUpdates: Set<String> = []
+    private let userUpdateQueue = DispatchQueue(label: "user.update.queue")
+    
+    // MARK: - Helper Methods
+    
+    /// Waits for concurrent update to complete and returns cached result
+    private func waitForConcurrentUpdate(_ userId: String, baseUrl: String, maxRetries: Int, forceRefresh: Bool) async throws -> User? {
+        // Simple implementation: just wait a bit and return cached user
+        // In production, you might want to use a condition variable or notification
+        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        return await TweetCacheManager.shared.fetchUser(mid: userId)
+    }
+    
+    /// Starts background refresh for expired user
+    private func startBackgroundRefresh(_ userId: String, cachedUser: User, maxRetries: Int, skipRetryAndBlacklist: Bool) async {
+        defer {
+            _ = userUpdateQueue.sync {
+                ongoingUserUpdates.remove(userId)
+            }
+        }
         
-        // Custom retry logic with baseUrl handling
-        var lastError: Error?
-        
-        // Check if user has a baseUrl (even if cache expired, e.g., alphaId user)
+        do {
+            _ = try await performUserUpdate(cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "backgroundRefresh")
+        } catch {
+            print("DEBUG: [startBackgroundRefresh] Background refresh failed for userId: \(userId): \(error)")
+        }
+    }
+    
+    /// Normalizes URL by removing http:// prefix for comparison
+    private func normalizeIpFromUrl(_ url: String) -> String {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("http://") {
+            return String(trimmed.dropFirst(7))
+        }
+        if trimmed.hasPrefix("https://") {
+            return String(trimmed.dropFirst(8))
+        }
+        return trimmed
+    }
+    
+    /// Ensures URL has http:// prefix
+    private func ensureHttpPrefix(_ url: String) -> String {
+        if url.hasPrefix("http://") || url.hasPrefix("http") {
+            return url
+        }
+        return "http://\(url)"
+    }
+    
+    /// Validates user data is complete and valid
+    private func isValidUserData(_ user: User) -> Bool {
+        return !user.mid.isEmpty && user.username != nil
+    }
+    
+    /// Checks if two normalized IPs represent a redirect loop
+    private func isRedirectLoop(currentIp: String, newIp: String) -> Bool {
+        return currentIp == newIp && !currentIp.isEmpty
+    }
+    
+    /// Performs the complete user update flow with retry logic
+    /// This is the main workhorse method that handles retries and redirects
+    private func performUserUpdate(_ user: User, maxRetries: Int, skipRetryAndBlacklist: Bool, logPrefix: String) async throws -> User {
+        let originalBaseUrl = user.baseUrl?.absoluteString
         let hasExpired = await user.hasExpired()
         let userHasBaseUrl = user.baseUrl != nil && !(user.baseUrl?.absoluteString.isEmpty ?? true)
+        let forceFreshIP = originalBaseUrl == nil || originalBaseUrl?.isEmpty == true || hasExpired
         
-        // Force fresh IP resolution if:
-        // 1. baseUrl parameter is empty (explicit force refresh)
-        // 2. User cache has expired (baseUrl is also considered expired when user is expired)
-        let forceFreshIP = baseUrl.isEmpty || hasExpired
+        var lastError: Error?
         
-        // Only retry if skipRetries is false
-        // 2 attempts = 1 regular run + 1 retry with fresh IP resolution
-        let maxAttempts = skipRetries ? 1 : 2
-        
-        for attempt in 1...maxAttempts {
+        for attempt in 1...maxRetries {
             do {
-                // First attempt: Use user's existing baseUrl if available AND not forcing fresh IP, otherwise resolve IP
-                // Retry attempts: Always force fresh IP resolution
-                if attempt == 1 {
-                    if !forceFreshIP && userHasBaseUrl, let userBaseUrl = user.baseUrl?.absoluteString {
-                        // User has a baseUrl and we're not forcing refresh - use it to avoid false redirect loop detection
-                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) - Using user's existing baseUrl: \(userBaseUrl) for userId: \(userId) (hasExpired: \(hasExpired))")
-                        let normalizedBase = try normalizedBaseURL(from: userBaseUrl, context: "existing baseUrl for \(userId)")
-                        await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "attempt \(attempt)")
-                    } else {
-                        // Force fresh IP resolution: either baseUrl param is empty, user is expired, or user has no baseUrl
-                        let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
-                        let reason: String
-                        if baseUrl.isEmpty {
-                            reason = "forcing fresh IP resolution (baseUrl param empty)"
-                        } else if hasExpired {
-                            reason = "forcing fresh IP resolution (user cache expired, baseUrl also considered expired)"
-                        } else {
-                            reason = "no baseUrl"
-                        }
-                        print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) - Resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl), reason: \(reason)")
-                        guard let providerIP = try await self.getProviderIP(userId) else {
-                            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
-                        }
-                        
-                        // On first attempt with forced refresh or no existing baseUrl, always accept the resolved IP
-                        // Redirect loop detection only applies on retries when we already have a baseUrl
-                        let normalizedBase = try normalizedBaseURL(from: providerIP, context: "provider IP for \(userId)")
-                        await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "provider IP attempt \(attempt)")
-                    }
-                } else {
-                    // Retry attempts: Always force fresh IP resolution
-                    let oldBaseUrl = user.baseUrl?.absoluteString ?? "nil"
-                    print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) - Re-resolving provider IP for userId: \(userId), old baseUrl: \(oldBaseUrl)")
-                    guard let providerIP = try await self.getProviderIP(userId) else {
-                        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Provider not found", comment: "Provider lookup error")])
-                    }
-                    
-                    // Check if resolved IP is the same as current IP (redirect loop prevention)
-                    let normalizedProviderIp = providerIP.hasPrefix("http://") ? String(providerIP.dropFirst(7)) : (providerIP.hasPrefix("http") ? String(providerIP.dropFirst(4)) : providerIP)
-                    let currentBaseUrlString = user.baseUrl?.absoluteString ?? ""
-                    let normalizedCurrentIp = currentBaseUrlString.hasPrefix("http://") ? String(currentBaseUrlString.dropFirst(7)) : currentBaseUrlString
-                    
-                    if normalizedProviderIp == normalizedCurrentIp && !normalizedCurrentIp.isEmpty {
-                        print("DEBUG: [updateUserFromServer] Redirect loop detected on retry - resolved IP (\(providerIP)) same as current IP (\(currentBaseUrlString))")
-                        throw NSError(domain: "HproseClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Redirect loop detected - resolved IP same as current IP: \(providerIP)"])
-                    }
-                    
-                    let normalizedBase = try normalizedBaseURL(from: providerIP, context: "provider IP for \(userId)")
-                    await applyBaseUrlIfNeeded(user, url: normalizedBase, reason: "provider IP attempt \(attempt)")
+                // Resolve and update baseUrl
+                try await resolveAndUpdateBaseUrl(
+                    user: user,
+                    attempt: attempt,
+                    maxRetries: maxRetries,
+                    forceFreshIP: forceFreshIP,
+                    userHasBaseUrl: userHasBaseUrl,
+                    hasExpired: hasExpired,
+                    originalBaseUrl: originalBaseUrl
+                )
+                
+                // Prepare server request
+                let entry = "get_user"
+                let params: [String: Any] = [
+                    "aid": appId,
+                    "ver": "last",
+                    "version": "v2",
+                    "userid": user.mid
+                ]
+                
+                guard let hproseClient = user.hproseClient else {
+                    print("ERROR: [\(logPrefix)] Cannot call get_user: hproseClient is null for userId: \(user.mid), baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
+                    throw HproseError.noClient(userId: user.mid)
                 }
                 
-                // Perform the actual server communication
-                try await self.updateUserFromServerInternal(user)
-                return user
+                // Make server call
+                guard let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
+                    throw HproseError.noResponse(userId: user.mid)
+                }
+                
+                print("DEBUG: [\(logPrefix)] get_user rawResponse received for \(user.mid)")
+                
+                // Unwrap and process response
+                let response = try Self.unwrapV2Response(rawResponse)
+                
+                // Process the response
+                let success = try await processUserDataResponse(user: user, response: response as Any, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params)
+                
+                if success {
+                    return user
+                }
                 
             } catch {
                 lastError = error
-                print("DEBUG: [updateUserFromServer] Attempt \(attempt)/\(maxAttempts) failed for userId: \(userId): \(error)")
+                print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), error: \(error.localizedDescription)")
                 
-                // Check if this is a redirect loop error - don't retry in this case
-                if case HproseError.redirectLoop = error {
-                    print("DEBUG: [updateUserFromServer] Redirect loop detected, stopping retries for userId: \(userId)")
+                // Check for redirect loop
+                if let errorMessage = (error as NSError?)?.localizedDescription,
+                   errorMessage.contains("Redirect loop detected") {
+                    print("ERROR: [\(logPrefix)] REDIRECT LOOP DETECTED, stopping retries for userId: \(user.mid)")
+                    if !skipRetryAndBlacklist {
+                        blackList.recordFailure(user.mid)
+                    }
                     throw error
                 }
                 
-                // Also check for NSError with code -2 for backwards compatibility
-                if let nsError = error as NSError?, nsError.code == -2 {
-                    print("DEBUG: [updateUserFromServer] Redirect loop detected (NSError), stopping retries for userId: \(userId)")
+                if skipRetryAndBlacklist {
                     throw error
                 }
                 
-                // If skipRetries is true, don't retry
-                if skipRetries {
-                    throw error
+                // Delay before retry
+                if attempt < maxRetries {
+                    let delayNs = UInt64(attempt) * 1_000_000_000 // 1 second per attempt
+                    try await Task.sleep(nanoseconds: delayNs)
                 }
             }
         }
         
         // All retries failed
-        if let error = lastError {
-            throw error
+        print("ERROR: [\(logPrefix)] ALL RETRIES FAILED: userId: \(user.mid), maxRetries: \(maxRetries)")
+        if !skipRetryAndBlacklist {
+            blackList.recordFailure(user.mid)
+        }
+        throw lastError ?? HproseError.noResponse(userId: user.mid)
+    }
+    
+    /// Processes user data response from server
+    /// Returns true if successful, throws exception otherwise
+    private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool, entry: String, params: [String: Any]) async throws -> Bool {
+        // Handle string response (redirect)
+        if let redirectIP = response as? String {
+            return try await handleRedirectAndRetry(user: user, providerIP: redirectIP.trimmingCharacters(in: .whitespacesAndNewlines), entry: entry, params: params, skipRetryAndBlacklist: skipRetryAndBlacklist)
+        }
+        
+        // Handle dictionary response (user data)
+        if let userDict = response as? [String: Any] {
+            if !skipRetryAndBlacklist {
+                blackList.recordSuccess(user.mid)
+            }
+            
+            try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false)
+            
+            if isValidUserData(user) {
+                return true
+            } else {
+                print("ERROR: [processUserDataResponse] INVALID USER DATA: userId: \(user.mid), mid: \(user.mid), username: \(user.username ?? "nil")")
+                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received")
+            }
+        }
+        
+        // Handle nil response
+        if response is NSNull {
+            print("ERROR: [processUserDataResponse] NULL RESPONSE: userId: \(user.mid)")
+            throw HproseError.noResponse(userId: user.mid)
+        }
+        
+        // Unexpected response type
+        print("ERROR: [processUserDataResponse] UNEXPECTED RESPONSE TYPE: userId: \(user.mid), type: \(type(of: response))")
+        throw HproseError.unexpectedResponse(response: response)
+    }
+    
+    /// Handles redirect response and retries the request
+    private func handleRedirectAndRetry(user: User, providerIP: String, entry: String, params: [String: Any], skipRetryAndBlacklist: Bool) async throws -> Bool {
+        print("DEBUG: [handleRedirectAndRetry] PROVIDER IP RECEIVED: userId: \(user.mid), providerIP: \(providerIP)")
+        
+        let normalizedRedirectIp = normalizeIpFromUrl(providerIP)
+        let normalizedCurrentIp = normalizeIpFromUrl(user.baseUrl?.absoluteString ?? "")
+        
+        if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedRedirectIp) {
+            print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected to same IP:port: \(providerIP) (current: \(user.baseUrl?.absoluteString ?? "nil"))")
+            throw HproseError.redirectLoop(ip: providerIP)
+        }
+        
+        // Update baseUrl and retry
+        if let redirectURL = URL(string: ensureHttpPrefix(providerIP)) {
+            await applyBaseUrlIfNeeded(user, url: redirectURL, reason: "redirect")
+        }
+        
+        // Retry with new baseUrl
+        guard let hproseClient = user.hproseClient else {
+            throw HproseError.noClient(userId: user.mid)
+        }
+        
+        guard let retryRawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
+            throw HproseError.noResponse(userId: user.mid)
+        }
+        
+        let retryResponse = try Self.unwrapV2Response(retryRawResponse)
+        
+        // Handle second response
+        if let newIpAddress = retryResponse as? String {
+            let trimmedNewIp = newIpAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            let newNormalizedIp = normalizeIpFromUrl(trimmedNewIp)
+            
+            if isRedirectLoop(currentIp: newNormalizedIp, newIp: normalizedRedirectIp) {
+                print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected server returned same IP:port: \(trimmedNewIp)")
+                throw HproseError.redirectLoop(ip: trimmedNewIp)
+            }
+            
+            print("ERROR: [handleRedirectAndRetry] USER NOT FOUND AFTER REDIRECT: userId: \(user.mid), second IP returned: \(trimmedNewIp)")
+            throw HproseError.userNotFound(userId: user.mid, reason: "User not found after redirect - second IP returned: \(trimmedNewIp)")
+        }
+        
+        if let userDict = retryResponse as? [String: Any] {
+            return try await processUserDataResponse(user: user, response: userDict, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params)
+        }
+        
+        if retryResponse is NSNull {
+            print("ERROR: [handleRedirectAndRetry] NULL RESPONSE AFTER REDIRECT: userId: \(user.mid)")
+            throw HproseError.noResponse(userId: user.mid)
+        }
+        
+        print("ERROR: [handleRedirectAndRetry] UNEXPECTED RESPONSE TYPE AFTER REDIRECT: userId: \(user.mid), type: \(type(of: retryResponse))")
+        throw HproseError.unexpectedResponse(response: retryResponse as Any)
+    }
+    
+    /// Resolves and updates user's baseUrl (for first attempt or retries)
+    private func resolveAndUpdateBaseUrl(
+        user: User,
+        attempt: Int,
+        maxRetries: Int,
+        forceFreshIP: Bool,
+        userHasBaseUrl: Bool,
+        hasExpired: Bool,
+        originalBaseUrl: String?
+    ) async throws {
+        if attempt == 1 && !forceFreshIP && userHasBaseUrl && !(user.baseUrl?.absoluteString.isEmpty ?? true) {
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using user's existing baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid) (hasExpired: \(hasExpired))")
+            return
+        }
+        
+        // Resolve fresh IP
+        if attempt > 1 {
+            // Retry attempts: check for redirect loop before resolving
+            guard let providerIP = try await getProviderIP(user.mid) else {
+                throw HproseError.noResponse(userId: user.mid)
+            }
+            
+            let normalizedProviderIp = normalizeIpFromUrl(providerIP)
+            let normalizedCurrentIp = normalizeIpFromUrl(user.baseUrl?.absoluteString ?? "")
+            
+            if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedProviderIp) {
+                print("ERROR: [resolveAndUpdateBaseUrl] REDIRECT LOOP DETECTED on retry - resolved IP:port (\(providerIP)) same as current IP:port (\(user.baseUrl?.absoluteString ?? "nil"))")
+                throw HproseError.redirectLoop(ip: providerIP)
+            }
+            
+            if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
+            }
         } else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "All retries failed"])
+            // First attempt with fresh IP
+            let reason: String
+            if originalBaseUrl == nil || originalBaseUrl?.isEmpty == true {
+                reason = "forcing fresh IP resolution (baseUrl param empty)"
+            } else if hasExpired {
+                reason = "forcing fresh IP resolution (user cache expired, baseUrl also considered expired)"
+            } else {
+                reason = "no baseUrl"
+            }
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid), old baseUrl: \(user.baseUrl?.absoluteString ?? "nil"), reason: \(reason)")
+            
+            guard let providerIP = try await getProviderIP(user.mid) else {
+                throw HproseError.noResponse(userId: user.mid)
+            }
+            
+            if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                await applyBaseUrlIfNeeded(user, url: url, reason: "initial resolution")
+            }
+            
+            if user.hproseClient == nil {
+                print("ERROR: [resolveAndUpdateBaseUrl] hproseClient is null after setting baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
+            }
         }
     }
     
-    private func normalizedBaseURL(from value: String, context: String) throws -> URL {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [
-                NSLocalizedDescriptionKey: NSLocalizedString("Empty base URL returned while \(context)", comment: "Invalid base URL error")
-            ])
-        }
-        
-        if let url = URL(string: trimmed), let host = url.host, !host.isEmpty {
-            return url
-        }
-        
-        if let url = URL(string: "http://\(trimmed)"), let host = url.host, !host.isEmpty {
-            return url
-        }
-        
-        throw NSError(domain: "HproseClient", code: -1, userInfo: [
-            NSLocalizedDescriptionKey: NSLocalizedString("Invalid base URL '\(trimmed)' returned while \(context)", comment: "Invalid base URL error")
-        ])
-    }
+
     
     /// Get provider IP for a user with health checking and fallback retry
     /// - Parameter mid: User's member ID
@@ -1518,7 +1578,7 @@ final class HproseInstance: ObservableObject {
         
         let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
         guard let response = rawResponse else {
-            print("DEBUG: [updateUserFromServer] No response from server.")
+            print("DEBUG: [_getProviderIP] No response from server.")
             return nil
         }
         
@@ -1578,120 +1638,7 @@ final class HproseInstance: ObservableObject {
         }.value
     }
     
-    /// Internal method that performs the actual server communication
-    private func updateUserFromServerInternal(_ user: User) async throws {
-        let response = try await fetchUserFromServer(user)
-        try await processUserResponse(response, for: user)
-    }
-    
-    // MARK: - Helper Methods (Cleaner separation of concerns)
-    
-    /// Fetches raw user data from server
-    private func fetchUserFromServer(_ user: User) async throws -> Any {
-        guard let hproseClient = user.hproseClient else {
-            print("DEBUG: [fetchUserFromServer] No hprose client available for user: \(user.mid)")
-            throw HproseError.noClient(userId: user.mid)
-        }
-        
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "userid": user.mid,
-        ]
-        
-        guard let rawResponse = hproseClient.invoke("runMApp", withArgs: ["get_user", params]) else {
-            print("DEBUG: [fetchUserFromServer] No response from server for user: \(user.mid)")
-            throw HproseError.noResponse(userId: user.mid)
-        }
-        
-        return try Self.unwrapV2Response(rawResponse)
-    }
-    
-    /// Processes server response and handles redirects
-    private func processUserResponse(_ response: Any, for user: User) async throws {
-        // Try to extract IP redirect
-        if let redirectIP = extractRedirectIP(from: response) {
-            try await handleRedirect(redirectIP, for: user)
-            return
-        }
-        
-        // Try to parse as user dictionary
-        if let userDict = response as? [String: Any] {
-            try await updateUserFromDict(userDict, for: user)
-            return
-        }
-        
-        // Unexpected response
-        print("DEBUG: [processUserResponse] Unexpected response type: \(type(of: response))")
-        throw HproseError.unexpectedResponse(response: response)
-    }
-    
-    /// Extracts redirect IP from response if present
-    private func extractRedirectIP(from response: Any) -> String? {
-        if let ipString = response as? String, !ipString.isEmpty {
-            return ipString
-        }
-        if let dict = response as? [String: Any], let data = dict["data"] as? String, !data.isEmpty {
-            return data
-        }
-        return nil
-    }
-    
-    /// Handles redirect to another server
-    private func handleRedirect(_ redirectIP: String, for user: User) async throws {
-        let normalizedRedirect = normalizeIP(redirectIP)
-        let normalizedCurrent = normalizeIP(user.baseUrl?.absoluteString ?? "")
-        
-        // Check for redirect loop
-        if normalizedRedirect == normalizedCurrent && !normalizedCurrent.isEmpty {
-            print("DEBUG: [handleRedirect] Redirect loop detected for \(user.mid)")
-            throw HproseError.redirectLoop(ip: redirectIP)
-        }
-        
-        print("DEBUG: [handleRedirect] \(user.mid) redirecting to: \(redirectIP)")
-        
-        // Update user's baseUrl
-        if let redirectURL = URL(string: "http://\(redirectIP)") {
-            await applyBaseUrlIfNeeded(user, url: redirectURL, reason: "redirect")
-        }
-        
-        // Fetch from redirected server
-        guard let redirectedClient = user.hproseClient else {
-            print("DEBUG: [handleRedirect] Failed to create client for redirected IP: \(redirectIP)")
-            throw HproseError.noClient(userId: user.mid)
-        }
-        
-        let params = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "userid": user.mid,
-        ]
-        
-        guard let rawResponse = redirectedClient.invoke("runMApp", withArgs: ["get_user", params]) else {
-            throw HproseError.noResponse(userId: user.mid)
-        }
-        
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        
-        // Handle second redirect (potential loop)
-        if let secondRedirectIP = extractRedirectIP(from: unwrappedResponse) {
-            let normalizedSecond = normalizeIP(secondRedirectIP)
-            if normalizedSecond == normalizedRedirect {
-                print("DEBUG: [handleRedirect] Second redirect loop detected for \(user.mid)")
-                throw HproseError.redirectLoop(ip: secondRedirectIP)
-            }
-            throw HproseError.userNotFound(userId: user.mid, reason: "second redirect to \(secondRedirectIP)")
-        }
-        
-        // Parse user from redirected response
-        guard let userDict = unwrappedResponse as? [String: Any] else {
-            throw HproseError.userNotFound(userId: user.mid, reason: "invalid response after redirect")
-        }
-        
-        try await updateUserFromDict(userDict, for: user, preserveBaseUrl: true)
-    }
+
     
     /// Updates user from dictionary response
     private func updateUserFromDict(_ dict: [String: Any], for user: User, preserveBaseUrl: Bool = false) async throws {
@@ -1709,18 +1656,6 @@ final class HproseInstance: ObservableObject {
             User.updateUserInstance(with: updatedUser)
             TweetCacheManager.shared.saveUser(updatedUser)
         }
-    }
-    
-    /// Normalizes IP address for comparison
-    private func normalizeIP(_ urlString: String) -> String {
-        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("http://") {
-            return String(trimmed.dropFirst(7))
-        }
-        if trimmed.hasPrefix("https://") {
-            return String(trimmed.dropFirst(8))
-        }
-        return trimmed
     }
     
     // MARK: - Error Types
@@ -4738,7 +4673,7 @@ final class HproseInstance: ObservableObject {
     /// This method updates the current appUser with fresh data from the backend server:
     /// 1. Skips refresh for guest users (returns early)
     /// 2. Resolves the provider IP for the current user
-    /// 3. Calls `updateUserFromServer()` to fetch latest user data
+    /// 3. Calls `fetchUser()` to fetch latest user data
     /// 4. Updates HproseInstance.baseUrl if the provider IP has changed
     /// 5. Updates the appUser singleton instance with refreshed data
     ///
@@ -4771,11 +4706,11 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [HproseInstance] Refreshing user from provider IP: \(providerIp)")
             
-            // Call updateUserFromServer directly to always fetch from server (bypass cache)
+            // Call fetchUser to fetch from server (force refresh)
             // Only force IP re-resolution during retries when network issues are suspected
             // For normal refreshes after successful operations, use existing baseUrl
             let baseUrlToUse = forceIPRefresh ? "" : (appUser.baseUrl?.absoluteString ?? "")
-            if let refreshedUser = try await updateUserFromServer(appUser.mid, baseUrl: baseUrlToUse) {
+            if let refreshedUser = try await fetchUser(appUser.mid, baseUrl: baseUrlToUse, forceRefresh: true) {
                 // Update base URL to the resolved provider IP
                 if HproseInstance.baseUrl.absoluteString != "http://\(providerIp)" {
                     HproseInstance.baseUrl = URL(string: "http://\(providerIp)")!

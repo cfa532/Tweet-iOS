@@ -169,7 +169,7 @@ struct LoginView: View {
             if let userId = try await hproseInstance.getUserId(username, baseUrl: HproseInstance.baseUrl) {
                 // Force fetch from server with empty baseUrl to ensure fresh data
                 // This prevents the issue where cached user with nil username is returned
-                if let user = try await hproseInstance.updateUserFromServer(userId, baseUrl: "") {
+                if let user = try await hproseInstance.fetchUser(userId, baseUrl: "") {
                     if (user.username == nil) {
                         print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
                         errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")

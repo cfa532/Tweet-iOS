@@ -414,7 +414,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
     }
     
-    static func updateUserInstance(with user: User) {
+    static func updateUserInstance(
+        with user: User,
+        _ shouldUpdateBaseUrl: Bool = false
+    ) {
         let instance = getInstance(mid: user.mid)
         
         // Update synchronously if already on MainActor, otherwise dispatch to MainActor
@@ -431,13 +434,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.domainToShare = user.domainToShare
             instance.hostIds = user.hostIds
             
-            // CRITICAL: Never overwrite baseUrl from user parameter - it might be from hostId[0]
-            // baseUrl should only be set via getProviderIP(user.mid) in HproseInstance
-            // Preserve the existing baseUrl that was correctly resolved from provider IP
-            // writableUrl: Not persisted, resolved fresh from hostIds
-            // Note: baseUrl is preserved above in User.from(dict:), so we don't overwrite it here
-            if let newWritableUrl = user.writableUrl {
-                instance.writableUrl = newWritableUrl
+            // when user argument is from cache, do not use its baseUrl.
+            if (shouldUpdateBaseUrl) {
+                instance.baseUrl = user.baseUrl
             }
             
             if instance.tweetCount != user.tweetCount {
