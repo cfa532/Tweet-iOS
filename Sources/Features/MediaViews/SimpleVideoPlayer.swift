@@ -2438,11 +2438,13 @@ struct SimpleVideoPlayer: View {
                     }
                     
                     if shouldAutoPlay {
-                        // CRITICAL: For MediaCell, check VideoManager before playing (same as first time)
-                        // This ensures only the current video plays in sequential playback
+                        // CRITICAL: For MediaCell, check VideoManager and actual visibility before playing
+                        // This ensures only the current video plays in sequential playback and not when covered
                         let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
+                        // Use synchronous check as backup in case binding update is slow
+                        let actuallyVisible = self.mode != .mediaCell || (self.isActuallyVisible && SharedVisibilityManager.shared.isCurrentlyVisible())
                         
-                        if approved {
+                        if approved && actuallyVisible {
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
@@ -2451,6 +2453,8 @@ struct SimpleVideoPlayer: View {
                             // Start playing automatically
                             player.play()
                             NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
+                        } else if !actuallyVisible {
+                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
                         } else {
                             NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - not approved by VideoManager")
                         }
@@ -2486,7 +2490,11 @@ struct SimpleVideoPlayer: View {
                         // For sequential playback, check with VideoManager first
                         // This prevents videos from playing to completion prematurely (especially short videos)
                         // CRITICAL: Default to false for MediaCell to prevent both videos from playing
-                        let shouldPlay = shouldAutoPlay && (self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? false)
+                        // Also check if video is actually visible (not covered by overlay)
+                        let managerApproved = self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
+                        // Use synchronous check as backup in case binding update is slow
+                        let actuallyVisible = self.mode != .mediaCell || (self.isActuallyVisible && SharedVisibilityManager.shared.isCurrentlyVisible())
+                        let shouldPlay = shouldAutoPlay && managerApproved && actuallyVisible
                         
                         if shouldPlay && player.rate == 0 {
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
@@ -2496,6 +2504,8 @@ struct SimpleVideoPlayer: View {
                             }
                             player.play()
                             NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (approved by VideoManager)")
+                        } else if !actuallyVisible {
+                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
                         } else if !shouldPlay {
                             NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - waiting for approval from VideoManager")
                             // First frame will render when player is ready, no need to play()
@@ -3462,7 +3472,87 @@ struct VideoManagerObserverModifier: ViewModifier {
 }
 
 // MARK: - Visibility Detector
-/// UIViewRepresentable that detects if the view is actually visible (not covered by sheets/modals)
+/// Shared visibility manager that uses a single timer for all videos
+private class SharedVisibilityManager {
+    static let shared = SharedVisibilityManager()
+    private var timer: Timer?
+    private var subscribers: [String: (Bool) -> Void] = [:]
+    private var lastVisibilityState: Bool = true
+    
+    private init() {
+        startTimer()
+    }
+    
+    func subscribe(id: String, onChange: @escaping (Bool) -> Void) {
+        subscribers[id] = onChange
+        // Immediately check and notify current state
+        checkVisibility()
+    }
+    
+    func unsubscribe(id: String) {
+        subscribers.removeValue(forKey: id)
+    }
+    
+    // Synchronous check for immediate use
+    func isCurrentlyVisible() -> Bool {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) else {
+            return false
+        }
+        
+        let hasPresentedController = window.rootViewController?.presentedViewController != nil
+        return !hasPresentedController
+    }
+    
+    private func startTimer() {
+        // Check visibility every 0.5 seconds
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.checkVisibility()
+        }
+    }
+
+    private func pauseAllVisibleVideos() {
+        // Send notification to pause all videos immediately
+        NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+        print("🛑 [VISIBILITY] Sent stopAllVideos notification to pause playing videos")
+    }
+    
+    private func checkVisibility() {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) else {
+            return
+        }
+        
+        // Check if there's a presented view controller covering the content
+        let hasPresentedController = window.rootViewController?.presentedViewController != nil
+        let isVisible = !hasPresentedController
+        
+        // Only notify if state changed
+        if isVisible != lastVisibilityState {
+            lastVisibilityState = isVisible
+            let message = isVisible ?
+                "✅ [VISIBILITY] Content is now visible - no covering overlays" :
+                "🚫 [VISIBILITY] Content covered by overlay - pausing all videos"
+            print(message)
+
+            // If becoming invisible, immediately pause all playing videos
+            if !isVisible {
+                pauseAllVisibleVideos()
+            }
+
+            // Notify all subscribers
+            for (_, onChange) in subscribers {
+                onChange(isVisible)
+            }
+        }
+    }
+}
+
+/// UIViewRepresentable that subscribes to shared visibility manager
 private struct VisibilityDetectorView: UIViewRepresentable {
     @Binding var isActuallyVisible: Bool
     let mid: String
@@ -3472,18 +3562,11 @@ private struct VisibilityDetectorView: UIViewRepresentable {
         let view = UIView()
         view.backgroundColor = .clear
         view.isUserInteractionEnabled = false
-        // Defer visibility check to avoid modifying state during view update
-        DispatchQueue.main.async {
-            context.coordinator.checkVisibility(view: view)
-        }
         return view
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
-        // Defer visibility check to avoid modifying state during view update
-        DispatchQueue.main.async {
-            context.coordinator.checkVisibility(view: uiView)
-        }
+        // Nothing to update
     }
     
     func makeCoordinator() -> Coordinator {
@@ -3494,85 +3577,31 @@ private struct VisibilityDetectorView: UIViewRepresentable {
         @Binding var isActuallyVisible: Bool
         let mid: String
         let mode: Mode
-        var timer: Timer?
         
         init(isActuallyVisible: Binding<Bool>, mid: String, mode: Mode) {
             self._isActuallyVisible = isActuallyVisible
             self.mid = mid
             self.mode = mode
             
-            // Start periodic visibility check only for MediaCell mode
+            // Subscribe to shared visibility manager only for MediaCell mode
             if mode == .mediaCell {
-                startPeriodicCheck()
+                SharedVisibilityManager.shared.subscribe(id: mid) { [weak self] isVisible in
+                    guard let self = self else { return }
+                    // Update the binding - this should trigger onChange
+                    DispatchQueue.main.async {
+                        let oldValue = self.isActuallyVisible
+                        if oldValue != isVisible {
+                            print("🔄 [BINDING UPDATE] Updating isActuallyVisible for \(self.mid): \(oldValue) -> \(isVisible)")
+                            self.isActuallyVisible = isVisible
+                        }
+                    }
+                }
             }
         }
         
         deinit {
-            timer?.invalidate()
-        }
-        
-        func startPeriodicCheck() {
-            // Check visibility every 0.5 seconds
-            timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                // Find the view through the window
-                DispatchQueue.main.async {
-                    if let window = UIApplication.shared.connectedScenes
-                        .compactMap({ $0 as? UIWindowScene })
-                        .flatMap({ $0.windows })
-                        .first(where: { $0.isKeyWindow }) {
-                        self.checkWindowVisibility(window: window)
-                    }
-                }
-            }
-        }
-        
-        func checkVisibility(view: UIView) {
-            guard mode == .mediaCell else {
-                // For fullscreen/detail modes, always consider visible
-                if !isActuallyVisible {
-                    DispatchQueue.main.async {
-                        self.isActuallyVisible = true
-                    }
-                }
-                return
-            }
-            
-            // Check if view has a window and the window is key
-            guard let window = view.window, window.isKeyWindow else {
-                if isActuallyVisible {
-                    DispatchQueue.main.async {
-                        print("⚠️ [VISIBILITY] Video \(self.mid) is no longer in key window - marking as not visible")
-                        self.isActuallyVisible = false
-                    }
-                }
-                return
-            }
-            
-            checkWindowVisibility(window: window)
-        }
-        
-        func checkWindowVisibility(window: UIWindow) {
-            // Check if there are any presented view controllers covering the content
-            var topController = window.rootViewController
-            while let presented = topController?.presentedViewController {
-                topController = presented
-            }
-            
-            // If there's a presented view controller, the video is covered
-            let hasPresentedController = window.rootViewController?.presentedViewController != nil
-            let shouldBeVisible = !hasPresentedController
-            
-            if shouldBeVisible != isActuallyVisible {
-                let message = shouldBeVisible ? 
-                    "✅ [VISIBILITY] Video \(mid) is now visible - no covering sheets" :
-                    "🚫 [VISIBILITY] Video \(mid) is covered by sheet/modal - pausing"
-                
-                // Defer state update to avoid modifying state during view update
-                DispatchQueue.main.async {
-                    print(message)
-                    self.isActuallyVisible = shouldBeVisible
-                }
+            if mode == .mediaCell {
+                SharedVisibilityManager.shared.unsubscribe(id: mid)
             }
         }
     }
