@@ -126,6 +126,14 @@ struct CommentDetailView: View {
             }
         }
         .overlay(toastOverlay)
+        .onAppear {
+            // Mark detail view as active to prevent MediaCell autoplay
+            NavigationStateManager.shared.setDetailViewActive(true)
+        }
+        .onDisappear {
+            // Mark detail view as inactive
+            NavigationStateManager.shared.setDetailViewActive(false)
+        }
         .task {
             // Refresh comment after a short delay
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds

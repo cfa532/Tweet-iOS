@@ -622,14 +622,12 @@ struct MediaGridView: View, Equatable {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
-            // CRITICAL: Don't stop sequential playback when fullscreen opens
-            // Fullscreen just pauses videos temporarily - they should resume when fullscreen closes
-            // Only stop for audio interruptions (like incoming calls) - but we can't distinguish that here
-            // So we'll just pause videos but keep sequential playback state intact
+            // Handle audio interruptions (calls, alarms, etc.) from AudioSessionManager
+            // Fullscreen opening now uses visibility detection instead of this notification
             shouldLoadVideo = false
             // DON'T call videoManager.stopSequentialPlayback() - this clears state
             // Videos will be paused by SimpleVideoPlayer.handleStopAllVideos()
-            // And resumed by SimpleVideoPlayer.handleResumeMediaCellVideos()
+            // And resumed when audio session is restored
         }
     }
 }

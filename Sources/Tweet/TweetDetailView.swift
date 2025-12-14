@@ -427,10 +427,13 @@ struct TweetDetailView: View {
             }
         }
         .onAppear {
-            
+
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
+
+            // Mark detail view as active to prevent MediaCell autoplay
+            NavigationStateManager.shared.setDetailViewActive(true)
         }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
@@ -439,7 +442,10 @@ struct TweetDetailView: View {
         .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
-            
+
+            // Mark detail view as inactive
+            NavigationStateManager.shared.setDetailViewActive(false)
+
             // CRITICAL: Stop video playback immediately when navigating away
             // This ensures video doesn't keep playing in background when user leaves detail view
             DetailVideoManager.shared.clearCurrentVideo()

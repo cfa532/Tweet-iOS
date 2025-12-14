@@ -91,7 +91,7 @@ struct MediaBrowserView: View {
             )
             .onAppear {
                 setupFullScreenManager()
-                
+
                 // CRITICAL: Pause all MediaCell videos when fullscreen opens
                 // This prevents videos from playing in the background while fullscreen is active
                 NotificationCenter.default.post(name: .stopAllVideos, object: nil)
@@ -99,7 +99,7 @@ struct MediaBrowserView: View {
             }
             .onDisappear {
                 FullScreenVideoManager.shared.clearSingletonPlayer()
-                
+
                 // CRITICAL: Resume MediaCell videos when exiting fullscreen
                 // This allows videos that were playing before fullscreen to resume
                 NotificationCenter.default.post(name: .resumeMediaCellVideos, object: nil)

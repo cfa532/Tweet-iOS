@@ -11,6 +11,22 @@ import AVFoundation
 import UIKit
 import SwiftUI
 
+/// Global navigation state tracker
+@MainActor
+class NavigationStateManager {
+    static let shared = NavigationStateManager()
+
+    private init() {}
+
+    /// Track if detail view is currently active (TweetDetailView or CommentDetailView)
+    @Published var isDetailViewActive = false
+
+    func setDetailViewActive(_ active: Bool) {
+        isDetailViewActive = active
+        print("DEBUG: [NAVIGATION STATE] Detail view active: \(active)")
+    }
+}
+
 // MARK: - Shared App Lifecycle Protocol
 @MainActor
 protocol VideoPlayerLifecycleManager: AnyObject {
@@ -1108,6 +1124,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published var currentPlayer: AVPlayer?
     @Published var currentVideoMid: String?
     @Published var isPlaying = false
+
+    /// Check if detail view is currently active (safe for Sendable contexts)
+    @MainActor
+    func isDetailViewActive() -> Bool {
+        return currentPlayer != nil
+    }
     
     private var videoCompletionObserver: NSObjectProtocol?
     private var hasKVOObserver = false // Track if KVO observer was added

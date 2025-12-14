@@ -1130,6 +1130,7 @@ struct SimpleVideoPlayer: View {
     }
     
     /// RECOVERY: Restore playback after background (with sanity check as safety net)
+    @MainActor
     private func recoverFromBackground() {
         print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid), mode: \(mode), didEnterBackground: \(didEnterBackground), shouldLoadVideo: \(shouldLoadVideo)")
         
@@ -1188,11 +1189,13 @@ struct SimpleVideoPlayer: View {
                             player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                                 if finished {
                                     // Resume playback if was playing
-                                    // For MediaCell, check VideoManager approval
+                                    // For MediaCell, check VideoManager approval AND no overlays active
                                     if self.mode == .mediaCell {
                                         player.isMuted = MuteState.shared.isMuted
                                         let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                                        if approved && self.isVisible {
+                                        let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
+                                        let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                                        if approved && self.isVisible && noOverlaysActive && noDetailViewActive {
                                             player.play()
                                             self.playbackState = .playing
                                             print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (MediaCell, approved)")
@@ -1214,7 +1217,9 @@ struct SimpleVideoPlayer: View {
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
                                 let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                                if approved && self.isVisible {
+                                let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
+                                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                                if approved && self.isVisible && noOverlaysActive && noDetailViewActive {
                                     player.play()
                                     self.playbackState = .playing
                                     print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (MediaCell, approved, no seek)")
@@ -1348,13 +1353,15 @@ struct SimpleVideoPlayer: View {
             }
             
             // CRITICAL: Resume video if it was playing before backgrounding
-            // For MediaCell, check VideoManager approval
+            // For MediaCell, check VideoManager approval AND no overlays (fullscreen/detail view)
             // For other modes, resume if was playing and should load
             if cachedState.wasPlaying {
                 if mode == .mediaCell {
-                    // For MediaCell, check VideoManager approval
+                    // For MediaCell, check VideoManager approval AND that no overlays/detail views are active
                     let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
-                    if approved && isVisible {
+                    let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
+                                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                    if approved && isVisible && noOverlaysActive && noDetailViewActive {
                         // CRITICAL: Always ensure muteState is correct before playing
                         player.isMuted = MuteState.shared.isMuted
                         NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
@@ -1368,12 +1375,15 @@ struct SimpleVideoPlayer: View {
                             // Player not ready yet - wait for it to become ready
                             print("⏳ [VIDEO RECOVERY] Player not ready yet (status: \(playerItem.status.rawValue)), will resume when ready")
                             Task { @MainActor in
+                                let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
+                                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                                let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
                                 var attempts = 0
-                                while playerItem.status != .readyToPlay && attempts < 50 {
+                                while self.playerItem?.status != .readyToPlay && attempts < 50 {
                                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                                     attempts += 1
                                 }
-                                if playerItem.status == .readyToPlay && self.isVisible && (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) {
+                                if self.playerItem?.status == .readyToPlay && self.isVisible && approved && noOverlaysActive && noDetailViewActive {
                                     player.isMuted = MuteState.shared.isMuted
                                     player.play()
                                     self.playbackState = .playing
@@ -2462,13 +2472,14 @@ struct SimpleVideoPlayer: View {
                     }
                     
                     if shouldAutoPlay {
-                        // CRITICAL: For MediaCell, check VideoManager and actual visibility before playing
-                        // This ensures only the current video plays in sequential playback and not when covered
+                        // CRITICAL: For MediaCell, check VideoManager, actual visibility, and detail view activity before playing
+                        // This ensures only the current video plays in sequential playback and not when covered or detail view active
                         let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
                         // Use synchronous check as backup in case binding update is slow
                         let actuallyVisible = self.mode != .mediaCell || self.visibilityManager?.isCurrentlyVisible() ?? true
+                        let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
-                        if approved && actuallyVisible {
+                        if approved && actuallyVisible && noDetailViewActive {
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
@@ -2479,6 +2490,8 @@ struct SimpleVideoPlayer: View {
                             NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
                         } else if !actuallyVisible {
                             NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
+                        } else if !noDetailViewActive {
+                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - detail view active")
                         } else {
                             NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - not approved by VideoManager")
                         }
@@ -2904,10 +2917,11 @@ struct SimpleVideoPlayer: View {
         // For fullscreen and detail modes, bypass shouldLoadVideo check
         let shouldCheckLoading = mode == .mediaCell ? shouldLoadVideo : true
         
-        // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals)
+        // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals or detail views)
         let isActuallyVisibleOrFullscreen = mode != .mediaCell || visibilityManager?.isActuallyVisible ?? true
-        
-        if autoPlay && isVisible && isActuallyVisibleOrFullscreen && player != nil && !loadingState.isLoading && shouldCheckLoading {
+        let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
+
+        if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {
             
             // CRITICAL: For sequential playback, check with VideoManager before playing
             // This prevents videos that finished prematurely from restarting
