@@ -333,7 +333,7 @@ final class HproseInstance: ObservableObject {
         // This ensures safe operation even after cache is completely cleared
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
-        NSLog("🔍 [initializeAppUser] Loaded cached appUser: \(userId), avatar: \(cachedUser.avatar ?? "nil")")
+        NSLog("🔍 [initializeAppUser] Loaded cached appUser: \(userId), avatar: \(cachedUser.avatar ?? "nil"), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
         
         await MainActor.run {
             // CRITICAL: Update the singleton instance instead of replacing appUser
@@ -346,7 +346,7 @@ final class HproseInstance: ObservableObject {
             let appUserInstance = User.getInstance(mid: userId)
             appUserInstance.followingList = Gadget.getAlphaIds()
             
-            NSLog("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil")")
+            NSLog("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil"), baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
             // Mark initialization as complete so error messages can be shown

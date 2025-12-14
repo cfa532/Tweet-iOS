@@ -370,9 +370,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Try to decode the full user object from cache.
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
-            // baseUrl is now persisted (since retry mechanism handles stale IPs)
-            // writableUrl is NOT persisted (resolved fresh from hostIds each time)
-            updateUserInstance(with: decodedUser)
+            // baseUrl is persisted in cache and should be loaded
+            // Pass true to apply cached baseUrl so avatar can load immediately on app start
+            updateUserInstance(with: decodedUser, true)
         }
         return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
     }
