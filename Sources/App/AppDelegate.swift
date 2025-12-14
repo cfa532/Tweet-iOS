@@ -201,20 +201,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// - Long screen lock (>5 min): Full server restart
     ///   - Clears video players
     ///   - Shows loading overlay during restart
-    ///   - Does NOT post .videoInfrastructureRestarted notification
-    ///   - Videos will recover when they become visible
+    ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     /// - Short screen lock (<5 min): Lightweight refresh
     ///   - Keeps players intact when possible
     ///   - Resets connection pool
-    ///   - Does NOT post .videoInfrastructureRestarted notification
-    ///   - Videos will recover when they become visible
+    ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     ///
     /// **State Management:**
     /// - Clears stale video states (older than 1 hour)
     /// - Refreshes mute state from preferences
     /// - Posts .appDidBecomeActive for other listeners
     ///
-    /// - Note: Videos are NOT automatically recovered - they recover when visible
+    /// - Note: Only visible videos reload automatically; off-screen videos load when scrolled into view
     @objc private func handleAppDidBecomeActive() {
         print("[AppDelegate] App did become active - checking for screen lock recovery")
         
@@ -251,11 +249,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         // Restart server in background
                         await self.restartVideoInfrastructureAsync()
                         
-                        // Hide loading indicator but DON'T post notification immediately
-                        // Videos will recover when they become visible or are already visible
+                        // Hide loading indicator and notify visible videos to reload
                         await MainActor.run {
                             self.hideLoadingOverlay()
-                            print("[AppDelegate] Server restarted after long screen lock - videos will recover when visible")
+                            // Post notification for ONLY visible videos to reload
+                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                            print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
                         }
                     }
                 } else {
@@ -267,8 +266,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                         LocalHTTPServer.shared.resetConnectionPool()
                         print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
-                        // DON'T post notification here - videos will recover when they become visible
-                        print("[AppDelegate] Short screen lock recovery - videos will recover when visible")
+                        // Post notification for ONLY visible videos to reload
+                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                        print("[AppDelegate] Short screen lock recovery - posted reloadVisibleVideosOnly notification")
                     } else {
                         // Server killed during screen lock - restart it
                         print("[AppDelegate] Server killed during screen lock, restarting...")
@@ -289,11 +289,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             // Restart server in background
                             LocalHTTPServer.shared.startAndWait()
                             
-                            // Hide loading indicator but DON'T post notification immediately
-                            // Videos will recover when they become visible or are already visible
+                            // Hide loading indicator and notify visible videos to reload
                             await MainActor.run {
                                 self.hideLoadingOverlay()
-                                print("[AppDelegate] Server restarted after screen lock - videos will recover when visible")
+                                // Post notification for ONLY visible videos to reload
+                                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                                print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
                             }
                         }
                     }
@@ -341,14 +342,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// - Long background (>5 min): Full server restart required
     ///   - Clears all video players to release old URLs
     ///   - Shows loading overlay during restart
-    ///   - Does NOT post .videoInfrastructureRestarted notification
-    ///   - Videos will recover when they become visible
+    ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     /// - Short background (<5 min): Lightweight recovery
     ///   - Clears players for predictable clean state
     ///   - Resets connection pool
     ///   - Ensures LocalHTTPServer is running
-    ///   - Does NOT post .videoInfrastructureRestarted notification
-    ///   - Videos will recover when they become visible
+    ///   - Posts .reloadVisibleVideosOnly notification (only visible videos reload)
     ///
     /// **Message Check:**
     /// - Checks for new messages via `checkMessagesForBadgeOnly()`
@@ -356,7 +355,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     ///
     /// - Note: Skips recovery if app hasn't finished launching
     /// - Note: Duration-based recovery is more reliable than isRunning checks
-    /// - Note: Videos are NOT automatically recovered on foreground - they recover when visible
+    /// - Note: Only visible videos reload automatically; off-screen videos load when scrolled into view
     @objc private func handleAppWillEnterForeground() {
         NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
         
@@ -406,11 +405,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     // Restart server in background
                     await self.restartVideoInfrastructureAsync()
                     
-                    // Hide loading indicator but DON'T post notification immediately
-                    // Videos will recover when they become visible or are already visible
+                    // Hide loading indicator and notify visible videos to reload
                     await MainActor.run {
                         self.hideLoadingOverlay()
-                        NSLog("✅ [AppDelegate] Server fully restarted - videos will recover when visible")
+                        // Post notification for ONLY visible videos to reload
+                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                        NSLog("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
                     }
                 }
             } else {
@@ -432,8 +432,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 
                 NSLog("✅ [AppDelegate] Short background recovery complete - players cleared")
                 
-                // DON'T post notification here - videos will recover when they become visible
-                NSLog("[AppDelegate] Short background recovery - videos will recover when visible")
+                // Post notification for ONLY visible videos to reload
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                NSLog("[AppDelegate] Short background recovery - posted reloadVisibleVideosOnly notification")
             }
         } else {
             // No background timestamp - this means app was just launched or killed

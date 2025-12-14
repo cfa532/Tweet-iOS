@@ -100,6 +100,8 @@ extension Notification.Name {
     static let resumeMediaCellVideos = Notification.Name("ResumeMediaCellVideos")
     /// Posted to force video layer refresh after screen lock recovery
     static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
+    /// Posted to reload only visible videos after foreground recovery (not all videos)
+    static let reloadVisibleVideosOnly = Notification.Name("ReloadVisibleVideosOnly")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast
