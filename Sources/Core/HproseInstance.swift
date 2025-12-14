@@ -2525,36 +2525,37 @@ final class HproseInstance: ObservableObject {
     }
     
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
-        // Check if app user is blacklisted by the tweet author
-        if let tweetAuthor = tweet.author {
-            if tweetAuthor.isUserBlacklisted(appUser.mid) {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot comment on this tweet because you are blocked by the author", comment: "Comment blocked error")])
+        return try await withRetry {
+            // Check if app user is blacklisted by the tweet author
+            if let tweetAuthor = tweet.author {
+                if tweetAuthor.isUserBlacklisted(appUser.mid) {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot comment on this tweet because you are blocked by the author", comment: "Comment blocked error")])
+                }
             }
-        }
-        
-        // Wait for writableUrl to be resolved
-        let resolvedUrl = try await appUser.resolveWritableUrl()
-        guard resolvedUrl != nil else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable URL not available", comment: "URL resolution error")])
-        }
-        
-        guard let uploadClient = appUser.uploadClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        
-        comment.author = nil
-        let params: [String: Any] = [
-            "aid": appId,
-            "ver": "last",
-            "version": "v2",
-            "hostid": tweet.author?.hostIds?.first as Any,
-            "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
-            "tweetid": tweet.mid,
-            "appuserid": appUser.mid
-        ]
-        let entry = "add_comment"
-        let rawResponse = uploadClient.invoke("runMApp", withArgs: [entry, params])
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            
+            // Wait for writableUrl to be resolved
+            let resolvedUrl = try await appUser.resolveWritableUrl()
+            guard resolvedUrl != nil else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable URL not available", comment: "URL resolution error")])
+            }
+            
+            guard let uploadClient = appUser.uploadClient else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            }
+            
+            comment.author = nil
+            let params: [String: Any] = [
+                "aid": appId,
+                "ver": "last",
+                "version": "v2",
+                "hostid": tweet.author?.hostIds?.first as Any,
+                "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
+                "tweetid": tweet.mid,
+                "appuserid": appUser.mid
+            ]
+            let entry = "add_comment"
+            let rawResponse = uploadClient.invoke("runMApp", withArgs: [entry, params])
+            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
@@ -2640,6 +2641,7 @@ final class HproseInstance: ObservableObject {
             // Failure case: extract error message
             let errorMessage = response["message"] as? String ?? "Unknown comment upload error"
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+        }
         }
     }
     
@@ -4589,18 +4591,20 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - Network Operations
     private func withRetry<T>(_ block: () async throws -> T) async throws -> T {
-        var retryCount = 0
-        while retryCount < 2 {
+        var attempt = 0
+        let maxAttempts = 2 // Initial attempt + 1 retry
+        
+        while attempt < maxAttempts {
+            attempt += 1
             do {
                 return try await block()
             } catch {
-                retryCount += 1
-                print("DEBUG: [withRetry] Attempt \(retryCount)/2 failed: \(error)")
+                print("DEBUG: [withRetry] Attempt \(attempt)/\(maxAttempts) failed: \(error)")
                 
-                if retryCount < 2 {
-                    // Add delay before retry
-                    let delay = UInt64(retryCount) * 2_000_000_000 // 2 seconds, 4 seconds
-                    print("DEBUG: [withRetry] Retrying in \(delay / 1_000_000_000) seconds...")
+                if attempt < maxAttempts {
+                    // Wait 1 second before retry
+                    let delay: UInt64 = 1_000_000_000 // 1 second
+                    print("DEBUG: [withRetry] Retrying in 1 second...")
                     try await Task.sleep(nanoseconds: delay)
                     
                     // Refresh appUser from server instead of full app reinitialization
