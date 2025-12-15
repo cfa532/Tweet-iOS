@@ -862,6 +862,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Navigate to next video (triggered by swipe up)
     func navigateToNext() {
+        // Don't navigate while app is backgrounding (e.g. user swipes up to go Home).
+        guard UIApplication.shared.applicationState == .active else {
+            print("DEBUG: [FullScreenVideoManager] Ignoring swipe-up navigateToNext while app not active")
+            return
+        }
+
         guard let currentSourceTweetId = currentSourceTweetId,
               let findNextVideo = findNextVideo else {
             print("DEBUG: [FullScreenVideoManager] No source tweet ID or search function")

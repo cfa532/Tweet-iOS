@@ -8,6 +8,7 @@
 import SwiftUI
 import AVKit
 import Photos
+import UIKit
 
 struct MediaBrowserView: View {
     let tweet: Tweet
@@ -290,6 +291,10 @@ struct MediaBrowserView: View {
                         if !isImageZoomed {
                             let swipeThreshold: CGFloat = 100
                             let velocityThreshold: CGFloat = 500
+                            // Ignore system home-indicator swipe-ups (close app / go Home).
+                            // Only treat swipe-up as "next video" if the gesture started away from the bottom edge.
+                            let bottomExclusion: CGFloat = 44 + MediaBrowserView.currentBottomSafeAreaInset()
+                            let startedNearBottomEdge = value.startLocation.y > (UIScreen.main.bounds.height - bottomExclusion)
                             
                             // Swipe down - exit fullscreen
                             if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
@@ -298,7 +303,8 @@ struct MediaBrowserView: View {
                             }
                             
                             // Swipe up - next video
-                            if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
+                            if !startedNearBottomEdge,
+                               (value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold) {
                                 print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
                                 FullScreenVideoManager.shared.navigateToNext()
                             }
@@ -426,6 +432,16 @@ struct MediaBrowserView: View {
         }
         
 
+    }
+
+    static func currentBottomSafeAreaInset() -> CGFloat {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) else {
+            return 0
+        }
+        return window.safeAreaInsets.bottom
     }
     
 
