@@ -3351,13 +3351,28 @@ struct SimpleVideoPlayer: View {
                 NSLog("🔇 [PLAYER MUTE] checkPlaybackConditions - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
             }
             
-            // CRITICAL: For mediaCell mode, if video was never actually played (only first frame shown),
-            // seek to start to ensure clean state before playing
-            // Also handle case where video was reset from finished state for sequential playback
+            // MediaCell resume behavior:
+            // - If we have a cached playback position (e.g. scrolled off-screen and back), resume from that time.
+            // - Otherwise, start from the beginning.
+            //
+            // Note: `restoreFromCache` seeks to cachedState.time but marks playbackState as `.notStarted`
+            // so we must not blindly seek to `.zero` here, or we'd erase the resume position.
             if mode == .mediaCell && playbackState == .notStarted {
-                NSLog("🔄 [PLAYBACK] Seeking to start for clean playback: \(mid)")
-                player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                // Brief delay to let seek complete, then start playing
+                let cachedTime = VideoStateCache.shared.getCachedState(for: mid)?.time ?? .zero
+                let resumeSeconds = cachedTime.seconds.isFinite ? cachedTime.seconds : 0
+                let shouldResume = resumeSeconds > 0.25
+
+                // Avoid redundant seeks if we're already near the intended position.
+                let currentSeconds = player?.currentTime().seconds ?? 0
+                let needsSeek = shouldResume ? abs(currentSeconds - resumeSeconds) > 0.25 : currentSeconds > 0.25
+
+                let targetTime: CMTime = shouldResume ? cachedTime : .zero
+                if needsSeek {
+                    NSLog("🔄 [PLAYBACK] Seeking to \(shouldResume ? "resume" : "start") position (\(String(format: "%.2f", targetTime.seconds))s) for \(mid)")
+                    player?.seek(to: targetTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                }
+
+                // Brief delay to let seek settle, then start playing
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     // Double-check conditions haven't changed
                     if self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
