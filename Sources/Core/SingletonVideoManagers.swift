@@ -251,6 +251,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var loadedTimeRangesObserver: NSKeyValueObservation?
     private var itemStatusObserver: NSKeyValueObservation?
     private var wasPlayingBeforeWaiting = false
+
+    // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
+    private var loadGeneration: Int = 0
+    private var loadingMid: String?
     
     /// Initialize singleton player early (called during app startup)
     func initializePlayerEarly() {
@@ -277,6 +281,20 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Load and play a video in the singleton player
     func loadVideo(url: URL, mid: String, tweetId: String, sourceTweetId: String, videoIndex: Int, mediaType: MediaType) {
         print("DEBUG: [FullScreenVideoManager] Loading video in singleton player - mid: \(mid), tweetId: \(tweetId), sourceTweetId: \(sourceTweetId), videoIndex: \(videoIndex)")
+
+        // If we already have the correct item loaded, don't thrash observers / state.
+        if currentVideoMid == mid,
+           currentTweetId == tweetId,
+           singletonPlayer?.currentItem != nil {
+            // Still ensure buffering observers are attached (covers view recreation edge cases).
+            setupTimeControlStatusObserver()
+            return
+        }
+
+        // Bump generation so any prior async completions are ignored.
+        loadGeneration += 1
+        let generation = loadGeneration
+        loadingMid = mid
         
         // Remove old observer if exists
         if let observer = videoCompletionObserver {
@@ -326,6 +344,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(for: url, mediaID: mid, mediaType: mediaType)
                     
                     await MainActor.run {
+                        // Ignore stale completions (e.g. duplicated loadVideo calls from view recreations)
+                        guard self.loadGeneration == generation, self.currentVideoMid == mid else {
+                            print("DEBUG: [FullScreenVideoManager] Ignoring stale playerItem completion for \(mid)")
+                            return
+                        }
+                        self.loadingMid = nil
+
                         // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
                         AudioSessionManager.shared.activateForVideoPlayback()
                         
@@ -394,6 +419,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     }
                 } catch {
                     await MainActor.run {
+                        guard self.loadGeneration == generation, self.currentVideoMid == mid else {
+                            print("DEBUG: [FullScreenVideoManager] Ignoring stale load error for \(mid): \(error)")
+                            return
+                        }
+                        self.loadingMid = nil
                         print("ERROR: [FullScreenVideoManager] Failed to create fresh playerItem: \(error), falling back to normal load")
                         // Fall through to normal load path below
                     }
@@ -410,6 +440,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 let playerItem = await AVPlayerItem(asset: asset)
                 
                 await MainActor.run {
+                    // Ignore stale completions
+                    guard self.loadGeneration == generation, self.currentVideoMid == mid else {
+                        print("DEBUG: [FullScreenVideoManager] Ignoring stale asset completion for \(mid)")
+                        return
+                    }
+                    self.loadingMid = nil
+
                     // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
                     AudioSessionManager.shared.activateForVideoPlayback()
                     
@@ -481,6 +518,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 }
             } catch {
                 await MainActor.run {
+                    guard self.loadGeneration == generation, self.currentVideoMid == mid else {
+                        print("DEBUG: [FullScreenVideoManager] Ignoring stale load error for \(mid): \(error)")
+                        return
+                    }
+                    self.loadingMid = nil
+
                     print("ERROR: [FullScreenVideoManager] Failed to load video: \(error)")
                     // Clear broken player state to show loading placeholder instead of broken icon
                     // CRITICAL: Clear ALL state variables consistently with recovery cleanup (lines 488-490)
