@@ -1744,24 +1744,18 @@ struct SimpleVideoPlayer: View {
         // Visible videos should either show last-frame/spinner placeholders or the player itself.
         isPlayerDetached = false
 
-        // CRITICAL FIX: After long background, videos may not have players yet (especially non-playing
-        // videos in a grid waiting for sequential playback). We need to recreate them if shouldLoadVideo is true.
-        let playerMissing = (player == nil)
+        // If we're already loading, don't thrash.
+        if loadingState.isLoading {
+            print("DEBUG: [VIDEO RELOAD VISIBLE] Already loading \(mid), skipping")
+            return
+        }
+
         let itemMissing = (player?.currentItem == nil)
         let timeInvalid = !(player?.currentTime().seconds.isFinite ?? true)
         let broken = itemMissing || timeInvalid || isPlayerBroken()
-        
-        // For videos that should be loaded but don't have a player, or have a broken player, recreate
-        let needsRecreation = (playerMissing && shouldLoadVideo) || broken
 
-        if needsRecreation {
-            print("⚠️ [VIDEO RELOAD VISIBLE] Player missing/broken for \(mid) (playerMissing: \(playerMissing), itemMissing: \(itemMissing), timeInvalid: \(timeInvalid)) - recreating")
-
-            // If we're already loading, reset the loading state to allow fresh start
-            if loadingState.isLoading {
-                print("⚠️ [VIDEO RELOAD VISIBLE] Resetting stuck loading state for \(mid)")
-                loadingState = .idle
-            }
+        if broken {
+            print("⚠️ [VIDEO RELOAD VISIBLE] Player missing/broken for \(mid) (itemMissing: \(itemMissing), timeInvalid: \(timeInvalid)) - recreating")
 
             // Clean up time observer if attached.
             if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
@@ -1777,90 +1771,14 @@ struct SimpleVideoPlayer: View {
             loadingState = .idle
             playbackState = .notStarted
 
-            // Force view refresh to fix black screens - increment representableId to recreate the view
-            // This is necessary after long background to ensure the video layer is properly reattached
-            representableId += 1
-            
-            // Setup player - this will recreate it and properly initialize
+            // Don't increment representableId here - let setupPlayer/configurePlayer handle it
+            // when the player is actually ready, to avoid showing loading placeholder unnecessarily
             setupPlayer()
-            
-            // CRITICAL: After long background recovery, ensure videos that should be playing actually start.
-            // Add a delayed check to ensure playback starts if VideoManager approves it.
-            // This fixes cases where videos get stuck in loading state after recovery.
-            Task { @MainActor in
-                // Wait for player to be created and ready
-                var attempts = 0
-                while (self.player == nil || self.loadingState.isLoading) && attempts < 30 {
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                    attempts += 1
-                }
-                
-                // Check if player is ready and should be playing
-                guard let player = self.player,
-                      let playerItem = player.currentItem,
-                      playerItem.status == .readyToPlay,
-                      self.isVisible,
-                      self.shouldLoadVideo else {
-                    return
-                }
-                
-                // Check if loading state is stuck
-                if self.loadingState.isLoading {
-                    let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-                    let bufferedDuration = self.bufferedTimeAhead(for: playerItem, player: player)
-                    
-                    if hasBufferedData && bufferedDuration >= self.firstFrameMinimumBuffer {
-                        print("⚠️ [VIDEO RELOAD] LoadingState stuck at .loading after recovery for \(self.mid), fixing")
-                        self.loadingState = .loaded
-                        self.retryAttempts = 0
-                        if self.mode == .mediaCell {
-                            self.hasInitialized = true
-                        }
-                    }
-                }
-                
-                // If video should be playing according to VideoManager, ensure it starts
-                let shouldPlay = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                if shouldPlay && self.currentAutoPlay && self.loadingState.isLoaded {
-                    let noOverlaysActive = !self.isCoveredByOverlay
-                    let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-                    
-                    if noOverlaysActive && noDetailViewActive {
-                        print("✅ [VIDEO RELOAD] Ensuring playback starts after recovery for \(self.mid)")
-                        self.checkPlaybackConditions(autoPlay: true, isVisible: true)
-                    }
-                }
-            }
-        } else if player != nil {
-            // Player is intact; still refresh the layer and re-evaluate autoplay.
-            // CRITICAL: For long background recovery, even "intact" players may have stale layers.
-            // Force a view refresh to ensure the video layer is properly reattached.
-            // This fixes cases where videos show black screens even though the player appears healthy.
-            representableId += 1
-            
-            // CRITICAL: Check if loading state is stuck - this can happen after long background
-            // where the player appears intact but is actually stuck in loading
-            if loadingState.isLoading, let playerItem = player?.currentItem, playerItem.status == .readyToPlay {
-                let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-                if let player = player {
-                    let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player)
-                    if hasBufferedData && bufferedDuration >= firstFrameMinimumBuffer {
-                        print("⚠️ [VIDEO RELOAD] LoadingState stuck at .loading for intact player \(mid), fixing")
-                        loadingState = .loaded
-                        retryAttempts = 0
-                        if mode == .mediaCell {
-                            hasInitialized = true
-                        }
-                    }
-                }
-            }
-            
-            // Re-evaluate autoplay conditions - this ensures playing videos resume correctly
-            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
         } else {
-            // Player is nil but shouldLoadVideo is false - this is expected for non-playing videos
-            // in a grid waiting for sequential playback. Just ensure state is clean.
-            print("DEBUG: [VIDEO RELOAD VISIBLE] Player nil but shouldLoadVideo=false for \(mid) - waiting for sequential playback")
+            // Player is intact; still refresh the layer and re-evaluate autoplay.
+            // CRITICAL: Don't increment representableId for intact players to avoid flicker.
+            // The player layer should still work fine without forcing recreation.
+            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
         }
     }
     
