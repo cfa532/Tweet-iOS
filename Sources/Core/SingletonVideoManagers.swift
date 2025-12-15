@@ -42,6 +42,57 @@ protocol VideoPlayerLifecycleManager: AnyObject {
 }
 
 extension VideoPlayerLifecycleManager {
+    /// Default implementation: Check if player is broken
+    func isPlayerBroken() -> Bool {
+        guard let player = getPlayer() else {
+            let managerName = String(describing: type(of: self))
+            NSLog("DEBUG: [\(managerName)] Player is nil -> BROKEN")
+            return true
+        }
+        
+        guard let currentItem = player.currentItem else {
+            let managerName = String(describing: type(of: self))
+            NSLog("DEBUG: [\(managerName)] Player has no currentItem -> BROKEN")
+            return true
+        }
+        
+        // Check if player item is in failed state
+        if currentItem.status == .failed {
+            let managerName = String(describing: type(of: self))
+            NSLog("DEBUG: [\(managerName)] Player item status is failed -> BROKEN")
+            return true
+        }
+        
+        // Check if player item has an error (even if status isn't .failed yet)
+        if let error = currentItem.error {
+            let managerName = String(describing: type(of: self))
+            NSLog("DEBUG: [\(managerName)] Player item has error: \(error.localizedDescription) -> BROKEN")
+            return true
+        }
+        
+        // Check if player has an error
+        if let error = player.error {
+            let managerName = String(describing: type(of: self))
+            NSLog("DEBUG: [\(managerName)] Player has error: \(error.localizedDescription) -> BROKEN")
+            return true
+        }
+        
+        // For screen lock recovery, don't check loadedTimeRanges
+        // iOS might temporarily clear this data, but it will reload
+        // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
+        if currentItem.status == .readyToPlay && 
+           currentItem.loadedTimeRanges.isEmpty && 
+           !currentItem.duration.isValid {
+            let managerName = String(describing: type(of: self))
+            NSLog("DEBUG: [\(managerName)] Player item has no loaded data AND invalid duration -> BROKEN")
+            return true
+        }
+        
+        let managerName = String(describing: type(of: self))
+        NSLog("DEBUG: [\(managerName)] Player health check passed -> HEALTHY")
+        return false
+    }
+    
     func setupAppLifecycleNotifications() {
         NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
@@ -314,18 +365,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         bufferObserver?.invalidate()
         bufferObserver = nil
         
-        // Clean up timeControlStatus observer
-        timeControlStatusObserver?.invalidate()
-        timeControlStatusObserver = nil
-        playbackBufferEmptyObserver?.invalidate()
-        playbackBufferEmptyObserver = nil
-        playbackLikelyToKeepUpObserver?.invalidate()
-        playbackLikelyToKeepUpObserver = nil
-        loadedTimeRangesObserver?.invalidate()
-        loadedTimeRangesObserver = nil
-        itemStatusObserver?.invalidate()
-        itemStatusObserver = nil
-        wasPlayingBeforeWaiting = false
+        // Clean up timeControlStatus observers
+        cleanupObservers()
         isBuffering = false
         
         // Store current video info
@@ -522,7 +563,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         self.isPlaying = true // Mark as "should be playing"
                     }
                     
-                                print("DEBUG: [FullScreenVideoManager] ✅ Singleton player loaded - mid: \(mid), tweetId: \(tweetId), videoIndex: \(videoIndex)")
+                    print("DEBUG: [FullScreenVideoManager] ✅ Singleton player loaded - mid: \(mid), tweetId: \(tweetId), videoIndex: \(videoIndex)")
                 }
             } catch {
                 await MainActor.run {
@@ -546,9 +587,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
     }
     
-    /// Setup timeControlStatus observer for buffering detection and autoplay
-    private func setupTimeControlStatusObserver() {
-        // Remove old observers
+    /// Clean up all observers
+    private func cleanupObservers() {
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
         playbackBufferEmptyObserver?.invalidate()
@@ -560,8 +600,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
         wasPlayingBeforeWaiting = false
-        hasRestoredPosition = false // Reset restoration flag when setting up new observers
-        isSeekingToRestoredPosition = false // Reset seeking flag
+        hasRestoredPosition = false
+        isSeekingToRestoredPosition = false
+    }
+    
+    /// Setup timeControlStatus observer for buffering detection and autoplay
+    private func setupTimeControlStatusObserver() {
+        cleanupObservers()
         
         guard let player = singletonPlayer, let playerItem = player.currentItem else {
             NSLog("⚠️ [FULLSCREEN WAITING] Cannot setup observer - no player or playerItem")
@@ -987,26 +1032,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         bufferObserver?.invalidate()
         bufferObserver = nil
         
-        // Clean up timeControlStatus observer
-        timeControlStatusObserver?.invalidate()
-        timeControlStatusObserver = nil
-        playbackBufferEmptyObserver?.invalidate()
-        playbackBufferEmptyObserver = nil
-        playbackLikelyToKeepUpObserver?.invalidate()
-        playbackLikelyToKeepUpObserver = nil
-        loadedTimeRangesObserver?.invalidate()
-        loadedTimeRangesObserver = nil
-        itemStatusObserver?.invalidate()
-        itemStatusObserver = nil
-        wasPlayingBeforeWaiting = false
+        // Clean up timeControlStatus observers
+        cleanupObservers()
         isBuffering = false
         
         print("DEBUG: [FullScreenVideoManager] Cleared video content (player instance retained)")
         
-        // Do NOT deactivate audio session here
-        // Deactivating (setting to .ambient) can interrupt MediaCell playback if it has already resumed
-        // Let the next video player or the system handle audio session state
-        // AudioSessionManager.shared.deactivateForVideoPlayback()
     }
     
     /// Pause current playback
@@ -1130,50 +1161,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 }
             }
         }
-    }
-    
-    /// Check if player is broken (Layer 2 security check)
-    func isPlayerBroken() -> Bool {
-        guard let player = singletonPlayer else {
-            NSLog("DEBUG: [FullScreenVideoManager] Player is nil -> BROKEN")
-            return true
-        }
-        
-        guard let currentItem = player.currentItem else {
-            NSLog("DEBUG: [FullScreenVideoManager] Player has no currentItem -> BROKEN")
-            return true
-        }
-        
-        // Check if player item is in failed state
-        if currentItem.status == .failed {
-            NSLog("DEBUG: [FullScreenVideoManager] Player item status is failed -> BROKEN")
-            return true
-        }
-        
-        // Check if player item has an error (even if status isn't .failed yet)
-        if let error = currentItem.error {
-            NSLog("DEBUG: [FullScreenVideoManager] Player item has error: \(error.localizedDescription) -> BROKEN")
-            return true
-        }
-        
-        // Check if player has an error
-        if let error = player.error {
-            NSLog("DEBUG: [FullScreenVideoManager] Player has error: \(error.localizedDescription) -> BROKEN")
-            return true
-        }
-        
-        // For screen lock recovery, don't check loadedTimeRanges
-        // iOS might temporarily clear this data, but it will reload
-        // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
-        if currentItem.status == .readyToPlay && 
-           currentItem.loadedTimeRanges.isEmpty && 
-           !currentItem.duration.isValid {
-            NSLog("DEBUG: [FullScreenVideoManager] Player item has no loaded data AND invalid duration -> BROKEN")
-            return true
-        }
-        
-        NSLog("DEBUG: [FullScreenVideoManager] Player health check passed -> HEALTHY")
-        return false
     }
     
     /// Clear search function
@@ -1387,12 +1374,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 print("DEBUG: [DetailVideoManager] Removed player from SharedAssetCache with key: \(key)")
             }
         }
-        // AudioSessionManager.shared.deactivateForVideoPlayback()
-        // Do NOT deactivate audio session here
-        // Deactivating (setting to .ambient) can interrupt MediaCell playback if it has already resumed
-        // Let the next video player or the system handle audio session state
-        // AudioSessionManager.shared.deactivateForVideoPlayback()
-        
     }
     
     /// Setup video completion observer
@@ -1574,47 +1555,4 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
     }
     
-    /// Check if player is broken (Layer 2 security check)
-    func isPlayerBroken() -> Bool {
-        guard let player = currentPlayer else {
-            NSLog("DEBUG: [DetailVideoManager] Player is nil -> BROKEN")
-            return true
-        }
-        
-        guard let currentItem = player.currentItem else {
-            NSLog("DEBUG: [DetailVideoManager] Player has no currentItem -> BROKEN")
-            return true
-        }
-        
-        // Check if player item is in failed state
-        if currentItem.status == .failed {
-            NSLog("DEBUG: [DetailVideoManager] Player item status is failed -> BROKEN")
-            return true
-        }
-        
-        // Check if player item has an error (even if status isn't .failed yet)
-        if let error = currentItem.error {
-            NSLog("DEBUG: [DetailVideoManager] Player item has error: \(error.localizedDescription) -> BROKEN")
-            return true
-        }
-        
-        // Check if player has an error
-        if let error = player.error {
-            NSLog("DEBUG: [DetailVideoManager] Player has error: \(error.localizedDescription) -> BROKEN")
-            return true
-        }
-        
-        // For screen lock recovery, don't check loadedTimeRanges
-        // iOS might temporarily clear this data, but it will reload
-        // Only check loadedTimeRanges if status is .readyToPlay AND duration is invalid
-        if currentItem.status == .readyToPlay &&
-           currentItem.loadedTimeRanges.isEmpty &&
-           !currentItem.duration.isValid {
-            NSLog("DEBUG: [DetailVideoManager] Player item has no loaded data AND invalid duration -> BROKEN")
-            return true
-        }
-        
-        NSLog("DEBUG: [DetailVideoManager] Player health check passed -> HEALTHY")
-        return false
-    }
 }

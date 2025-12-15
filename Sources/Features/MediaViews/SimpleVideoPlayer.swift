@@ -252,9 +252,7 @@ enum VideoFrameExtractor {
 // MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
     // Cache screen dimensions to avoid repeated UIScreen.main calls
-    // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
-    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
     
     // MARK: Required Parameters
     let url: URL
@@ -307,7 +305,20 @@ struct SimpleVideoPlayer: View {
     @State private var videoOutputAttachedItem: AVPlayerItem?
     @State private var lastFrameCaptureAt: Date = .distantPast
     @State private var lastFrameVersion: Int = 0 // bumps when we store a new frame (forces view update)
+    @State private var isStartingPlayback = false // Prevent duplicate playback attempts during recovery
 
+    // MARK: - Helper Functions
+    
+    /// Apply mute state to player based on current mode
+    private func applyMuteState(to player: AVPlayer) {
+        if mode == .mediaCell {
+            player.isMuted = MuteState.shared.isMuted
+        } else {
+            // Fullscreen/Detail: Always unmute
+            player.isMuted = false
+        }
+    }
+    
     // MARK: - Resume helpers (MediaCell)
     /// Start playback, resuming from cached time when appropriate.
     ///
@@ -351,18 +362,15 @@ struct SimpleVideoPlayer: View {
     }
     
     private let progressiveBufferTargets: [Double] = [8.0, 12.0, 18.0, 24.0, 30.0]
+    
     /// Minimum buffered seconds required before we consider the first frame renderable.
     private var firstFrameMinimumBuffer: Double {
         mediaType == .video ? 3.0 : 0.1
     }
     
-    private var isProgressiveMedia: Bool {
-        mediaType == .video
-    }
-    
     /// Minimum buffered seconds required before we resume playback after a stall.
     private var stallRecoveryMinimumBuffer: Double {
-        isProgressiveMedia ? 5.0 : 0.5
+        mediaType == .video ? 5.0 : 0.5
     }
     
     /// Target forward buffer (in seconds) we want AVPlayer to maintain for progressive videos.
@@ -378,11 +386,6 @@ struct SimpleVideoPlayer: View {
     private var isVideoPortrait: Bool {
         guard let ar = videoAspectRatio else { return false }
         return ar < 1.0
-    }
-    
-    private var isVideoLandscape: Bool {
-        guard let ar = videoAspectRatio else { return false }
-        return ar > 1.0
     }
     
     // Reactive autoPlay state - use VideoManager if available, otherwise use static autoPlay
@@ -1277,7 +1280,7 @@ struct SimpleVideoPlayer: View {
     }
     
     private func shouldForceProgressiveReload(player: AVPlayer, item: AVPlayerItem) -> Bool {
-        guard isProgressiveMedia else { return false }
+        guard mediaType == .video else { return false }
         guard loadingState.isLoaded else { return false }
         guard item.status == .readyToPlay else { return false }
         
@@ -1506,11 +1509,7 @@ struct SimpleVideoPlayer: View {
         }
         
         // Restore mute state
-        if mode == .mediaCell && mediaType == .video {
-            player.isMuted = MuteState.shared.isMuted
-        } else {
-            player.isMuted = false
-        }
+        applyMuteState(to: player)
         
         // Reattach player first (before seeking/playing)
         isPlayerDetached = false
@@ -1772,11 +1771,13 @@ struct SimpleVideoPlayer: View {
             loadingState = .idle
             playbackState = .notStarted
 
+            // Don't increment representableId here - let setupPlayer/configurePlayer handle it
+            // when the player is actually ready, to avoid showing loading placeholder unnecessarily
             setupPlayer()
-            representableId += 1
         } else {
             // Player is intact; still refresh the layer and re-evaluate autoplay.
-            representableId += 1
+            // CRITICAL: Don't increment representableId for intact players to avoid flicker.
+            // The player layer should still work fine without forcing recreation.
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
         }
     }
@@ -2618,15 +2619,7 @@ struct SimpleVideoPlayer: View {
         }
         
         // Configure player mute state based on mode
-        if mode == .mediaCell {
-            // MediaCell: Apply global mute state
-            player.isMuted = MuteState.shared.isMuted
-            NSLog("🔇 [PLAYER MUTE] configurePlayer() - MediaCell mode, isMuted: \(MuteState.shared.isMuted) for \(mid)")
-        } else {
-            // Fullscreen/Detail: Always unmute
-            player.isMuted = false
-            NSLog("🔊 [PLAYER MUTE] configurePlayer() - Fullscreen/Detail mode, isMuted: false for \(mid)")
-        }
+        applyMuteState(to: player)
         
         // Setup time observer only if not already set up for this player
         if timeObserverPlayer !== player {
@@ -2643,10 +2636,13 @@ struct SimpleVideoPlayer: View {
         
         // CRITICAL: Only increment representableId if player actually changed
         // This prevents unnecessary view recreation and recomposition during normal scrolling
+        // For foreground recovery, skip incrementing representableId to avoid flicker - the view
+        // will update naturally when player binding changes, and last frame placeholder covers the transition
         let playerChanged = self.player !== player
-        if playerChanged {
-            self.representableId += 1 // Force VideoPlayerRepresentable to recreate only when player changes
-            self.viewConfigTimestamp = Date().timeIntervalSince1970 // Force unique view ID
+        if playerChanged && !hasRecoveredThisCycle {
+            // Only increment for non-recovery cases (normal player changes during scrolling)
+            self.representableId += 1
+            self.viewConfigTimestamp = Date().timeIntervalSince1970
         }
         
         // CRITICAL: Always update state, even if same player instance
@@ -2693,8 +2689,13 @@ struct SimpleVideoPlayer: View {
             setupPlayerObservers(player)
         }
         
-        // Start playback if needed
-        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+        // CRITICAL: During foreground recovery, skip checkPlaybackConditions here to avoid duplicate playback
+        // The KVO observers (status + buffer) will handle playback when the player is ready
+        // This prevents flicker from multiple playback attempts
+        if !hasRecoveredThisCycle {
+            // Start playback if needed (normal flow, not recovery)
+            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+        }
     }
     
     private func setupTimeObserver(for player: AVPlayer) {
@@ -2753,6 +2754,9 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Remove existing observers FIRST to prevent duplicates
         // This must happen before storing the new playerItem reference
         removePlayerObservers()
+        
+        // Reset playback flag when setting up new observers
+        isStartingPlayback = false
         
         // Store reference for cleanup (AFTER removing old observers)
         self.playerItem = playerItem
@@ -2903,19 +2907,29 @@ struct SimpleVideoPlayer: View {
                         let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
                         if approved && actuallyVisible && noDetailViewActive {
+                            // CRITICAL: Prevent duplicate playback attempts from status and buffer observers
+                            guard !self.isStartingPlayback && player.rate == 0 else {
+                                NSLog("⏭️ [VIDEO READY] Skipping playback start - already starting or playing for \(mid)")
+                                return
+                            }
+                            self.isStartingPlayback = true
+                            
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
                                 NSLog("🔇 [PLAYER MUTE] KVO status ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
                             }
                             // Start playing automatically
-                            if player.rate == 0 {
-                                self.playWithResumeIfNeeded(player)
-                            }
+                            self.playWithResumeIfNeeded(player)
                             if self.mode == .mediaCell {
                                 self.playbackState = .playing
                             }
                             NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
+                            
+                            // Reset flag after a delay to allow playback to actually start
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                self.isStartingPlayback = false
+                            }
                         } else if !actuallyVisible {
                             NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
                         } else if !noDetailViewActive {
@@ -2961,7 +2975,10 @@ struct SimpleVideoPlayer: View {
                         let noDetailViewActive = self.mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
                         let shouldPlay = shouldAutoPlay && managerApproved && actuallyVisible && noDetailViewActive
                         
-                        if shouldPlay && player.rate == 0 {
+                        // CRITICAL: Prevent duplicate playback attempts if status observer already started it
+                        if shouldPlay && player.rate == 0 && !self.isStartingPlayback {
+                            self.isStartingPlayback = true
+                            
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
@@ -2972,6 +2989,11 @@ struct SimpleVideoPlayer: View {
                                 self.playbackState = .playing
                             }
                             NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (approved by VideoManager)")
+                            
+                            // Reset flag after a delay to allow playback to actually start
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                self.isStartingPlayback = false
+                            }
                         } else if !actuallyVisible {
                             NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
                         } else if !noDetailViewActive {
@@ -2991,7 +3013,8 @@ struct SimpleVideoPlayer: View {
 
                         // CRITICAL: If video was waiting to play, check playback conditions now
                         // This handles case where video became approved but was still loading
-                        if self.currentAutoPlay && self.isVisible && self.mode == .mediaCell {
+                        // However, skip if playback is already starting to avoid duplicate attempts
+                        if self.currentAutoPlay && self.isVisible && self.mode == .mediaCell && !self.isStartingPlayback && player.rate == 0 {
                             DispatchQueue.main.async {
                                 self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
                             }
@@ -3655,71 +3678,9 @@ struct SimpleVideoPlayer: View {
         print("DEBUG: [VIDEO BACKGROUND] Player paused but NOT detached for \(mid)")
     }
     
-    /// Detach player (old function kept for reference but not called anymore)
-    private func detachPlayerForBackground() {
-        guard let player = player else { 
-            return 
-        }
-        
-        // Store current state before detaching
-        let wasPlaying = player.rate > 0
-        let currentTime = player.currentTime()
-        
-        // Cache the state for restoration (MediaCell only, NOT TweetDetail or MediaBrowser)
-        // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
-        // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
-        if mode == .mediaCell {
-            VideoStateCache.shared.cacheVideoState(
-                for: mid,
-                player: player,
-                time: currentTime,
-                wasPlaying: wasPlaying,
-                originalMuteState: isMuted
-            )
-        }
-        
-        // Pause the player first
-        player.pause()
-        
-        // Mark as detached - this prevents the video layer from becoming invalid
-        isPlayerDetached = true
-    }
     
 }
 
-// MARK: - Video Layer Refresh View
-struct VideoLayerRefreshView: UIViewRepresentable {
-    let player: AVPlayer
-    let mid: String
-    let instanceId: String
-    
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = false
-        
-        // Set up notification observer for app foreground
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            // Note: refreshVideoLayer is not called here to avoid retain cycles
-            // The main refresh logic is handled in the parent SimpleVideoPlayer
-        }
-        
-        return view
-    }
-    
-    func updateUIView(_ uiView: UIView, context: Context) {
-        // This view is used to access the underlying video layer for refresh
-    }
-    
-    func dismantleUIView(_ uiView: UIView, coordinator: ()) {
-        // Clean up observers when view is dismantled
-        NotificationCenter.default.removeObserver(uiView)
-    }
-}
 
 // MARK: - AVPlayerViewController Wrapper for Full Screen
         struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
