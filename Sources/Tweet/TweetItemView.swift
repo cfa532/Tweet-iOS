@@ -263,7 +263,8 @@ struct TweetItemView: View, Equatable {
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
                             backgroundColor: Color(.systemGray4).opacity(0.6),
-                            isEmbedded: true
+                            isEmbedded: true,
+                            visibleTweetId: tweet.mid
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
@@ -397,6 +398,9 @@ struct EmbeddedTweetView: View, Equatable {
     var onTap: ((Tweet) -> Void)? = nil
     var backgroundColor: Color = Color(.systemBackground)
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
+    /// The ID of the visible tweet in the feed (e.g. retweet/quote container).
+    /// Used to keep media identity stable and navigation anchored to the visible tweet.
+    var visibleTweetId: String? = nil
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -430,7 +434,7 @@ struct EmbeddedTweetView: View, Equatable {
             tweet.isVisible = false
         }
         // Add identity for embedded tweets
-        .id("embedded_\(tweet.mid)")
+        .id("embedded_\(tweet.mid)_\(visibleTweetId ?? "self")")
     }
     
     private var embeddedContent: some View {
@@ -452,7 +456,13 @@ struct EmbeddedTweetView: View, Equatable {
                     Spacer()
                 }
                 
-                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid, isEmbedded: isEmbedded)
+                TweetItemBodyView(
+                    tweet: tweet,
+                    enableTap: false,
+                    isVisible: isVisible,
+                    visibleTweetId: visibleTweetId ?? tweet.mid,
+                    isEmbedded: isEmbedded
+                )
             }
         }
         .padding(8)
@@ -464,6 +474,7 @@ struct EmbeddedTweetView: View, Equatable {
         return lhs.tweet.mid == rhs.tweet.mid &&
                lhs.isPinned == rhs.isPinned &&
                lhs.backgroundColor == rhs.backgroundColor &&
-               lhs.isEmbedded == rhs.isEmbedded
+               lhs.isEmbedded == rhs.isEmbedded &&
+               lhs.visibleTweetId == rhs.visibleTweetId
     }
 }

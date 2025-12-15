@@ -63,7 +63,23 @@ SwiftUI video player with automatic playback management and stall recovery.
 - Smart resume when data becomes available
 - Spinner control (shows during buffering, hides when ready)
 - First frame rendering optimization
+- **Last-frame placeholder (MediaCell)** to prevent black flashes during buffering/foreground recovery
 - Memory state management
+
+### UX: Last-Frame Placeholder (MediaCell)
+
+When a MediaCell video is about to go off-screen or the app backgrounds, the player captures the **last decoded frame** and uses it as a placeholder while the player is reattaching/rebuffering.
+
+**How it works:**
+- Capture: `AVPlayerItemVideoOutput` → pixel buffer → downscaled `UIImage`
+- Cache: in-memory (keyed by `mid`, short TTL)
+- Display: show cached frame + spinner until buffer/first-frame criteria are met
+
+**Logs:**
+```
+🖼️ [LAST FRAME] Captured for {mid} (onDisappear)
+🖼️ [LAST FRAME] Captured for {mid} (willResignActive)
+```
 
 ---
 

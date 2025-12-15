@@ -87,11 +87,18 @@ struct TweetItemBodyView: View {
             // MediaGrid to show attachment previews.
             if let attachments = tweet.attachments, !attachments.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
-                    MediaGridView(parentTweet: tweet, attachments: attachments, visibleTweetId: visibleTweetId ?? tweet.mid, isEmbedded: isEmbedded)
+                    MediaGridView(
+                        parentTweet: tweet,
+                        attachments: attachments,
+                        visibleTweetId: visibleTweetId ?? tweet.mid,
+                        isEmbedded: isEmbedded
+                    )
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .clipped()
                         .cornerRadius(8)
-                        .id("\(tweet.mid)_grid")
+                        // Include visibleTweetId + embedded flag to avoid duplicate identities when the same
+                        // original tweet is embedded in multiple retweets/quotes simultaneously.
+                        .id("\(visibleTweetId ?? tweet.mid)_\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
                         .padding(.top, 4)
                     
                     if let caption = singleVideoCaption(for: attachments) {

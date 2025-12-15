@@ -40,6 +40,21 @@ Network/Disk Cache
 
 **Location:** `Sources/Features/MediaViews/SimpleVideoPlayer.swift`
 
+### UX: Last-Frame Placeholder (MediaCell)
+
+To avoid brief black flashes during **background/foreground**, **layer reattachment**, or **buffering**, MediaCell now renders a **frozen “last displayed frame” placeholder** behind a spinner until playback is ready again.
+
+**Implementation (high level):**
+- Captures decoded frames using `AVPlayerItemVideoOutput` (works for both `.video` and `.hls_video`).
+- Stores a **downscaled** `UIImage` in an in-memory cache keyed by `mid` (short TTL + count limit).
+- On transitions (off-screen + background), captures once and reuses as placeholder on return.
+
+**Key logs:**
+```
+🖼️ [LAST FRAME] Captured for {mid} (onDisappear)
+🖼️ [LAST FRAME] Captured for {mid} (willResignActive)
+```
+
 ### Playback Modes
 
 ```swift
@@ -760,6 +775,7 @@ looping: false
 - Pause when scrolled off-screen
 - Muted by default
 - Only ONE video plays at a time
+- **Last-frame placeholder + spinner** during buffering/foreground recovery (prevents black flicker)
 
 ### TweetDetail (Detail View)
 
@@ -1125,6 +1141,7 @@ ffmpeg -i input.mp4 \
 ▶️ [VIDEO READY]          - Auto-playing video
 🔄 [APP USER READY]       - App initialization recovery
 ⚠️ [VIDEO RECOVERY]       - Background/foreground recovery
+🖼️ [LAST FRAME]           - Captured last rendered frame (placeholder for MediaCell)
 DEBUG: [PROGRESSIVE FETCH SUCCESS] - Network request completed
 ❌ [PROGRESSIVE CACHE MISS] - Cache miss, fetching from network
 ```
