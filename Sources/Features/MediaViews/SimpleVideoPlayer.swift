@@ -306,7 +306,7 @@ struct SimpleVideoPlayer: View {
                         // Portrait video: fit on full screen
                         videoPlayerView()
                             .aspectRatio(videoAR, contentMode: .fit)
-                            .frame(maxWidth: screenWidth, maxHeight: screenHeight)
+                            .frame(width: screenWidth, height: screenHeight, alignment: .center)
                     } else {
                         // Landscape video: rotate 90 degrees clockwise to fit on portrait device
                         ZStack {
@@ -315,8 +315,11 @@ struct SimpleVideoPlayer: View {
                                 .frame(maxWidth: screenWidth - 2, maxHeight: screenHeight - 2)
                                 .rotationEffect(.degrees(-90))
                                 .scaleEffect(screenHeight / screenWidth)
+                                // Force-center after background/foreground; transforms don't affect layout.
+                                .position(x: screenWidth / 2, y: screenHeight / 2)
                                 .background(Color.black)
                         }
+                        .frame(width: screenWidth, height: screenHeight, alignment: .center)
                     }
                 }
                 
