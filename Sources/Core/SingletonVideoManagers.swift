@@ -541,8 +541,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let hasSignificantBuffer = hasBufferedData && bufferedDuration >= 1.0
             let shouldShowSpinner = (isBufferEmpty && !hasSignificantBuffer) || isWaiting || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
             
-            NSLog("🔍 [FULLSCREEN WAITING] bufferEmpty: \(isBufferEmpty), likelyToKeepUp: \(isLikelyToKeepUp), waiting: \(isWaiting), hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDuration))s, status: \(itemStatus.rawValue), shouldShow: \(shouldShowSpinner)")
-            
             if shouldShowSpinner {
                 // Video is waiting for data - track if it was playing
                 if !self.wasPlayingBeforeWaiting && wasPlaying {

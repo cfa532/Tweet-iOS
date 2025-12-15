@@ -848,20 +848,25 @@ struct SimpleVideoPlayer: View {
                 }
             }
         } else {
-            // Video is no longer covered - resume if it was playing
+            // Video is no longer covered.
+            // If it was playing before it got covered (fullscreen/login/sheet), resume immediately
+            // (don't depend on VideoManager approval here, since sequential state can be stale/cleared).
             if isVisible, let player = player {
-                if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-                    if cachedState.wasPlaying {
-                        // Check if VideoManager approves playback
-                        let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
-                        if approved && shouldLoadVideo {
-                            print("▶️ [ACTUAL VISIBILITY] Resuming video \(mid) after overlay dismissed")
-                            player.isMuted = MuteState.shared.isMuted
-                            player.play()
-                            playbackState = .playing
-                        } else {
-                            print("⏳ [ACTUAL VISIBILITY] Video \(mid) was playing but not approved, won't resume")
-                        }
+                let wasPlayingBeforeCover = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+                let shouldResume = wasPlayingBeforeCover || playbackState == .playing
+                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+
+                if shouldResume && noDetailViewActive {
+                    if player.rate == 0 {
+                        print("▶️ [ACTUAL VISIBILITY] Resuming video \(mid) after overlay dismissed")
+                        player.isMuted = MuteState.shared.isMuted
+                        player.play()
+                    }
+                    playbackState = .playing
+                } else {
+                    // Otherwise, re-check playback conditions on uncover (VideoManager decides).
+                    if player.rate == 0 {
+                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                     }
                 }
             }
@@ -1853,8 +1858,12 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // SECOND: Check if we have cached content for this tweet
-        let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: mid)
+        // SECOND: Check if we have cached content for this tweet/media.
+        // Use parentTweetId for tweet-level caching/mapping; fall back to mid (mediaID).
+        let tweetIdForCaching = parentTweetId ?? mid
+        let hasCachedContent =
+            SharedAssetCache.shared.hasCachedContent(for: tweetIdForCaching) ||
+            SharedAssetCache.shared.hasCachedContent(for: mid)
         
         if hasCachedContent {
             NSLog("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, loading from cache in mode \(mode)")
@@ -1865,7 +1874,8 @@ struct SimpleVideoPlayer: View {
                 do {
                     NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer for \(mid)")
                     // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType)
+                    // Use tweetIdForCaching so SharedAssetCache can map tweetId -> mediaIDs (prevents VideoLoadingManager cancelling active videos)
+                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: tweetIdForCaching, mediaType: mediaType)
                     NSLog("DEBUG: [VIDEO SETUP] getOrCreatePlayer returned successfully for \(mid)")
                     
                     // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
@@ -1916,7 +1926,7 @@ struct SimpleVideoPlayer: View {
             do {
                 // Use shared cached player for all modes - simpler and more efficient
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: mid, mediaType: mediaType)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: tweetIdForCaching, mediaType: mediaType)
                 
                 
                 // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
@@ -2491,6 +2501,9 @@ struct SimpleVideoPlayer: View {
                             }
                             // Start playing automatically
                             player.play()
+                            if self.mode == .mediaCell {
+                                self.playbackState = .playing
+                            }
                             NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
                         } else if !actuallyVisible {
                             NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
@@ -2545,6 +2558,9 @@ struct SimpleVideoPlayer: View {
                                 NSLog("🔇 [PLAYER MUTE] First frame render - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
                             }
                             player.play()
+                            if self.mode == .mediaCell {
+                                self.playbackState = .playing
+                            }
                             NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (approved by VideoManager)")
                         } else if !actuallyVisible {
                             NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
@@ -2925,7 +2941,8 @@ struct SimpleVideoPlayer: View {
         let shouldCheckLoading = mode == .mediaCell ? shouldLoadVideo : true
         
         // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals or detail views)
-        let isActuallyVisibleOrFullscreen = mode != .mediaCell || visibilityManager?.isActuallyVisible ?? true
+        // Use synchronous visibility check (presentedViewController) to avoid timer lag.
+        let isActuallyVisibleOrFullscreen = mode != .mediaCell || (visibilityManager?.isCurrentlyVisible() ?? true)
         let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
         
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {

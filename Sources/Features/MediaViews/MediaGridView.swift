@@ -609,8 +609,14 @@ struct MediaGridView: View, Equatable {
             if let tweetId = notification.userInfo?["tweetId"] as? String,
                tweetId == parentTweet.mid {
                 print("DEBUG: [MediaGridView] Received cancel video loading notification for tweet \(tweetId)")
+                // Don't cancel loading for a tweet that is currently visible.
+                // Fullscreen/login overlays can confuse global visibility/cancellation heuristics.
+                guard !isVisible else {
+                    print("DEBUG: [MediaGridView] Ignoring cancelVideoLoading for visible tweet \(tweetId)")
+                    return
+                }
                 shouldLoadVideo = false
-                videoManager.stopSequentialPlayback()
+                // DON'T stop sequential playback here; it breaks resume after overlays.
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
@@ -628,6 +634,10 @@ struct MediaGridView: View, Equatable {
             // DON'T call videoManager.stopSequentialPlayback() - this clears state
             // Videos will be paused by SimpleVideoPlayer.handleStopAllVideos()
             // And resumed when audio session is restored
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .resumeMediaCellVideos)) { _ in
+            // Fullscreen dismissed: re-enable loading so visible MediaCell videos can resume.
+            shouldLoadVideo = true
         }
     }
 }

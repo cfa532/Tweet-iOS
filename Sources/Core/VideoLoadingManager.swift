@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 
 @MainActor
 class VideoLoadingManager: ObservableObject {
@@ -270,6 +271,14 @@ class VideoLoadingManager: ObservableObject {
     
     /// Process a batch of cancellations in background
     private func processCancellationBatch(_ tweetIds: [String]) async {
+        // If an overlay (fullscreen, login sheet, etc.) is presented, skip cancellations.
+        // Cancelling during overlays can stop videos that should resume after dismissal.
+        let isCovered = await MainActor.run { self.isContentCoveredByOverlay() }
+        if isCovered {
+            print("DEBUG: [VideoLoadingManager] Content covered by overlay, skipping cancellation batch (\(tweetIds.count) tweets)")
+            return
+        }
+
         for tweetId in tweetIds {
             // Check if tweet has cached content before cancelling
             let hasCachedContent = await MainActor.run {
@@ -297,6 +306,18 @@ class VideoLoadingManager: ObservableObject {
             
             // No artificial delay - process videos as fast as the system allows
         }
+    }
+
+    /// Returns true when a modal/sheet/fullscreen cover is presented over the app content.
+    @MainActor
+    private func isContentCoveredByOverlay() -> Bool {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) else {
+            return false
+        }
+        return window.rootViewController?.presentedViewController != nil
     }
     
     private func isLoadingTooFrequently() -> Bool {
