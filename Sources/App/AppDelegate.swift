@@ -7,7 +7,10 @@ import ffmpegkit
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
-    static var isVideoInfrastructureReady = true // Public flag for videos to check
+    /// Public flag for video views to decide whether to attempt recovery/play.
+    /// During long background recovery we restart LocalHTTPServer + clear players asynchronously; attempting
+    /// to recover/play while this is in-flight causes "zombie" players (nil currentItem / NaN time).
+    static var isVideoInfrastructureReady = true
     
     // Loading overlay window for server restart
     private var loadingWindow: UIWindow?
@@ -239,6 +242,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         return
                     }
                     
+                    AppDelegate.isVideoInfrastructureReady = false
                     SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                     
                     // Show loading indicator (non-blocking - allows user to scroll)
@@ -252,6 +256,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         // Hide loading indicator and notify visible videos to reload
                         await MainActor.run {
                             self.hideLoadingOverlay()
+                            AppDelegate.isVideoInfrastructureReady = true
                             // Post notification for ONLY visible videos to reload
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
@@ -279,6 +284,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             return
                         }
                         
+                        AppDelegate.isVideoInfrastructureReady = false
                         SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                         
                         // Show loading indicator (non-blocking)
@@ -292,6 +298,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             // Hide loading indicator and notify visible videos to reload
                             await MainActor.run {
                                 self.hideLoadingOverlay()
+                                AppDelegate.isVideoInfrastructureReady = true
                                 // Post notification for ONLY visible videos to reload
                                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                                 print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
@@ -398,6 +405,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 
                 // Show loading indicator (non-blocking - allows user to scroll)
                 showLoadingOverlay()
+                AppDelegate.isVideoInfrastructureReady = false
                 
                 // Restart infrastructure asynchronously (non-blocking)
                 // Videos will show loading state until server is ready, but UI remains interactive
@@ -408,6 +416,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     // Hide loading indicator and notify visible videos to reload
                     await MainActor.run {
                         self.hideLoadingOverlay()
+                        AppDelegate.isVideoInfrastructureReady = true
                         // Post notification for ONLY visible videos to reload
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                         NSLog("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
@@ -416,6 +425,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             } else {
                 // SHORT background (<5min) - simple approach: always clear and let videos recreate
                 NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players for clean state")
+                AppDelegate.isVideoInfrastructureReady = false
                 
                 // Always clear players for predictable recovery
                 // Trying to keep them "intact" creates too many edge cases
@@ -431,6 +441,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 }
                 
                 NSLog("✅ [AppDelegate] Short background recovery complete - players cleared")
+                AppDelegate.isVideoInfrastructureReady = true
                 
                 // Post notification for ONLY visible videos to reload
                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
@@ -447,6 +458,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             } else {
                 NSLog("✅ [AppDelegate] Server already running - no recovery needed")
             }
+            AppDelegate.isVideoInfrastructureReady = true
         }
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers

@@ -188,6 +188,41 @@ enum VideoFrameExtractor {
             image.draw(in: CGRect(origin: .zero, size: targetSize))
         }
     }
+
+    /// Heuristic guard: treat near-black frames as invalid placeholders.
+    /// This prevents overwriting a good cached last frame with a black capture that can happen during app transitions.
+    static func isMostlyBlack(_ image: UIImage, luminanceThreshold: Float = 0.05) -> Bool {
+        // If we can't analyze, don't block caching.
+        guard let cgImage = image.cgImage else { return false }
+
+        let ciImage = CIImage(cgImage: cgImage)
+        let extent = ciImage.extent
+        guard extent.width > 0, extent.height > 0 else { return false }
+        guard let filter = CIFilter(name: "CIAreaAverage") else { return false }
+
+        filter.setValue(ciImage, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(cgRect: extent), forKey: kCIInputExtentKey)
+        guard let outputImage = filter.outputImage else { return false }
+
+        var pixel: [UInt8] = [0, 0, 0, 0] // RGBA
+        ciContext.render(
+            outputImage,
+            toBitmap: &pixel,
+            rowBytes: 4,
+            bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+
+        let a = Float(pixel[3]) / 255.0
+        if a < 0.1 { return false }
+
+        let r = Float(pixel[0]) / 255.0
+        let g = Float(pixel[1]) / 255.0
+        let b = Float(pixel[2]) / 255.0
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return luminance < luminanceThreshold
+    }
 }
 
 // MARK: - Unified Simple Video Player
@@ -358,6 +393,9 @@ struct SimpleVideoPlayer: View {
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
             .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
             .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
+            .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in
+                handleReloadVisibleVideosOnly()
+            }
             .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in handleWillResignActive() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
@@ -1015,6 +1053,29 @@ struct SimpleVideoPlayer: View {
     
     private func handleWillEnterForeground() {
         print("DEBUG: [VIDEO FOREGROUND] App will enter foreground for \(mid)")
+        // For MediaCell, AppDelegate always clears players and then posts `.reloadVisibleVideosOnly`
+        // (short background, long background, and some screen-lock recoveries).
+        // Running `recoverFromBackground()` here causes duplicate recreations (double getOrCreatePlayer)
+        // and extra churn; instead defer to `.reloadVisibleVideosOnly` for visible MediaCell videos.
+        if mode == .mediaCell, didEnterBackground {
+            print("DEBUG: [VIDEO FOREGROUND] MediaCell background cycle; deferring recovery to reloadVisibleVideosOnly for \(mid)")
+            // Don't detach here. Detaching shows the explicit "Video paused" overlay, which is confusing.
+            // We already have a last-frame + spinner placeholder for MediaCell while the player reloads.
+            isPlayerDetached = false
+            // Prevent didBecomeActive from running recovery again in the same cycle.
+            hasRecoveredThisCycle = true
+            return
+        }
+
+        // For non-MediaCell contexts (detail/fullscreen) and screen-lock cycles (no didEnterBackground),
+        // recover immediately.
+        if !AppDelegate.isVideoInfrastructureReady {
+            print("DEBUG: [VIDEO FOREGROUND] Infrastructure not ready yet; deferring recovery for \(mid)")
+            // Same reasoning: rely on last-frame/spinner placeholders instead of "paused" overlay.
+            isPlayerDetached = false
+            return
+        }
+
         recoverFromBackground()
     }
     
@@ -1497,6 +1558,17 @@ struct SimpleVideoPlayer: View {
                 }
             }
         }
+
+        // Even if the video *wasn't* playing before backgrounding, it may now be visible and should autoplay.
+        // This fixes the case where the app returns to foreground with a visible MediaCell video that should play,
+        // but `cachedState.wasPlaying` is false so we never call play().
+        if mode == .mediaCell, isVisible, isActuallyVisible {
+            Task { @MainActor in
+                // Give SwiftUI/AVPlayerLayer a beat to reattach before evaluating autoplay.
+                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
+                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
+            }
+        }
         
         // Reset background flag after recovery to prevent stale flags from affecting future visibility changes
         didEnterBackground = false
@@ -1590,6 +1662,56 @@ struct SimpleVideoPlayer: View {
                     playbackState = .playing
                 }
             }
+        }
+    }
+
+    /// AppDelegate posts `.reloadVisibleVideosOnly` after long background / screen-lock recovery.
+    /// At that time SharedAssetCache may have cleared player items AFTER our own foreground recovery ran,
+    /// so we must revalidate and recreate *visible* MediaCell players here.
+    @MainActor
+    private func handleReloadVisibleVideosOnly() {
+        guard mode == .mediaCell else { return }
+        guard isVisible, isActuallyVisible else { return }
+
+        print("DEBUG: [VIDEO RELOAD VISIBLE] Reload requested for visible video \(mid)")
+
+        // Ensure we don't get stuck showing the explicit "Video paused" overlay.
+        // Visible videos should either show last-frame/spinner placeholders or the player itself.
+        isPlayerDetached = false
+
+        // If we're already loading, don't thrash.
+        if loadingState.isLoading {
+            print("DEBUG: [VIDEO RELOAD VISIBLE] Already loading \(mid), skipping")
+            return
+        }
+
+        let itemMissing = (player?.currentItem == nil)
+        let timeInvalid = !(player?.currentTime().seconds.isFinite ?? true)
+        let broken = itemMissing || timeInvalid || isPlayerBroken()
+
+        if broken {
+            print("⚠️ [VIDEO RELOAD VISIBLE] Player missing/broken for \(mid) (itemMissing: \(itemMissing), timeInvalid: \(timeInvalid)) - recreating")
+
+            // Clean up time observer if attached.
+            if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+                observerPlayer.removeTimeObserver(observer)
+            }
+            timeObserver = nil
+            timeObserverPlayer = nil
+
+            // Force fresh creation.
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            player?.pause()
+            player = nil
+            loadingState = .idle
+            playbackState = .notStarted
+
+            setupPlayer()
+            representableId += 1
+        } else {
+            // Player is intact; still refresh the layer and re-evaluate autoplay.
+            representableId += 1
+            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
         }
     }
     
@@ -1936,6 +2058,15 @@ struct SimpleVideoPlayer: View {
             guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else {
                 if reason == "willResignActive" {
                     print("🖼️ [LAST FRAME] Skip (image conversion failed) for \(mid) (\(reason))")
+                }
+                return
+            }
+
+            // Guard against black placeholder captures (common during backgrounding/transition frames).
+            // If the capture is mostly black, keep the previous cached frame instead of overwriting it.
+            if VideoFrameExtractor.isMostlyBlack(image) {
+                if reason == "willResignActive" {
+                    print("🖼️ [LAST FRAME] Skip (mostly black) for \(mid) (\(reason))")
                 }
                 return
             }
@@ -3143,9 +3274,35 @@ struct SimpleVideoPlayer: View {
     }
     
     private func checkPlaybackConditions(autoPlay: Bool, isVisible: Bool) {
-        
-        // Validate player state before attempting playback
-        if let player = player, let playerItem = player.currentItem {
+        // Validate player state before attempting playback.
+        // IMPORTANT: After long background, AppDelegate may clear players asynchronously which can leave
+        // `player` non-nil but `currentItem == nil` / invalid time. Treat that as broken and recreate.
+        if let player = player {
+            guard let playerItem = player.currentItem else {
+                if !loadingState.isLoading {
+                    NSLog("⚠️ [VIDEO VALIDATION] Player has no currentItem for \(mid) - recreating")
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    self.player = nil
+                    loadingState = .idle
+                    playbackState = .notStarted
+                    setupPlayer()
+                }
+                return
+            }
+
+            let currentSeconds = player.currentTime().seconds
+            if !currentSeconds.isFinite {
+                if !loadingState.isLoading {
+                    NSLog("⚠️ [VIDEO VALIDATION] Player currentTime is invalid (\(currentSeconds)) for \(mid) - recreating")
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    self.player = nil
+                    loadingState = .idle
+                    playbackState = .notStarted
+                    setupPlayer()
+                }
+                return
+            }
+
             if playerItem.status == .failed {
                 NSLog("DEBUG: [VIDEO VALIDATION] Player item is in failed state for \(mid), triggering recovery")
                 handleError(strategy: .loadFailure)
