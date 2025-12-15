@@ -228,7 +228,7 @@ struct TweetItemView: View, Equatable {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, visibleTweetId: tweet.mid)
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
@@ -255,7 +255,7 @@ struct TweetItemView: View, Equatable {
                                 .padding(.trailing, -24)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         EmbeddedTweetView(
@@ -263,8 +263,7 @@ struct TweetItemView: View, Equatable {
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
                             backgroundColor: Color(.systemGray4).opacity(0.6),
-                            isEmbedded: true,
-                            visibleTweetId: tweet.mid
+                            isEmbedded: true
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
@@ -304,7 +303,7 @@ struct TweetItemView: View, Equatable {
                     
                     // Show tweet content if available
                     if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                     }
                     
                     // Placeholder for embedded tweet
@@ -361,7 +360,7 @@ struct TweetItemView: View, Equatable {
                             .padding(.trailing, -24)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
+                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
@@ -398,9 +397,6 @@ struct EmbeddedTweetView: View, Equatable {
     var onTap: ((Tweet) -> Void)? = nil
     var backgroundColor: Color = Color(.systemBackground)
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
-    /// The ID of the visible tweet in the feed (e.g. retweet/quote container).
-    /// Used to keep media identity stable and navigation anchored to the visible tweet.
-    var visibleTweetId: String? = nil
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -434,7 +430,7 @@ struct EmbeddedTweetView: View, Equatable {
             tweet.isVisible = false
         }
         // Add identity for embedded tweets
-        .id("embedded_\(tweet.mid)_\(visibleTweetId ?? "self")")
+        .id("embedded_\(tweet.mid)")
     }
     
     private var embeddedContent: some View {
@@ -460,7 +456,6 @@ struct EmbeddedTweetView: View, Equatable {
                     tweet: tweet,
                     enableTap: false,
                     isVisible: isVisible,
-                    visibleTweetId: visibleTweetId ?? tweet.mid,
                     isEmbedded: isEmbedded
                 )
             }
@@ -474,7 +469,6 @@ struct EmbeddedTweetView: View, Equatable {
         return lhs.tweet.mid == rhs.tweet.mid &&
                lhs.isPinned == rhs.isPinned &&
                lhs.backgroundColor == rhs.backgroundColor &&
-               lhs.isEmbedded == rhs.isEmbedded &&
-               lhs.visibleTweetId == rhs.visibleTweetId
+               lhs.isEmbedded == rhs.isEmbedded
     }
 }

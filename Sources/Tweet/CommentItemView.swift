@@ -61,7 +61,7 @@ struct CommentItemView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
-                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible, visibleTweetId: comment.mid)
+                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
                 
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
                     .padding(.top, 8)

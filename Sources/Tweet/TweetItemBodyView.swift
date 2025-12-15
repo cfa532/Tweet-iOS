@@ -17,7 +17,6 @@ struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
     var enableTap: Bool = false
     var isVisible: Bool = true
-    var visibleTweetId: String? = nil // The ID of the visible tweet in feed (for retweets)
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
     @State private var isExpanded = false
     @State private var showLoginSheet = false
@@ -90,15 +89,12 @@ struct TweetItemBodyView: View {
                     MediaGridView(
                         parentTweet: tweet,
                         attachments: attachments,
-                        visibleTweetId: visibleTweetId ?? tweet.mid,
                         isEmbedded: isEmbedded
                     )
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .clipped()
                         .cornerRadius(8)
-                        // Include visibleTweetId + embedded flag to avoid duplicate identities when the same
-                        // original tweet is embedded in multiple retweets/quotes simultaneously.
-                        .id("\(visibleTweetId ?? tweet.mid)_\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
+                        .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
                         .padding(.top, 4)
                     
                     if let caption = singleVideoCaption(for: attachments) {
