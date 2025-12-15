@@ -84,14 +84,38 @@ class VideoStateCache {
             return nil
         }
         
-        // Validate player is still valid
+        // Validate player is still valid.
+        //
+        // IMPORTANT: AppDelegate background recovery may clear `currentItem` to force recreation.
+        // In that case, we MUST keep the cached playback time so we can resume after recreating the player.
         if cachedState.player.currentItem == nil || cachedState.player.currentItem?.status == .failed {
-            print("DEBUG: [VIDEO CACHE] Cached player for \(mid) is invalid, clearing")
-            cache.removeValue(forKey: mid)
+            print("DEBUG: [VIDEO CACHE] Cached player for \(mid) is invalid (keeping playback info)")
             return nil
         }
         
         return (player: cachedState.player, time: cachedState.time, wasPlaying: cachedState.wasPlaying, originalMuteState: cachedState.originalMuteState)
+    }
+
+    /// Returns cached playback info even if the cached player is no longer valid.
+    ///
+    /// This is important for background recovery: AppDelegate may clear/replace player items
+    /// (making cachedState.player.currentItem nil) but we still want to resume from the last known time.
+    func getCachedPlaybackInfo(for mid: String) -> (time: CMTime, wasPlaying: Bool)? {
+        guard let cachedState = cache[mid] else { return nil }
+
+        // Expire old entries; this is still safe to clear.
+        let age = Date().timeIntervalSince(cachedState.timestamp)
+        if age > cacheExpirationInterval {
+            print("DEBUG: [VIDEO CACHE] Playback info for \(mid) is stale (age: \(age)s), clearing")
+            cache.removeValue(forKey: mid)
+            return nil
+        }
+
+        return (time: cachedState.time, wasPlaying: cachedState.wasPlaying)
+    }
+
+    func hasCachedPlaybackInfo(for mid: String) -> Bool {
+        return getCachedPlaybackInfo(for: mid) != nil
     }
     
     func clearCache(for mid: String) {
@@ -283,6 +307,48 @@ struct SimpleVideoPlayer: View {
     @State private var videoOutputAttachedItem: AVPlayerItem?
     @State private var lastFrameCaptureAt: Date = .distantPast
     @State private var lastFrameVersion: Int = 0 // bumps when we store a new frame (forces view update)
+
+    // MARK: - Resume helpers (MediaCell)
+    /// Start playback, resuming from cached time when appropriate.
+    ///
+    /// For short background: AppDelegate clears players, we recreate them; to avoid restarting from 0
+    /// we seek to the cached time *if the video was playing* before background.
+    @MainActor
+    private func playWithResumeIfNeeded(_ player: AVPlayer) {
+        guard mode == .mediaCell else {
+            player.play()
+            return
+        }
+
+        // If we have a cached playback time (e.g. short background where player was cleared),
+        // resume from it when auto-playing. Don't rely on `wasPlaying` here because AVPlayer.rate
+        // can be 0 during buffering/background transitions even if the user considers it "playing".
+        guard let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) else {
+            player.play()
+            return
+        }
+
+        let targetSeconds = info.time.seconds
+        guard targetSeconds.isFinite, targetSeconds > 0.25 else {
+            player.play()
+            return
+        }
+
+        let currentSeconds = player.currentTime().seconds
+        if currentSeconds.isFinite, abs(currentSeconds - targetSeconds) <= 0.25 {
+            player.play()
+            return
+        }
+
+        NSLog("🔄 [RESUME] Seeking to cached time \(String(format: "%.2f", targetSeconds))s before play for \(mid)")
+        player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+            guard finished else {
+                player.play()
+                return
+            }
+            player.play()
+        }
+    }
     
     private let progressiveBufferTargets: [Double] = [8.0, 12.0, 18.0, 24.0, 30.0]
     /// Minimum buffered seconds required before we consider the first frame renderable.
@@ -979,7 +1045,7 @@ struct SimpleVideoPlayer: View {
             // If it was playing before it got covered (fullscreen/login/sheet), resume immediately
             // (don't depend on VideoManager approval here, since sequential state can be stale/cleared).
             if isVisible, let player = player {
-                let wasPlayingBeforeCover = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+                let wasPlayingBeforeCover = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
                 let shouldResume = wasPlayingBeforeCover || playbackState == .playing
                 let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
@@ -1118,7 +1184,7 @@ struct SimpleVideoPlayer: View {
                     // Remove from SharedAssetCache
                     SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
                     
-                    let wasPlaying = VideoStateCache.shared.getCachedState(for: self.mid)?.wasPlaying ?? false
+                    let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: self.mid)?.wasPlaying ?? false
                     
                     player.pause()
                     self.player = nil
@@ -1259,7 +1325,7 @@ struct SimpleVideoPlayer: View {
             // Remove from SharedAssetCache
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
             
-            let wasPlaying = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
             let currentTime = player?.currentTime() ?? .zero
             
             player?.pause()
@@ -1366,7 +1432,7 @@ struct SimpleVideoPlayer: View {
             timeObserver = nil
             timeObserverPlayer = nil
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
-            let wasPlaying = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
             player.pause()
             self.player = nil
             loadingState = .idle
@@ -1389,7 +1455,7 @@ struct SimpleVideoPlayer: View {
             timeObserver = nil
             timeObserverPlayer = nil
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
-            let wasPlaying = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
             player.pause()
             self.player = nil
             loadingState = .idle
@@ -1406,7 +1472,7 @@ struct SimpleVideoPlayer: View {
         // Instead, do a delayed health check and only refresh the view if the player appears "stuck"
         // (common symptom of stale AVPlayerLayer after background).
         if mode == .mediaCell && backgroundedThisCycle {
-            let wasPlayingBeforeBackground = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            let wasPlayingBeforeBackground = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
             
             Task { @MainActor in
                 // Give iOS a moment to re-wire the underlying layer pipeline after foregrounding.
@@ -1585,7 +1651,7 @@ struct SimpleVideoPlayer: View {
             // Check if player exists OR if currentItem is nil (cleared by clearVideoPlayersForBackgroundRecovery)
             let hadPlayer = player != nil
             let currentItemIsNil = player?.currentItem == nil
-            let wasInCache = VideoStateCache.shared.getCachedState(for: mid) != nil
+            let wasInCache = VideoStateCache.shared.hasCachedPlaybackInfo(for: mid)
             
             // Force recreate if: player exists, OR currentItem is nil (was cleared), OR was in cache
             if hadPlayer || currentItemIsNil || wasInCache {
@@ -1650,7 +1716,7 @@ struct SimpleVideoPlayer: View {
             print("DEBUG: [VIDEO INFRA RESTART] Non-MediaCell healthy - refresh view")
             representableId += 1
             
-            if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            if let cachedState = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
                 let shouldResume = cachedState.wasPlaying && (shouldLoadVideo || mode == .tweetDetail || mode == .mediaBrowser)
                 if shouldResume && player?.rate == 0 {
                     // CRITICAL: Always ensure muteState is correct before playing
@@ -2310,8 +2376,7 @@ struct SimpleVideoPlayer: View {
         
         // Validate cached player before using it
         guard let playerItem = cachedState.player.currentItem else {
-            NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player has no currentItem, clearing cache and creating new player for \(mid)")
-            VideoStateCache.shared.clearCache(for: mid)
+            NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player has no currentItem; keeping playback info and creating new player for \(mid)")
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
             loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
@@ -2321,8 +2386,7 @@ struct SimpleVideoPlayer: View {
         
         // Check if player item is in a failed state
         if playerItem.status == .failed {
-            NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item is in failed state, clearing cache and creating new player for \(mid)")
-            VideoStateCache.shared.clearCache(for: mid)
+            NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item is in failed state; keeping playback info and creating new player for \(mid)")
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
             loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
@@ -2349,8 +2413,7 @@ struct SimpleVideoPlayer: View {
                     NSLog("DEBUG: [VIDEO CACHE] ⚠️ Player status not ready yet (status: \(playerItem.status.rawValue)) but HAS buffered data - will use it for MediaCell")
                 } else if playerItem.status == .failed {
                     // Only clear cache if player has FAILED, not if it's just loading
-                    NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item FAILED for MediaCell, clearing cache and creating new player for \(mid)")
-                    VideoStateCache.shared.clearCache(for: mid)
+                    NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item FAILED for MediaCell; keeping playback info and creating new player for \(mid)")
                     SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
                     loadingState = .idle  // Reset loading state before recreating
                     setupPlayer()
@@ -2647,20 +2710,19 @@ struct SimpleVideoPlayer: View {
         let time = CMTime(seconds: 2.0, preferredTimescale: timeScale)
         
         timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { [mid] time in
-            // Cache/update player state periodically when ready
-            if let playerItem = player.currentItem,
-               playerItem.status == .readyToPlay,
-               !playerItem.loadedTimeRanges.isEmpty {
-                let currentTime = player.currentTime()
-                let wasPlaying = player.rate > 0
-                VideoStateCache.shared.cacheVideoState(
-                    for: mid,
-                    player: player,
-                    time: currentTime,
-                    wasPlaying: wasPlaying,
-                    originalMuteState: player.isMuted
-                )
-            }
+            // Cache/update playback time periodically.
+            // Don't require loadedTimeRanges; HLS can advance time before ranges populate reliably.
+            guard player.currentItem != nil else { return }
+            let currentTime = player.currentTime()
+            guard currentTime.seconds.isFinite, currentTime.seconds > 0 else { return }
+            let wasPlaying = player.rate > 0
+            VideoStateCache.shared.cacheVideoState(
+                for: mid,
+                player: player,
+                time: currentTime,
+                wasPlaying: wasPlaying,
+                originalMuteState: player.isMuted
+            )
         }
         
         // Store reference to the player that added this observer
@@ -2848,7 +2910,7 @@ struct SimpleVideoPlayer: View {
                             }
                             // Start playing automatically
                             if player.rate == 0 {
-                                player.play()
+                                self.playWithResumeIfNeeded(player)
                             }
                             if self.mode == .mediaCell {
                                 self.playbackState = .playing
@@ -2905,7 +2967,7 @@ struct SimpleVideoPlayer: View {
                                 player.isMuted = MuteState.shared.isMuted
                                 NSLog("🔇 [PLAYER MUTE] First frame render - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
                             }
-                            player.play()
+                            self.playWithResumeIfNeeded(player)
                             if self.mode == .mediaCell {
                                 self.playbackState = .playing
                             }
@@ -2976,7 +3038,7 @@ struct SimpleVideoPlayer: View {
                             player.isMuted = MuteState.shared.isMuted
                             NSLog("🔇 [PLAYER MUTE] Initial check ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
                         }
-                        player.play()
+                        self.playWithResumeIfNeeded(player)
                         NSLog("▶️ [VIDEO SETUP] Already ready - auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
                     } else {
                         NSLog("⏸️ [VIDEO SETUP] NOT auto-playing \(mid) - not approved by VideoManager")
@@ -3358,7 +3420,7 @@ struct SimpleVideoPlayer: View {
             // Note: `restoreFromCache` seeks to cachedState.time but marks playbackState as `.notStarted`
             // so we must not blindly seek to `.zero` here, or we'd erase the resume position.
             if mode == .mediaCell && playbackState == .notStarted {
-                let cachedTime = VideoStateCache.shared.getCachedState(for: mid)?.time ?? .zero
+                let cachedTime = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.time ?? .zero
                 let resumeSeconds = cachedTime.seconds.isFinite ? cachedTime.seconds : 0
                 let shouldResume = resumeSeconds > 0.25
 
@@ -3496,8 +3558,20 @@ struct SimpleVideoPlayer: View {
         }
         
         // Store current state for later restoration
-        let wasPlaying = player.rate > 0
-        let currentTime = player.currentTime()
+        // AVPlayer.rate can be 0 while buffering; use our logical playbackState too.
+        let wasPlaying = (player.rate > 0) || (playbackState == .playing)
+        let rawTime = player.currentTime()
+        // Fallback: if player.currentTime reports 0/invalid at resign-active,
+        // use the last cached playback time (kept even when players are cleared on foreground).
+        let cachedTime = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.time ?? .zero
+        let currentTime: CMTime
+        if rawTime.seconds.isFinite, rawTime.seconds > 0.25 {
+            currentTime = rawTime
+        } else if cachedTime.seconds.isFinite, cachedTime.seconds > 0.25 {
+            currentTime = cachedTime
+        } else {
+            currentTime = rawTime.seconds.isFinite ? rawTime : .zero
+        }
         
         print("DEBUG: [VIDEO BACKGROUND] Caching state for \(mid) - wasPlaying: \(wasPlaying), time: \(CMTimeGetSeconds(currentTime))")
         
