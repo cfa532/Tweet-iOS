@@ -3434,7 +3434,6 @@ struct SimpleVideoPlayer: View {
                 let cachedInfo = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)
                 let hasCachedPosition = cachedInfo != nil
                 let cachedTime = cachedInfo?.time ?? .zero
-                let cachedWasPlaying = cachedInfo?.wasPlaying ?? false
                 
                 let currentSeconds = player?.currentTime().seconds ?? 0
                 let duration = player?.currentItem?.duration.seconds ?? 0
