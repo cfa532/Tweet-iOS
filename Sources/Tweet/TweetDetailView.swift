@@ -427,7 +427,7 @@ struct TweetDetailView: View {
             }
         }
         .onAppear {
-
+            
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
@@ -445,7 +445,7 @@ struct TweetDetailView: View {
 
             // Mark detail view as inactive
             NavigationStateManager.shared.setDetailViewActive(false)
-
+            
             // CRITICAL: Stop video playback immediately when navigating away
             // This ensures video doesn't keep playing in background when user leaves detail view
             DetailVideoManager.shared.clearCurrentVideo()

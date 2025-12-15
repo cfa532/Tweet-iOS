@@ -1187,9 +1187,10 @@ struct SimpleVideoPlayer: View {
                         // Restore position and resume if was playing
                         if wasPlaying && CMTimeGetSeconds(currentTime) > 0 {
                             player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                                if finished {
+                                guard finished else { return }
+                                Task { @MainActor in
                                     // Resume playback if was playing
-                                    // For MediaCell, check VideoManager approval AND no overlays active
+                                    // For MediaCell, check VideoManager approval AND no overlays/detail active
                                     if self.mode == .mediaCell {
                                         player.isMuted = MuteState.shared.isMuted
                                         let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
@@ -2920,7 +2921,7 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals or detail views)
         let isActuallyVisibleOrFullscreen = mode != .mediaCell || visibilityManager?.isActuallyVisible ?? true
         let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
-
+        
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {
             
             // CRITICAL: For sequential playback, check with VideoManager before playing
