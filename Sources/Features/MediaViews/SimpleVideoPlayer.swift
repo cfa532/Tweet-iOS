@@ -2532,7 +2532,8 @@ struct SimpleVideoPlayer: View {
                         let managerApproved = self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
                         // Use synchronous check as backup in case binding update is slow
                         let actuallyVisible = self.mode != .mediaCell || self.visibilityManager?.isCurrentlyVisible() ?? true
-                        let shouldPlay = shouldAutoPlay && managerApproved && actuallyVisible
+                        let noDetailViewActive = self.mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
+                        let shouldPlay = shouldAutoPlay && managerApproved && actuallyVisible && noDetailViewActive
                         
                         if shouldPlay && player.rate == 0 {
                             // CRITICAL: Always ensure muteState is correct before playing in MediaCell
@@ -2544,6 +2545,8 @@ struct SimpleVideoPlayer: View {
                             NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (approved by VideoManager)")
                         } else if !actuallyVisible {
                             NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
+                        } else if !noDetailViewActive {
+                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - detail view active")
                         } else if !shouldPlay {
                             NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - waiting for approval from VideoManager")
                             // First frame will render when player is ready, no need to play()
