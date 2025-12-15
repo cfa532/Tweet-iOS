@@ -89,8 +89,12 @@ class PersistentVideoStateManager: ObservableObject {
             return false
         }
         
-        // Only restore if context matches (prevents restoring fullscreen state in detail view, etc.)
-        guard state.context == context else {
+        // Allow cross-context restoration: mediaCell -> detailView or fullScreen
+        // This allows videos to continue from where they were playing in the feed when opened in detail/fullscreen
+        let contextMatches = state.context == context || 
+            (state.context == .mediaCell && (context == .detailView || context == .fullScreen))
+        
+        guard contextMatches else {
             print("⚠️ [VIDEO STATE] Context mismatch for \(videoMid): saved=\(state.context.rawValue), current=\(context.rawValue)")
             return false
         }

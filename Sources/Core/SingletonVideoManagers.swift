@@ -251,6 +251,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var loadedTimeRangesObserver: NSKeyValueObservation?
     private var itemStatusObserver: NSKeyValueObservation?
     private var wasPlayingBeforeWaiting = false
+    private var hasRestoredPosition = false // Track if we've restored position from saved state
+    private var isSeekingToRestoredPosition = false // Track if we're currently seeking to restored position
 
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var loadGeneration: Int = 0
@@ -295,6 +297,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         loadGeneration += 1
         let generation = loadGeneration
         loadingMid = mid
+        hasRestoredPosition = false // Reset restoration flag when loading new video
+        isSeekingToRestoredPosition = false // Reset seeking flag
         
         // Remove old observer if exists
         if let observer = videoCompletionObserver {
@@ -484,8 +488,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         print("DEBUG: [FullScreenVideoManager] Player item ready immediately, checking for saved position")
                         
                         // Check for saved position and restore it
-                        if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
-                           let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid) {
+                        let shouldRestore = PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen)
+                        let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid)
+                        print("🔍 [FullScreenVideoManager] Checking saved state for \(mid): shouldRestore=\(shouldRestore), savedState=\(savedState != nil ? "exists (time=\(savedState!.currentTime.seconds)s)" : "nil")")
+                        
+                        if shouldRestore, let savedState = savedState {
                             print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
                             
                             self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
@@ -502,6 +509,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                 }
                             }
                         } else {
+                            print("⚠️ [FullScreenVideoManager] No saved state to restore, starting from beginning")
                             // No saved state, check position and rewind if at end before playing
                             self.checkAndRewindIfAtEnd {
                                 self.singletonPlayer?.play()
@@ -552,6 +560,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         itemStatusObserver?.invalidate()
         itemStatusObserver = nil
         wasPlayingBeforeWaiting = false
+        hasRestoredPosition = false // Reset restoration flag when setting up new observers
+        isSeekingToRestoredPosition = false // Reset seeking flag
         
         guard let player = singletonPlayer, let playerItem = player.currentItem else {
             NSLog("⚠️ [FULLSCREEN WAITING] Cannot setup observer - no player or playerItem")
@@ -610,6 +620,51 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 let isReadyToPlay = itemStatus == .readyToPlay
                 let isNotPlaying = player.rate == 0
                 let wantsToPlay = self.isPlaying || self.wasPlayingBeforeWaiting
+                
+                // CRITICAL: Check for saved state and restore position BEFORE playing
+                if !self.hasRestoredPosition && !self.isSeekingToRestoredPosition && isReadyToPlay && hasEnoughBuffer {
+                    if let videoMid = self.currentVideoMid,
+                       PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen),
+                       let savedState = PersistentVideoStateManager.shared.getState(videoMid: videoMid) {
+                        NSLog("🔄 [FULLSCREEN DATA READY] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
+                        // Mark as seeking to prevent multiple attempts and prevent playing
+                        self.isSeekingToRestoredPosition = true
+                        
+                        player.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                            guard finished, let self = self else { return }
+                            Task { @MainActor in
+                                NSLog("✅ [FULLSCREEN DATA READY] Restored position to \(savedState.currentTime.seconds)s")
+                                
+                                // Mark as restored and clear seeking flag
+                                self.hasRestoredPosition = true
+                                self.isSeekingToRestoredPosition = false
+                                
+                                // Now play if it was playing before
+                                if savedState.wasPlaying {
+                                    player.play()
+                                    self.isPlaying = true
+                                    NSLog("▶️ [FULLSCREEN DATA READY] Resumed playback from saved position")
+                                }
+                                self.wasPlayingBeforeWaiting = false
+                            }
+                        }
+                        return // CRITICAL: Don't play yet, wait for seek to complete
+                    } else {
+                        // No saved state to restore, mark as restored so we don't check again
+                        self.hasRestoredPosition = true
+                        NSLog("🔍 [FULLSCREEN DATA READY] No saved state found, will play from beginning")
+                    }
+                }
+                
+                // Don't play if we're currently seeking to restored position
+                if self.isSeekingToRestoredPosition {
+                    return // Still waiting for seek to complete
+                }
+                
+                // Only play if we've already restored position (or there was no saved state)
+                if !self.hasRestoredPosition {
+                    return // Still waiting for restoration
+                }
                 
                 // If we want to play, have data, and player is not playing, resume
                 if wantsToPlay && isReadyToPlay && hasEnoughBuffer && isNotPlaying {

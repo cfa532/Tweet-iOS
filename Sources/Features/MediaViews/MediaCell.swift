@@ -287,10 +287,40 @@ struct MediaCell: View, Equatable {
         isPreloading = false
     }
     
+    private func saveVideoPositionForFullscreen() {
+        // Save current playback position before opening fullscreen
+        // This allows the video to continue from where it was playing in the cell
+        // Get the current time directly from the cached player (more accurate than cached playback info)
+        if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid) {
+            let currentTime = cachedState.player.currentTime()
+            let wasPlaying = cachedState.player.rate > 0
+            
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .fullScreen
+            )
+            print("💾 [MediaCell] Saved video position before opening fullscreen: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+        } else if let playbackInfo = VideoStateCache.shared.getCachedPlaybackInfo(for: attachment.mid) {
+            // Fallback to cached playback info if player is not available
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: playbackInfo.time,
+                wasPlaying: playbackInfo.wasPlaying,
+                context: .fullScreen
+            )
+            print("💾 [MediaCell] Saved video position (fallback) before opening fullscreen: \(playbackInfo.time.seconds)s, wasPlaying: \(playbackInfo.wasPlaying)")
+        }
+    }
+    
     private func handleTap() {
         // Use internal full screen logic
         switch attachment.type {
         case .video, .hls_video:
+            // Save current playback position before opening fullscreen
+            saveVideoPositionForFullscreen()
+            
             // Show loading spinner for videos
             isOpeningFullScreen = true
             // Delay opening fullscreen to allow spinner to render
@@ -371,6 +401,8 @@ struct MediaCell: View, Equatable {
                 showNativeControls: false,
                 isMuted: muteState.isMuted,
                 onVideoTap: {
+                    // Save current playback position before opening fullscreen
+                    saveVideoPositionForFullscreen()
                     isOpeningFullScreen = true
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
@@ -386,6 +418,8 @@ struct MediaCell: View, Equatable {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        // Save current playback position before opening fullscreen
+                        saveVideoPositionForFullscreen()
                         isOpeningFullScreen = true
                         Task { @MainActor in
                             try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds

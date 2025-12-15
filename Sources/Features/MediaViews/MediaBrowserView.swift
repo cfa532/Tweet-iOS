@@ -936,20 +936,18 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     private func setupPlayerItemObserver(player: AVPlayer, context: Context) {
         context.coordinator.statusObserver?.invalidate()
         
+        // Don't auto-play here - let FullScreenVideoManager handle playback after restoring position
+        // FullScreenVideoManager will check for saved state and seek/play accordingly
         if let playerItem = player.currentItem {
             if playerItem.status == .readyToPlay {
-                print("DEBUG: [SingletonVideoPlayer] Player already ready, playing immediately")
-                DispatchQueue.main.async {
-                    player.play()
-                }
+                print("DEBUG: [SingletonVideoPlayer] Player already ready - FullScreenVideoManager will handle playback")
+                // FullScreenVideoManager will handle playback after checking for saved state
             } else {
                 print("DEBUG: [SingletonVideoPlayer] Player not ready yet, setting up observer")
                 context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                     if item.status == .readyToPlay {
-                        print("DEBUG: [SingletonVideoPlayer] Player became ready, playing now")
-                        DispatchQueue.main.async {
-                            player.play()
-                        }
+                        print("DEBUG: [SingletonVideoPlayer] Player became ready - FullScreenVideoManager will handle playback")
+                        // FullScreenVideoManager will handle playback after checking for saved state
                         context.coordinator.statusObserver?.invalidate()
                         context.coordinator.statusObserver = nil
                     } else if item.status == .failed {
@@ -977,19 +975,17 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         if uiViewController.player !== player {
             uiViewController.player = player
             
-            // Setup observer for new player
+            // Setup observer for new player - don't auto-play, let FullScreenVideoManager handle it
             context.coordinator.statusObserver?.invalidate()
             if let playerItem = player.currentItem {
                 if playerItem.status == .readyToPlay {
-                    print("DEBUG: [SingletonVideoPlayer] Player ready on update, playing")
-                    player.play()
+                    print("DEBUG: [SingletonVideoPlayer] Player ready on update - FullScreenVideoManager will handle playback")
+                    // FullScreenVideoManager will handle playback after checking for saved state
                 } else {
                     context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                         if item.status == .readyToPlay {
-                            print("DEBUG: [SingletonVideoPlayer] Player ready after update, playing")
-                            DispatchQueue.main.async {
-                                player.play()
-                            }
+                            print("DEBUG: [SingletonVideoPlayer] Player ready after update - FullScreenVideoManager will handle playback")
+                            // FullScreenVideoManager will handle playback after checking for saved state
                             context.coordinator.statusObserver?.invalidate()
                             context.coordinator.statusObserver = nil
                         }
