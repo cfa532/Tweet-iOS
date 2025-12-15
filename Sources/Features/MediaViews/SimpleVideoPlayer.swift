@@ -2500,7 +2500,9 @@ struct SimpleVideoPlayer: View {
                                 NSLog("🔇 [PLAYER MUTE] KVO status ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
                             }
                             // Start playing automatically
-                            player.play()
+                            if player.rate == 0 {
+                                player.play()
+                            }
                             if self.mode == .mediaCell {
                                 self.playbackState = .playing
                             }

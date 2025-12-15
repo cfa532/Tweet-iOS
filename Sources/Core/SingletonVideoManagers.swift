@@ -90,9 +90,10 @@ extension VideoPlayerLifecycleManager {
         let managerName = String(describing: type(of: self))
         print("DEBUG: [\(managerName)] App resigning active (screen lock), saving state")
         
-        // Save current playback state
+        // Save current playback state (avoid NaN times)
         let wasPlaying = player.rate > 0
-        let currentTime = player.currentTime()
+        let rawTime = player.currentTime()
+        let currentTime: CMTime = rawTime.seconds.isFinite ? rawTime : .zero
         savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
         
         // CRITICAL: Also save to persistent storage so it survives player recreation
@@ -133,7 +134,8 @@ extension VideoPlayerLifecycleManager {
         // Save current playback state (if not already saved by willResignActive)
         if savedPlaybackState == nil {
             let wasPlaying = player.rate > 0
-            let currentTime = player.currentTime()
+            let rawTime = player.currentTime()
+            let currentTime: CMTime = rawTime.seconds.isFinite ? rawTime : .zero
             savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
             
             // Pause the player
