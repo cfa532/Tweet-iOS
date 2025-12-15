@@ -1085,6 +1085,7 @@ struct SimpleVideoPlayer: View {
     @MainActor
     private func recoverFromBackground() {
         print("DEBUG: [VIDEO RECOVERY] Starting recovery for \(mid), mode: \(mode), didEnterBackground: \(didEnterBackground), shouldLoadVideo: \(shouldLoadVideo)")
+        let backgroundedThisCycle = didEnterBackground
         
         // Mark that we've recovered (but don't reattach yet)
         hasRecoveredThisCycle = true
@@ -1249,12 +1250,42 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // CRITICAL FIX: For MediaCell after short backgrounds, always force view refresh
-        // iOS invalidates video layers unpredictably, even when player object is intact
-        // Force view recreation to ensure video layer is fresh
-        if mode == .mediaCell {
-            print("✅ [VIDEO RECOVERY] MediaCell - forcing view refresh to prevent stale video layers")
-            representableId += 1
+        // For MediaCell, DO NOT force a layer refresh unconditionally.
+        // Unconditional refresh recreates the representable and causes a visible "flicker" on every foreground.
+        // Instead, do a delayed health check and only refresh the view if the player appears "stuck"
+        // (common symptom of stale AVPlayerLayer after background).
+        if mode == .mediaCell && backgroundedThisCycle {
+            let wasPlayingBeforeBackground = VideoStateCache.shared.getCachedState(for: mid)?.wasPlaying ?? false
+            
+            Task { @MainActor in
+                // Give iOS a moment to re-wire the underlying layer pipeline after foregrounding.
+                try? await Task.sleep(nanoseconds: 250_000_000) // 0.25s
+                
+                // Only relevant for currently visible feed videos.
+                guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { return }
+                guard let player = self.player, let item = player.currentItem else { return }
+                
+                // If player is actually broken, the normal recovery path / delayed health check will recreate it.
+                if self.isPlayerBroken() { return }
+                
+                let statusReady = item.status == .readyToPlay
+                let hasBufferedData = !item.loadedTimeRanges.isEmpty
+                let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
+                
+                // Heuristic: refresh only if we're "ready" but have no frames buffered,
+                // or if we were previously playing and are stuck waiting with insufficient buffer.
+                let stuckWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate || item.isPlaybackBufferEmpty
+                let shouldRefresh =
+                    (statusReady && !hasBufferedData) ||
+                    (wasPlayingBeforeBackground && stuckWaiting && bufferedAhead < self.firstFrameMinimumBuffer)
+                
+                if shouldRefresh {
+                    print("✅ [VIDEO RECOVERY] MediaCell - delayed check indicates stale layer, refreshing view for \(self.mid)")
+                    self.representableId += 1
+                } else {
+                    print("DEBUG: [VIDEO RECOVERY] MediaCell - delayed check: no refresh needed for \(self.mid)")
+                }
+            }
         }
         
         // Restore mute state
