@@ -154,6 +154,19 @@ struct LoginView: View {
                 )
             }
         }
+        .onAppear {
+            OverlayVisibilityCoordinator.shared.beginOverlay(id: "loginView", source: "LoginView")
+        }
+        .onDisappear {
+            OverlayVisibilityCoordinator.shared.endOverlay(id: "loginView", source: "LoginView")
+        }
+        .onChange(of: showRegistration) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "registrationSheet", source: "LoginView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "registrationSheet", source: "LoginView")
+            }
+        }
     }
     
     private func login() async {

@@ -161,6 +161,13 @@ struct ContentView: View {
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()
         }
+        .onChange(of: showComposeSheet) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "composeSheet", source: "ContentView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "composeSheet", source: "ContentView")
+            }
+        }
         .alert(NSLocalizedString("Tweet Limit Reached", comment: "Tweet limit alert title"), isPresented: $showCloudDriveLimitAlert) {
             Button(NSLocalizedString("Learn More", comment: "Learn more button")) {
                 Task {
@@ -172,6 +179,13 @@ struct ContentView: View {
             }
         } message: {
             Text(NSLocalizedString("This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.", comment: "Tweet limit message"))
+        }
+        .onChange(of: showCloudDriveLimitAlert) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "tweetLimitAlert", source: "ContentView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "tweetLimitAlert", source: "ContentView")
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetSubmitted)) { notification in
             if let message = notification.userInfo?["message"] as? String {

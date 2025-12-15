@@ -525,7 +525,11 @@ struct TweetActionButtonsView: View {
             }
         }
         .onChange(of: showCommentCompose) { _, isPresented in
-            // Video management is now handled locally per grid
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
+            }
         }
         .sheet(item: $shareSheetItems, onDismiss: {
             // Reset state when sheet is dismissed
@@ -533,6 +537,7 @@ struct TweetActionButtonsView: View {
             isPreparingShare = false
             print("DEBUG: [SHARE] Sheet dismissed, state cleared")
             onShareVisibilityChange?(false)
+            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
         }) { sheetData in
             let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
             onShareVisibilityChange?(true)
@@ -562,10 +567,21 @@ struct TweetActionButtonsView: View {
                 // Hide spinner only when share sheet actually appears
                 isPreparingShare = false
                 print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+            }
+            .onDisappear {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
             }
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .onChange(of: showLoginSheet) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "loginSheet", source: "TweetActionButtonsView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "loginSheet", source: "TweetActionButtonsView")
+            }
         }
         .overlay(
             // Toast message overlay

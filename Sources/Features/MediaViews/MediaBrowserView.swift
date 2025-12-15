@@ -92,16 +92,14 @@ struct MediaBrowserView: View {
             )
             .onAppear {
                 setupFullScreenManager()
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
 
                 // NOTE: Don't broadcast stopAllVideos here.
                 // MediaCell videos will pause via overlay visibility detection once the fullscreen cover is presented.
             }
             .onDisappear {
                 FullScreenVideoManager.shared.clearSingletonPlayer()
-
-                // Kick visible MediaGrids to re-enable loading and let MediaCells re-check playback.
-                // This fixes cases where other grids don't resume after fullscreen dismiss.
-                NotificationCenter.default.post(name: .resumeMediaCellVideos, object: nil)
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
             }
     }
     

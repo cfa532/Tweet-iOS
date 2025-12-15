@@ -635,9 +635,13 @@ struct MediaGridView: View, Equatable {
             // Videos will be paused by SimpleVideoPlayer.handleStopAllVideos()
             // And resumed when audio session is restored
         }
-        .onReceive(NotificationCenter.default.publisher(for: .resumeMediaCellVideos)) { _ in
-            // Fullscreen dismissed: re-enable loading so visible MediaCell videos can resume.
-            shouldLoadVideo = true
+        .onReceive(NotificationCenter.default.publisher(for: .overlayCoverageChanged)) { notification in
+            guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
+            // When overlays dismiss, re-enable loading only for grids that are currently visible.
+            // This replaces the old fullscreen "resumeMediaCellVideos" broadcast and keeps resume scoped.
+            if !isCovered, isVisible {
+                shouldLoadVideo = true
+            }
         }
     }
 }

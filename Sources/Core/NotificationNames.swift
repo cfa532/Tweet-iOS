@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 extension Notification.Name {
     // MARK: - User Related
@@ -96,8 +97,9 @@ extension Notification.Name {
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
-    /// Posted to resume MediaCell videos when exiting fullscreen
-    static let resumeMediaCellVideos = Notification.Name("ResumeMediaCellVideos")
+    /// Posted when app content is covered/uncovered by an overlay (sheet/fullScreenCover/login/share).
+    /// userInfo: ["isCovered": Bool, "activeCount": Int, "source": String?]
+    static let overlayCoverageChanged = Notification.Name("OverlayCoverageChanged")
     /// Posted to force video layer refresh after screen lock recovery
     static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
     /// Posted to reload only visible videos after foreground recovery (not all videos)
@@ -106,4 +108,59 @@ extension Notification.Name {
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast
     static let errorOccurred = Notification.Name("ErrorOccurred")
+}
+
+/// Centralized overlay coverage state for the app.
+///
+/// This replaces polling-based \"is content covered\" checks by providing explicit begin/end calls
+/// from SwiftUI sheets/fullScreenCovers and other overlay presenters.
+@MainActor
+final class OverlayVisibilityCoordinator: ObservableObject {
+    static let shared = OverlayVisibilityCoordinator()
+
+    @Published private(set) var isCovered: Bool = false
+
+    private var activeOverlayIds: Set<String> = []
+
+    private init() {}
+
+    func beginOverlay(id: String, source: String? = nil) {
+        let inserted = activeOverlayIds.insert(id).inserted
+        if inserted {
+            updateIfNeeded(source: source)
+        }
+    }
+
+    func endOverlay(id: String, source: String? = nil) {
+        let removed = activeOverlayIds.remove(id) != nil
+        if removed {
+            updateIfNeeded(source: source)
+        }
+    }
+
+    func reset(source: String? = nil) {
+        guard !activeOverlayIds.isEmpty else { return }
+        activeOverlayIds.removeAll()
+        updateIfNeeded(source: source)
+    }
+
+    private func updateIfNeeded(source: String?) {
+        let newCovered = !activeOverlayIds.isEmpty
+        guard newCovered != isCovered else { return }
+        isCovered = newCovered
+
+        var userInfo: [AnyHashable: Any] = [
+            "isCovered": newCovered,
+            "activeCount": activeOverlayIds.count
+        ]
+        if let source {
+            userInfo["source"] = source
+        }
+
+        NotificationCenter.default.post(
+            name: .overlayCoverageChanged,
+            object: nil,
+            userInfo: userInfo
+        )
+    }
 }

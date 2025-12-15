@@ -252,11 +252,19 @@ struct MediaCell: View, Equatable {
             if newValue {
                 // Video is going into full-screen mode
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
+                OverlayVisibilityCoordinator.shared.beginOverlay(
+                    id: "mediaBrowserFullScreen",
+                    source: "MediaCell"
+                )
                 // Reset loading state once fullscreen is presented
                 isOpeningFullScreen = false
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
+                OverlayVisibilityCoordinator.shared.endOverlay(
+                    id: "mediaBrowserFullScreen",
+                    source: "MediaCell"
+                )
             }
         }
     }

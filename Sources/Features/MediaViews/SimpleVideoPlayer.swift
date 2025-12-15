@@ -155,7 +155,7 @@ struct SimpleVideoPlayer: View {
     @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
     @State private var isBuffering = false // Track buffering state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
-    @State private var visibilityManager: IndividualVideoVisibilityManager? // Each video manages its own visibility
+    @State private var isCoveredByOverlay: Bool = false
     @State private var videoCompletionObserver: NSObjectProtocol?
     @State private var videoErrorObserver: NSObjectProtocol?
     @State private var videoStallObserver: NSObjectProtocol?
@@ -239,22 +239,17 @@ struct SimpleVideoPlayer: View {
     
     // Track actual visibility (whether video is covered by overlay/modal)
     private var isActuallyVisible: Bool {
-        visibilityManager?.isActuallyVisible ?? true
+        // Only gate MediaCell playback by overlay coverage.
+        // Fullscreen/detail contexts manage their own visibility and should not be paused by feed overlays.
+        mode != .mediaCell || !isCoveredByOverlay
     }
     
     var body: some View {
         videoContentView
             .onAppear {
                 handleOnAppear()
-                // Initialize visibility manager when view appears
-                if mode == .mediaCell && visibilityManager == nil {
-                    visibilityManager = IndividualVideoVisibilityManager(
-                        mid: mid,
-                        mode: mode,
-                        onPause: { pauseVideoDueToOverlay() },
-                        onResume: { resumeVideoDueToOverlay() }
-                    )
-                }
+                // Initialize overlay coverage state when view appears (no polling).
+                isCoveredByOverlay = OverlayVisibilityCoordinator.shared.isCovered
             }
             .onDisappear { handleOnDisappear() }
             .onChange(of: mode) { oldMode, newMode in handleModeChange(oldMode: oldMode, newMode: newMode) }
@@ -263,6 +258,12 @@ struct SimpleVideoPlayer: View {
             .onChange(of: currentAutoPlay) { _, shouldAutoPlay in handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay) }
             .onChange(of: isVisible) { _, visible in handleVisibilityChange(visible: visible) }
             .onChange(of: isActuallyVisible) { _, actuallyVisible in handleActualVisibilityChange(actuallyVisible: actuallyVisible) }
+            .onReceive(NotificationCenter.default.publisher(for: .overlayCoverageChanged)) { notification in
+                guard mode == .mediaCell else { return }
+                if let isCovered = notification.userInfo?["isCovered"] as? Bool {
+                    isCoveredByOverlay = isCovered
+                }
+            }
             // Observe VideoManager's currentVideoIndex changes for sequential playback
             .modifier(VideoManagerObserverModifier(videoManager: videoManager, mid: mid, mode: mode) { shouldAutoPlay in
                 handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay)
@@ -270,7 +271,6 @@ struct SimpleVideoPlayer: View {
             .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
             .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
             .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
-            .onReceive(NotificationCenter.default.publisher(for: .resumeMediaCellVideos)) { _ in handleResumeMediaCellVideos() }
             .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
             .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
             .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
@@ -874,15 +874,7 @@ struct SimpleVideoPlayer: View {
     }
     
     // MARK: - Overlay Visibility Callbacks
-    
-    private func pauseVideoDueToOverlay() {
-        handleActualVisibilityChange(actuallyVisible: false)
-    }
-    
-    private func resumeVideoDueToOverlay() {
-        handleActualVisibilityChange(actuallyVisible: true)
-    }
-    
+
     private func handlePlayerChange(newPlayer: AVPlayer?) {
         // When player becomes available, check if we should autoplay
         if newPlayer != nil {
@@ -907,54 +899,6 @@ struct SimpleVideoPlayer: View {
             }
         }
         // TweetDetail and MediaBrowser: DO NOTHING
-    }
-    
-    private func handleResumeMediaCellVideos() {
-        // Only resume MediaCell videos that should be playing
-        guard mode == .mediaCell else { return }
-        
-        // CRITICAL: Check if video was playing before pause (playbackState == .playing)
-        // VideoManager state might have been cleared by MediaGridView.stopAllVideos handler
-        // So we check playbackState first, then check VideoManager
-        let wasPlaying = playbackState == .playing
-        
-        if wasPlaying && isVisible, let player = player {
-            // Video was playing before fullscreen - check if VideoManager approves it now
-            // If VideoManager state was cleared, it might not approve, but we should still resume
-            // since the video was playing before
-            let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
-            
-            if approved {
-                // Video was playing and is still approved - resume playback
-                player.isMuted = MuteState.shared.isMuted
-                NSLog("🔇 [RESUME VIDEOS] Applied global mute state: \(MuteState.shared.isMuted) for \(mid)")
-                
-                if player.rate == 0 {
-                    player.play()
-                    NSLog("DEBUG: [RESUME VIDEOS] ✅ Resumed playback for \(mid) after fullscreen exit")
-                }
-            } else {
-                // Video was playing but VideoManager doesn't approve (state might have been cleared)
-                // Still resume if it was playing - VideoManager will handle sequential playback
-                player.isMuted = MuteState.shared.isMuted
-                NSLog("🔇 [RESUME VIDEOS] Applied global mute state: \(MuteState.shared.isMuted) for \(mid)")
-                
-                // Use checkPlaybackConditions to let VideoManager decide
-                checkPlaybackConditions(autoPlay: true, isVisible: isVisible)
-                NSLog("DEBUG: [RESUME VIDEOS] Checked playback conditions for \(mid) (VideoManager state may have been cleared)")
-            }
-        } else if !wasPlaying && isVisible {
-            // Video wasn't playing but should check if it should play now
-            let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
-            if approved {
-                checkPlaybackConditions(autoPlay: true, isVisible: isVisible)
-                NSLog("DEBUG: [RESUME VIDEOS] Checked playback conditions for \(mid)")
-            } else {
-                NSLog("DEBUG: [RESUME VIDEOS] NOT resuming \(mid) - wasPlaying: \(wasPlaying), isVisible: \(isVisible), approved: \(approved), playbackState: \(playbackState)")
-            }
-        } else {
-            NSLog("DEBUG: [RESUME VIDEOS] NOT resuming \(mid) - wasPlaying: \(wasPlaying), isVisible: \(isVisible), playbackState: \(playbackState)")
-        }
     }
     
     private func handleWillResignActive() {
@@ -1202,7 +1146,7 @@ struct SimpleVideoPlayer: View {
                                     if self.mode == .mediaCell {
                                         player.isMuted = MuteState.shared.isMuted
                                         let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                                        let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
+                                        let noOverlaysActive = !self.isCoveredByOverlay
                                         let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
                                         if approved && self.isVisible && noOverlaysActive && noDetailViewActive {
                                             player.play()
@@ -1226,7 +1170,7 @@ struct SimpleVideoPlayer: View {
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
                                 let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                                let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
+                                let noOverlaysActive = !self.isCoveredByOverlay
                                 let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
                                 if approved && self.isVisible && noOverlaysActive && noDetailViewActive {
                                     player.play()
@@ -1368,8 +1312,8 @@ struct SimpleVideoPlayer: View {
                 if mode == .mediaCell {
                     // For MediaCell, check VideoManager approval AND that no overlays/detail views are active
                     let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
-                    let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
-                                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                    let noOverlaysActive = !isCoveredByOverlay
+                    let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
                     if approved && isVisible && noOverlaysActive && noDetailViewActive {
                         // CRITICAL: Always ensure muteState is correct before playing
                         player.isMuted = MuteState.shared.isMuted
@@ -1384,7 +1328,7 @@ struct SimpleVideoPlayer: View {
                             // Player not ready yet - wait for it to become ready
                             print("⏳ [VIDEO RECOVERY] Player not ready yet (status: \(playerItem.status.rawValue)), will resume when ready")
                             Task { @MainActor in
-                                let noOverlaysActive = OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
+                                let noOverlaysActive = !self.isCoveredByOverlay
                                 let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
                                 let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
                                 var attempts = 0
@@ -2489,8 +2433,7 @@ struct SimpleVideoPlayer: View {
                         // CRITICAL: For MediaCell, check VideoManager, actual visibility, and detail view activity before playing
                         // This ensures only the current video plays in sequential playback and not when covered or detail view active
                         let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
-                        // Use synchronous check as backup in case binding update is slow
-                        let actuallyVisible = self.mode != .mediaCell || self.visibilityManager?.isCurrentlyVisible() ?? true
+                        let actuallyVisible = self.mode != .mediaCell || !self.isCoveredByOverlay
                         let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
                         if approved && actuallyVisible && noDetailViewActive {
@@ -2548,8 +2491,7 @@ struct SimpleVideoPlayer: View {
                         // CRITICAL: Default to false for MediaCell to prevent both videos from playing
                         // Also check if video is actually visible (not covered by overlay)
                         let managerApproved = self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                        // Use synchronous check as backup in case binding update is slow
-                        let actuallyVisible = self.mode != .mediaCell || self.visibilityManager?.isCurrentlyVisible() ?? true
+                        let actuallyVisible = self.mode != .mediaCell || !self.isCoveredByOverlay
                         let noDetailViewActive = self.mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
                         let shouldPlay = shouldAutoPlay && managerApproved && actuallyVisible && noDetailViewActive
                         
@@ -2944,7 +2886,7 @@ struct SimpleVideoPlayer: View {
         
         // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals or detail views)
         // Use synchronous visibility check (presentedViewController) to avoid timer lag.
-        let isActuallyVisibleOrFullscreen = mode != .mediaCell || (visibilityManager?.isCurrentlyVisible() ?? true)
+        let isActuallyVisibleOrFullscreen = mode != .mediaCell || !isCoveredByOverlay
         let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
         
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {
@@ -3535,168 +3477,3 @@ struct VideoManagerObserverModifier: ViewModifier {
     }
 }
 
-// MARK: - Optimized Video Visibility Manager
-/// Shared timer with individual video management for optimal performance
-private class OptimizedVideoVisibilityManager {
-    static let shared = OptimizedVideoVisibilityManager()
-    private var timer: Timer?
-    private var registeredVideos: [String: VideoVisibilityDelegate] = [:]
-    private var lastVisibilityState: Bool = true
-
-    private init() {
-        startTimer()
-    }
-
-    func registerVideo(_ mid: String, delegate: VideoVisibilityDelegate) {
-        registeredVideos[mid] = delegate
-        print("📝 [VISIBILITY MANAGER] Registered video \(mid) (total: \(registeredVideos.count))")
-    }
-
-    func unregisterVideo(_ mid: String) {
-        registeredVideos.removeValue(forKey: mid)
-        print("📝 [VISIBILITY MANAGER] Unregistered video \(mid) (total: \(registeredVideos.count))")
-    }
-
-    private func startTimer() {
-        // Single timer for all videos - much more efficient!
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.checkVisibility()
-        }
-    }
-
-    private func checkVisibility() {
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap({ $0.windows })
-            .first(where: { $0.isKeyWindow }) else {
-            return
-        }
-
-        let hasPresentedController = window.rootViewController?.presentedViewController != nil
-        let isVisible = !hasPresentedController
-
-        // Only notify if state changed
-        if isVisible != lastVisibilityState {
-            lastVisibilityState = isVisible
-            let message = isVisible ?
-                "✅ [VISIBILITY MANAGER] Content visible - notifying \(registeredVideos.count) videos" :
-                "🚫 [VISIBILITY MANAGER] Content covered - notifying \(registeredVideos.count) videos"
-            print(message)
-
-            // Notify all registered videos to handle their own visibility
-            for (mid, delegate) in registeredVideos {
-                delegate.handleVisibilityChange(isVisible: isVisible, mid: mid)
-            }
-        }
-    }
-
-    // Synchronous visibility check for KVO observers
-    func isCurrentlyVisible() -> Bool {
-        guard let window = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .flatMap({ $0.windows })
-            .first(where: { $0.isKeyWindow }) else {
-            return false
-        }
-
-        let hasPresentedController = window.rootViewController?.presentedViewController != nil
-        return !hasPresentedController
-    }
-}
-
-/// Protocol for videos to receive visibility updates
-private protocol VideoVisibilityDelegate: AnyObject {
-    func handleVisibilityChange(isVisible: Bool, mid: String)
-}
-
-// MARK: - Individual Video Visibility Manager
-/// Each video manages its own visibility response but uses shared timer
-private class IndividualVideoVisibilityManager: ObservableObject, VideoVisibilityDelegate {
-    @Published var isActuallyVisible = true
-
-    private var mid: String
-    private var mode: Mode
-    private var pauseCallback: (() -> Void)?
-    private var resumeCallback: (() -> Void)?
-
-    init(mid: String, mode: Mode, onPause: @escaping () -> Void, onResume: @escaping () -> Void) {
-        self.mid = mid
-        self.mode = mode
-        self.pauseCallback = onPause
-        self.resumeCallback = onResume
-
-        // Register with shared manager for MediaCell mode only
-        if mode == .mediaCell {
-            OptimizedVideoVisibilityManager.shared.registerVideo(mid, delegate: self)
-        }
-    }
-
-    deinit {
-        if mode == .mediaCell {
-            OptimizedVideoVisibilityManager.shared.unregisterVideo(mid)
-        }
-    }
-
-    // Called by shared manager when visibility changes
-    func handleVisibilityChange(isVisible: Bool, mid: String) {
-        guard mid == self.mid else { return }
-
-        DispatchQueue.main.async {
-            let oldValue = self.isActuallyVisible
-            if oldValue != isVisible {
-                let message = isVisible ?
-                    "✅ [VIDEO VISIBILITY] Video \(mid) now visible" :
-                    "🚫 [VIDEO VISIBILITY] Video \(mid) covered by overlay"
-                print(message)
-
-                self.isActuallyVisible = isVisible
-
-                // Call callbacks to let the video player handle playback
-                if !isVisible {
-                    self.pauseCallback?()
-                } else {
-                    self.resumeCallback?()
-                }
-            }
-        }
-    }
-
-    // Synchronous visibility check for KVO observers
-    func isCurrentlyVisible() -> Bool {
-        return OptimizedVideoVisibilityManager.shared.isCurrentlyVisible()
-    }
-}
-
-/// UIViewRepresentable that triggers visibility manager initialization
-private struct VisibilityDetectorView: UIViewRepresentable {
-    let mid: String
-    let mode: Mode
-    let videoPlayer: SimpleVideoPlayer
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        // Nothing to update
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(mid: mid, mode: mode, videoPlayer: videoPlayer)
-    }
-
-    class Coordinator {
-        let mid: String
-        let mode: Mode
-        let videoPlayer: SimpleVideoPlayer
-
-        init(mid: String, mode: Mode, videoPlayer: SimpleVideoPlayer) {
-            self.mid = mid
-            self.mode = mode
-            self.videoPlayer = videoPlayer
-        }
-    }
-}
