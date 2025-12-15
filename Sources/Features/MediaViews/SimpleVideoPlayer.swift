@@ -8,6 +8,10 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import UIKit
+import CoreImage
+import CoreVideo
+import QuartzCore
 
 // MARK: - Video Player Mode
 enum Mode {
@@ -115,6 +119,77 @@ class VideoStateCache {
     }
 }
 
+// MARK: - Last Frame Cache (for flicker-free placeholders)
+/// Stores a downscaled last-rendered frame per `mid` for fast placeholder rendering.
+/// Uses an in-memory cache with a short TTL to avoid unbounded memory growth.
+final class VideoLastFrameCache {
+    static let shared = VideoLastFrameCache()
+    
+    private let cache = NSCache<NSString, UIImage>()
+    private var timestamps: [String: Date] = [:]
+    private let ttl: TimeInterval = 10 * 60 // 10 minutes
+    
+    private init() {
+        // Rough bound: keep only a small number of frames in memory.
+        cache.countLimit = 48
+    }
+    
+    func set(_ image: UIImage, for mid: String) {
+        cache.setObject(image, forKey: mid as NSString)
+        timestamps[mid] = Date()
+    }
+    
+    func image(for mid: String) -> UIImage? {
+        guard let ts = timestamps[mid] else { return nil }
+        if Date().timeIntervalSince(ts) > ttl {
+            clear(for: mid)
+            return nil
+        }
+        return cache.object(forKey: mid as NSString)
+    }
+    
+    func clear(for mid: String) {
+        cache.removeObject(forKey: mid as NSString)
+        timestamps.removeValue(forKey: mid)
+    }
+    
+    func clearAll() {
+        cache.removeAllObjects()
+        timestamps.removeAll()
+    }
+}
+
+// MARK: - Frame Extraction Utilities (AVPlayerItemVideoOutput)
+enum VideoFrameExtractor {
+    static let ciContext = CIContext(options: [
+        // Keep it lightweight; we only need fast, small frame extraction.
+        CIContextOption.useSoftwareRenderer: false
+    ])
+    
+    /// Convert a pixel buffer to a downscaled UIImage (for feed placeholders).
+    static func makeDownscaledUIImage(from pixelBuffer: CVPixelBuffer, maxDimension: CGFloat = 720) -> UIImage? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        let image = UIImage(cgImage: cgImage)
+        return downscale(image, maxDimension: maxDimension)
+    }
+    
+    /// Downscale without changing aspect ratio.
+    static func downscale(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        let maxSide = max(size.width, size.height)
+        guard maxSide > maxDimension, maxSide > 0 else { return image }
+        
+        let scale = maxDimension / maxSide
+        let targetSize = CGSize(width: size.width * scale, height: size.height * scale)
+        
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+    }
+}
+
 // MARK: - Unified Simple Video Player
 struct SimpleVideoPlayer: View {
     // Cache screen dimensions to avoid repeated UIScreen.main calls
@@ -168,6 +243,12 @@ struct SimpleVideoPlayer: View {
     @State private var progressiveBufferTargetIndex: Int = 0
     @State private var hasInitialized = false // Track if player has been initialized to prevent recomposition when scrolling
     
+    // Last-frame placeholder support (MediaCell/HLS): keep a decoded frame to avoid black flicker.
+    @State private var videoOutput: AVPlayerItemVideoOutput?
+    @State private var videoOutputAttachedItem: AVPlayerItem?
+    @State private var lastFrameCaptureAt: Date = .distantPast
+    @State private var lastFrameVersion: Int = 0 // bumps when we store a new frame (forces view update)
+    
     private let progressiveBufferTargets: [Double] = [8.0, 12.0, 18.0, 24.0, 30.0]
     /// Minimum buffered seconds required before we consider the first frame renderable.
     private var firstFrameMinimumBuffer: Double {
@@ -189,6 +270,10 @@ struct SimpleVideoPlayer: View {
     }
     
     // MARK: Computed Properties
+    private var isAnyVideoMedia: Bool {
+        mediaType == .video || mediaType == .hls_video
+    }
+    
     private var isVideoPortrait: Bool {
         guard let ar = videoAspectRatio else { return false }
         return ar < 1.0
@@ -459,6 +544,8 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Always pause player when view disappears
         // MediaCell and MediaBrowser share the same player instance via VideoStateCache
         if mode == .mediaCell {
+            // Capture last visible frame to use as placeholder next time (prevents black flicker).
+            captureLastFrameIfPossible(reason: "onDisappear")
             player?.pause()
             // Ensure muteState is correct when pausing MediaCell
             if let player = player {
@@ -801,6 +888,8 @@ struct SimpleVideoPlayer: View {
                 // checkPlaybackConditions will be called by KVO handlers or handleAutoPlayChange
             }
         } else {
+            // About to become invisible: capture the last rendered frame for a smooth return.
+            captureLastFrameIfPossible(reason: "becameInvisible")
             // When becoming invisible, cache state but don't pause here
             // (pause is handled in onDisappear to avoid conflicts)
             // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
@@ -914,6 +1003,7 @@ struct SimpleVideoPlayer: View {
         didEnterBackground = false  // Reset - will be set to true if didEnterBackground fires
         
         // Cache player state but DON'T detach yet - keep video visible
+        captureLastFrameIfPossible(reason: "willResignActive")
         cachePlayerStateForBackground()
     }
     
@@ -1611,6 +1701,10 @@ struct SimpleVideoPlayer: View {
     // MARK: - Video Player View
     @ViewBuilder
     private func videoPlayerView() -> some View {
+        // Force SwiftUI to re-evaluate cached last-frame reads when we update it.
+        let _ = lastFrameVersion
+        let cachedLastFrame = VideoLastFrameCache.shared.image(for: mid)
+        
         if let player = player {
             ZStack {
                 // Main video player - only show if not detached
@@ -1653,6 +1747,37 @@ struct SimpleVideoPlayer: View {
                         )
                 }
                 
+                // MediaCell UX: last-frame placeholder to avoid black flicker during reattach/buffering.
+                if mode == .mediaCell, let frame = cachedLastFrame {
+                    let item = player.currentItem
+                    let bufferedAhead = item.map { bufferedTimeAhead(for: $0, player: player) } ?? 0
+                    let hasBufferedData = !(item?.loadedTimeRanges.isEmpty ?? true)
+                    let readyForFirstFrame = (item?.status == .readyToPlay) && hasBufferedData && bufferedAhead >= firstFrameMinimumBuffer
+                    
+                    let waitingForData = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    let bufferEmpty = item?.isPlaybackBufferEmpty ?? false
+                    let shouldShowPlaceholder =
+                        isPlayerDetached ||
+                        loadingState.isLoading ||
+                        (!readyForFirstFrame && (waitingForData || bufferEmpty || !loadingState.isLoaded))
+                    
+                    if shouldShowPlaceholder {
+                        Image(uiImage: frame)
+                            .resizable()
+                            .scaledToFill()
+                            .clipped()
+                            .overlay(Color.black.opacity(0.08))
+                        
+                        // Spinner over the placeholder while waiting.
+                        if loadingState.isLoading || waitingForData || bufferEmpty {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.1)
+                                .opacity(0.7)
+                        }
+                    }
+                }
+                
                 // Show buffering spinner when buffering (fullscreen only)
                 if isBuffering && mode == .mediaBrowser {
                     ZStack {
@@ -1684,9 +1809,17 @@ struct SimpleVideoPlayer: View {
                 }
             }
         } else {
-            // No player yet - show visible loading placeholder
+            // No player yet - show last frame if available, otherwise black placeholder.
             ZStack {
-                Color.black.opacity(0.9)
+                if mode == .mediaCell, let frame = cachedLastFrame {
+                    Image(uiImage: frame)
+                        .resizable()
+                        .scaledToFill()
+                        .clipped()
+                        .overlay(Color.black.opacity(0.10))
+                } else {
+                    Color.black.opacity(0.9)
+                }
                 
                 // Always show spinner when no player (loading or retrying)
                 ProgressView()
@@ -1710,6 +1843,107 @@ struct SimpleVideoPlayer: View {
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.2), value: isLongPressing)
                 }
+            }
+        }
+    }
+
+    // MARK: - Last Frame Capture (MediaCell)
+    @MainActor
+    private func ensureVideoOutputAttachedIfNeeded(for player: AVPlayer) {
+        guard mode == .mediaCell else { return }
+        guard isAnyVideoMedia else { return }
+        guard let item = player.currentItem else { return }
+        
+        // If we're already attached to this exact item, do nothing.
+        if videoOutputAttachedItem === item, videoOutput != nil {
+            return
+        }
+        
+        // Detach from any previous item to avoid accumulating outputs.
+        if let previousItem = videoOutputAttachedItem, let existingOutput = videoOutput {
+            previousItem.remove(existingOutput)
+        }
+        
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ])
+        
+        item.add(output)
+        videoOutput = output
+        videoOutputAttachedItem = item
+    }
+    
+    @MainActor
+    private func captureLastFrameIfPossible(reason: String) {
+        guard mode == .mediaCell else { return }
+        guard isAnyVideoMedia else { return }
+        guard let player = player, let item = player.currentItem else {
+            if reason == "willResignActive" {
+                print("🖼️ [LAST FRAME] Skip (no player/item) for \(mid) (\(reason))")
+            }
+            return
+        }
+        
+        // Ensure we have a video output attached to the current item (may have been nil during earlier setup).
+        ensureVideoOutputAttachedIfNeeded(for: player)
+        guard let output = videoOutput else {
+            if reason == "willResignActive" {
+                print("🖼️ [LAST FRAME] Skip (no videoOutput) for \(mid) (\(reason))")
+            }
+            return
+        }
+        
+        // Only capture if we likely have a meaningful frame.
+        guard item.status == .readyToPlay else {
+            if reason == "willResignActive" {
+                print("🖼️ [LAST FRAME] Skip (item not ready: \(item.status.rawValue)) for \(mid) (\(reason))")
+            }
+            return
+        }
+        if item.loadedTimeRanges.isEmpty {
+            if reason == "willResignActive" {
+                print("🖼️ [LAST FRAME] Skip (no buffered ranges) for \(mid) (\(reason))")
+            }
+            return
+        }
+        
+        // Throttle: avoid capturing repeatedly during scrolling/rapid state changes.
+        let now = Date()
+        if now.timeIntervalSince(lastFrameCaptureAt) < 0.75 {
+            return
+        }
+        lastFrameCaptureAt = now
+        
+        let mid = self.mid
+        Task.detached(priority: .utility) {
+            // Try to capture the frame corresponding to the current host time.
+            let hostTime = CACurrentMediaTime()
+            var itemTime = output.itemTime(forHostTime: hostTime)
+            
+            // If no new pixel buffer is available, fall back to the player's currentTime().
+            if !output.hasNewPixelBuffer(forItemTime: itemTime) {
+                itemTime = item.currentTime()
+            }
+            
+            var displayTime = CMTime.zero
+            guard let pixelBuffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime) else {
+                if reason == "willResignActive" {
+                    print("🖼️ [LAST FRAME] Skip (no pixelBuffer) for \(mid) (\(reason))")
+                }
+                return
+            }
+            
+            guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else {
+                if reason == "willResignActive" {
+                    print("🖼️ [LAST FRAME] Skip (image conversion failed) for \(mid) (\(reason))")
+                }
+                return
+            }
+            
+            await MainActor.run {
+                VideoLastFrameCache.shared.set(image, for: mid)
+                self.lastFrameVersion += 1
+                print("🖼️ [LAST FRAME] Captured for \(mid) (\(reason))")
             }
         }
     }
@@ -2180,6 +2414,10 @@ struct SimpleVideoPlayer: View {
         
         configureAutomaticWaiting(for: player)
         
+        // MediaCell last-frame support: attach a video output so we can snapshot decoded frames
+        // (for flicker-free placeholders during layer reattach / buffering).
+        ensureVideoOutputAttachedIfNeeded(for: player)
+        
         // CRITICAL: For MediaCell, pause playing shared players FIRST to prevent audio bleed
         if mode == .mediaCell && player.rate > 0 {
             player.pause()
@@ -2303,6 +2541,10 @@ struct SimpleVideoPlayer: View {
             NSLog("⚠️ [OBSERVER SETUP] Cannot setup observers for \(mid) - currentItem is nil")
             return 
         }
+        
+        // MediaCell last-frame support: ensure the video output is attached once a real item exists.
+        // (configurePlayer() can run while currentItem is temporarily nil for some HLS paths.)
+        ensureVideoOutputAttachedIfNeeded(for: player)
         
         // CRITICAL: Check if observer is already attached to this exact playerItem
         // Use object identity (===) to ensure we're checking the same instance
