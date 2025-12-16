@@ -18,6 +18,7 @@ enum Mode {
     case mediaCell // Normal cell in feed/grid
     case mediaBrowser // In MediaBrowserView (fullscreen browser)
     case tweetDetail // In TweetDetailView (single tweet view)
+    case embeddedDetail // In TweetDetailView, embedded/quoted tweet preview
 }
 
 // MARK: - Consolidated State Enums
@@ -337,7 +338,7 @@ struct SimpleVideoPlayer: View {
     
     /// Apply mute state to player based on current mode
     private func applyMuteState(to player: AVPlayer) {
-        if mode == .mediaCell {
+        if mode == .mediaCell || mode == .embeddedDetail {
             player.isMuted = MuteState.shared.isMuted
         } else {
             // Fullscreen/Detail: Always unmute
@@ -683,7 +684,7 @@ struct SimpleVideoPlayer: View {
     // Reactive autoPlay state - use VideoManager if available, otherwise use static autoPlay
     // For fullscreen and detail modes, always use static autoPlay (bypass VideoManager)
     private var currentAutoPlay: Bool {
-        if mode == .mediaBrowser || mode == .tweetDetail {
+        if mode == .mediaBrowser || mode == .tweetDetail || mode == .embeddedDetail {
             return autoPlay
         }
         if let videoManager = videoManager {
@@ -720,9 +721,12 @@ struct SimpleVideoPlayer: View {
     
     // Track actual visibility (whether video is covered by overlay/modal)
     private var isActuallyVisible: Bool {
-        // Only gate MediaCell playback by overlay coverage.
+        // Gate MediaCell-like playback by overlay coverage.
         // Fullscreen/detail contexts manage their own visibility and should not be paused by feed overlays.
-        mode != .mediaCell || !isCoveredByOverlay
+        if mode == .mediaCell || mode == .embeddedDetail {
+            return !isCoveredByOverlay
+        }
+        return true
     }
     
     var body: some View {
@@ -816,6 +820,12 @@ struct SimpleVideoPlayer: View {
                         .aspectRatio(videoAR, contentMode: .fit)
                         .frame(maxWidth: screenWidth, maxHeight: screenHeight)
                 }
+                
+            case .embeddedDetail:
+                // Embedded/quoted tweet preview inside TweetDetailView: behave like a MediaCell (fills its grid slot)
+                videoPlayerView()
+                    .aspectRatio(videoAR, contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
             // Fallback when no aspect ratio is available
@@ -920,7 +930,7 @@ struct SimpleVideoPlayer: View {
             // These are needed to handle videos finishing/failing while off-screen
             // playerItem reference is kept so setupPlayerObservers() can detect if already set up
         } else {
-            // For other modes (mediaBrowser, tweetDetail), remove all observers
+            // For other modes (mediaBrowser, tweetDetail, embeddedDetail), remove all observers
             removePlayerObservers()
         }
 
@@ -964,6 +974,9 @@ struct SimpleVideoPlayer: View {
             // Detail view uses a singleton player (DetailVideoManager) and SwiftUI may recreate
             // cells/views (TabView) during normal interaction. Pausing here causes the
             // "plays briefly then stops" bug. Cleanup is handled by TweetDetailView's lifecycle.
+        } else if mode == .embeddedDetail {
+            // Embedded/quoted tweet video: pause and clean up (independent player instance).
+            player?.pause()
         }
     }
     
@@ -1372,7 +1385,14 @@ struct SimpleVideoPlayer: View {
     
     private func handleStopAllVideos() {
         // Only pause MediaCell videos - TweetDetail and MediaBrowser are immune
-        if mode == .mediaCell {
+        if mode == .mediaCell || mode == .embeddedDetail {
+            // If we're currently *in* a TweetDetailView and this MediaCell is visible there (e.g. quoted tweet),
+            // do NOT pause it. We only want to stop feed/background MediaCells.
+            if NavigationStateManager.shared.isDetailViewActive && isVisible {
+                NSLog("DEBUG: [STOP ALL VIDEOS] Ignoring for visible MediaCell inside TweetDetailView: \(mid)")
+                return
+            }
+
             // Store playback state before pausing so we can resume later
             if let player = player {
                 let wasPlaying = player.rate > 0
@@ -2760,6 +2780,33 @@ struct SimpleVideoPlayer: View {
             }
             return
         }
+
+        // SPECIAL CASE: Embedded/quoted tweet video inside TweetDetailView.
+        // Use an independent AVPlayer instance (fresh AVPlayerItem) so it does not share the feed MediaCell player.
+        if mode == .embeddedDetail {
+            Task.detached(priority: .userInitiated) {
+                NSLog("DEBUG: [VIDEO SETUP] Task started for embeddedDetail \(mid)")
+                do {
+                    let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
+                        for: uniquePlayerURL,
+                        mediaID: mid,
+                        mediaType: mediaType
+                    )
+                    let newPlayer = AVPlayer(playerItem: playerItem)
+                    await MainActor.run {
+                        // Respect global mute state for embedded previews
+                        newPlayer.isMuted = MuteState.shared.isMuted
+                        self.configurePlayer(newPlayer)
+                    }
+                } catch {
+                    NSLog("DEBUG: [VIDEO SETUP] ❌ Failed to create embeddedDetail player: \(error.localizedDescription)")
+                    await MainActor.run {
+                        self.handleError(strategy: .loadFailure)
+                    }
+                }
+            }
+            return
+        }
         
         // NORMAL FLOW: Check VideoStateCache for shared player (MediaCell can read/write, MediaBrowser can only read)
         // MediaBrowser can read from VideoStateCache for performance (reuse MediaCell's player), but won't write to it
@@ -3400,7 +3447,7 @@ struct SimpleVideoPlayer: View {
         
         // Simple approach: Tell AVPlayer what to do and let IT handle the rest
         // For MediaCell mode, observe when player is ready and react accordingly
-        if mode == .mediaCell {
+        if mode == .mediaCell || mode == .embeddedDetail {
             let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
             
             // Observe player status to know when it's ready
@@ -3451,7 +3498,7 @@ struct SimpleVideoPlayer: View {
                         // CRITICAL: For MediaCell, check VideoManager, actual visibility, and detail view activity before playing
                         // This ensures only the current video plays in sequential playback and not when covered or detail view active
                         let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
-                        let actuallyVisible = self.mode != .mediaCell || !self.isCoveredByOverlay
+                        let actuallyVisible = (self.mode == .mediaCell || self.mode == .embeddedDetail) ? !self.isCoveredByOverlay : true
                         let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
                         if approved && actuallyVisible && noDetailViewActive {
@@ -3964,12 +4011,13 @@ struct SimpleVideoPlayer: View {
         }
         
         // Check if all conditions are met for autoplay
-        // For fullscreen and detail modes, bypass shouldLoadVideo check
-        let shouldCheckLoading = mode == .mediaCell ? shouldLoadVideo : true
+        // For fullscreen and tweetDetail modes, bypass shouldLoadVideo check.
+        // For embeddedDetail (quoted video), treat like MediaCell and respect shouldLoadVideo.
+        let shouldCheckLoading = (mode == .mediaCell || mode == .embeddedDetail) ? shouldLoadVideo : true
         
         // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals or detail views)
         // Use synchronous visibility check (presentedViewController) to avoid timer lag.
-        let isActuallyVisibleOrFullscreen = mode != .mediaCell || !isCoveredByOverlay
+        let isActuallyVisibleOrFullscreen = (mode == .mediaCell || mode == .embeddedDetail) ? !isCoveredByOverlay : true
         let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
         
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {

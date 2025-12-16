@@ -539,11 +539,14 @@ struct TweetDetailView: View {
             if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
                 if let orig = originalTweet {
                     VStack {
-                        TweetItemView(
+                        // Use embedded rendering: prevents quoted tweet videos from loading/autoplaying
+                        // (avoids conflicts with feed/shared MediaCell players).
+                        EmbeddedTweetView(
                             tweet: orig,
-                            onTap: nil, // Enable NavigationLink for quoted tweet
-                            hideActions: true,
-                            backgroundColor: Color(.systemGray6).opacity(0.5)
+                            isPinned: false,
+                            onTap: nil, // NavigationLink to quoted tweet detail
+                            backgroundColor: Color(.systemGray6).opacity(0.5),
+                            isEmbedded: true
                         )
                         
                     }

@@ -29,6 +29,7 @@ struct MediaCell: View, Equatable {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
+    let isEmbedded: Bool
     
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -43,7 +44,7 @@ struct MediaCell: View, Equatable {
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager, isEmbedded: Bool = false) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -51,6 +52,7 @@ struct MediaCell: View, Equatable {
         self.onVideoFinished = onVideoFinished
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
+        self.isEmbedded = isEmbedded
         
         // Initialize shouldAutoPlay based on initial conditions
         if let attachments = parentTweet.attachments,
@@ -58,7 +60,12 @@ struct MediaCell: View, Equatable {
             let attachment = attachments[attachmentIndex]
             let isVideo = attachment.type == .video || attachment.type == .hls_video
             if isVideo {
-                self._shouldAutoPlay = State(initialValue: videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo && isVisible)
+                if isEmbedded {
+                    // Embedded/quoted tweet preview: allow autoplay for the first attachment only.
+                    self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible && attachmentIndex == 0)
+                } else {
+                    self._shouldAutoPlay = State(initialValue: videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo && isVisible)
+                }
             } else {
                 self._shouldAutoPlay = State(initialValue: false)
             }
@@ -101,7 +108,9 @@ struct MediaCell: View, Equatable {
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
                         .onTapGesture {
-                            handleTap()
+                            if !isEmbedded {
+                                handleTap()
+                            }
                         }
                 case .image:
                     // MediaGrid already sets fixed frame - content should fill parent naturally
@@ -160,7 +169,9 @@ struct MediaCell: View, Equatable {
                     )
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        handleTap()
+                        if !isEmbedded {
+                            handleTap()
+                        }
                     }
                 default:
                     EmptyView()
@@ -176,20 +187,25 @@ struct MediaCell: View, Equatable {
             
             // For video attachments, update autoplay state based on current conditions
             if isVideoAttachment {
-                let managerSays = videoManager.shouldPlayVideo(for: attachment.mid)
-                shouldAutoPlay = managerSays && shouldLoadVideo
-                print("DEBUG: [MediaCell] onAppear for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), videoManager=\(managerSays), shouldLoadVideo=\(shouldLoadVideo), currentIndex=\(videoManager.currentVideoIndex), videoMids=\(videoManager.videoMids)")
-                
-                // CRITICAL FIX: If this is a new grid that just appeared and has videos,
-                // ensure VideoManager knows to play the first video
-                if !managerSays && shouldLoadVideo {
-                    // Check if this video is in the manager's list
-                    if let videoIndex = videoManager.videoMids.firstIndex(of: attachment.mid) {
-                        // This video is in the list but not set to play
-                        // If it's the current index, we should play it
-                        if videoIndex == videoManager.currentVideoIndex {
-                            print("⚠️ [MediaCell] VideoManager has video at current index but shouldPlayVideo=false. Forcing shouldAutoPlay=true")
-                            shouldAutoPlay = true
+                if isEmbedded {
+                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
+                    print("DEBUG: [MediaCell] onAppear (embedded) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), shouldLoadVideo=\(shouldLoadVideo)")
+                } else {
+                    let managerSays = videoManager.shouldPlayVideo(for: attachment.mid)
+                    shouldAutoPlay = managerSays && shouldLoadVideo
+                    print("DEBUG: [MediaCell] onAppear for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), videoManager=\(managerSays), shouldLoadVideo=\(shouldLoadVideo), currentIndex=\(videoManager.currentVideoIndex), videoMids=\(videoManager.videoMids)")
+                    
+                    // CRITICAL FIX: If this is a new grid that just appeared and has videos,
+                    // ensure VideoManager knows to play the first video
+                    if !managerSays && shouldLoadVideo {
+                        // Check if this video is in the manager's list
+                        if let videoIndex = videoManager.videoMids.firstIndex(of: attachment.mid) {
+                            // This video is in the list but not set to play
+                            // If it's the current index, we should play it
+                            if videoIndex == videoManager.currentVideoIndex {
+                                print("⚠️ [MediaCell] VideoManager has video at current index but shouldPlayVideo=false. Forcing shouldAutoPlay=true")
+                                shouldAutoPlay = true
+                            }
                         }
                     }
                 }
@@ -217,7 +233,11 @@ struct MediaCell: View, Equatable {
         .onChange(of: isVisible) { _, newValue in
             // Update autoplay state when visibility changes for video attachments
             if isVideoAttachment && newValue {
-                shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo
+                if isEmbedded {
+                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
+                } else {
+                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo
+                }
                 print("DEBUG: [MediaCell] onChange(isVisible) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
             }
         }
@@ -225,7 +245,11 @@ struct MediaCell: View, Equatable {
         .onChange(of: shouldLoadVideo) { _, newValue in
             // Update autoplay state when shouldLoadVideo changes for video attachments
             if isVideoAttachment && isVisible && newValue {
-                shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid)
+                if isEmbedded {
+                    shouldAutoPlay = attachmentIndex == 0
+                } else {
+                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid)
+                }
                 print("DEBUG: [MediaCell] onChange(shouldLoadVideo) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
             }
         }
@@ -392,13 +416,13 @@ struct MediaCell: View, Equatable {
                 isVisible: isVisible,
                 mediaType: attachment.type,
                 autoPlay: shouldAutoPlay, // Use state variable instead of computed value
-                videoManager: videoManager,
+                videoManager: isEmbedded ? nil : videoManager,
                 onVideoFinished: onVideoFinished,
                 cellAspectRatio: CGFloat(aspectRatio),
                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                 showNativeControls: false,
                 isMuted: muteState.isMuted,
-                onVideoTap: {
+                onVideoTap: isEmbedded ? nil : {
                     // Save current playback position before opening fullscreen
                     saveVideoPositionForFullscreen()
                     isOpeningFullScreen = true
@@ -409,7 +433,7 @@ struct MediaCell: View, Equatable {
                 },
                 disableAutoRestart: true,
                 shouldLoadVideo: shouldLoadVideo,
-                mode: .mediaCell
+                mode: isEmbedded ? .embeddedDetail : .mediaCell
             )
             .overlay(
                 // Invisible overlay to prevent tap propagation to parent views and add long press

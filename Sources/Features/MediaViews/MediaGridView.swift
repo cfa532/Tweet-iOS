@@ -21,7 +21,7 @@ struct MediaGridView: View, Equatable {
                lhs.attachments.map { $0.mid } == rhs.attachments.map { $0.mid } &&
                lhs.isEmbedded == rhs.isEmbedded
     }
-    @State private var shouldLoadVideo = true
+    @State private var shouldLoadVideo: Bool
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
     @State private var hasSetupSequentialPlayback = false // Track if we've already set up sequential playback
@@ -39,6 +39,7 @@ struct MediaGridView: View, Equatable {
         self.parentTweet = parentTweet
         self.attachments = attachments
         self.isEmbedded = isEmbedded
+        self._shouldLoadVideo = State(initialValue: true)
     }
     
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -106,6 +107,7 @@ struct MediaGridView: View, Equatable {
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
                         videoManager: videoManager,
+                        isEmbedded: isEmbedded
                     )
                     .frame(width: actualWidth, height: gridHeight, alignment: .center)
                     .clipped()
@@ -131,6 +133,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -148,6 +151,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -166,6 +170,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -178,6 +183,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -191,6 +197,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -203,6 +210,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -235,6 +243,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 0.618 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -251,6 +260,7 @@ struct MediaGridView: View, Equatable {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth * 0.382 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -270,6 +280,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth, height: gridHeight * 0.618 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -286,6 +297,7 @@ struct MediaGridView: View, Equatable {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth/2 - 1, height: gridHeight * 0.382 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -304,6 +316,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -318,6 +331,7 @@ struct MediaGridView: View, Equatable {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -335,6 +349,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -348,6 +363,7 @@ struct MediaGridView: View, Equatable {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -375,6 +391,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -389,7 +406,8 @@ struct MediaGridView: View, Equatable {
                                         
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
-                                        videoManager: videoManager
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
                                     )
                                         .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped().contentShape(Rectangle())
@@ -410,6 +428,7 @@ struct MediaGridView: View, Equatable {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -427,6 +446,7 @@ struct MediaGridView: View, Equatable {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .clipped().contentShape(Rectangle())
