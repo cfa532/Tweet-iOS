@@ -2221,7 +2221,6 @@ struct SimpleVideoPlayer: View {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
                         for: url,
-                        tweetId: mid,
                         mediaType: mediaType
                     )
                     self.player = newPlayer
@@ -2734,7 +2733,7 @@ struct SimpleVideoPlayer: View {
                 NSLog("DEBUG: [VIDEO SETUP] Task started for \(mid)")
                 do {
                     NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer...")
-                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: "tweetDetail_\(mid)", mediaType: mediaType)
+                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
                     NSLog("DEBUG: [VIDEO SETUP] Player created, now storing in singleton...")
                     newPlayer.isMuted = false
                     
@@ -2781,8 +2780,8 @@ struct SimpleVideoPlayer: View {
         }
         
         // SECOND: Check if we have cached content for this tweet/media.
-        // Use parentTweetId for tweet-level caching/mapping; fall back to mid (mediaID).
-        let tweetIdForCaching = parentTweetId ?? mid
+        // Cache is keyed ONLY by mid (video attachment mediaID).
+        let tweetIdForCaching = mid
         let hasCachedContent =
             SharedAssetCache.shared.hasCachedContent(for: tweetIdForCaching) ||
             SharedAssetCache.shared.hasCachedContent(for: mid)
@@ -2796,8 +2795,7 @@ struct SimpleVideoPlayer: View {
                 do {
                     NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer for \(mid)")
                     // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                    // Use tweetIdForCaching so SharedAssetCache can map tweetId -> mediaIDs (prevents VideoLoadingManager cancelling active videos)
-                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: tweetIdForCaching, mediaType: mediaType)
+                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
                     NSLog("DEBUG: [VIDEO SETUP] getOrCreatePlayer returned successfully for \(mid)")
                     
                     // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
@@ -2848,7 +2846,7 @@ struct SimpleVideoPlayer: View {
             do {
                 // Use shared cached player for all modes - simpler and more efficient
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: tweetIdForCaching, mediaType: mediaType)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
                 
                 
                 // Apply mute state IMMEDIATELY after player creation, before returning to MainActor

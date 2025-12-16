@@ -175,7 +175,8 @@ struct CachingVideoPlayer: View {
                 
                 
                 // Use SharedAssetCache.getOrCreatePlayer to get cached player or create new one
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
+                // Cache key is always the video's mediaID (mid); do not pass tweetId.
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaType: mediaType)
                 
                 await MainActor.run {
                     // Store references

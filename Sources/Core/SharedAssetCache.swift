@@ -509,12 +509,16 @@ class SharedAssetCache: ObservableObject {
         }
         
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
-        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for tweetId: \(tweetId ?? "nil")")
+        if let tweetId {
+            NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer received tweetId (ignored for caching): \(tweetId)")
+        } else {
+            NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called with no tweetId")
+        }
         
-        // Use tweetId if provided (for mode-specific caching), otherwise use mediaID
-        // This allows TweetDetail to have separate players from MediaCell
-        let cacheKey = tweetId ?? mediaID
-        NSLog("DEBUG: [SHARED ASSET CACHE] Using cache key: \(cacheKey)")
+        // CRITICAL: Cache key must ALWAYS be the mediaID (video attachment mid).
+        // tweetId must never affect player caching; it caused incorrect reuse/eviction behavior.
+        let cacheKey = mediaID
+        NSLog("DEBUG: [SHARED ASSET CACHE] Using cache key (mediaID): \(cacheKey)")
         
         // Try to get cached player first
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
@@ -587,10 +591,9 @@ class SharedAssetCache: ObservableObject {
             playerItem.preferredForwardBufferDuration = 30.0  // Buffer 30 seconds ahead to reduce spinner frequency
             
             // Cache the player
-            let cacheKey = tweetId ?? mediaID
             await MainActor.run { 
-                cachePlayer(player, for: cacheKey)
-                NSLog("DEBUG: [SHARED ASSET CACHE] Cached progressive player with cacheKey: \(cacheKey)")
+                cachePlayer(player, for: mediaID)
+                NSLog("DEBUG: [SHARED ASSET CACHE] Cached progressive player with cacheKey (mediaID): \(mediaID)")
                 // Notify completion
                 VideoLoadingManager.shared.videoLoadCompleted()
             }
@@ -672,10 +675,9 @@ class SharedAssetCache: ObservableObject {
         cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Buffer 15 seconds ahead (balanced prefetch)
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
-        // Cache the player using cacheKey
-        let cacheKey = tweetId ?? mediaID
+        // Cache the player using mediaID (video attachment mid)
         await MainActor.run { 
-            cachePlayer(player, for: cacheKey)
+            cachePlayer(player, for: mediaID)
             // Invalidate disk cache status since we're creating new cache content
             invalidateDiskCacheStatus(for: mediaID)
         }
@@ -975,14 +977,14 @@ class SharedAssetCache: ObservableObject {
     func preloadVideo(for url: URL, tweetId: String? = nil) {
         // Use mediaID as cache key (stable identifier), not URL which can change
         guard let mediaID = extractMediaID(from: url) else { return }
-        let cacheKey = tweetId ?? mediaID
+        let cacheKey = mediaID
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         
         let task = Task {
             do {
-                _ = try await getOrCreatePlayer(for: url, tweetId: tweetId)
+                _ = try await getOrCreatePlayer(for: url)
             } catch {
                 // Handle error silently
             }
@@ -995,7 +997,7 @@ class SharedAssetCache: ObservableObject {
     func preloadAsset(for url: URL, tweetId: String? = nil) {
         // Use mediaID as cache key (stable identifier), not URL which can change
         guard let mediaID = extractMediaID(from: url) else { return }
-        let cacheKey = tweetId ?? mediaID
+        let cacheKey = mediaID
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
