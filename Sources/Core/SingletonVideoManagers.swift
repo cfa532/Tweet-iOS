@@ -448,7 +448,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             
                             // Check for saved position and restore it
                             if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
-                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid) {
+                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen) {
                                 print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
                                 
                                 self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
@@ -564,7 +564,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         
                         // Check for saved position and restore it
                         let shouldRestore = PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen)
-                        let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid)
+                        let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen)
                         print("🔍 [FullScreenVideoManager] Checking saved state for \(mid): shouldRestore=\(shouldRestore), savedState=\(savedState != nil ? "exists (time=\(savedState!.currentTime.seconds)s)" : "nil")")
                         
                         if shouldRestore, let savedState = savedState {
@@ -728,7 +728,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     
                     if let videoMid = self.currentVideoMid,
                        PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen),
-                       let savedState = PersistentVideoStateManager.shared.getState(videoMid: videoMid) {
+                       let savedState = PersistentVideoStateManager.shared.getState(videoMid: videoMid, context: .fullScreen) {
                         NSLog("🔄 [FULLSCREEN DATA READY] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
                         // Mark as seeking to prevent multiple attempts and prevent playing
                         self.isSeekingToRestoredPosition = true
@@ -1175,8 +1175,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         let seekTime: CMTime
         
         if let videoMid = currentVideoMid,
-           let persistentState = PersistentVideoStateManager.shared.getState(videoMid: videoMid),
-           PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen) {
+           PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen),
+           let persistentState = PersistentVideoStateManager.shared.getState(videoMid: videoMid, context: .fullScreen) {
             // Use persistent state (survives player recreation)
             wasPlaying = persistentState.wasPlaying
             seekTime = persistentState.currentTime
@@ -1348,7 +1348,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                         if playerItem.status == .readyToPlay {
                             // Restore saved position if available
                             if hasSavedState,
-                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid) {
+                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) {
                                 print("🔄 [DETAIL VIDEO MANAGER] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
                                 self.currentPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                                     guard finished, let self = self else { return }
@@ -1558,8 +1558,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         let seekTime: CMTime
         
         if let videoMid = currentVideoMid,
-           let persistentState = PersistentVideoStateManager.shared.getState(videoMid: videoMid),
-           PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .detailView) {
+           PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .detailView),
+           let persistentState = PersistentVideoStateManager.shared.getState(videoMid: videoMid, context: .detailView) {
             // Use persistent state (survives player recreation)
             wasPlaying = persistentState.wasPlaying
             seekTime = persistentState.currentTime

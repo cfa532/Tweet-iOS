@@ -15,8 +15,9 @@ class PersistentVideoStateManager: ObservableObject {
     
     private init() {}
     
-    // Storage for video states
-    private var videoStates: [String: VideoPlaybackState] = [:]
+    // Storage for video states, isolated by context (detail vs fullscreen vs feed cell)
+    // This prevents one surface (e.g. feed) from overwriting another (e.g. detail view).
+    private var videoStates: [VideoPlaybackState.VideoContext: [String: VideoPlaybackState]] = [:]
     
     /// Video playback state
     struct VideoPlaybackState {
@@ -26,7 +27,7 @@ class PersistentVideoStateManager: ObservableObject {
         let timestamp: Date
         let context: VideoContext // Track which screen the video is in
         
-        enum VideoContext: String {
+        enum VideoContext: String, CaseIterable {
             case detailView = "detail"
             case fullScreen = "fullscreen"
             case mediaCell = "cell"
@@ -47,33 +48,49 @@ class PersistentVideoStateManager: ObservableObject {
             timestamp: Date(),
             context: context
         )
-        videoStates[videoMid] = state
+        var bucket = videoStates[context] ?? [:]
+        bucket[videoMid] = state
+        videoStates[context] = bucket
         
         print("📝 [VIDEO STATE] Saved state for \(videoMid): time=\(currentTime.seconds)s, wasPlaying=\(wasPlaying), context=\(context.rawValue)")
     }
     
     /// Get saved video playback state
-    func getState(videoMid: String) -> VideoPlaybackState? {
-        return videoStates[videoMid]
+    func getState(videoMid: String, context: VideoPlaybackState.VideoContext) -> VideoPlaybackState? {
+        return videoStates[context]?[videoMid]
     }
     
     /// Remove saved state for a video
+    func clearState(videoMid: String, context: VideoPlaybackState.VideoContext) {
+        videoStates[context]?.removeValue(forKey: videoMid)
+        print("🗑️ [VIDEO STATE] Cleared state for \(videoMid) in context \(context.rawValue)")
+    }
+
+    /// Remove saved state for a video across all contexts
     func clearState(videoMid: String) {
-        videoStates.removeValue(forKey: videoMid)
-        print("🗑️ [VIDEO STATE] Cleared state for \(videoMid)")
+        for context in VideoPlaybackState.VideoContext.allCases {
+            videoStates[context]?.removeValue(forKey: videoMid)
+        }
+        print("🗑️ [VIDEO STATE] Cleared state for \(videoMid) (all contexts)")
     }
     
     /// Clear states older than 1 hour
     func clearStaleStates() {
         let oneHourAgo = Date().addingTimeInterval(-3600)
-        let staleMids = videoStates.filter { $0.value.timestamp < oneHourAgo }.map { $0.key }
-        
-        for mid in staleMids {
-            videoStates.removeValue(forKey: mid)
+        var removedCount = 0
+
+        for context in VideoPlaybackState.VideoContext.allCases {
+            guard var bucket = videoStates[context] else { continue }
+            let staleMids = bucket.filter { $0.value.timestamp < oneHourAgo }.map { $0.key }
+            for mid in staleMids {
+                bucket.removeValue(forKey: mid)
+                removedCount += 1
+            }
+            videoStates[context] = bucket
         }
-        
-        if !staleMids.isEmpty {
-            print("🗑️ [VIDEO STATE] Cleared \(staleMids.count) stale states")
+
+        if removedCount > 0 {
+            print("🗑️ [VIDEO STATE] Cleared \(removedCount) stale states")
         }
     }
     
@@ -85,19 +102,12 @@ class PersistentVideoStateManager: ObservableObject {
     
     /// Check if we should restore playback for a video
     func shouldRestorePlayback(videoMid: String, context: VideoPlaybackState.VideoContext) -> Bool {
-        guard let state = getState(videoMid: videoMid) else {
+        guard let state = getState(videoMid: videoMid, context: context) else {
             return false
         }
         
-        // Allow cross-context restoration: mediaCell -> detailView or fullScreen
-        // This allows videos to continue from where they were playing in the feed when opened in detail/fullscreen
-        let contextMatches = state.context == context || 
-            (state.context == .mediaCell && (context == .detailView || context == .fullScreen))
-        
-        guard contextMatches else {
-            print("⚠️ [VIDEO STATE] Context mismatch for \(videoMid): saved=\(state.context.rawValue), current=\(context.rawValue)")
-            return false
-        }
+        // Context is isolated by dictionary key; this is a safety check.
+        guard state.context == context else { return false }
         
         // Only restore if saved within last 5 minutes
         let fiveMinutesAgo = Date().addingTimeInterval(-300)

@@ -161,7 +161,7 @@ struct DetailMediaCell: View {
             // For videos in detail view, check if we need to restore position
             if attachment.type == .video || attachment.type == .hls_video {
                 if !hasRestoredPosition {
-                    if let savedState = PersistentVideoStateManager.shared.getState(videoMid: attachment.mid),
+                    if let savedState = PersistentVideoStateManager.shared.getState(videoMid: attachment.mid, context: .detailView),
                        PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: attachment.mid, context: .detailView) {
                         
                         print("🔄 [DetailMediaCell] Found saved state for \(attachment.mid): time=\(savedState.currentTime.seconds)s, wasPlaying=\(savedState.wasPlaying)")
@@ -423,23 +423,7 @@ struct TweetDetailView: View {
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
             
-            // Save video timestamps from MediaCell to PersistentVideoStateManager
-            // This allows videos to continue from where they were playing in the feed
-            if let attachments = displayTweet.attachments {
-                for attachment in attachments {
-                    if attachment.type == .video || attachment.type == .hls_video {
-                        if let playbackInfo = VideoStateCache.shared.getCachedPlaybackInfo(for: attachment.mid) {
-                            PersistentVideoStateManager.shared.saveState(
-                                videoMid: attachment.mid,
-                                currentTime: playbackInfo.time,
-                                wasPlaying: playbackInfo.wasPlaying,
-                                context: .detailView
-                            )
-                            print("💾 [TweetDetailView] Saved video position from MediaCell: \(attachment.mid), time=\(playbackInfo.time.seconds)s, wasPlaying=\(playbackInfo.wasPlaying)")
-                        }
-                    }
-                }
-            }
+            // Detail view playback position is persisted independently (not seeded from feed positions).
         }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes

@@ -326,7 +326,7 @@ struct SimpleVideoPlayer: View {
     @State private var playbackWatchdogTask: Task<Void, Never>? = nil
     @State private var isHoldingRecoveryCover: Bool = false
     @State private var recoveryCoverTask: Task<Void, Never>? = nil
-    @State private var isCapturingFinishFrame: Bool = false
+    // (removed) finished-video last-frame cover behavior; last-frame is for background recovery only
     @State private var isHandlingFinishEvent: Bool = false
     
     // TweetDetail: prevent "play from 0 then jump back" by restoring seek before playback.
@@ -443,7 +443,7 @@ struct SimpleVideoPlayer: View {
         }
         
         guard PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .detailView),
-              let saved = PersistentVideoStateManager.shared.getState(videoMid: mid) else {
+              let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) else {
             hasAppliedDetailRestore = true
             return false
         }
@@ -960,10 +960,10 @@ struct SimpleVideoPlayer: View {
                 NSLog("🔇 [PLAYER MUTE] handleOnDisappear - Restored global mute state after exiting fullscreen: \(MuteState.shared.isMuted) for \(mid)")
             }
         } else if mode == .tweetDetail {
-            // TweetDetail: Pause singleton player when view disappears
-            // The task defer in TweetDetailView also handles cleanup, but we should pause here too
-            DetailVideoManager.shared.currentPlayer?.pause()
-            NSLog("DEBUG: [VIDEO DISAPPEAR] TweetDetail view disappeared - paused singleton player for \(mid)")
+            // TweetDetail: DO NOTHING.
+            // Detail view uses a singleton player (DetailVideoManager) and SwiftUI may recreate
+            // cells/views (TabView) during normal interaction. Pausing here causes the
+            // "plays briefly then stops" bug. Cleanup is handled by TweetDetailView's lifecycle.
         }
     }
     
@@ -2334,7 +2334,7 @@ struct SimpleVideoPlayer: View {
                         )
                 }
                 
-                // MediaCell UX: last-frame placeholder to avoid black flicker during reattach/buffering.
+                // MediaCell UX: last-frame placeholder used ONLY for background recovery cover.
                 if mode == .mediaCell, let frame = cachedLastFrame {
                     let item = player.currentItem
                     let bufferedAhead = item.map { bufferedTimeAhead(for: $0, player: player) } ?? 0
@@ -2344,17 +2344,10 @@ struct SimpleVideoPlayer: View {
                     let waitingForData = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                     let bufferEmpty = item?.isPlaybackBufferEmpty ?? false
                     let isFinished = (playbackState == .finished)
-                    // Avoid a "start frame -> last frame" jump at end:
-                    // while we are capturing a better last frame (seek-back), keep showing the player layer
-                    // instead of the (potentially stale) cached placeholder frame.
-                    let shouldShowFinishedPlaceholder = isFinished && !isCapturingFinishFrame
-                    let shouldShowPlaceholder =
-                        isHoldingRecoveryCover ||
-                        isPlayerDetached ||
-                        loadingState.isLoading ||
-                        // If finished, prefer the cached last frame over any end-of-stream black frame.
-                        shouldShowFinishedPlaceholder ||
-                        (!readyForFirstFrame && (waitingForData || bufferEmpty || !loadingState.isLoaded))
+                    
+                    // Only show the cached frame while we are holding the recovery cover (background recovery)
+                    // or the player is explicitly detached due to app lifecycle.
+                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached
                     
                     if shouldShowPlaceholder {
                         // IMPORTANT: This overlay must be tap-through so taps still reach the video layer
@@ -2368,7 +2361,7 @@ struct SimpleVideoPlayer: View {
                             
                             // Spinner over the cover frame during recovery/buffering.
                             // IMPORTANT: Never show spinner when the video is finished.
-                            if !isFinished && (loadingState.isLoading || waitingForData || bufferEmpty) {
+                            if !isFinished && (loadingState.isLoading || waitingForData || bufferEmpty || !readyForFirstFrame) {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(1.1)
@@ -2410,12 +2403,12 @@ struct SimpleVideoPlayer: View {
                 }
             }
         } else {
-            // No player yet - show last frame if available, otherwise black placeholder.
+            // No player yet - ONLY show last frame during background recovery; otherwise black placeholder.
             ZStack {
                 // Tap-through cover: let MediaCell's overlay / parent tap gestures still work
                 // even while the player is being created.
                 Group {
-                    if mode == .mediaCell, let frame = cachedLastFrame {
+                    if mode == .mediaCell, isHoldingRecoveryCover, let frame = cachedLastFrame {
                         Image(uiImage: frame)
                             .resizable()
                             .scaledToFill()
@@ -2728,13 +2721,20 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
-            // Different video or no singleton - create new player and store in singleton
+            // Different video or no singleton - create an INDEPENDENT player and store in singleton.
+            // IMPORTANT: Do NOT reuse SharedAssetCache's cached AVPlayer here, otherwise MediaCell's
+            // onDisappear() will pause the same player instance and TweetDetail will "play briefly then stop".
             Task.detached(priority: .userInitiated) {
                 NSLog("DEBUG: [VIDEO SETUP] Task started for \(mid)")
                 do {
-                    NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer...")
-                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
-                    NSLog("DEBUG: [VIDEO SETUP] Player created, now storing in singleton...")
+                    NSLog("DEBUG: [VIDEO SETUP] Creating fresh playerItem for TweetDetail...")
+                    let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
+                        for: uniquePlayerURL,
+                        mediaID: mid,
+                        mediaType: mediaType
+                    )
+                    let newPlayer = AVPlayer(playerItem: playerItem)
+                    NSLog("DEBUG: [VIDEO SETUP] Created independent AVPlayer for TweetDetail, now storing in singleton...")
                     newPlayer.isMuted = false
                     
                     await MainActor.run {
@@ -3769,20 +3769,9 @@ struct SimpleVideoPlayer: View {
         // Mark finished immediately to prevent any auto-restart logic from firing.
         playbackState = .finished
 
-        // Cache a good last-frame for finished videos (some videos end on black).
-        // Run after pausing so we capture a stable decoded frame.
-        if mode == .mediaCell {
-            isCapturingFinishFrame = true
-            await captureLastFrameNearEndIfPossible(reason: "didPlayToEnd")
-            isCapturingFinishFrame = false
-        }
-        
         // For MediaCell mode, ensure mute state is correct and prevent any view updates
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
-            // CRITICAL: Don't trigger any view updates for finished videos
-            // The video layer should remain static showing the last frame
-            // Any representableId changes would cause flicker
         }
         
         // CRITICAL: For MediaCell sequential playback, call callback to advance to next video
