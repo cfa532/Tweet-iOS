@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 @available(iOS 16.0, *)
 struct CommentComposeView: View {
@@ -21,6 +22,11 @@ struct CommentComposeView: View {
     @State private var showLoginView = false
     @FocusState private var isEditorFocused: Bool
     @EnvironmentObject private var hproseInstance: HproseInstance
+
+    private func hideKeyboard() {
+        isEditorFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
     
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
@@ -30,6 +36,11 @@ struct CommentComposeView: View {
     var body: some View {
         NavigationView {
             ZStack {
+                // Tap anywhere outside the TextEditor to dismiss keyboard.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { hideKeyboard() }
+
                 ScrollView {
                     VStack(spacing: 0) {
                         // Quote checkbox with larger tappable area
@@ -55,7 +66,7 @@ struct CommentComposeView: View {
                         // Don't show quoted content preview
                         
                         TextEditor(text: $commentText)
-                            .frame(minHeight: 150, maxHeight: 250) // Max height for ~10 lines
+                            .frame(minHeight: 150, maxHeight: 242) // Reduced maxHeight by 8pt
                             .padding()
                             .focused($isEditorFocused)
                             .background(Color(.systemBackground))
@@ -109,6 +120,10 @@ struct CommentComposeView: View {
                         )
                     }
                 }
+                // When the editor is focused, let the TextEditor handle vertical scrolling.
+                // Otherwise the outer ScrollView often steals the scroll gesture and long text feels "stuck".
+                .scrollDisabled(isEditorFocused)
+                .scrollDismissesKeyboard(.interactively)
                 
                 if let error = error {
                     VStack {
@@ -171,6 +186,14 @@ struct CommentComposeView: View {
                         }
                     }
                     .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && selectedItems.isEmpty && selectedImages.isEmpty && selectedVideos.isEmpty)
+                }
+
+                // Keyboard accessory: always provide an explicit "Done".
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(NSLocalizedString("Done", comment: "Dismiss keyboard")) {
+                        hideKeyboard()
+                    }
                 }
             }
         }

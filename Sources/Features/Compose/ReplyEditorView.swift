@@ -8,6 +8,7 @@
 import SwiftUI
 import PhotosUI
 import AVFoundation
+import UIKit
 
 @available(iOS 16.0, *)
 struct ReplyEditorView: View {
@@ -136,6 +137,16 @@ struct ReplyEditorView: View {
                 showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
             }
         }
+        .toolbar {
+            // Keyboard accessory: always provide an explicit "Done".
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(NSLocalizedString("Done", comment: "Dismiss keyboard")) {
+                    isTextFieldFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+            }
+        }
         
     }
     
@@ -167,7 +178,16 @@ struct ReplyEditorView: View {
     }
     
     private var expandedView: some View {
-        VStack(spacing: 12) {
+        ZStack {
+            // Tap anywhere outside the TextEditor to dismiss keyboard.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isTextFieldFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+
+            VStack(spacing: 12) {
             // User profile section
             HStack(alignment: .top, spacing: 8) {
                 // User avatar
@@ -317,6 +337,7 @@ struct ReplyEditorView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isTextFieldFocused = true
             }
+        }
         }
     }
     

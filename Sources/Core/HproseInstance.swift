@@ -4779,8 +4779,14 @@ final class HproseInstance: ObservableObject {
                 
                 print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
                 let uploadedTweet = tweet
-                uploadedTweet.mid = newTweetId
-                uploadedTweet.author = try? await self.fetchUser(tweet.authorId)
+                
+                // Fetch author off-main, but assign @Published properties on main.
+                let author = try? await self.fetchUser(tweet.authorId)
+                await MainActor.run {
+                    // Tweet is an ObservableObject; avoid publishing from background threads.
+                    uploadedTweet.mid = newTweetId
+                    uploadedTweet.author = author
+                }
                 
                 // Immediately update appUser tweet count (like favorites/bookmarks)
                 await MainActor.run {
