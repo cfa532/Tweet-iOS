@@ -9,10 +9,11 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     
     /// Navigation state
-    @State private var showUserList = false
     @State private var showTweetList = false
     @State private var selectedTweetForNavigation: Tweet? = nil
+    @State private var selectedTweetFromBookmarksFavorites: Tweet? = nil // Separate state for tweets from bookmarks/favorites
     @State private var selectedUserForNavigation: User? = nil
+    @State private var userListDestination: UserListDestination? = nil
     
     @State private var userListType: UserListType = .FOLLOWER
     @State private var tweetListType: TweetListType = .BOOKMARKS
@@ -25,6 +26,7 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
+    @State private var profileRefreshCounter = 0
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -99,11 +101,13 @@ struct ProfileView: View {
                                 user: user,
                                 onFollowersTap: {
                                     userListType = .FOLLOWER
-                                    showUserList = true
+                                    userListDestination = UserListDestination(userId: user.mid, listType: .FOLLOWER)
+                                    navigationPath.append(userListDestination!)
                                 },
                                 onFollowingTap: {
                                     userListType = .FOLLOWING
-                                    showUserList = true
+                                    userListDestination = UserListDestination(userId: user.mid, listType: .FOLLOWING)
+                                    navigationPath.append(userListDestination!)
                                 },
                                 onBookmarksTap: {
                                     tweetListType = .BOOKMARKS
@@ -219,13 +223,18 @@ struct ProfileView: View {
         .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
         .sheet(isPresented: $showEditSheet) {
             ProfileEditView(
-                onSubmit: { username, password, alias, profile, hostId, cloudDrivePort in
+                onSubmit: { username, password, alias, profile, hostId, cloudDrivePort, domainToShare in
                     // Set submission state
                     isSubmittingProfile = true
-                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort)")
+                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), domainToShare: \(domainToShare ?? "nil")")
                     
                     let success = try await hproseInstance.updateUserCore(
-                        password: password, alias: alias, profile: profile, hostId: hostId, cloudDrivePort: cloudDrivePort
+                        password: password,
+                        alias: alias,
+                        profile: profile,
+                        hostId: hostId,
+                        cloudDrivePort: cloudDrivePort,
+                        domainToShare: domainToShare
                     )
                     print("DEBUG: Profile update result: \(success)")
                     
@@ -245,6 +254,15 @@ struct ProfileView: View {
                         }
                         hproseInstance.appUser.cloudDrivePort = cloudDrivePort
                         print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
+                        
+                        let sanitizedDomain = domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let domain = sanitizedDomain, !domain.isEmpty {
+                            hproseInstance.appUser.domainToShare = domain
+                            print("DEBUG: Updated domainToShare to: \(domain)")
+                        } else {
+                            hproseInstance.appUser.domainToShare = nil
+                            print("DEBUG: Cleared domainToShare")
+                        }
                         
                         // Clear user cache to ensure fresh data is loaded on next app launch
                         TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)
@@ -287,45 +305,17 @@ struct ProfileView: View {
         .fullScreenCover(isPresented: $showChatScreen) {
             ChatScreen(receiptId: user.mid)
         }
-        .task {
-            if !didLoad {
-                isLoading = true
-                
-                // Fetch fresh user data from server
-                do {
-                    let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
-                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
-                    
-                    // Save updated user to cache if fetch was successful
-                    if let refreshedUser = refreshedUser {
-                        TweetCacheManager.shared.saveUser(refreshedUser)
-                        print("DEBUG: [ProfileView] Saved fetched user to cache")
-                    }
-                } catch {
-                    print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
-                }
-                
-                // Refresh pinned tweets
-                await refreshPinnedTweets()
-                
-                isLoading = false
-                didLoad = true
-                
-                // Resync user data on server in background (long-running operation)
-                let userId = user.mid
-                Task.detached {
-                    do {
-                        let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
-                        print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
-                        
-                        // Save resynced user to cache
-                        TweetCacheManager.shared.saveUser(resyncedUser)
-                        print("DEBUG: [ProfileView] Saved resynced user to cache")
-                    } catch {
-                        print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
-                    }
-                }
+        .task(id: profileRefreshCounter) {
+            await refreshProfileData()
+        }
+        .onAppear {
+            if didLoad {
+                profileRefreshCounter += 1
             }
+        }
+        .onChange(of: user.mid) { _, _ in
+            didLoad = false
+            profileRefreshCounter += 1
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
             if let _ = notification.userInfo?["tweetId"] as? String,
@@ -335,33 +325,31 @@ struct ProfileView: View {
                 }
             }
         }
-        .navigationDestination(isPresented: $showUserList) {
-            let displayName = if let name = user.name, !name.isEmpty {
-                name
-            } else {
-                user.username ?? "No One"
-            }
+        .navigationDestination(for: UserListDestination.self) { destination in
             UserListView(
-                title: userListType == .FOLLOWER ? "Fans@\(displayName)" : "Followings@\(displayName)",
+                title: userListTitle(for: destination),
                 userFetcher: { page, size in
                     // Only fetch all IDs once when page is 0
                     if page == 0 {
-                        let entry: UserContentType = userListType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
-                        let ids = try await hproseInstance.getListByType(user: user, entry: entry)
+                        let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                        // Get the user instance from destination.userId
+                        let targetUser = User.getInstance(mid: destination.userId)
+                        let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
                         // Update user properties on main thread to avoid publishing changes from background thread
                         await MainActor.run {
-                            if userListType == .FOLLOWER {
-                                user.fansList = ids
+                            if destination.listType == .FOLLOWER {
+                                targetUser.fansList = ids
                             } else {
-                                user.followingList = ids
+                                targetUser.followingList = ids
                             }
                         }
                         return ids
                     } else {
-                        return if userListType == .FOLLOWER {
-                            user.fansList ?? []
+                        let targetUser = User.getInstance(mid: destination.userId)
+                        return if destination.listType == .FOLLOWER {
+                            targetUser.fansList ?? []
                         } else {
-                            user.followingList ?? []
+                            targetUser.followingList ?? []
                         }
                     }
                 },
@@ -376,18 +364,6 @@ struct ProfileView: View {
         .navigationDestination(isPresented: $showTweetList) {
             print("🔵 [ProfileView] navigationDestination(showTweetList) TRIGGERED - type: \(tweetListType), user: \(user.username ?? "nil")")
             return bookmarksOrFavoritesListView()
-                .onAppear {
-                    print("🔵 [ProfileView] Bookmarks/Favorites list appeared - type: \(tweetListType), user: \(user.username ?? "nil")")
-                    // Clear tweets when view appears to ensure fresh data
-                    if tweetListType == .BOOKMARKS {
-                        bookmarksTweets.removeAll()
-                    } else {
-                        favoritesTweets.removeAll()
-                    }
-                }
-                .onDisappear {
-                    print("🔵 [ProfileView] Bookmarks/Favorites list disappeared - type: \(tweetListType)")
-                }
         }
         .navigationDestination(item: $selectedTweetForNavigation) { tweet in
             // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
@@ -620,12 +596,20 @@ struct ProfileView: View {
                     // Increment the followed user's followers count
                     user.followersCount = (user.followersCount ?? 0) + 1
                     print("DEBUG: [ProfileView] Incremented followers count for user \(user.mid): \(oldFollowersCount ?? 0) -> \(user.followersCount ?? 0)")
+                    
+                    // Fetch and add recent tweets from newly followed user to main feed
+                    Task {
+                        await FollowingsTweetViewModel.shared.addTweetsFromNewlyFollowedUser(user)
+                    }
                 } else {
                     // User is no longer following - remove app user from followed user's fansList
                     user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
                     // Decrement the followed user's followers count
                     user.followersCount = max(0, (user.followersCount ?? 0) - 1)
                     print("DEBUG: [ProfileView] Decremented followers count for user \(user.mid): \(oldFollowersCount ?? 0) -> \(user.followersCount ?? 0)")
+                    
+                    // Remove unfollowed user's tweets from main feed
+                    FollowingsTweetViewModel.shared.removeTweetsFromUser(user.mid)
                 }
                 
                 // Update app user's following count
@@ -647,6 +631,48 @@ struct ProfileView: View {
                 isFollowing.wrappedValue.toggle()
             }
             showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"), type: .error)
+        }
+    }
+    
+    private func refreshProfileData() async {
+        await MainActor.run {
+            isLoading = true
+        }
+        
+        defer {
+            Task { @MainActor in
+                isLoading = false
+                didLoad = true
+            }
+        }
+        
+        // Fetch fresh user data from server
+        do {
+            let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
+            print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
+            
+            if let refreshedUser = refreshedUser {
+                TweetCacheManager.shared.saveUser(refreshedUser)
+                print("DEBUG: [ProfileView] Saved fetched user to cache")
+            }
+        } catch {
+            print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
+        }
+        
+        await refreshPinnedTweets()
+        
+        // Resync user data on server in background (long-running operation)
+        let userId = user.mid
+        Task.detached {
+            do {
+                let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
+                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
+                
+                TweetCacheManager.shared.saveUser(resyncedUser)
+                print("DEBUG: [ProfileView] Saved resynced user to cache")
+            } catch {
+                print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+            }
         }
     }
     
@@ -719,7 +745,7 @@ struct ProfileView: View {
         } catch {
             // Show error message
             await MainActor.run {
-                showToastMessage(String(format: NSLocalizedString("Failed to block user: %@", comment: "Block user error message"), error.localizedDescription), type: .error)
+                showToastMessage(String(format: NSLocalizedString("Failed to block user: %@", comment: "Block user error message"), ErrorMessageHelper.userFriendlyMessage(from: error)), type: .error)
             }
         }
     }
@@ -777,8 +803,30 @@ struct ProfileView: View {
         } catch {
             // Show error message
             await MainActor.run {
-                showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), error.localizedDescription), type: .error)
+                showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), ErrorMessageHelper.userFriendlyMessage(from: error)), type: .error)
             }
+        }
+    }
+    
+    // MARK: - Helper Methods
+    private func userListTitle(for destination: UserListDestination) -> String {
+        let isDestinationAppUser = destination.userId == hproseInstance.appUser.mid
+        if isDestinationAppUser {
+            return destination.listType == .FOLLOWER 
+                ? NSLocalizedString("Your Fans", comment: "Your fans title")
+                : NSLocalizedString("Your Followings", comment: "Your followings title")
+        } else {
+            let targetUser = User.getInstance(mid: destination.userId)
+            let displayName: String
+            if let name = targetUser.name, !name.isEmpty {
+                displayName = name
+            } else if let username = targetUser.username {
+                displayName = username
+            } else {
+                displayName = NSLocalizedString("Noone", comment: "No one")
+            }
+            let titleKey = destination.listType == .FOLLOWER ? "Fans@%@" : "Followings@%@"
+            return String(format: NSLocalizedString(titleKey, comment: "User list title"), displayName)
         }
     }
     
@@ -786,10 +834,12 @@ struct ProfileView: View {
     private func bookmarksOrFavoritesListView() -> some View {
         if tweetListType == .BOOKMARKS {
             TweetListView(
-                title: "Bookmarks",
+                title: isAppUser 
+                    ? NSLocalizedString("Your Bookmarks", comment: "Your bookmarks title")
+                    : NSLocalizedString("Bookmarks", comment: "Bookmarks title"),
                 tweets: $bookmarksTweets,
-                tweetFetcher: { page, size, isFromCache, shouldCache in
-                    print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache), shouldCache: \(shouldCache)")
+                tweetFetcher: { page, size, isFromCache in
+                    print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache)")
                     if isFromCache {
                         // For bookmarks/favorites, we don't cache, so return empty array
                         print("DEBUG: [ProfileView] Cache requested for bookmarks, returning empty array")
@@ -800,7 +850,6 @@ struct ProfileView: View {
                         return tweets
                     }
                 },
-                shouldCacheServerTweets: false,
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
@@ -811,17 +860,42 @@ struct ProfileView: View {
                             selectedUserForNavigation = tappedUser
                         },
                         onTap: { selectedTweet in
-                            selectedTweetForNavigation = selectedTweet
+                            selectedTweetFromBookmarksFavorites = selectedTweet
                         }
                     )
                 }
             )
+            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
+                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
+                    CommentDetailViewWithParent(comment: tweet)
+                } else {
+                    // This is a regular tweet or quote tweet, show TweetDetailView
+                    TweetDetailView(tweet: tweet)
+                }
+            }
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showTweetList = false
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text(NSLocalizedString("Back", comment: "Back button"))
+                        }
+                    }
+                }
+            }
         } else {
             TweetListView(
-                title: "Favorites",
+                title: isAppUser 
+                    ? NSLocalizedString("Your Favorites", comment: "Your favorites title")
+                    : NSLocalizedString("Favorites", comment: "Favorites title"),
                 tweets: $favoritesTweets,
-                tweetFetcher: { page, size, isFromCache, shouldCache in
-                    print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache), shouldCache: \(shouldCache)")
+                tweetFetcher: { page, size, isFromCache in
+                    print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache)")
                     if isFromCache {
                         // For favorites, we don't cache, so return empty array
                         print("DEBUG: [ProfileView] Cache requested for favorites, returning empty array")
@@ -832,7 +906,6 @@ struct ProfileView: View {
                         return tweets
                     }
                 },
-                shouldCacheServerTweets: false,
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
@@ -843,11 +916,34 @@ struct ProfileView: View {
                             selectedUserForNavigation = tappedUser
                         },
                         onTap: { selectedTweet in
-                            selectedTweetForNavigation = selectedTweet
+                            selectedTweetFromBookmarksFavorites = selectedTweet
                         }
                     )
                 }
             )
+            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
+                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
+                    CommentDetailViewWithParent(comment: tweet)
+                } else {
+                    // This is a regular tweet or quote tweet, show TweetDetailView
+                    TweetDetailView(tweet: tweet)
+                }
+            }
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showTweetList = false
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text(NSLocalizedString("Back", comment: "Back button"))
+                        }
+                    }
+                }
+            }
         }
     }
 }

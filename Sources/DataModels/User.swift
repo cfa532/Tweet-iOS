@@ -1,11 +1,11 @@
  import Foundation
-import Combine
+import Foundation
 import hprose
 
 class User: ObservableObject, Codable, Identifiable, Hashable {
     // MARK: - Singleton Dictionary
     private static var userInstances: [MimeiId: User] = [:]
-    private static let userInstancesQueue = DispatchQueue(label: "user.instances.queue")
+    static let userInstancesQueue = DispatchQueue(label: "user.instances.queue")
     
     // MARK: - Properties
     @Published var mid: MimeiId
@@ -20,9 +20,16 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var timestamp: Date
     @Published var lastLogin: Date?
     @Published var cloudDrivePort: Int = 0
+    @Published var domainToShare: String?
     
     @Published var tweetCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = tweetCount, count < 0 {
+                tweetCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when tweetCount changes
@@ -41,6 +48,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followingCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = followingCount, count < 0 {
+                followingCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followingCount changes
@@ -59,6 +72,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var followersCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = followersCount, count < 0 {
+                followersCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when followersCount changes
@@ -77,6 +96,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var bookmarksCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = bookmarksCount, count < 0 {
+                bookmarksCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when bookmarksCount changes
@@ -95,6 +120,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     @Published var favoritesCount: Int? {
         didSet {
+            // Ensure count never goes below zero
+            if let count = favoritesCount, count < 0 {
+                favoritesCount = 0
+                return
+            }
+            
             let userId = mid  // Capture mid before Task to avoid race conditions
             Task { @MainActor in
                 // Update cached version when favoritesCount changes
@@ -111,64 +142,62 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             }
         }
     }
-    @Published var commentsCount: Int?
+    @Published var commentsCount: Int? {
+        didSet {
+            // Ensure count never goes below zero
+            if let count = commentsCount, count < 0 {
+                commentsCount = 0
+                return
+            }
+        }
+    }
     
     @Published var hostIds: [MimeiId]? // List of MimeiId
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
-    private var _hproseClient: HproseClient?
+    
     public var hproseClient: HproseClient? {
         get {
             guard let baseUrl = baseUrl else { 
                 return nil 
             }
-
-            if let cached = _hproseClient {
-                return cached
-            } else {
-                if baseUrl == HproseInstance.shared.appUser.baseUrl {
-                    // Create a new client since the shared one is private
-                    let client = HproseHttpClient()
-                    client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
-                    client.uri = "\(baseUrl)/webapi/"
-                    _hproseClient = client
-                    return client
-                } else {
-                    let client = HproseHttpClient()
-                    client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
-                    client.uri = "\(baseUrl)/webapi/"
-                    _hproseClient = client
-                    return client
-                }
-            }
+            
+            let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
+            
+            // Configure timeout for regular operations (5 minutes)
+            client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
+            
+            return client
         }
     }
-    private var _uploadClient: HproseClient?
+    
     public var uploadClient: HproseClient? {
         get {
             guard let writableUrl = writableUrl else { 
                 return nil 
             }
-
-            if let cached = _uploadClient {
-                return cached
-            } else {
-                if writableUrl == HproseInstance.shared.appUser.baseUrl {
-                    // Use the main hprose client if available, otherwise create a new one
-                    // Create a new client for upload
-                    let client = HproseHttpClient()
-                    client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
-                    client.uri = "\(writableUrl)/webapi/"
-                    _uploadClient = client
-                    return client
-                } else {
-                    let client = HproseHttpClient()
-                    client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
-                    client.uri = "\(writableUrl)/webapi/"
-                    _uploadClient = client
-                    return client
-                }
-            }
+            
+            let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
+            
+            // Configure timeout for upload operations (50 minutes for large uploads)
+            client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
+            
+            return client
+        }
+    }
+    
+    @MainActor
+    func resetClients() {
+        // With clientPool, we don't need to manually close clients
+        // The pool manages lifecycle. We can clear the pool for specific URLs if needed
+        if let baseUrl = baseUrl {
+            let urlString = "\(baseUrl)/webapi/"
+            HproseInstance.shared.clientPool.clear(for: urlString)
+        }
+        
+        if let writableUrl = writableUrl {
+            let urlString = "\(writableUrl)/webapi/"
+            HproseInstance.shared.clientPool.clear(for: urlString)
         }
     }
     
@@ -217,9 +246,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     var id: String { mid }  // Computed property that returns mid
     
-    private var baseUrlCancellable: AnyCancellable?
-    private var writableUrlCancellable: AnyCancellable?
-    
     // MARK: - Initialization
     init(
         mid: MimeiId = Constants.GUEST_ID,
@@ -231,6 +257,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         email: String? = nil,
         profile: String? = nil,
         cloudDrivePort: Int = 0,
+        domainToShare: String? = nil,
         hostIds: [MimeiId]? = nil,
         publicKey: String? = nil,
         hasAcceptedTerms: Bool = false
@@ -246,6 +273,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.timestamp = Date.now
         self.lastLogin = Date.now
         self.cloudDrivePort = cloudDrivePort
+        self.domainToShare = domainToShare
         self.tweetCount = nil
         self.followingCount = nil
         self.followersCount = nil
@@ -255,18 +283,6 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         self.hostIds = hostIds
         self.publicKey = publicKey
         self.hasAcceptedTerms = hasAcceptedTerms
-        // Observe baseUrl changes to clear cached clients
-        baseUrlCancellable = $baseUrl
-            .sink { [weak self] _ in
-                self?._hproseClient = nil
-                self?._uploadClient = nil
-            }
-        
-        // Observe writableUrl changes to clear upload client cache
-        writableUrlCancellable = $writableUrl
-            .sink { [weak self] _ in
-                self?._uploadClient = nil
-            }
     }
     
     // MARK: - Factory Methods
@@ -281,16 +297,36 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
     
+    /// Get all user instances (for search functionality)
+    static func getAllInstances() -> [String: User] {
+        return userInstancesQueue.sync {
+            return userInstances
+        }
+    }
+    
     /// Update user instance with backend data. Keep current baseUrl
     static func from(dict: [String: Any]) throws -> User {
         do {
-            // Convert NSArray objects to proper JSON arrays
+            // Convert NSArray objects to proper JSON arrays and handle type conversions
             var sanitizedDict = dict
             for (key, value) in dict {
                 if let nsArray = value as? NSArray {
                     // Convert NSArray to Swift Array
                     let swiftArray = nsArray.compactMap { $0 as? String }
                     sanitizedDict[key] = swiftArray
+                } else if key == "cloudDrivePort" {
+                    // Handle cloudDrivePort: convert to Int from String, NSNumber, or Int
+                    if let number = value as? NSNumber {
+                        sanitizedDict[key] = number.intValue
+                    } else if let string = value as? String, let intValue = Int(string) {
+                        sanitizedDict[key] = intValue
+                    } else if value is Int {
+                        // Already Int, keep as is
+                        sanitizedDict[key] = value
+                    } else {
+                        // Invalid type, use 0 as default
+                        sanitizedDict[key] = 0
+                    }
                 } else if !JSONSerialization.isValidJSONObject([key: value]) {
                 }
             }
@@ -300,9 +336,11 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             decoder.dateDecodingStrategy = .millisecondsSince1970
             let decodedUser = try decoder.decode(User.self, from: jsonData)
             
-            // keep original baseUrl when updated by user dictionary from backend.
+            // CRITICAL: Always preserve the existing baseUrl from the singleton instance
+            // The backend may send a baseUrl from hostId[0], but we need the user's provider IP
+            // which is resolved via getProviderIP(user.mid), not from hostId
             let instance = getInstance(mid: decodedUser.mid)
-            decodedUser.baseUrl = instance.baseUrl
+            decodedUser.baseUrl = instance.baseUrl  // Preserve provider IP, ignore backend baseUrl
             decodedUser.writableUrl = instance.writableUrl
             
             updateUserInstance(with: decodedUser)
@@ -332,14 +370,17 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         // Try to decode the full user object from cache.
         if let userData = cdUser.userData,
            let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
-            // baseUrl and writableUrl are not persisted to Core Data
-            // They will be nil and resolved fresh on first use
-            updateUserInstance(with: decodedUser)
+            // baseUrl is persisted in cache and should be loaded
+            // Pass true to apply cached baseUrl so avatar can load immediately on app start
+            updateUserInstance(with: decodedUser, true)
         }
         return getInstance(mid: cdUser.mid ?? Constants.GUEST_ID)
     }
     
-    static func updateUserInstance(with user: User) {
+    static func updateUserInstance(
+        with user: User,
+        _ shouldUpdateBaseUrl: Bool = false
+    ) {
         let instance = getInstance(mid: user.mid)
         
         // Update synchronously if already on MainActor, otherwise dispatch to MainActor
@@ -353,15 +394,12 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.timestamp = user.timestamp
             instance.lastLogin = user.lastLogin
             instance.cloudDrivePort = user.cloudDrivePort
+            instance.domainToShare = user.domainToShare
             instance.hostIds = user.hostIds
             
-            // Only update baseUrl/writableUrl if the new value is non-nil
-            // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
-            if let newBaseUrl = user.baseUrl {
-                instance.baseUrl = newBaseUrl
-            }
-            if let newWritableUrl = user.writableUrl {
-                instance.writableUrl = newWritableUrl
+            // when user argument is from cache, do not use its baseUrl.
+            if (shouldUpdateBaseUrl) {
+                instance.baseUrl = user.baseUrl
             }
             
             if instance.tweetCount != user.tweetCount {
@@ -394,13 +432,14 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.timestamp = user.timestamp
                 instance.lastLogin = user.lastLogin
                 instance.cloudDrivePort = user.cloudDrivePort
+                instance.domainToShare = user.domainToShare
                 instance.hostIds = user.hostIds
                 
-                // Only update baseUrl/writableUrl if the new value is non-nil
-                // This preserves memory-cached IPs when loading from disk (where IPs are not persisted)
-                if let newBaseUrl = user.baseUrl {
-                    instance.baseUrl = newBaseUrl
-                }
+                // CRITICAL: Never overwrite baseUrl from user parameter - it might be from hostId[0]
+                // baseUrl should only be set via getProviderIP(user.mid) in HproseInstance
+                // Preserve the existing baseUrl that was correctly resolved from provider IP
+                // writableUrl: Not persisted, resolved fresh from hostIds
+                // Note: baseUrl is preserved above in User.from(dict:), so we don't overwrite it here
                 if let newWritableUrl = user.writableUrl {
                     instance.writableUrl = newWritableUrl
                 }
@@ -430,7 +469,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // CodingKeys to handle @Published properties
     enum CodingKeys: String, CodingKey {
-        case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort
+        case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort, domainToShare
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
         case hostIds, publicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
     }
@@ -451,6 +490,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date.now
         lastLogin = try container.decodeIfPresent(Date.self, forKey: .lastLogin)
         cloudDrivePort = try container.decodeIfPresent(Int.self, forKey: .cloudDrivePort) ?? 0
+        domainToShare = try container.decodeIfPresent(String.self, forKey: .domainToShare)
         
         tweetCount = try container.decodeIfPresent(Int.self, forKey: .tweetCount)
         followingCount = try container.decodeIfPresent(Int.self, forKey: .followingCount)
@@ -477,9 +517,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         
         try container.encode(mid, forKey: .mid)
-        // Don't encode baseUrl/writableUrl - IP addresses should be resolved fresh each session
-        // to handle cases where server IPs have changed
-        // try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        // NOW caching baseUrl for faster app restarts
+        // Safe because retry mechanism automatically re-resolves if IP changed
+        try container.encodeIfPresent(baseUrl, forKey: .baseUrl)
+        // Don't cache writableUrl - resolved fresh from hostIds each time
         // try container.encodeIfPresent(writableUrl, forKey: .writableUrl)
         try container.encodeIfPresent(name, forKey: .name)
         try container.encodeIfPresent(username, forKey: .username)
@@ -490,6 +531,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         try container.encode(timestamp, forKey: .timestamp)
         try container.encodeIfPresent(lastLogin, forKey: .lastLogin)
         try container.encode(cloudDrivePort, forKey: .cloudDrivePort)
+        try container.encodeIfPresent(domainToShare, forKey: .domainToShare)
         
         try container.encodeIfPresent(tweetCount, forKey: .tweetCount)
         try container.encodeIfPresent(followingCount, forKey: .followingCount)
@@ -527,9 +569,10 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     var avatarUrl: String? {
         if let avatar = avatar {
             // Use user's baseUrl if available, otherwise fallback to HproseInstance.baseUrl
-            // This ensures avatarUrl is available even when user.baseUrl is temporarily nil (e.g., after cache load)
-            let effectiveBaseUrl = baseUrl ?? HproseInstance.baseUrl
-            return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(effectiveBaseUrl)/ipfs/\(avatar)" :  "\(effectiveBaseUrl)/mm/\(avatar)"
+            // baseUrl now usually available (cached from disk), fallback for edge cases
+            if let baseUrl = baseUrl {
+                return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
+            }
         }
         return nil
     }

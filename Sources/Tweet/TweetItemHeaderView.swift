@@ -6,13 +6,7 @@ struct TweetItemHeaderView: View {
     var body: some View {
         HStack {
             HStack(alignment: .top) {
-                Text(tweet.author?.name ?? "No one")
-                    .font(.headline)
-                    .foregroundColor(.themeText)
-                Text("@\(tweet.author?.username ?? NSLocalizedString("username", comment: "Default username"))")
-                    .font(.subheadline)
-                    .foregroundColor(.themeSecondaryText)
-                    .padding(.leading, -6)
+                AuthorNameView(author: tweet.author)
                 Text("•")
                     .font(.subheadline)
                     .foregroundColor(.themeSecondaryText)
@@ -72,7 +66,7 @@ struct TweetMenu: View {
     }
     
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             Menu {
                 Button(action: {
                     UIPasteboard.general.string = tweet.mid
@@ -129,7 +123,8 @@ struct TweetMenu: View {
                                     tweet.isPrivate = newPrivacyStatus
                                     
                                     // Update Core Data cache with the new privacy status
-                                    TweetCacheManager.shared.updateTweetInAppUserCaches(tweet, appUserId: hproseInstance.appUser.mid)
+                                    // Cache under the tweet's authorId, not appUser.mid
+                                    TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                                     
                                     // Send notification to update tweet list views
                                     // Send tweetId for removal (handles both private->public and public->private)
@@ -212,7 +207,7 @@ struct TweetMenu: View {
                 Image(systemName: "ellipsis")
                     .foregroundColor(isPressed ? .primary : .secondary)
                     .font(.system(size: 16, weight: .medium))
-                    .frame(width: 44, height: 44) // Minimum 44x44 tap target for accessibility
+                    .frame(width: 44, height: 24, alignment: .leading) // Minimum 44x44 tap target for accessibility
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 8)
@@ -267,7 +262,19 @@ struct TweetMenu: View {
                     // originalTweet is loaded in cache, which is visible to user.
                     let currentCount = originalTweet.retweetCount ?? 0
                     originalTweet.retweetCount = max(0, currentCount - 1)
-                    try? await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false)
+                    if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: originalTweet, retweetId: tweet.mid, direction: false) {
+                        // Cache the updated original tweet with its authorId as the cache key
+                        TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
+                        
+                        // Refresh original tweet from server to ensure all views get the updated count
+                        if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                            await MainActor.run {
+                                if let existingTweet = Tweet.getInstance(for: originalTweetId) {
+                                    try? existingTweet.update(from: refreshedTweet)
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
                 print("DEBUG: [TweetItemHeaderView] deleteTweet returned nil for: \(tweet.mid)")
@@ -275,6 +282,19 @@ struct TweetMenu: View {
             }
         } catch {
             print("DEBUG: [TweetItemHeaderView] Tweet deletion failed for \(tweet.mid): \(error)")
+            
+            // If deletion fails and this was a retweet, refresh original tweet to restore correct retweetCount
+            if let originalTweetId = tweet.originalTweetId,
+               let originalAuthorId = tweet.originalAuthorId {
+                if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                    await MainActor.run {
+                        if let existingTweet = Tweet.getInstance(for: originalTweetId) {
+                            try? existingTweet.update(from: refreshedTweet)
+                        }
+                    }
+                }
+            }
+            
             // If deletion fails, post restoration notification
             NotificationCenter.default.post(
                 name: .tweetRestored,
@@ -285,7 +305,7 @@ struct TweetMenu: View {
                 // Send notification for global error toast
                 NotificationCenter.default.post(
                     name: .errorOccurred,
-                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(error.localizedDescription)"])
+                    object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
                 )
             }
         }
@@ -298,5 +318,41 @@ struct TweetMenu: View {
         let prefix = String(id.prefix(8))
         let suffix = String(id.suffix(4))
         return "\(prefix)...\(suffix)"
+    }
+}
+
+/// Separate view to observe User singleton changes
+private struct AuthorNameView: View {
+    let author: User?
+    
+    var body: some View {
+        Group {
+            if let user = author {
+                ObservedAuthorNameView(user: user)
+            } else {
+                Text("No one")
+                    .font(.headline)
+                    .foregroundColor(.themeText)
+                Text("@\(NSLocalizedString("username", comment: "Default username"))")
+                    .font(.subheadline)
+                    .foregroundColor(.themeSecondaryText)
+                    .padding(.leading, -6)
+            }
+        }
+    }
+}
+
+/// Observes the User singleton to refresh when username/name updates
+private struct ObservedAuthorNameView: View {
+    @ObservedObject var user: User
+    
+    var body: some View {
+        Text(user.name ?? "No one")
+            .font(.headline)
+            .foregroundColor(.themeText)
+        Text("@\(user.username ?? NSLocalizedString("username", comment: "Default username"))")
+            .font(.subheadline)
+            .foregroundColor(.themeSecondaryText)
+            .padding(.leading, -6)
     }
 }

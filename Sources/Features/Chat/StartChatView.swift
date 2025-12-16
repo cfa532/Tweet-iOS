@@ -97,7 +97,10 @@ struct StartChatView: View {
             var fetchedUsers: [User] = []
             for userId in followingIds {
                 if let user = try await hproseInstance.fetchUser(userId) {
-                    fetchedUsers.append(user)
+                    // Ignore invalid users without username
+                    if user.username != nil {
+                        fetchedUsers.append(user)
+                    }
                 }
             }
             
@@ -107,7 +110,7 @@ struct StartChatView: View {
             }
         } catch {
             await MainActor.run {
-                errorMessage = error.localizedDescription
+                errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 isLoading = false
             }
         }

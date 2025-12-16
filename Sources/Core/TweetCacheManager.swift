@@ -169,14 +169,22 @@ final class TweetCacheManager: @unchecked Sendable {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
-    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil) async -> [Tweet?] {
+    func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil, isProfileView: Bool = false) async -> [Tweet?] {
         return await withCheckedContinuation { continuation in
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                
+                // For profile views: load from userId cache and filter by authorId
+                // For main feed: load from userId (appUser.mid) cache, no authorId filtering
+                let shouldFilterByAuthorId = isProfileView
+                
+                // Always load from userId cache (which equals authorId for profile views)
                 request.predicate = NSPredicate(format: "uid == %@", userId)
                 request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+                // Fetch more tweets if filtering by authorId (to account for filtering)
+                let fetchLimit = shouldFilterByAuthorId ? Int(pageSize * 3) : Int(pageSize)
+                request.fetchLimit = fetchLimit
                 request.fetchOffset = Int(page * pageSize)
-                request.fetchLimit = Int(pageSize)
                 
                 if let cdTweets = try? self.context.fetch(request) {
                     var tweets: [Tweet?] = []
@@ -184,12 +192,30 @@ extension TweetCacheManager {
                         do {
                             let tweet = try Tweet.from(cdTweet: cdTweet)
                             
-                            // Load author from memory singleton only (no Core Data cache for user)
-                            // This ensures all tweets share the same User singleton
+                            // For profile views, always filter to only include tweets authored by the profile user
+                            // This ensures we only show that user's tweets, even if cache contains tweets from other authors
+                            if shouldFilterByAuthorId && tweet.authorId != userId {
+                                continue // Skip tweets from other authors
+                            }
+                            
+                            // Load author from cache (Core Data) if available, otherwise use singleton
+                            // This ensures cached user data is used as placeholder until refreshed from server
                             if tweet.author == nil {
-                                // Get singleton - don't load from CDUser cache as it can be stale
+                                // First get the singleton
                                 let authorSingleton = User.getInstance(mid: tweet.authorId)
-                                tweet.author = authorSingleton
+                                
+                                // If singleton doesn't have data, try to load from Core Data cache
+                                if authorSingleton.username == nil {
+                                    let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                                    userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+                                    if let cdUser = try? self.context.fetch(userRequest).first {
+                                        // Update singleton with cached data (even if expired)
+                                        _ = User.from(cdUser: cdUser)
+                                    }
+                                }
+                                
+                                // Use the singleton (either populated from cache or skeleton)
+                                tweet.author = User.getInstance(mid: tweet.authorId)
                             }
                             
                             // NOTE: baseUrl will be assigned on MainActor after all tweets are collected
@@ -201,19 +227,30 @@ extension TweetCacheManager {
                                 continue
                             }
                             
-                            // Filter out ALL private tweets in main feed (regardless of author)
+                            // Filter private tweets:
+                            // - Main feed: Always filter out private tweets (show all tweets, but no private ones)
+                            // - Profile view: Only show private tweets if appUser is viewing their own profile
                             if tweet.isPrivate == true {
-                                tweets.append(nil)
-                                continue
+                                if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
+                                    // Profile view: Allow private tweets only if viewing own profile (appUser == visited user)
+                                    tweets.append(tweet)
+                                } else {
+                                    // Main feed or viewing other user's profile: Filter out private tweets
+                                    continue
+                                }
+                            } else {
+                                // Public tweet: Always include
+                                tweets.append(tweet)
                             }
-                            tweets.append(tweet)
                         } catch {
                             print("Error processing tweet: \(error)")
                             tweets.append(nil)
                         }
                     }
                     
-                    continuation.resume(returning: tweets)
+                    // Filtered results - limit to pageSize
+                    let limitedTweets = Array(tweets.prefix(Int(pageSize)))
+                    continuation.resume(returning: limitedTweets)
                 } else {
                     continuation.resume(returning: [])
                 }
@@ -221,6 +258,12 @@ extension TweetCacheManager {
         }
     }
 
+    /// Fetch a tweet by its mid (tweet ID) from cache
+    /// IMPORTANT: Searches across ALL user caches, not just a specific user's cache
+    /// This is necessary because:
+    /// - Original tweets are cached under their authorId
+    /// - Retweets are cached under appUser.mid
+    /// - When we only have a tweet mid, we don't know which user's cache it's in
     func fetchTweet(mid: String) async -> Tweet? {
         return await withCheckedContinuation { continuation in
             // First check in-memory singleton
@@ -231,6 +274,7 @@ extension TweetCacheManager {
             }
             
             // Otherwise, load from Core Data cache
+            // Search by tid (tweet ID) across ALL caches, not filtered by userId
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                 request.predicate = NSPredicate(format: "tid == %@", mid)
@@ -240,12 +284,24 @@ extension TweetCacheManager {
                     do {
                         let tweet = try Tweet.from(cdTweet: cdTweet)
                         
-                        // Load author from memory singleton only (no Core Data cache for user)
-                        // This ensures all tweets share the same User singleton
+                        // Load author from cache (Core Data) if available, otherwise use singleton
+                        // This ensures cached user data is used as placeholder until refreshed from server
                         if tweet.author == nil {
-                            // Get singleton - don't load from CDUser cache as it can be stale
+                            // First get the singleton
                             let authorSingleton = User.getInstance(mid: tweet.authorId)
-                            tweet.author = authorSingleton
+                            
+                            // If singleton doesn't have data, try to load from Core Data cache
+                            if authorSingleton.username == nil {
+                                let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                                userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+                                if let cdUser = try? self.context.fetch(userRequest).first {
+                                    // Update singleton with cached data (even if expired)
+                                    _ = User.from(cdUser: cdUser)
+                                }
+                            }
+                            
+                            // Use the singleton (either populated from cache or skeleton)
+                            tweet.author = User.getInstance(mid: tweet.authorId)
                         }
                         
                         // Then update the cache time in a separate operation
@@ -302,18 +358,12 @@ extension TweetCacheManager {
         }
     }
 
-    /// Update a tweet using unified cache strategy:
-    /// - AppUser's public tweets → "main_feed" cache (appear in feed and profile)
-    /// - AppUser's private tweets → appUser.mid cache only (profile-only visibility)
-    /// - Other users' tweets → "main_feed" cache
+    /// Update a tweet in cache for main feed.
+    /// Main feed tweets are cached under appUser.mid for efficient loading.
+    /// Profile tweets should use saveTweet directly with their authorId.
     func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-        if tweet.authorId == appUserId && tweet.isPrivate == true {
-            // AppUser's private tweet - save only to profile cache
-            saveTweet(tweet, userId: appUserId)
-        } else {
-            // Public tweet (any user) or other users' tweets - save to main_feed
-            saveTweet(tweet, userId: "main_feed")
-        }
+        // Cache main feed tweets under appUser.mid
+        saveTweet(tweet, userId: appUserId)
     }
 
     func deleteExpiredTweets() {
@@ -394,6 +444,33 @@ extension TweetCacheManager {
                     print("DEBUG: [TweetCacheManager] Deleted \(cdTweets.count) cache entries for tweet: \(mid)")
                 }
                 try? context.save()
+            }
+        }
+    }
+    
+    /// Delete all tweets from a specific user from a specific cache (e.g., when unfollowing)
+    func deleteTweetsFromUser(userId: String, cacheKey: String) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            // Match tweets where uid (cache key) matches AND tweet's authorId matches userId
+            request.predicate = NSPredicate(format: "uid == %@", cacheKey)
+            
+            if let cdTweets = try? context.fetch(request) {
+                var deletedCount = 0
+                for cdTweet in cdTweets {
+                    // Decode tweet to check authorId
+                    if let tweet = try? Tweet.from(cdTweet: cdTweet), tweet.authorId == userId {
+                        // Remove from access times
+                        tweetAccessTimes.removeValue(forKey: tweet.mid)
+                        context.delete(cdTweet)
+                        deletedCount += 1
+                    }
+                }
+                if deletedCount > 0 {
+                    try? context.save()
+                    saveAccessTimes()
+                    print("DEBUG: [TweetCacheManager] Deleted \(deletedCount) tweets from user \(userId) in cache: \(cacheKey)")
+                }
             }
         }
     }
@@ -481,6 +558,7 @@ extension Tweet {
                 NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
                 
                 // Trigger fetchUser if baseUrl is nil to resolve IP
+                // (Rare case: old cache data before IP caching, or newly created user)
                 // SKIP appUser - app initialization will handle it
                 if authorSingleton.baseUrl == nil
                     && authorSingleton.mid != HproseInstance.shared.appUser.mid {
@@ -489,7 +567,29 @@ extension Tweet {
                     }
                 }
             }
-            return tweet
+            
+            // CRITICAL: Use singleton pattern for Tweet instance as well
+            // This ensures that the same tweet loaded from cache vs server uses the same instance
+            // Without this, profile view (from cache) and main feed (from server) would have different instances
+            // causing retweet count updates to not sync across views
+            return Tweet.getInstance(
+                mid: tweet.mid,
+                authorId: tweet.authorId,
+                content: tweet.content,
+                timestamp: tweet.timestamp,
+                title: tweet.title,
+                originalTweetId: tweet.originalTweetId,
+                originalAuthorId: tweet.originalAuthorId,
+                author: tweet.author,
+                favorites: tweet.favorites,
+                favoriteCount: tweet.favoriteCount ?? 0,
+                bookmarkCount: tweet.bookmarkCount ?? 0,
+                retweetCount: tweet.retweetCount ?? 0,
+                commentCount: tweet.commentCount ?? 0,
+                attachments: tweet.attachments,
+                isPrivate: tweet.isPrivate,
+                downloadable: tweet.downloadable
+            )
         }
         throw NSError(domain: "TweetCacheManager", code: -1,
                       userInfo: [NSLocalizedDescriptionKey: "Failed to decode tweet data from Core Data"])
@@ -614,4 +714,388 @@ extension TweetCacheManager {
             }
         }
     }
+    
+    /// Search for users by partial username or name match
+    /// Only returns users with valid usernames (username is required, name is optional)
+    /// Uses multi-source search with relevance scoring (matches Android implementation)
+    func searchUsers(query: String, limit: Int = 25) async -> [User] {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        
+        let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        var scoredResults: [String: (score: Int, user: User)] = [:]
+        
+        // Helper function to calculate match score (lower is better)
+        func matchScore(for user: User, query: String) -> Int? {
+            guard let username = user.username, !username.isEmpty else {
+                return nil // Skip users without valid username
+            }
+            
+            let usernameLower = username.lowercased()
+            let nameLower = user.name?.lowercased() ?? ""
+            
+            // Prioritize matches: prefix > contains, username > name
+            if usernameLower.hasPrefix(query) {
+                return 0 // Best: username starts with query
+            } else if usernameLower.contains(query) {
+                return 1 // Good: username contains query
+            } else if nameLower.hasPrefix(query) {
+                return 2 // OK: name starts with query
+            } else if nameLower.contains(query) {
+                return 3 // Lower priority: name contains query
+            }
+            return nil
+        }
+        
+        // Helper to consider a user for results
+        func consider(_ user: User) {
+            guard let score = matchScore(for: user, query: normalizedQuery) else { return }
+            
+            // Keep the best score for each user
+            if let existing = scoredResults[user.mid] {
+                if score < existing.score {
+                    scoredResults[user.mid] = (score, user)
+                }
+            } else {
+                scoredResults[user.mid] = (score, user)
+            }
+        }
+        
+        // Step 1: Search in-memory User singletons (fast)
+        let memoryUsers = User.getAllInstances()
+        for (_, user) in memoryUsers {
+            consider(user)
+            if scoredResults.count >= limit { break }
+        }
+        
+        // Step 2: Search cached users in Core Data
+        if scoredResults.count < limit {
+            let coreDataUsers = await withCheckedContinuation { (continuation: CheckedContinuation<[User], Never>) in
+                context.perform {
+                    let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                    request.fetchLimit = 100 // Get more candidates for better results
+                    
+                    var users: [User] = []
+                    if let cdUsers = try? self.context.fetch(request) {
+                        for cdUser in cdUsers {
+                            let user = User.from(cdUser: cdUser)
+                            users.append(user)
+                        }
+                    }
+                    continuation.resume(returning: users)
+                }
+            }
+            
+            // Consider users outside the closure to avoid Sendable warnings
+            for user in coreDataUsers {
+                if scoredResults.count >= limit { break }
+                consider(user)
+            }
+        }
+        
+        // Step 3: Search users from cached tweets (tweet authors)
+        if scoredResults.count < limit {
+            let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
+                context.perform {
+                    let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                    tweetRequest.fetchLimit = 200 // Check recent tweets for author candidates
+                    
+                    var userIds = Set<String>()
+                    if let cdTweets = try? self.context.fetch(tweetRequest) {
+                        // Collect unique author IDs from recent tweets by decoding tweet data
+                        for cdTweet in cdTweets {
+                            if let tweetData = cdTweet.tweetData,
+                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                                userIds.insert(tweet.authorId)
+                            }
+                            if userIds.count >= 50 { break }
+                        }
+                    }
+                    continuation.resume(returning: userIds)
+                }
+            }
+            
+            // Fetch and consider these users outside the closure
+            for userId in candidateUserIds {
+                if scoredResults.count >= limit { break }
+                if scoredResults[userId] != nil { continue } // Already have this user
+                
+                let user = User.getInstance(mid: userId)
+                if user.username != nil {
+                    consider(user)
+                }
+            }
+        }
+        
+        // Sort by score (lower is better), then alphabetically by username
+        let sortedResults = scoredResults.values
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score < rhs.score
+                }
+                let username1 = lhs.user.username?.lowercased() ?? ""
+                let username2 = rhs.user.username?.lowercased() ?? ""
+                return username1 < username2
+            }
+            .prefix(limit)
+            .map { $0.user }
+        
+        return Array(sortedResults)
+    }
+    
+    /// Search for users incrementally, calling the callback after each source completes
+    /// This provides a responsive UI by showing results as they're found
+    func searchUsersIncremental(
+        query: String,
+        limit: Int = 25,
+        onResults: @escaping ([User]) async -> Void
+    ) async {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            await onResults([])
+            return
+        }
+        
+        let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        var scoredResults: [String: (score: Int, user: User)] = [:]
+        
+        // Helper function to calculate match score (lower is better)
+        func matchScore(for user: User, query: String) -> Int? {
+            guard let username = user.username, !username.isEmpty else {
+                return nil // Skip users without valid username
+            }
+            
+            let usernameLower = username.lowercased()
+            let nameLower = user.name?.lowercased() ?? ""
+            
+            // Prioritize matches: prefix > contains, username > name
+            if usernameLower.hasPrefix(query) {
+                return 0 // Best: username starts with query
+            } else if usernameLower.contains(query) {
+                return 1 // Good: username contains query
+            } else if nameLower.hasPrefix(query) {
+                return 2 // OK: name starts with query
+            } else if nameLower.contains(query) {
+                return 3 // Lower priority: name contains query
+            }
+            return nil
+        }
+        
+        // Helper to consider a user for results
+        func consider(_ user: User) {
+            guard let score = matchScore(for: user, query: normalizedQuery) else { return }
+            
+            // Keep the best score for each user
+            if let existing = scoredResults[user.mid] {
+                if score < existing.score {
+                    scoredResults[user.mid] = (score, user)
+                }
+            } else {
+                scoredResults[user.mid] = (score, user)
+            }
+        }
+        
+        // Helper to sort and return current results
+        func getSortedResults() -> [User] {
+            let sorted = scoredResults.values
+                .sorted { lhs, rhs in
+                    if lhs.score != rhs.score {
+                        return lhs.score < rhs.score
+                    }
+                    let username1 = lhs.user.username?.lowercased() ?? ""
+                    let username2 = rhs.user.username?.lowercased() ?? ""
+                    return username1 < username2
+                }
+                .prefix(limit)
+                .map { $0.user }
+            return Array(sorted)
+        }
+        
+        // Step 1: Search in-memory User singletons (fast) - show immediately
+        let memoryUsers = User.getAllInstances()
+        for (_, user) in memoryUsers {
+            consider(user)
+            if scoredResults.count >= limit { break }
+        }
+        
+        // Show first results immediately
+        if !scoredResults.isEmpty {
+            await onResults(getSortedResults())
+        }
+        
+        // Step 2: Search cached users in Core Data - update UI
+        if scoredResults.count < limit {
+            let coreDataUsers = await withCheckedContinuation { (continuation: CheckedContinuation<[User], Never>) in
+                context.perform {
+                    let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                    request.fetchLimit = 100
+                    
+                    var users: [User] = []
+                    if let cdUsers = try? self.context.fetch(request) {
+                        for cdUser in cdUsers {
+                            let user = User.from(cdUser: cdUser)
+                            users.append(user)
+                        }
+                    }
+                    continuation.resume(returning: users)
+                }
+            }
+            
+            // Consider users outside the closure to avoid Sendable warnings
+            for user in coreDataUsers {
+                if scoredResults.count >= limit { break }
+                consider(user)
+            }
+            
+            // Show updated results
+            await onResults(getSortedResults())
+        }
+        
+        // Step 3: Search users from cached tweets (tweet authors) - final update
+        if scoredResults.count < limit {
+            let candidateUserIds = await withCheckedContinuation { (continuation: CheckedContinuation<Set<String>, Never>) in
+                context.perform {
+                    let tweetRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    tweetRequest.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                    tweetRequest.fetchLimit = 200
+                    
+                    var userIds = Set<String>()
+                    if let cdTweets = try? self.context.fetch(tweetRequest) {
+                        // Collect unique author IDs from recent tweets by decoding tweet data
+                        for cdTweet in cdTweets {
+                            if let tweetData = cdTweet.tweetData,
+                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                                userIds.insert(tweet.authorId)
+                            }
+                            if userIds.count >= 50 { break }
+                        }
+                    }
+                    continuation.resume(returning: userIds)
+                }
+            }
+            
+            // Fetch and consider these users outside the closure
+            for userId in candidateUserIds {
+                if scoredResults.count >= limit { break }
+                if scoredResults[userId] != nil { continue }
+                
+                let user = User.getInstance(mid: userId)
+                if user.username != nil {
+                    consider(user)
+                }
+            }
+            
+            // Show final results
+            await onResults(getSortedResults())
+        }
+    }
+    
+    /// Search for tweets by content and title only (not author username/name)
+    /// Matches Android implementation - only searches in content and title
+    func searchTweets(query: String, limit: Int = 40) async -> [Tweet] {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        
+        let normalizedQuery = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        var scoredResults: [String: (score: Int, tweet: Tweet)] = [:]
+        
+        // Helper function to calculate match score (lower is better)
+        // Only matches content and title, NOT author username/name
+        func matchScore(for tweet: Tweet, query: String) -> Int? {
+            // Skip private tweets
+            if tweet.isPrivate ?? false {
+                return nil
+            }
+            
+            let contentLower = tweet.content?.lowercased() ?? ""
+            let titleLower = tweet.title?.lowercased() ?? ""
+            
+            // Prioritize matches: prefix > contains, content > title
+            if contentLower.hasPrefix(query) {
+                return 0 // Best: content starts with query
+            } else if contentLower.contains(query) {
+                return 1 // Good: content contains query
+            } else if titleLower.hasPrefix(query) {
+                return 2 // OK: title starts with query
+            } else if titleLower.contains(query) {
+                return 3 // Lower priority: title contains query
+            }
+            return nil
+        }
+        
+        // Helper to consider a tweet for results
+        func consider(_ tweet: Tweet) {
+            guard let score = matchScore(for: tweet, query: normalizedQuery) else { return }
+            
+            // Keep the best score for each tweet
+            if let existing = scoredResults[tweet.mid] {
+                if score < existing.score {
+                    scoredResults[tweet.mid] = (score, tweet)
+                }
+            } else {
+                scoredResults[tweet.mid] = (score, tweet)
+            }
+        }
+        
+        // Step 1: Search in-memory tweet singletons (fast)
+        let memoryTweets = Tweet.getAllInstances()
+        for (_, tweet) in memoryTweets {
+            consider(tweet)
+            if scoredResults.count >= limit { break }
+        }
+        
+        // Step 2: Search cached tweets in Core Data
+        if scoredResults.count < limit {
+            let coreDataTweets = await withCheckedContinuation { (continuation: CheckedContinuation<[Tweet], Never>) in
+                context.perform {
+                    let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                    request.fetchLimit = 400 // Get more candidates for better results
+                    
+                    var tweets: [Tweet] = []
+                    if let cdTweets = try? self.context.fetch(request) {
+                        for cdTweet in cdTweets {
+                            if let tweetData = cdTweet.tweetData,
+                               let tweet = try? JSONDecoder().decode(Tweet.self, from: tweetData) {
+                                tweets.append(tweet)
+                            }
+                            if tweets.count >= 400 { break }
+                        }
+                    }
+                    continuation.resume(returning: tweets)
+                }
+            }
+            
+            // Consider tweets outside the closure to avoid Sendable warnings
+            for tweet in coreDataTweets {
+                if scoredResults.count >= limit { break }
+                consider(tweet)
+            }
+        }
+        
+        // Sort by score (lower is better), then by timestamp (newer first)
+        let sortedResults = scoredResults.values
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score {
+                    return lhs.score < rhs.score
+                }
+                // If scores are equal, sort by timestamp (newer first)
+                return lhs.tweet.timestamp > rhs.tweet.timestamp
+            }
+            .prefix(limit)
+            .map { $0.tweet }
+        
+        // Ensure authors are loaded for display
+        for tweet in sortedResults {
+            if tweet.author == nil {
+                tweet.author = User.getInstance(mid: tweet.authorId)
+            }
+        }
+        
+        return Array(sortedResults)
+    }
 } 
+
+

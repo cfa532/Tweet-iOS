@@ -30,6 +30,7 @@
 "Checking video status..." = "動画ステータスを確認中...";
 "Processing on server..." = "サーバーで処理中...";
 "Your tweet will be posted when ready" = "準備が整い次第ツイートが投稿されます";
+"Your message will be sent when ready" = "準備が整い次第メッセージが送信されます";
 "Uploading %@ %d/%d..." = "%@ %d/%d をアップロード中...";
 "Processing video %d/%d" = "動画を処理中 %d/%d";
 "Uploading image %d/%d" = "画像をアップロード中 %d/%d";
@@ -82,12 +83,15 @@
 "Alias" = "ニックネーム";
 "Profile" = "プロフィール";
 "Host ID (optional)" = "ホストID（任意）";
+"Host ID" = "ホストID";
 "Cloud Drive Port" = "クラウドドライブポート";
+"Share Domain" = "共有ドメイン";
 "Register" = "登録";
 "Cancel" = "キャンセル";
 "Uploading..." = "アップロード中...";
 "Saving..." = "保存中...";
 "Create Account" = "アカウント作成";
+"Registration successful. Please wait a few minutes before logging in." = "登録が完了しました。ログインまで数分お待ちください。";
 
 // MARK: - Settings Screen
 "Account" = "アカウント";
@@ -109,10 +113,17 @@
 "Pinned" = "ピン留め";
 "username" = "ユーザー名";
 "Noone" = "なし";
+"Fans@%@" = "%@のフォロワー";
+"Followings@%@" = "%@のフォロー中";
+"Your Fans" = "あなたのフォロワー";
+"Your Followings" = "あなたのフォロー中";
+"Your Bookmarks" = "あなたのブックマーク";
+"Your Favorites" = "あなたのお気に入り";
 
 // MARK: - Tweet Actions
 "Show more" = "もっと見る";
 "Forwarded by %@" = "%@がリツイート";
+"Forwarded by you" = "あなたがリツイート";
 "Quote Tweet" = "ツイートを引用";
 
 // MARK: - Media
@@ -365,11 +376,18 @@
 "Start a conversation to see your chats here" = "会話を始めて、ここにチャットを表示";
 "No results found" = "結果が見つかりません";
 "Try searching for a different username" = "別のユーザー名で検索してみてください";
+"Try a different search term" = "別の検索語で試してみてください";
 "Search for users" = "ユーザーを検索";
 "Enter @username to find users" = "@ユーザー名を入力してユーザーを見つける";
+"Search by username or name..." = "ユーザー名または名前で検索...";
+"Search by username or display name" = "ユーザー名または表示名で検索";
 "Start Chat" = "チャットを開始";
 "%d attachments" = "%d個の添付ファイル";
 "+%d" = "+%d";
+"Sent" = "送信済み";
+"Received" = "受信済み";
+"Yesterday" = "昨日";
+"%@ %@" = "%@ %@";
 
 // MARK: - Toast Messages
 "Failed to toggle following status" = "フォロー状態の切り替えに失敗しました";
@@ -393,8 +411,18 @@
 "%d attachments" = "%d個の添付ファイル";
 
 // MARK: - Chat Messages
+"Sent" = "送信済み";
+"Received" = "受信済み";
+"Yesterday" = "昨日";
+"%@ %@" = "%@ %@";
+
+// MARK: - Chat Messages
 "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "%@とのチャットを削除してもよろしいですか？この操作により、この会話のすべてのメッセージが永久に削除されます。";
 "Receipt ID: %@" = "受信者ID: %@";
+"Sent" = "送信済み";
+"Received" = "受信済み";
+"Yesterday" = "昨日";
+"%@ %@" = "%@ %@";
 
 // MARK: - Video Player
 "Failed to load video" = "動画の読み込みに失敗しました";
@@ -461,3 +489,49 @@
 "Failed to update pinned tweet" = "固定ツイートの更新に失敗しました";
 "Failed to get pinned tweets" = "固定ツイートの取得に失敗しました";
 "Failed to report tweet" = "ツイートの報告に失敗しました";
+
+// MARK: - User-Friendly Error Messages
+"Network connection lost. Please check your internet connection." = "ネットワーク接続が失われました。インターネット接続を確認してください。";
+"The request took too long. Please try again." = "リクエストがタイムアウトしました。もう一度お試しください。";
+"Cannot reach the server. Please try again later." = "サーバーに接続できません。後でもう一度お試しください。";
+"Connection interrupted. Please try again." = "接続が中断されました。もう一度お試しください。";
+"Secure connection failed. Please check your network settings." = "セキュア接続に失敗しました。ネットワーク設定を確認してください。";
+"Service temporarily unavailable. Please try again." = "サービスが一時的に利用できません。もう一度お試しください。";
+"Content not found." = "コンテンツが見つかりません。";
+"Session expired. Please log in again." = "セッションが期限切れです。再度ログインしてください。";
+"You don't have permission to access this." = "このコンテンツにアクセスする権限がありません。";
+"Server error. Please try again later." = "サーバーエラーです。後でもう一度お試しください。";
+"Service temporarily unavailable. Please try again later." = "サービスが一時的に利用できません。後でもう一度お試しください。";
+"Unable to process data. Please try again." = "データを処理できません。もう一度お試しください。";
+"Not enough storage space available." = "ストレージ容量が不足しています。";
+"Network error. Please check your connection and try again." = "ネットワークエラーです。接続を確認してもう一度お試しください。";
+"Something went wrong. Please try again." = "問題が発生しました。もう一度お試しください。";
+
+// MARK: - Server Error Messages
+"Username is taken" = "ユーザー名は既に使用されています";
+"User not found" = "ユーザーが見つかりません";
+"Wrong password" = "パスワードが間違っています";
+"Unknown error" = "不明なエラー";
+"User not found or missing host" = "ユーザーが見つからないか、ホストがありません";
+"User host not found" = "ユーザーホストが見つかりません";
+"Author host not found" = "作成者ホストが見つかりません";
+"User not found in database" = "データベースにユーザーが見つかりません";
+"User missing host" = "ユーザーのホストがありません";
+"Cannot follow yourself" = "自分自身をフォローすることはできません";
+"Cannot get followed user" = "フォローしているユーザーを取得できません";
+"Missing host for followed user" = "フォローしているユーザーのホストがありません";
+"Tweet not found" = "ツイートが見つかりません";
+"Only the tweet author can update privacy settings" = "ツイートの作成者のみがプライバシー設定を更新できます";
+"Not a friend of the host" = "ホストの友達ではありません";
+"No provider IP found." = "プロバイダーIPが見つかりません。";
+"Chunk size exceeds 1MB limit" = "チャンクサイズが1MB制限を超えています";
+"Failed to extract zip file" = "ZIPファイルの抽出に失敗しました";
+"Invalid HLS structure" = "無効なHLS構造";
+"App ID mismatch" = "アプリIDが一致しません";
+
+"Cloud Drive Port must be between 8000 and 65535." = "クラウドドライブポートは8000から65535の間である必要があります。";
+
+// MARK: - Cloud Drive Limit
+"Tweet Limit Reached" = "ツイート制限に達しました";
+"This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "これはWeb3ツイートアプリです。善意でホストされているツイートの最大数に達しました。独自のノードを設定するか、友人に今後のツイートをホストしてもらってください。";
+"Learn More" = "詳細を見る";

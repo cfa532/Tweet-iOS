@@ -2,7 +2,7 @@
 //  CommentMenu.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/6/6.
+//  Created by Tomás Hongo on 2025/6/6.
 //
 
 import SwiftUI

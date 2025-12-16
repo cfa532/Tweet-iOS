@@ -50,6 +50,5 @@ struct AppHeaderView: View {
         .sheet(isPresented: $isSettingsSheetPresented) {
             SettingsView()
         }
-
     }
-}
+    }

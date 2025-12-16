@@ -2,7 +2,7 @@
 //  Login.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/24.
+//  Created by Tomás Hongo on 2025/5/24.
 //
 
 import SwiftUI
@@ -16,7 +16,6 @@ struct LoginView: View {
     @State private var showRegistration = false
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var showSuccess = false
     @FocusState private var focusedField: Field?
     
     enum Field {
@@ -137,31 +136,35 @@ struct LoginView: View {
             })
             .sheet(isPresented: $showRegistration) {
                 RegistrationView(
-                    onSubmit: { (username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int) in
+                    onSubmit: { (username: String, password: String?, alias: String?, profile: String?, hostId: String?) in
                         let success = try await hproseInstance.registerUser(
                             username: username,
                             password: password ?? "",
                             alias: alias ?? "",
                             profile: profile ?? "",
                             hostId: (hostId?.isEmpty ?? true) ? nil : hostId,
-                            cloudDrivePort: cloudDrivePort
+                            cloudDrivePort: 0
                         )
-                        if success {
-                            showSuccess = true
-                            showRegistration = false
-                        } else {
+                        if !success {
                             // Let RegistrationView handle the error with toast
                             throw NSError(domain: "Registration", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
                         }
+                        // Success is handled by RegistrationView with toast message
                     }
                 )
             }
-            .alert(LocalizedStringKey("Login Successful. Wait for a few minutes before login."), isPresented: $showSuccess) {
-                Button(LocalizedStringKey("OK")) {
-//                    dismiss()
-                }
-            } message: {
-                Text(LocalizedStringKey("Welcome back!"))
+        }
+        .onAppear {
+            OverlayVisibilityCoordinator.shared.beginOverlay(id: "loginView", source: "LoginView")
+        }
+        .onDisappear {
+            OverlayVisibilityCoordinator.shared.endOverlay(id: "loginView", source: "LoginView")
+        }
+        .onChange(of: showRegistration) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "registrationSheet", source: "LoginView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "registrationSheet", source: "LoginView")
             }
         }
     }
@@ -175,13 +178,14 @@ struct LoginView: View {
                 errorMessage = NSLocalizedString("Username & password are required.", comment: "Login error message")
                 return
             }
+            // Use entry URL when calling getUserId during login
             if let userId = try await hproseInstance.getUserId(username) {
                 // Force fetch from server with empty baseUrl to ensure fresh data
                 // This prevents the issue where cached user with nil username is returned
-                if let user = try await hproseInstance.updateUserFromServer(userId, baseUrl: "") {
+                if let user = try await hproseInstance.fetchUser(userId, baseUrl: "") {
                     if (user.username == nil) {
                         print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
-                        errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), username)
+                        errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
                     } else {
                         user.password = password
                         let result = try await hproseInstance.login(user)
@@ -196,15 +200,23 @@ struct LoginView: View {
                     }
                 } else {
                     print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
-                    errorMessage = String(format: NSLocalizedString("Cannot find user by %@", comment: "User not found error"), username)
+                    errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
                 }
             } else {
                 print("DEBUG: [Login] Cannot find userId - username: \(username)")
-                errorMessage = String(format: NSLocalizedString("Cannot find userId by %@", comment: "UserId not found error"), username)
+                errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
             }
         } catch {
             print("DEBUG: [Login] Login error - username: \(username), error: \(error.localizedDescription)")
-            errorMessage = error.localizedDescription
+            let lowercasedDescription = error.localizedDescription.lowercased()
+            if lowercasedDescription.contains("base url") ||
+                lowercasedDescription.contains("provider ip") ||
+                lowercasedDescription.contains("userid not found") ||
+                lowercasedDescription.contains("login failed") {
+                errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
+            } else {
+                errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+            }
         }
         
         isLoading = false

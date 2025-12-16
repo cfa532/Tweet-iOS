@@ -76,8 +76,7 @@ class TweetUploadManager {
             await MainActor.run {
                 UploadProgressManager.shared.startUpload(type: "chat")
             }
-            var mutableMessage = message
-            await self.uploadChatMessageWithPersistenceAndRetry(message: &mutableMessage, itemData: itemData)
+            await self.uploadChatMessageWithPersistenceAndRetry(message: message, itemData: itemData)
         }
     }
     
@@ -207,11 +206,12 @@ class TweetUploadManager {
                                 if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
                                     print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
                                     // Update retweet count on the original tweet
-                                    do {
-                                        try await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: quoteTweet.mid, direction: true)
+                                    if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: quoteTweet.mid, direction: true) {
+                                        // Cache the updated original tweet with its authorId as the cache key
+                                        TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
                                         print("✅ [Quote Tweet] Updated retweet count for original tweet")
-                                    } catch {
-                                        print("⚠️ [Quote Tweet] Failed to update retweet count: \(error)")
+                                    } else {
+                                        print("⚠️ [Quote Tweet] Failed to update retweet count")
                                     }
                                 } else {
                                     print("❌ [Quote Tweet] Failed to post quote tweet")
@@ -246,7 +246,7 @@ class TweetUploadManager {
             } catch {
                 print("❌ [Comment Upload] Failed to upload attachments: \(error)")
                 await MainActor.run {
-                    UploadProgressManager.shared.failUpload(message: error.localizedDescription)
+                    UploadProgressManager.shared.failUpload(message: ErrorMessageHelper.userFriendlyMessage(from: error))
                     
                     guard let hproseInstance = self.hproseInstance else { return }
                     if !hproseInstance.isAppInitializing {
@@ -282,6 +282,13 @@ extension TweetUploadManager {
                 UploadProgressManager.shared.failUpload(message: "System error")
             }
             return
+        }
+
+        if retryCount > 0 {
+            await forceRefreshBaseUrlForRetry(
+                userId: hproseInstance.appUser.mid,
+                context: "tweet upload"
+            )
         }
         
         // Save pending upload to disk
@@ -920,6 +927,16 @@ extension TweetUploadManager {
     ) async {
         guard let hproseInstance = hproseInstance else { return }
         
+        if retryCount > 0 {
+            let targetUserId: String? = parentTweet.authorId.isEmpty
+                ? parentTweet.author?.mid
+                : parentTweet.authorId
+            await forceRefreshBaseUrlForRetry(
+                userId: targetUserId,
+                context: "comment upload"
+            )
+        }
+        
         print("📝 [Comment Submit] Submitting comment with \(completedCIDs.count) completed video job(s), retry: \(retryCount)")
         
         // Build final attachments using completed job CIDs
@@ -975,11 +992,12 @@ extension TweetUploadManager {
                     if let quoteTweet = try await hproseInstance.uploadTweet(newComment) {
                         print("✅ [Quote Tweet] Quote tweet posted successfully! ID: \(quoteTweet.mid)")
                         // Update retweet count on the original tweet
-                        do {
-                            try await hproseInstance.updateRetweetCount(tweet: parentTweet, retweetId: quoteTweet.mid, direction: true)
+                        if let updatedTweet = await hproseInstance.updateRetweetCount(tweet: parentTweet, retweetId: quoteTweet.mid, direction: true) {
+                            // Cache the updated original tweet with its authorId as the cache key
+                            TweetCacheManager.shared.saveTweet(updatedTweet, userId: updatedTweet.authorId)
                             print("✅ [Quote Tweet] Updated retweet count for original tweet")
-                        } catch {
-                            print("⚠️ [Quote Tweet] Failed to update retweet count: \(error)")
+                        } else {
+                            print("⚠️ [Quote Tweet] Failed to update retweet count")
                         }
                     } else {
                         print("❌ [Quote Tweet] Failed to post quote tweet")
@@ -1010,6 +1028,263 @@ extension TweetUploadManager {
             }
         }
     }
+
+    private func forceRefreshBaseUrlForRetry(userId: String?, context: String) async {
+        guard let userId = userId,
+              !userId.isEmpty,
+              let hproseInstance = hproseInstance else {
+            return
+        }
+        
+        do {
+            _ = try await hproseInstance.fetchUser(userId, baseUrl: "")
+            print("DEBUG: [Upload Retry] Forced baseUrl refresh for user \(userId) during \(context)")
+        } catch {
+            print("DEBUG: [Upload Retry] Failed to refresh baseUrl for user \(userId) during \(context): \(error)")
+        }
+    }
+    
+    /// Poll video jobs and send chat message once complete
+    private func pollVideoJobsAndSendChatMessage(
+        message: ChatMessage,
+        itemData: [PendingTweetUpload.ItemData],
+        uploadedAttachments: [MimeiFileType]
+    ) async {
+        // Extract all job IDs from itemData
+        let jobItems = itemData.filter { $0.videoJobId != nil }
+        guard !jobItems.isEmpty else {
+            print("⚠️ [Chat Poll] No job IDs to poll")
+            return
+        }
+        
+        print("🔄 [Chat Poll] Starting background polling for \(jobItems.count) video job(s)")
+        print("🔄 [Chat Poll] Message content: '\(message.content ?? "nil")', receiptId: \(message.receiptId)")
+        for (idx, jobItem) in jobItems.enumerated() {
+            print("🔄 [Chat Poll] Job \(idx + 1): jobId=\(jobItem.videoJobId ?? "nil"), fileName=\(jobItem.fileName)")
+        }
+        
+        guard let hproseInstance = hproseInstance else {
+            print("❌ [Chat Poll] HproseInstance not available")
+            return
+        }
+        
+        // Get base URL for polling
+        guard let baseURL = try? await hproseInstance.appUser.resolveWritableUrl(),
+              let host = baseURL.host,
+              hproseInstance.appUser.cloudDrivePort > 0,
+              let pollURL = URL(string: "http://\(host):\(hproseInstance.appUser.cloudDrivePort)") else {
+            print("❌ [Chat Poll] Cannot construct polling URL")
+            await showFailureToast(message: NSLocalizedString("Failed to check video status", comment: "Error"))
+            return
+        }
+        
+        // Track completed job CIDs
+        var completedCIDs: [String: String] = [:] // jobId -> CID
+        var completedCount = 0
+        let totalJobs = jobItems.count
+        
+        // Poll until all complete or failed
+        var pollAttempts = 0
+        let maxPollAttempts = 120 // 10 minutes (5 second intervals)
+        
+        while pollAttempts < maxPollAttempts && completedCount < totalJobs {
+            pollAttempts += 1
+            
+            // Check status of all pending jobs
+            for jobItem in jobItems {
+                guard let jobId = jobItem.videoJobId else { continue }
+                
+                // Skip already completed jobs
+                if completedCIDs[jobId] != nil {
+                    continue
+                }
+                
+                if let status = await checkVideoJobStatus(jobId: jobId, baseURL: pollURL) {
+                    switch status.status {
+                    case "completed":
+                        if let cid = status.cid, !cid.isEmpty {
+                            completedCIDs[jobId] = cid
+                            completedCount += 1
+                            print("✅ [Chat Poll] Job \(completedCount)/\(totalJobs) complete! Job: \(jobId), CID: \(cid)")
+                        } else {
+                            print("❌ [Chat Poll] Job completed but no CID returned")
+                            await showFailureToast(message: NSLocalizedString("Video processing completed but no ID returned", comment: "Error"))
+                            return
+                        }
+                        
+                    case "failed":
+                        print("❌ [Chat Poll] Job failed: \(status.message ?? "Unknown error")")
+                        await MainActor.run {
+                            NotificationCenter.default.post(
+                                name: .chatMessageSendFailed,
+                                object: nil,
+                                userInfo: ["error": NSError(domain: "ChatUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: status.message ?? NSLocalizedString("Video processing failed", comment: "Error")])]
+                            )
+                        }
+                        return
+                        
+                    case "uploading", "processing":
+                        // Still processing, continue polling
+                        continue
+                        
+                    default:
+                        print("⚠️ [Chat Poll] Unknown status for job \(jobId): \(status.status)")
+                        continue
+                    }
+                }
+            }
+            
+            // Check if all jobs completed
+            if completedCount == totalJobs {
+                print("✅ [Chat Poll] ALL \(totalJobs) video jobs completed!")
+                // Send chat message with all completed videos
+                await sendChatMessageWithCompletedJobs(
+                    message: message,
+                    itemData: itemData,
+                    completedCIDs: completedCIDs
+                )
+                return
+            }
+            
+            // Wait before next poll
+            print("⏳ [Chat Poll] \(completedCount)/\(totalJobs) jobs complete, polling... (\(pollAttempts)/\(maxPollAttempts))")
+            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+        }
+        
+        // Timeout
+        print("❌ [Chat Poll] Polling timeout after \(maxPollAttempts) attempts (\(completedCount)/\(totalJobs) completed)")
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: .chatMessageSendFailed,
+                object: nil,
+                userInfo: ["error": NSError(domain: "ChatUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Video processing timed out", comment: "Error")])]
+            )
+        }
+    }
+    
+    /// Send chat message once ALL video jobs are complete
+    private func sendChatMessageWithCompletedJobs(
+        message: ChatMessage,
+        itemData: [PendingTweetUpload.ItemData],
+        completedCIDs: [String: String],
+        retryCount: Int = 0
+    ) async {
+        guard let hproseInstance = hproseInstance else { return }
+        
+        print("📝 [Chat Submit] Sending message with \(completedCIDs.count) completed video job(s), retry: \(retryCount)")
+        print("📝 [Chat Submit] ItemData count: \(itemData.count), completedCIDs: \(completedCIDs)")
+        
+        // Build final attachments using completed job CIDs
+        var finalAttachments: [MimeiFileType] = []
+        
+        for (index, item) in itemData.enumerated() {
+            print("📋 [Chat Submit] Processing item \(index + 1): videoJobId=\(item.videoJobId ?? "nil"), cid=\(item.cid ?? "nil"), fileName=\(item.fileName)")
+            
+            if let jobId = item.videoJobId {
+                // This is a video - use the completed CID from server
+                if let completedCID = completedCIDs[jobId] {
+                    // Use the mediaType from itemData if available, otherwise default to hls_video
+                    let mediaType = item.mediaType != nil ? MediaType.fromString(item.mediaType!) : .hls_video
+                    let attachment = MimeiFileType(
+                        mid: completedCID,
+                        mediaType: mediaType,
+                        size: item.fileSize ?? Int64(item.data.count),
+                        fileName: item.fileName,
+                        timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
+                        aspectRatio: item.aspectRatio,
+                        url: nil
+                    )
+                    finalAttachments.append(attachment)
+                    print("✅ [Chat Submit] Added video attachment \(index + 1): CID: \(completedCID), mediaType: \(mediaType.rawValue), size: \(item.fileSize ?? 0), aspectRatio: \(item.aspectRatio ?? 0)")
+                } else {
+                    print("❌ [Chat Submit] WARNING: Missing completed CID for job: \(jobId)")
+                }
+            } else if let storedCID = item.cid {
+                // This is an image - use the stored CID
+                let mediaType = MediaType.fromString(item.mediaType ?? "Image")
+                let attachment = MimeiFileType(
+                    mid: storedCID,
+                    mediaType: mediaType,
+                    size: item.fileSize ?? Int64(item.data.count),
+                    fileName: item.fileName,
+                    timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
+                    aspectRatio: item.aspectRatio,
+                    url: nil
+                )
+                finalAttachments.append(attachment)
+                print("✅ [Chat Submit] Added image attachment \(index + 1): CID: \(storedCID), mediaType: \(mediaType.rawValue)")
+            } else {
+                print("❌ [Chat Submit] ERROR: Missing CID for attachment \(index + 1) - This should never happen!")
+            }
+        }
+        
+        print("📊 [Chat Submit] Final attachments count: \(finalAttachments.count) (expected: \(itemData.count))")
+        
+        var finalMessage = message
+        finalMessage.attachments = finalAttachments
+        
+        print("📤 [Chat Submit] About to send message: content='\(finalMessage.content ?? "nil")', attachments=\(finalMessage.attachments?.count ?? 0), receiptId=\(finalMessage.receiptId)")
+        if let attachments = finalMessage.attachments {
+            for (idx, att) in attachments.enumerated() {
+                print("📤 [Chat Submit] Final attachment \(idx + 1):")
+                print("  mid: \(att.mid)")
+                print("  type: \(att.type.rawValue)")
+                print("  size: \(att.size ?? -1)")
+                print("  fileName: \(att.fileName ?? "nil")")
+                print("  aspectRatio: \(att.aspectRatio ?? -1)")
+                print("  timestamp: \(att.timestamp.timeIntervalSince1970 * 1000)")
+            }
+        }
+        print("📤 [Chat Submit] Full message JSON: \(finalMessage.toJSONString())")
+        
+        // Send the message
+        do {
+            let resultMessage = try await hproseInstance.sendMessage(receiptId: finalMessage.receiptId, message: finalMessage)
+            
+            if resultMessage.success == true {
+                print("✅ [Chat Submit] Message sent successfully with \(finalAttachments.count) attachments!")
+                print("✅ [Chat Submit] Result message ID: \(resultMessage.id), content: \(resultMessage.content ?? "nil"), attachments: \(resultMessage.attachments?.count ?? 0)")
+                
+                await MainActor.run {
+                    // Post notification for message sent
+                    NotificationCenter.default.post(
+                        name: .chatMessageSent,
+                        object: nil,
+                        userInfo: ["message": resultMessage]
+                    )
+                    print("✅ [Chat Submit] Posted chatMessageSent notification")
+                }
+            } else {
+                let errorMsg = resultMessage.errorMsg ?? "Failed to send message"
+                print("❌ [Chat Submit] Message send failed: \(errorMsg)")
+                throw NSError(domain: "ChatUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMsg])
+            }
+        } catch {
+            print("❌ [Chat Submit] Failed to send message (attempt \(retryCount + 1)): \(error)")
+            print("❌ [Chat Submit] Error details: \(error.localizedDescription)")
+            
+            let maxRetries = 2
+            if retryCount < maxRetries {
+                print("🔄 [Chat Submit] Retrying... (\(retryCount + 1)/\(maxRetries))")
+                try? await Task.sleep(nanoseconds: UInt64(retryCount + 1) * 2_000_000_000) // Exponential backoff
+                await sendChatMessageWithCompletedJobs(
+                    message: message,
+                    itemData: itemData,
+                    completedCIDs: completedCIDs,
+                    retryCount: retryCount + 1
+                )
+            } else {
+                print("❌ [Chat Submit] Max retries reached, giving up")
+                await MainActor.run {
+                    NotificationCenter.default.post(
+                        name: .chatMessageSendFailed,
+                        object: nil,
+                        userInfo: ["error": error]
+                    )
+                }
+            }
+        }
+    }
     
     private func showFailureToast(message: String) async {
         await MainActor.run {
@@ -1022,26 +1297,119 @@ extension TweetUploadManager {
     }
     
     private func uploadChatMessageWithPersistenceAndRetry(
-        message: inout ChatMessage,
+        message: ChatMessage,
         itemData: [PendingTweetUpload.ItemData],
         retryCount: Int = 0
     ) async {
         guard let hproseInstance = hproseInstance else { return }
         
         do {
-            let (uploadedAttachments, _) = try await uploadAttachments(itemData: itemData)
-            message.attachments = uploadedAttachments
+            // Update progress: uploading attachments
+            await MainActor.run {
+                UploadProgressManager.shared.updateProgress(
+                    stage: .uploadingAttachments,
+                    message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                    progress: 0.2
+                )
+            }
             
-            let resultMessage = try await hproseInstance.sendMessage(receiptId: message.receiptId, message: message)
+            let (uploadedAttachments, jobIdMap) = try await uploadAttachments(itemData: itemData)
+            
+            // Check if we have video jobs that need polling
+            if !jobIdMap.isEmpty {
+                print("✅ [Chat Upload] Got \(jobIdMap.count) video job ID(s). Closing dialog and polling in background...")
+                
+                // Update itemData with job IDs for polling
+                var updatedItemData = itemData
+                for (index, item) in updatedItemData.enumerated() {
+                    if index < uploadedAttachments.count {
+                        let attachment = uploadedAttachments[index]
+                        let jobId = jobIdMap[item.identifier]
+                        
+                        print("📋 [Chat Upload] Storing metadata for item \(index + 1): mediaType=\(attachment.type.rawValue), jobId=\(jobId ?? "nil"), cid=\(attachment.mid)")
+                        
+                        updatedItemData[index] = PendingTweetUpload.ItemData(
+                            identifier: item.identifier,
+                            typeIdentifier: item.typeIdentifier,
+                            data: item.data,
+                            fileName: item.fileName,
+                            noResample: item.noResample,
+                            videoJobId: jobId,
+                            cid: attachment.mid,
+                            aspectRatio: attachment.aspectRatio,
+                            fileSize: attachment.size,
+                            mediaType: attachment.type.rawValue
+                        )
+                    }
+                }
+                
+                // Close the dialog with message about server processing
+                await MainActor.run {
+                    UploadProgressManager.shared.updateProgress(
+                        stage: .completed,
+                        message: NSLocalizedString("Processing video on server...", comment: "Upload stage"),
+                        progress: 1.0,
+                        detail: NSLocalizedString("Your message will be sent when ready", comment: "Background processing")
+                    )
+                }
+                
+                // Small delay to show message
+                try? await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
+                
+                await MainActor.run {
+                    UploadProgressManager.shared.completeUpload()
+                }
+                
+                // Start background polling for video jobs
+                Task.detached(priority: .background) {
+                    await self.pollVideoJobsAndSendChatMessage(
+                        message: message,
+                        itemData: updatedItemData,
+                        uploadedAttachments: uploadedAttachments
+                    )
+                }
+                
+                return
+            }
+            
+            // No video jobs - images only, send message immediately
+            print("✅ [Chat Upload] All image attachments uploaded. Sending message...")
+            
+            var finalMessage = message
+            finalMessage.attachments = uploadedAttachments
+            
+            // Update progress: sending message
+            await MainActor.run {
+                UploadProgressManager.shared.updateProgress(
+                    stage: .submittingTweet,
+                    message: NSLocalizedString("Sending message...", comment: "Upload stage"),
+                    progress: 0.9
+                )
+            }
+            
+            let resultMessage = try await hproseInstance.sendMessage(receiptId: finalMessage.receiptId, message: finalMessage)
             
             if resultMessage.success == true {
-                print("Chat message sent successfully: \(resultMessage.id)")
+                print("✅ [Chat Upload] Chat message sent successfully: \(resultMessage.id)")
+                
+                await MainActor.run {
+                    UploadProgressManager.shared.completeUpload()
+                    
+                    // Post notification for message sent
+                    NotificationCenter.default.post(
+                        name: .chatMessageSent,
+                        object: nil,
+                        userInfo: ["message": resultMessage]
+                    )
+                }
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: resultMessage.errorMsg ?? "Failed to send chat message"])
             }
         } catch {
-            print("Error uploading chat message: \(error)")
-            print(NSLocalizedString("Chat message upload failed", comment: "Chat upload error"))
+            print("❌ [Chat Upload] Error uploading chat message: \(error)")
+            await MainActor.run {
+                UploadProgressManager.shared.failUpload(message: ErrorMessageHelper.userFriendlyMessage(from: error))
+            }
         }
     }
     

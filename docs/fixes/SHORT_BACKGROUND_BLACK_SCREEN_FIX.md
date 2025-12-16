@@ -397,6 +397,20 @@ Even with gentle recovery, videos would flicker once after short backgrounds whe
    - Don't increment `representableId` on every active event
    - Reduces unnecessary view recreations
 
+### 5. UX Improvement: Last-Frame Placeholder (MediaCell)
+
+Even when the underlying player is healthy, iOS can briefly show a black surface while render layers reattach after background/foreground. To eliminate that visual discontinuity, MediaCell now captures the **last decoded frame** and uses it as a placeholder while the video pipeline becomes ready again.
+
+**Key logs:**
+```
+🖼️ [LAST FRAME] Captured for {mid} (willResignActive)
+🖼️ [LAST FRAME] Captured for {mid} (onDisappear)
+```
+
+**Impact:**
+- ✅ No “one-frame” black flicker on foreground return (for visible feed videos)
+- ✅ Smooth placeholder + spinner while buffering
+
 4. **Smart Seek Avoidance** (line 1671-1686)
    ```swift
    // Only seek if we're more than 0.5 seconds away from cached position

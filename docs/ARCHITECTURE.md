@@ -135,6 +135,10 @@ class ChatRepository {
 - Async/await for network calls
 - Error handling and retry logic
 - Authentication and session management
+- **Smart IP Resolution**: First attempt uses cached IP, retries force fresh resolution
+  - Handles server migrations automatically
+  - Minimizes provider IP lookups
+  - See `NETWORK_RESILIENCE.md` for details
 
 **Key Operations:**
 ```swift

@@ -1,115 +1,41 @@
 import SwiftUI
 import AVKit
+import UIKit
 
-// MARK: - Video Player Representable
-struct VideoPlayerRepresentable: UIViewRepresentable {
-    let player: AVPlayer
+// Custom text view that enables text selection without NavigationLink interference
+@available(iOS 16.0, *)
+struct SelectableTextView: UIViewRepresentable {
+    let text: String
     
-    func makeUIView(context: Context) -> UIView {
-        let view = VideoPlayerView()
-        view.backgroundColor = .black
-        
-        NSLog("DEBUG: [VideoPlayerRepresentable] makeUIView - creating NEW view and layer")
-        
-        // Create layer immediately
-        let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspect
-        playerLayer.needsDisplayOnBoundsChange = true
-        view.layer.addSublayer(playerLayer)
-        view.playerLayer = playerLayer
-        
-        context.coordinator.playerLayer = playerLayer
-        context.coordinator.view = view
-        context.coordinator.currentPlayer = player
-        
-        NSLog("DEBUG: [VideoPlayerRepresentable] makeUIView - layer created and player assigned")
-        
-        return view
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.text = text
+        textView.font = UIFont.preferredFont(forTextStyle: .body)
+        textView.textColor = UIColor.label
+        textView.backgroundColor = .clear
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = false
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.linkTextAttributes = [:] // Prevent links from being tappable
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return textView
     }
     
-    func updateUIView(_ uiView: UIView, context: Context) {
-        guard let videoView = uiView as? VideoPlayerView else { return }
-        
-        NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView called")
-        
-        // Check if player instance changed
-        let playerChanged = videoView.playerLayer?.player !== player
-        
-        // Always refresh player connection
-        if let playerLayer = videoView.playerLayer {
-            NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView - updating player, changed: \(playerChanged)")
-            playerLayer.player = player
-            context.coordinator.currentPlayer = player
-            
-            // CRITICAL: Reset recreation flag when player changes
-            // This ensures layer will be recreated for the new player
-            if playerChanged {
-                videoView.hasRecreatedLayer = false
-                NSLog("DEBUG: [VideoPlayerRepresentable] Player changed - reset recreation flag")
-            }
-        } else {
-            NSLog("DEBUG: [VideoPlayerRepresentable] updateUIView - NO LAYER EXISTS!")
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        if uiView.text != text {
+            uiView.text = text
         }
     }
     
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width - 32 // Account for padding
+        uiView.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return size
     }
-    
-    class Coordinator: NSObject {
-        var playerLayer: AVPlayerLayer?
-        var view: VideoPlayerView?
-        var currentPlayer: AVPlayer?
-    }
-}
-
-// Custom UIView that properly handles layout
-class VideoPlayerView: UIView {
-    var playerLayer: AVPlayerLayer?
-    var hasRecreatedLayer = false  // Not private - needs to be reset by representable
-    
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        
-        guard let layer = playerLayer else { return }
-        
-        let hadZeroBounds = layer.frame.width == 0 || layer.frame.height == 0
-        let hasValidBounds = bounds.width > 0 && bounds.height > 0
-        
-        // ALWAYS recreate layer if it has zero bounds - don't trust the flag
-        // This handles view reuse cases where the flag might be stale
-        if hadZeroBounds && hasValidBounds {
-            NSLog("DEBUG: [VideoPlayerView] Recreating layer - old frame: \(layer.frame), new bounds: \(bounds), flag was: \(hasRecreatedLayer)")
-            hasRecreatedLayer = true
-            
-            // Get player before removing layer
-            let player = layer.player
-            layer.removeFromSuperlayer()
-            
-            // CRITICAL: Create layer WITHOUT player, set frame FIRST, then assign player
-            let newLayer = AVPlayerLayer()
-            newLayer.videoGravity = .resizeAspect
-            newLayer.frame = bounds  // Set frame BEFORE assigning player
-            newLayer.needsDisplayOnBoundsChange = true
-            self.layer.addSublayer(newLayer)
-            
-            // NOW assign player after frame is set
-            newLayer.player = player
-            
-            playerLayer = newLayer
-            
-            NSLog("DEBUG: [VideoPlayerView] Layer recreated - frame set BEFORE player assigned")
-        } else {
-            // Just update frame
-            layer.frame = bounds
-        }
-    }
-}
-
-// MARK: - Scroll Detection
-private enum ScrollDirection {
-    case up
-    case down
 }
 
 // Custom MediaCell for TweetDetailView that shows native video controls instead of going full-screen
@@ -118,18 +44,16 @@ struct DetailMediaCell: View {
     @ObservedObject var parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float
-    @State private var play: Bool
     let shouldLoadVideo: Bool
-    @State private var isVisible: Bool = true
     @State private var image: UIImage?
     @State private var loading = false
     let showMuteButton: Bool
+    @State private var hasRestoredPosition = false // Track if we've restored position
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, play: Bool = false, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
-        self._play = State(initialValue: play)
         self.shouldLoadVideo = shouldLoadVideo
         self.showMuteButton = showMuteButton
     }
@@ -142,85 +66,85 @@ struct DetailMediaCell: View {
         return attachments[attachmentIndex]
     }
     
-    private var baseUrl: URL {
-        // Use author's baseUrl if available, otherwise use appUser's baseUrl
-        // If both are nil, use real IP from HproseInstance (resolved at app start)
-        return parentTweet.author?.baseUrl 
-            ?? HproseInstance.shared.appUser.baseUrl 
-            ?? HproseInstance.baseUrl
+    private var baseUrl: URL? {
+        return parentTweet.author?.baseUrl
     }
     
     var body: some View {
         Group {
-            if let url = attachment.getUrl(baseUrl) {
+            if let baseUrl = baseUrl, let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
                     // Show video with SimpleVideoPlayer in tweetDetail mode (shares player with grid, bypasses VideoManager)
-                    if shouldLoadVideo {
-                        SimpleVideoPlayer(
-                            url: url,
-                            mid: attachment.mid,
-                            parentTweetId: parentTweet.mid,
-                            isVisible: true,
-                            mediaType: attachment.type,
-                            autoPlay: true,
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: true,
-                            isMuted: false,
-                            mode: .tweetDetail
-                        )
-                    } else {
-                        // Show placeholder for videos that haven't been loaded yet
+                    // Videos already use .fit in tweetDetail mode, wrap in black background
+                    ZStack {
                         Color.black
-                            .overlay(
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(1.5)
+                        if shouldLoadVideo {
+                            SimpleVideoPlayer(
+                                url: url,
+                                mid: attachment.mid,
+                                parentTweetId: parentTweet.mid,
+                                isVisible: true,
+                                mediaType: attachment.type,
+                                autoPlay: true,
+                                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                                showNativeControls: true,
+                                isMuted: false,
+                                mode: .tweetDetail
                             )
+                        } else {
+                            // Show placeholder for videos that haven't been loaded yet
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(1.5)
+                        }
                     }
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
                     SimpleAudioPlayer(url: url, autoPlay: false)
                         .environmentObject(MuteState.shared)
                 case .image:
-                    // Images still go to full-screen when tapped
-                    Group {
-                        if let image = image {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                        } else if loading {
-                            // Show cached placeholder while loading original image
-                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                                Image(uiImage: cachedImage)
+                    // Images: use .fit for landscape, .fill for portrait, with black background
+                    let isLandscape = CGFloat(aspectRatio) > 1.0
+                    ZStack {
+                        Color.black
+                        Group {
+                            if let image = image {
+                                Image(uiImage: image)
                                     .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                                    .overlay(
-                                        ProgressView()
-                                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                            .scaleEffect(1.0)
-                                            .background(Color.black.opacity(0.3))
-                                            .clipShape(Circle())
-                                            .padding(),
-                                        alignment: .topTrailing
-                                    )
+                                    .aspectRatio(contentMode: isLandscape ? .fit : .fill)
+                                    .if(!isLandscape) { $0.clipped() }
+                            } else if loading {
+                                // Show cached placeholder while loading original image
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+                                    Image(uiImage: cachedImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: isLandscape ? .fit : .fill)
+                                        .if(!isLandscape) { $0.clipped() }
+                                        .overlay(
+                                            ProgressView()
+                                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                                .scaleEffect(1.0)
+                                                .background(Color.black.opacity(0.3))
+                                                .clipShape(Circle())
+                                                .padding(),
+                                            alignment: .topTrailing
+                                        )
+                                } else {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
                             } else {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .background(Color.gray.opacity(0.2))
-                            }
-                        } else {
-                            // Show cached placeholder if available, otherwise gray background
-                            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                                Image(uiImage: cachedImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .clipped()
-                            } else {
-                                Color.gray.opacity(0.2)
+                                // Show cached placeholder if available, otherwise gray background
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+                                    Image(uiImage: cachedImage)
+                                        .resizable()
+                                        .aspectRatio(contentMode: isLandscape ? .fit : .fill)
+                                        .if(!isLandscape) { $0.clipped() }
+                                } else {
+                                    Color.gray.opacity(0.2)
+                                }
                             }
                         }
                     }
@@ -233,23 +157,52 @@ struct DetailMediaCell: View {
         }
         .onAppear {
             print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid)")
-            isVisible = true
+            
+            // For videos in detail view, check if we need to restore position
+            if attachment.type == .video || attachment.type == .hls_video {
+                if !hasRestoredPosition {
+                    if let savedState = PersistentVideoStateManager.shared.getState(videoMid: attachment.mid, context: .detailView),
+                       PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: attachment.mid, context: .detailView) {
+                        
+                        print("🔄 [DetailMediaCell] Found saved state for \(attachment.mid): time=\(savedState.currentTime.seconds)s, wasPlaying=\(savedState.wasPlaying)")
+                        hasRestoredPosition = true
+                        // No notification needed: SimpleVideoPlayer now restores (seek) before starting playback,
+                        // preventing the visible "start at 0 then jump back" in TweetDetailView.
+                    }
+                }
+            }
+            
             if attachment.type == .image && image == nil {
                 print("DEBUG: [DetailMediaCell] Starting image load for attachment \(attachmentIndex)")
                 loadImage()
+            }
+        }
+        .onDisappear {
+            // For videos in detail view, post notification to save state
+            // SimpleVideoPlayer will handle the actual state capture
+            if attachment.type == .video || attachment.type == .hls_video {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("SaveVideoPosition"),
+                    object: nil,
+                    userInfo: [
+                        "videoMid": attachment.mid,
+                        "context": PersistentVideoStateManager.VideoPlaybackState.VideoContext.detailView.rawValue
+                    ]
+                )
             }
         }
 
     }
     
     private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { return }
+        guard let baseUrl = baseUrl,
+              let url = attachment.getUrl(baseUrl) else { return }
         
         let loadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
         
         // First, try to get cached image immediately
-        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             print("DEBUG: [TweetDetailView] Found cached image for \(loadId)")
             self.image = cachedImage
             return
@@ -267,8 +220,11 @@ struct DetailMediaCell: View {
             baseUrl: baseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
-            self.image = loadedImage
-            self.loading = false
+            // Completion is already @MainActor, but use Task to ensure SwiftUI view updates properly
+            Task { @MainActor in
+                self.image = loadedImage
+                self.loading = false
+            }
         }
     }
     
@@ -285,10 +241,6 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
-    @State private var showToast = false
-    @State private var toastMessage = ""
-    @State private var toastType: ToastView.ToastType = .info
-    @State private var isVisible = true
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
@@ -434,71 +386,79 @@ struct TweetDetailView: View {
                 dismiss()
             }
         }
+        // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
+        // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
+        .task(id: tweet.originalTweetId) {
+            // Load original tweet if this is a retweet/quoted tweet
+            guard let originalTweetId = tweet.originalTweetId,
+                  let originalAuthorId = tweet.originalAuthorId else {
+                return
+            }
+            
+            // First, try to restore from cache immediately to prevent layout shifts
+            if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
+                await MainActor.run {
+                    originalTweet = cachedTweet
+                    hasLoadedOriginalTweet = true
+                }
+            }
+            
+            // Then fetch from server to get the latest version
+            if let originalTweet = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId
+            ) {
+                await MainActor.run {
+                    self.originalTweet = originalTweet
+                    hasLoadedOriginalTweet = true
+                }
+            }
+        }
         .onAppear {
-            print("DEBUG: [TweetDetailView] ===== VIEW APPEARED =====")
-            print("DEBUG: [TweetDetailView] Tweet ID: \(tweet.mid)")
-            print("DEBUG: [TweetDetailView] Attachments count: \(tweet.attachments?.count ?? 0)")
-            
-            // Don't stop videos - let them naturally pause when scrolled off screen
-            // Posting stopAllVideos causes player conflicts when MediaCell and TweetDetailView share the same player
-            print("DEBUG: [TweetDetailView] View appeared - not posting stopAllVideos to avoid player conflicts")
-            
-            // Log all attachments
-            if let attachments = tweet.attachments {
-                for (index, attachment) in attachments.enumerated() {
-                    print("DEBUG: [TweetDetailView] Attachment \(index): \(attachment.type), mid: \(attachment.mid)")
-                }
-            }
-            
-            // Load original tweet immediately when view appears (like TweetItemView)
-            if !hasLoadedOriginalTweet,
-               let originalTweetId = tweet.originalTweetId,
-               let originalAuthorId = tweet.originalAuthorId {
-                hasLoadedOriginalTweet = true
-                Task {
-                    if let originalTweet = try? await hproseInstance.getTweet(
-                        tweetId: originalTweetId,
-                        authorId: originalAuthorId
-                    ) {
-                        await MainActor.run {
-                            self.originalTweet = originalTweet
-                        }
-                    }
-                }
-            }
-            
             
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
-        }
-        .onDisappear {
-            // Reset top navigation visibility when view disappears
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isTopNavigationVisible = true
-            }
-            // Clean up timer
-            scrollEndTimer?.invalidate()
-            scrollEndTimer = nil
-            print("DEBUG: [TweetDetailView] View disappeared, top navigation reset to visible")
+
+            // Mark detail view as active to prevent MediaCell autoplay
+            NavigationStateManager.shared.setDetailViewActive(true)
+
+            // Coordinate singleton lifecycle across nested detail navigations (quoted -> original).
+            DetailVideoManager.shared.beginDetailViewSession()
+            
+            // Detail view playback position is persisted independently (not seeded from feed positions).
         }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
         }
-        .overlay(toastOverlay)
         .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
+
+            // Mark detail view as inactive
+            NavigationStateManager.shared.setDetailViewActive(false)
+
+            // End session: we pause immediately, and clear only if no other detail view appears shortly.
+            // This avoids black flashes when pushing from one detail view to another.
+            DetailVideoManager.shared.endDetailViewSession()
+            
+            // Reset top navigation visibility when view disappears
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isTopNavigationVisible = true
+            }
+            
+            // Clean up timers and tasks
+            scrollUpdateTask?.cancel()
+            scrollUpdateTask = nil
             
             refreshTimer?.invalidate()
             refreshTimer = nil
-            isVisible = false
             
             // Cancel any pending image loads to prevent memory leaks
-            if let attachments = displayTweet.attachments {
+            if let attachments = displayTweet.attachments,
+               let baseUrl = displayTweet.author?.baseUrl {
                 for attachment in attachments {
-                    let baseUrl = displayTweet.author?.baseUrl ?? HproseInstance.baseUrl
                     let mainLoadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
                     
                     print("DEBUG: [TweetDetailView] Cancelling load: \(mainLoadId)")
@@ -509,66 +469,57 @@ struct TweetDetailView: View {
             
             print("DEBUG: [TweetDetailView] onDisappear called")
         }
-        .task {
-            // This task is cancelled when the view is permanently dismissed
-            // Keep singleton alive while view exists
-            defer {
-                // This runs when task is cancelled (view dismissed)
-                DetailVideoManager.shared.currentPlayer?.pause()
-                DetailVideoManager.shared.currentPlayer = nil
-                DetailVideoManager.shared.currentVideoMid = nil
-                print("DEBUG: [TweetDetailView] Task cancelled - cleaned up singleton")
-            }
-            
-            // Just wait forever - cleanup happens in defer when cancelled
-            try? await Task.sleep(for: .seconds(3600))
-        }
     }
     
     private var mediaSection: some View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                let aspect = aspectRatio(for: attachments[selectedMediaIndex], at: selectedMediaIndex)
+                // Use a fixed height based on all attachments to prevent jumping
+                let fixedAspect = calculateFixedAspectRatio(for: attachments)
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         DetailMediaCell(
                             parentTweet: displayTweet,
                             attachmentIndex: index,
                             aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
-                            play: index == selectedMediaIndex,
-                            shouldLoadVideo:  index == selectedMediaIndex,
+                            shouldLoadVideo: index == selectedMediaIndex,
                             showMuteButton: false
                         )
                         .tag(index)
                     }
                 }
                 .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                .onChange(of: selectedMediaIndex) { _, newIndex in
-                    // User swiped to new image - no aspect ratio loading needed
-                }
                 .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.width / aspect)
+                .frame(height: UIScreen.main.bounds.width / fixedAspect)
                 .background(Color.black)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showBrowser = true
+                }
             }
         }
     }
     
     private var tweetHeader: some View {
-        HStack(alignment: .top, spacing: 4) {
+        HStack(alignment: .top, spacing: 0) {
             if let user = displayTweet.author {
                 NavigationLink(value: user) {
                     Avatar(user: user)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
+            Spacer(minLength: 4)
             TweetItemHeaderView(tweet: displayTweet)
+            Spacer(minLength: 0)
             TweetMenu(
                 tweet: displayTweet, 
                 isPinned: displayTweet.isPinned(in: pinnedTweets),
                 showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid
             )
+            .padding(.trailing, -20)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.top)
     }
@@ -577,9 +528,9 @@ struct TweetDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Show text content if available
             if let content = displayTweet.content, !content.isEmpty {
-                Text(content)
-//                    .font(.body)
+                SelectableTextView(text: content)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal)
                     .padding(.vertical, 8)
             }
@@ -588,11 +539,14 @@ struct TweetDetailView: View {
             if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
                 if let orig = originalTweet {
                     VStack {
-                        TweetItemView(
+                        // Use embedded rendering: prevents quoted tweet videos from loading/autoplaying
+                        // (avoids conflicts with feed/shared MediaCell players).
+                        EmbeddedTweetView(
                             tweet: orig,
-                            onTap: nil, // Enable NavigationLink for quoted tweet
-                            hideActions: true,
-                            backgroundColor: Color(.systemGray6).opacity(0.5)
+                            isPinned: false,
+                            onTap: nil, // NavigationLink to quoted tweet detail
+                            backgroundColor: Color(.systemGray6).opacity(0.5),
+                            isEmbedded: true
                         )
                         
                     }
@@ -614,25 +568,13 @@ struct TweetDetailView: View {
             tweet: displayTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
-            }
+            },
+            isInDetailView: true  // Tell TweetActionButtonsView we're in detail view context
         )
         .padding(.leading, 16)
         .padding(.top, 8)
         .padding(.bottom, 4)
         .padding(.trailing, 12)
-    }
-    
-    private var toastOverlay: some View {
-        Group {
-            if showToast {
-                VStack {
-                    Spacer()
-                    ToastView(message: toastMessage, type: toastType)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                .padding(.bottom, 32)
-            }
-        }
     }
     
     private var commentsListView: some View {
@@ -652,11 +594,7 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .newCommentAdded,
                     key: "comment",
-                    shouldAccept: { comment in
-                        // Accept comments that belong to this tweet based on parentTweetId in notification
-                        // This will be handled by the notification system using the parentTweetId
-                        return true // We'll filter in the action
-                    },
+                    shouldAccept: { _ in true },
                     action: { comment, parentTweetId in
                         // Only add comment if it belongs to this tweet
                         if parentTweetId == displayTweet.mid {
@@ -667,10 +605,7 @@ struct TweetDetailView: View {
                 CommentListNotification(
                     name: .commentDeleted,
                     key: "comment",
-                    shouldAccept: { comment in
-                        // Accept all comment deletions - let the action function filter
-                        return true
-                    },
+                    shouldAccept: { _ in true },
                     action: { comment, parentTweetId in
                         if parentTweetId == displayTweet.mid {
                             comments.removeAll { $0.mid == comment.mid }
@@ -678,6 +613,7 @@ struct TweetDetailView: View {
                     }
                 )
             ],
+            isEmbedded: true, // Embedded in TweetDetailView's ScrollView, avoid nested scrolling
             rowView: { comment in
                 CommentItemView(
                     parentTweet: displayTweet,
@@ -706,17 +642,13 @@ struct TweetDetailView: View {
     
     private func refreshTweet() {
         Task {
-            do {
-                if let refreshedTweet = try await hproseInstance.refreshTweet(
-                    tweetId: tweet.mid,
-                    authorId: tweet.authorId
-                ) {
-                    try await MainActor.run {
-                        try tweet.update(from: refreshedTweet)
-                    }
+            if let refreshedTweet = try await hproseInstance.refreshTweet(
+                tweetId: tweet.mid,
+                authorId: tweet.authorId
+            ) {
+                try await MainActor.run {
+                    try tweet.update(from: refreshedTweet)
                 }
-            } catch {
-                // Error refreshing tweet
             }
         }
     }
@@ -776,19 +708,6 @@ struct TweetDetailView: View {
         }
     }
     
-    private func showToast(message: String, type: ToastView.ToastType) {
-        toastMessage = message
-        toastType = type
-        withAnimation {
-            showToast = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            withAnimation {
-                showToast = false
-            }
-        }
-    }
-    
     private func aspectRatio(for attachment: MimeiFileType, at index: Int) -> CGFloat {
         if attachment.type == .video || attachment.type == .hls_video {
             return CGFloat(attachment.aspectRatio ?? (4.0/3.0))
@@ -798,71 +717,98 @@ struct TweetDetailView: View {
         return 1.0 // Default aspect ratio
     }
     
+    /// Calculate a fixed aspect ratio for all attachments to prevent height jumping
+    /// Uses a smart approach: if all same orientation, use average; if mixed, use minimum aspect ratio
+    private func calculateFixedAspectRatio(for attachments: [MimeiFileType]) -> CGFloat {
+        guard !attachments.isEmpty else { return 1.0 }
+        
+        // Collect all aspect ratios
+        let aspectRatios = attachments.map { attachment -> CGFloat in
+            if attachment.type == .video || attachment.type == .hls_video {
+                return CGFloat(attachment.aspectRatio ?? (4.0/3.0))
+            } else if attachment.type == .image {
+                return CGFloat(attachment.aspectRatio ?? 1.0)
+            }
+            return 1.0
+        }
+        
+        // Separate portrait and landscape
+        let portraits = aspectRatios.filter { $0 < 1.0 }
+        let landscapes = aspectRatios.filter { $0 >= 1.0 }
+        
+        // If all are same orientation, use average
+        if portraits.isEmpty || landscapes.isEmpty {
+            let average = aspectRatios.reduce(0, +) / CGFloat(aspectRatios.count)
+            // Clamp to reasonable bounds (0.5 to 2.0)
+            return max(0.5, min(2.0, average))
+        }
+        
+        // Mixed orientations: use the minimum aspect ratio
+        // This ensures the container is tall enough for all content
+        // (minimum aspect ratio = tallest content = maximum height needed)
+        let minAspectRatio = aspectRatios.min() ?? 1.0
+        
+        // Clamp to reasonable bounds
+        return max(0.5, min(2.0, minAspectRatio))
+    }
     
-    @State private var scrollEndTimer: Timer?
-    @State private var consecutiveSmallMovements: Int = 0
-    @State private var isInertiaScrolling: Bool = false
+    @State private var scrollUpdateTask: Task<Void, Never>?
+    @State private var lastStateChangeTime: Date = Date()
     
     private func handleScroll(offset: CGFloat) {
-        // Cancel any existing timer
-        scrollEndTimer?.invalidate()
+        // Cancel any existing update task
+        scrollUpdateTask?.cancel()
         
-        // Calculate scroll direction and threshold
-        let scrollDelta = offset - previousScrollOffset
-        let scrollThreshold: CGFloat = 30
-        
-        // Track consecutive small movements to detect inertia scrolling
-        if abs(scrollDelta) > scrollThreshold {
-            consecutiveSmallMovements = 0
-            isInertiaScrolling = false
-        } else {
-            consecutiveSmallMovements += 1
-            // If we have many consecutive small movements, we're likely in inertia scrolling
-            if consecutiveSmallMovements > 3 {
-                isInertiaScrolling = true
-            }
-        }
-        
-        // Only change navigation state if we're not in inertia scrolling
-        if !isInertiaScrolling {
-            // Determine scroll direction
-            let isScrollingDown = scrollDelta < -scrollThreshold
-            let isScrollingUp = scrollDelta > scrollThreshold
-            
-            // Determine if we should show top navigation
-            let shouldShowTopNavigation: Bool
-            
-            if offset >= 0 {
-                // Always show when at the top
-                shouldShowTopNavigation = true
-            } else if isScrollingDown && isTopNavigationVisible {
-                // Scrolling down and navigation is visible - hide it
-                shouldShowTopNavigation = false
-            } else if isScrollingUp && !isTopNavigationVisible {
-                // Scrolling up and navigation is hidden - show it
-                shouldShowTopNavigation = true
-            } else {
-                // Keep current state
-                shouldShowTopNavigation = isTopNavigationVisible
-            }
-            
-            // Only update if the state actually changed
-            if shouldShowTopNavigation != isTopNavigationVisible {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    isTopNavigationVisible = shouldShowTopNavigation
-                }
-                print("[TweetDetailView] Top navigation visibility changed to: \(shouldShowTopNavigation)")
-            }
-        }
-        
-        previousScrollOffset = offset
-        
-        // Reset inertia scrolling state after 0.3 seconds of no scroll activity
-        scrollEndTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-            Task { @MainActor in
-                consecutiveSmallMovements = 0
-                isInertiaScrolling = false
+        // Debounce scroll updates - only process after a short delay
+        let capturedOffset = offset
+        scrollUpdateTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000) // 0.15 seconds
+            if !Task.isCancelled {
+                processScrollUpdate(offset: capturedOffset)
             }
         }
     }
+    
+    private func processScrollUpdate(offset: CGFloat) {
+        // Prevent rapid state changes - enforce minimum time between changes
+        let timeSinceLastChange = Date().timeIntervalSince(lastStateChangeTime)
+        let minTimeBetweenChanges: TimeInterval = 0.6 // Minimum 0.6 seconds between state changes
+        
+        // Calculate scroll direction and threshold
+        let scrollDelta = offset - previousScrollOffset
+        let scrollThreshold: CGFloat = 60 // Increased threshold for more stability
+        
+        // Determine scroll direction
+        let isScrollingDown = scrollDelta < -scrollThreshold
+        let isScrollingUp = scrollDelta > scrollThreshold
+        
+        // Determine if we should show top navigation
+        let shouldShowTopNavigation: Bool
+        
+        if offset >= 0 {
+            // Always show when at the top
+            shouldShowTopNavigation = true
+        } else if isScrollingDown && isTopNavigationVisible {
+            // Scrolling down and navigation is visible - hide it
+            shouldShowTopNavigation = false
+        } else if isScrollingUp && !isTopNavigationVisible {
+            // Scrolling up and navigation is hidden - show it
+            shouldShowTopNavigation = true
+        } else {
+            // Keep current state
+            shouldShowTopNavigation = isTopNavigationVisible
+        }
+        
+        // Only update if the state actually changed AND enough time has passed
+        if shouldShowTopNavigation != isTopNavigationVisible && timeSinceLastChange >= minTimeBetweenChanges {
+            lastStateChangeTime = Date()
+            withAnimation(.easeInOut(duration: 0.3)) {
+                isTopNavigationVisible = shouldShowTopNavigation
+            }
+            print("[TweetDetailView] Top navigation visibility changed to: \(shouldShowTopNavigation)")
+        }
+        
+        previousScrollOffset = offset
+    }
 }
+

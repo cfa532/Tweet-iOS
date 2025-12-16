@@ -2,12 +2,13 @@
 //  MediaBrowserView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/20.
+//  Created by Tomás Hongo on 2025/5/20.
 //
 
 import SwiftUI
 import AVKit
 import Photos
+import UIKit
 
 struct MediaBrowserView: View {
     let tweet: Tweet
@@ -30,6 +31,7 @@ struct MediaBrowserView: View {
     @State private var isImageZoomed = false // Track if current image is zoomed
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
+    @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     private var attachments: [MimeiFileType] {
         return currentTweet.attachments ?? []
     }
@@ -72,15 +74,32 @@ struct MediaBrowserView: View {
                 dismiss: { dismiss() },
                 startControlsTimer: startControlsTimer,
                 resetControlsTimer: resetControlsTimer,
+                onShareVisibilityChange: { isVisible in
+                    DispatchQueue.main.async {
+                        isShareSheetVisible = isVisible
+                        if isVisible {
+                            showControls = true
+                            controlsTimer?.invalidate()
+                            controlsTimer = nil
+                        } else {
+                            startControlsTimer()
+                        }
+                    }
+                },
                 loadImageIfNeededClosure: { attachment, index in
                     loadImageIfNeeded(for: attachment, at: index)
                 }
             )
             .onAppear {
                 setupFullScreenManager()
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
+
+                // NOTE: Don't broadcast stopAllVideos here.
+                // MediaCell videos will pause via overlay visibility detection once the fullscreen cover is presented.
             }
             .onDisappear {
                 FullScreenVideoManager.shared.clearSingletonPlayer()
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
             }
     }
     
@@ -169,6 +188,7 @@ struct MediaBrowserView: View {
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
+        let onShareVisibilityChange: (Bool) -> Void
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
         
         var body: some View {
@@ -205,7 +225,7 @@ struct MediaBrowserView: View {
                         cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
                     }
                     
-                    // Close button overlay
+                    // Close button + tweet actions overlay
                     if showControls {
                         VStack {
                             HStack {
@@ -220,6 +240,21 @@ struct MediaBrowserView: View {
                                 Spacer()
                             }
                             Spacer()
+                            HStack {
+                                TweetActionButtonsView(
+                                    tweet: currentTweet,
+                                    isInDetailView: true,
+                                    isFullScreen: true,
+                                    onShareVisibilityChange: { isVisible in
+                                        // Forward share visibility changes to outer view
+                                        onShareVisibilityChange(isVisible)
+                                    }
+                                )
+                                .environment(\.colorScheme, .dark)
+                                .tint(.white)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 60)
                         }
                         .transition(.opacity)
                     }
@@ -254,6 +289,10 @@ struct MediaBrowserView: View {
                         if !isImageZoomed {
                             let swipeThreshold: CGFloat = 100
                             let velocityThreshold: CGFloat = 500
+                            // Ignore system home-indicator swipe-ups (close app / go Home).
+                            // Only treat swipe-up as "next video" if the gesture started away from the bottom edge.
+                            let bottomExclusion: CGFloat = 44 + MediaBrowserView.currentBottomSafeAreaInset()
+                            let startedNearBottomEdge = value.startLocation.y > (UIScreen.main.bounds.height - bottomExclusion)
                             
                             // Swipe down - exit fullscreen
                             if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
@@ -262,7 +301,8 @@ struct MediaBrowserView: View {
                             }
                             
                             // Swipe up - next video
-                            if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
+                            if !startedNearBottomEdge,
+                               (value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold) {
                                 print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
                                 FullScreenVideoManager.shared.navigateToNext()
                             }
@@ -287,15 +327,17 @@ struct MediaBrowserView: View {
                 UIApplication.shared.isIdleTimerDisabled = true
                 startControlsTimer()
                 
-                // Stop all videos in the tweet list when entering full screen
-                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-                print("DEBUG: [MediaBrowserView] Posted stopAllVideos notification")
+                // Don't stop all videos - only the video entering fullscreen will pause itself
+                // This allows other videos to continue playing
                 
                 previousIndex = currentIndex
             }
             .onDisappear {
                 isVisible = false
                 UIApplication.shared.isIdleTimerDisabled = false
+                
+                // Don't resume all videos - each video will resume automatically when it becomes visible
+                // This allows videos that were already playing to continue, and only the exiting video to resume if needed
                 
                 // Clean up all image states to free memory
                 cleanupImageStates(attachments: attachments, imageStates: $imageStates, baseUrl: baseUrl)
@@ -336,9 +378,16 @@ struct MediaBrowserView: View {
                 url: url,
                 mid: attachment.mid,
                 tweetId: currentTweet.mid,
+                sourceTweetId: currentSourceTweetId,
                 videoIndex: index,
                 mediaType: attachment.type,
-                aspectRatio: attachment.aspectRatio
+                aspectRatio: attachment.aspectRatio,
+                onUserInteraction: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showControls = true
+                    }
+                    resetControlsTimer()
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -382,15 +431,34 @@ struct MediaBrowserView: View {
         
 
     }
+
+    static func currentBottomSafeAreaInset() -> CGFloat {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) else {
+            return 0
+        }
+        return window.safeAreaInsets.bottom
+    }
     
 
     
     private func startControlsTimer() {
         controlsTimer?.invalidate()
+        
+        // Don't auto-hide controls while share sheet is visible
+        if isShareSheetVisible {
+            return
+        }
+        
         controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
             // Hide close button for ALL content types after 3 seconds
-            withAnimation(.easeInOut(duration: 0.3)) {
-                showControls = false
+            // but only if share sheet isn't visible anymore
+            if !isShareSheetVisible {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    showControls = false
+                }
             }
         }
     }
@@ -405,7 +473,7 @@ struct MediaBrowserView: View {
         print("DEBUG: [MediaBrowserView] loadImageIfNeeded called for \(loadId)")
         
         // First, try to get compressed image immediately
-        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             print("DEBUG: [MediaBrowserView] Found cached image for \(loadId)")
             imageStates[index] = .loaded(compressedImage)
             return
@@ -443,7 +511,7 @@ struct MediaBrowserView: View {
 
     
     private func getCachedPlaceholder(for attachment: MimeiFileType) -> UIImage? {
-        return ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl)
+        return ImageCacheManager.shared.getCompressedImage(for: attachment)
     }
     
     private static func cleanupImageStates(attachments: [MimeiFileType], imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
@@ -750,30 +818,76 @@ struct SingletonVideoPlayerView: View {
     let url: URL
     let mid: String
     let tweetId: String
+    let sourceTweetId: String
     let videoIndex: Int
     let mediaType: MediaType
     let aspectRatio: Float?
+    let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
+    @State private var hasAttemptedReload = false
     
     var body: some View {
         GeometryReader { geometry in
-            if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
-                // Show player
-                SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // Loading placeholder
-                ZStack {
+            ZStack {
+                if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
+                    // Show player
+                    SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                onUserInteraction()
+                            }
+                        )
+                } else {
+                    // Loading placeholder or broken player - attempt to reload
                     Color.black
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
                 }
+                
+                // Show buffering spinner when waiting for data (non-interactive overlay)
+                if manager.isBuffering && manager.currentVideoMid == mid {
+                    ZStack {
+                        Color.black.opacity(0.15)
+                        ProgressView()
+                            .scaleEffect(3.0)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .opacity(0.8)
+                    }
+                    .transition(.opacity)
+                    .allowsHitTesting(false) // Don't block touches - allow user to interact with player controls
+                }
+            }
+            .onAppear {
+                    // If player is nil or doesn't match current video, reload it
+                    if manager.singletonPlayer == nil || manager.currentVideoMid != mid {
+                        if !hasAttemptedReload {
+                            hasAttemptedReload = true
+                            print("DEBUG: [SingletonVideoPlayerView] Player missing or mismatched - reloading video for mid: \(mid)")
+                            // Reload the video
+                            manager.loadVideo(
+                                url: url,
+                                mid: mid,
+                                tweetId: tweetId,
+                                sourceTweetId: sourceTweetId,
+                                videoIndex: videoIndex,
+                                mediaType: mediaType
+                            )
+                        }
+                    }
+                }
+                .onChange(of: manager.currentVideoMid) { _, newMid in
+                    // Reset reload flag when video changes
+                    if newMid == mid {
+                        hasAttemptedReload = false
+                    }
+                }
             }
         }
     }
-}
 
 // MARK: - Simple AVPlayerViewController Wrapper
 private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
@@ -822,20 +936,18 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
     private func setupPlayerItemObserver(player: AVPlayer, context: Context) {
         context.coordinator.statusObserver?.invalidate()
         
+        // Don't auto-play here - let FullScreenVideoManager handle playback after restoring position
+        // FullScreenVideoManager will check for saved state and seek/play accordingly
         if let playerItem = player.currentItem {
             if playerItem.status == .readyToPlay {
-                print("DEBUG: [SingletonVideoPlayer] Player already ready, playing immediately")
-                DispatchQueue.main.async {
-                    player.play()
-                }
+                print("DEBUG: [SingletonVideoPlayer] Player already ready - FullScreenVideoManager will handle playback")
+                // FullScreenVideoManager will handle playback after checking for saved state
             } else {
                 print("DEBUG: [SingletonVideoPlayer] Player not ready yet, setting up observer")
                 context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                     if item.status == .readyToPlay {
-                        print("DEBUG: [SingletonVideoPlayer] Player became ready, playing now")
-                        DispatchQueue.main.async {
-                            player.play()
-                        }
+                        print("DEBUG: [SingletonVideoPlayer] Player became ready - FullScreenVideoManager will handle playback")
+                        // FullScreenVideoManager will handle playback after checking for saved state
                         context.coordinator.statusObserver?.invalidate()
                         context.coordinator.statusObserver = nil
                     } else if item.status == .failed {
@@ -863,19 +975,17 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         if uiViewController.player !== player {
             uiViewController.player = player
             
-            // Setup observer for new player
+            // Setup observer for new player - don't auto-play, let FullScreenVideoManager handle it
             context.coordinator.statusObserver?.invalidate()
             if let playerItem = player.currentItem {
                 if playerItem.status == .readyToPlay {
-                    print("DEBUG: [SingletonVideoPlayer] Player ready on update, playing")
-                    player.play()
+                    print("DEBUG: [SingletonVideoPlayer] Player ready on update - FullScreenVideoManager will handle playback")
+                    // FullScreenVideoManager will handle playback after checking for saved state
                 } else {
                     context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                         if item.status == .readyToPlay {
-                            print("DEBUG: [SingletonVideoPlayer] Player ready after update, playing")
-                            DispatchQueue.main.async {
-                                player.play()
-                            }
+                            print("DEBUG: [SingletonVideoPlayer] Player ready after update - FullScreenVideoManager will handle playback")
+                            // FullScreenVideoManager will handle playback after checking for saved state
                             context.coordinator.statusObserver?.invalidate()
                             context.coordinator.statusObserver = nil
                         }

@@ -32,6 +32,10 @@ class AppState: ObservableObject {
                 // Load chat sessions after user is properly initialized
                 await ChatSessionManager.shared.loadSessionsWhenUserAvailable()
                 
+                // Check for new messages after sessions are loaded (only updates badge, no notifications)
+                await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
+                print("[TweetApp] ✅ Initial message check completed after app initialization")
+                
                 // Refresh mute state from preferences after HproseInstance is ready
                 MuteState.shared.refreshFromPreferences()
                 
@@ -46,9 +50,6 @@ class AppState: ObservableObject {
                     FullScreenVideoManager.shared.initializePlayerEarly()
                 }
                 
-                // Start periodic appUser refresh every 30 minutes
-                HproseInstance.shared.startPeriodicAppUserRefresh()
-                
                 // Cleanup caches after a delay
                 Task.detached(priority: .background) {
                     // Wait 30 seconds after app initialization
@@ -57,10 +58,19 @@ class AppState: ObservableObject {
                     ImageCacheManager.shared.cleanupOldCache()
                 }
             } catch {
+                // Even if initAppEntry fails, mark initialization as complete
+                // so the app can still function and fetch users from server
                 await MainActor.run {
                     self.error = error
+                    // Mark HproseInstance initialization as complete even on failure
+                    // This allows user fetches to proceed with resolved IPs
+                    HproseInstance.shared.markInitializationComplete()
                 }
+                print("DEBUG: [AppState] initAppEntry failed but marking initialization complete: \(error)")
             }
+            
+            // Always start periodic tasks (idempotent inside HproseInstance)
+            HproseInstance.shared.startPeriodicBlackListProcessing()
         }
     }
 }
@@ -165,14 +175,17 @@ struct TweetApp: App {
                     print("[TweetApp] Received notification to open chat with: \(senderId)")
                 }
             }
-            .alert(NSLocalizedString("Error", comment: "Error alert title"), isPresented: .constant(appState.error != nil)) {
-                Button(NSLocalizedString("OK", comment: "OK button")) {
-                    appState.error = nil
-                }
-            } message: {
-                if let error = appState.error {
-                    Text(error.localizedDescription)
-                }
+            .onOpenURL { url in
+                // SwiftUI's onOpenURL handler - works for both custom schemes and Universal Links
+                print("[TweetApp] ✅ SwiftUI onOpenURL received: \(url.absoluteString)")
+                print("[TweetApp] URL scheme: \(url.scheme ?? "nil"), host: \(url.host ?? "nil"), path: \(url.path)")
+                
+                // Post notification for ContentView to handle
+                NotificationCenter.default.post(
+                    name: .deeplinkReceived,
+                    object: nil,
+                    userInfo: ["url": url]
+                )
             }
         }
     }

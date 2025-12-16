@@ -59,7 +59,7 @@ class GlobalImageLoadManager: ObservableObject {
     // MARK: - Configuration
     private let maxConcurrentLoads = 8  // Balanced for stable network performance
     private let maxQueueSize = 100
-    private let memoryWarningThreshold = 0.8 // 80% of available memory
+    private let memoryWarningThreshold = 0.45 // 45% of available memory
     
     // MARK: - State Management
     private var activeLoads: [String: Task<Void, Never>] = [:]
@@ -117,6 +117,7 @@ class GlobalImageLoadManager: ObservableObject {
         
         // Check memory pressure
         if isMemoryPressureHigh() {
+            ImageCacheManager.shared.releasePartialCache(percentage: 40)
             if request.priority.rawValue < ImageLoadingPriority.high.rawValue {
                 // Defer low priority requests during memory pressure
                 deferRequest(request)
@@ -271,7 +272,7 @@ class GlobalImageLoadManager: ObservableObject {
     private func startLoading(_ request: ImageLoadRequest) {
         let task = Task {
             // Check if image is already cached
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment, baseUrl: request.baseUrl) {
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                 await MainActor.run {
                     request.completion(cachedImage)
                     self.completedRequests.insert(request.id)
@@ -291,6 +292,8 @@ class GlobalImageLoadManager: ObservableObject {
                     self.completedRequests.insert(request.id)
                     self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                 } else {
+                    // Always call completion, even on failure, so UI can update isLoading state
+                    request.completion(nil)
                     self.handleLoadFailure(request)
                 }
                 self.activeLoads.removeValue(forKey: request.id)
@@ -330,15 +333,11 @@ class GlobalImageLoadManager: ObservableObject {
                 return nil
             }
             
-            // Cache the image data
-            ImageCacheManager.shared.cacheImageData(data, for: request.attachment, baseUrl: request.baseUrl)
-            
-            // Create UIImage directly from data
-            if let image = UIImage(data: data) {
+            if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment) {
                 return image
             }
             
-            print("Error: Failed to create UIImage from data for \(request.url)")
+            print("Error: Failed to cache UIImage from data for \(request.url)")
             return nil
             
         } catch {
@@ -376,7 +375,7 @@ class GlobalImageLoadManager: ObservableObject {
         let task = Task {
             do {
                 // Check if image is already cached
-                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment, baseUrl: request.baseUrl) {
+                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                     await MainActor.run {
                         request.completion(cachedImage)
                         self.completedRequests.insert(request.id)
@@ -436,9 +435,10 @@ class GlobalImageLoadManager: ObservableObject {
             // Resize image to fit within maxSize while maintaining aspect ratio
             let resizedImage = resizeImage(originalImage, toFit: maxSize)
             
-            // Cache the resized image
             if let resizedData = resizedImage.jpegData(compressionQuality: 0.8) {
-                ImageCacheManager.shared.cacheImageData(resizedData, for: request.attachment, baseUrl: request.baseUrl)
+                if let cachedImage = ImageCacheManager.shared.cacheImageData(resizedData, for: request.attachment) {
+                    return cachedImage
+                }
             }
             
             return resizedImage
@@ -554,10 +554,13 @@ class GlobalImageLoadManager: ObservableObject {
             // Simple heuristic: if we're using more than 80% of available memory
             let availableMemory = ProcessInfo.processInfo.physicalMemory
             let memoryUsageRatio = Double(currentMemoryUsage) / Double(availableMemory)
-            let isHigh = memoryUsageRatio > memoryWarningThreshold
+            let memoryUsageMB = Double(currentMemoryUsage) / (1024.0 * 1024.0)
+            let isHigh = memoryUsageRatio > memoryWarningThreshold || memoryUsageMB > 600.0
             
             if isHigh {
-                print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(String(format: "%.1f", memoryUsageRatio * 100))% of available memory used")
+                let percentageString = String(format: "%.1f", memoryUsageRatio * 100)
+                let memoryString = String(format: "%.0f", memoryUsageMB)
+                print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(percentageString)% used (\(memoryString) MB)")
             }
             
             return isHigh
@@ -618,9 +621,9 @@ class GlobalImageLoadManager: ObservableObject {
         
         print("DEBUG: [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
         
-        // Only take action if memory usage exceeds 1.4GB (preventive cleanup threshold)
-        if memoryUsageMB > 1400 {
-            print("DEBUG: [GlobalImageLoadManager] Memory usage exceeds 1.4GB, performing cleanup")
+        // Only take action if memory usage exceeds 600MB (preventive cleanup threshold)
+        if memoryUsageMB > 600 {
+            print("DEBUG: [GlobalImageLoadManager] Memory usage exceeds 600MB, performing cleanup")
             
             // Cancel all low priority requests
             cancelLoads(priority: .low)
@@ -640,8 +643,11 @@ class GlobalImageLoadManager: ObservableObject {
             
             // Force garbage collection
             updateStatistics()
+            
+            // Aggressively trim cached images
+            ImageCacheManager.shared.releasePartialCache(percentage: 60)
         } else {
-            print("DEBUG: [GlobalImageLoadManager] Memory usage under 1.4GB, no action needed")
+            print("DEBUG: [GlobalImageLoadManager] Memory usage under 600MB threshold, no action needed")
         }
     }
     

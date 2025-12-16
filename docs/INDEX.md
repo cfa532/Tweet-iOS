@@ -1,6 +1,6 @@
 # Tweet-iOS Documentation Index
 
-**Last Updated:** October 22, 2025
+**Last Updated:** November 14, 2025
 
 ---
 
@@ -12,6 +12,7 @@
 | [**INSTANT_TWEET_RENDERING.md**](./INSTANT_TWEET_RENDERING.md) | **CURRENT:** Simple instant cache rendering via non-blocking renders and user singletons | ✅ Production |
 | [**UPLOAD_SYSTEM.md**](./UPLOAD_SYSTEM.md) | Complete upload system with progress tracking, multi-attachment support, background polling | ✅ Production |
 | [**VIDEO_SYSTEM.md**](./VIDEO_SYSTEM.md) | Dual video architecture (new shared cache + old fullscreen), HLS/MP4 playback | ⚠️ Partial Migration |
+| [**SHARING_SYSTEM.md**](./SHARING_SYSTEM.md) | IP-based sharing URLs with Vue HashHistory compatibility, context-aware video screenshots | ✅ Production |
 | [**ARCHITECTURE.md**](./ARCHITECTURE.md) | Overall app architecture, MVVM patterns, data flow | ✅ Current |
 | [**FEATURES.md**](./FEATURES.md) | Complete feature list and capabilities | ✅ Current |
 | [**BASEURL_RESOLUTION_AND_CACHE_RENDERING.md**](./BASEURL_RESOLUTION_AND_CACHE_RENDERING.md) | ~~Complex baseUrl assignment system~~ | ❌ Deprecated - see INSTANT_TWEET_RENDERING.md |
@@ -40,6 +41,9 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
+| [**fixes/LAYOUT_STABILITY_IMPROVEMENTS.md**](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) | **COMPREHENSIVE**: All layout stability mechanisms - retweet placeholders, scroll debouncing, GeometryReader removal, fixed sizes, drawing groups | Dec 2025 |
+| [**fixes/CACHE_KEY_MIGRATION_DEC_2025.md**](./fixes/CACHE_KEY_MIGRATION_DEC_2025.md) | Cache key migration from "main_feed" to appUser.mid with persistence across logouts | Dec 2025 |
+| [**fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md**](./fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md) | Context-aware sharing: IP-based URLs for Vue HashHistory, accurate video screenshots from detail view | Nov 14, 2025 |
 | [**fixes/CACHED_TWEETS_BLOCKING_FIX.md**](./fixes/CACHED_TWEETS_BLOCKING_FIX.md) | **CURRENT PRODUCTION**: Non-blocking renders, eliminated 34 lines of baseUrl workaround code | Oct 22, 2025 |
 | [**fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md**](./fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md) | Code cleanup: removed complex baseUrl assignment system | Oct 22, 2025 |
 | [**fixes/LOGGING_IMPROVEMENTS_OCT_22_2025.md**](./fixes/LOGGING_IMPROVEMENTS_OCT_22_2025.md) | Removed repetitive logs, added strategic cache rendering logs | Oct 22, 2025 |
@@ -131,6 +135,20 @@ All main documents should include:
 ---
 
 ## 🔄 Recent Updates
+
+### December 2025
+- ✅ **Layout Stability Improvements**: Comprehensive stability mechanisms
+  - **Retweet/Quoted Tweet Stability**: Fixed-height placeholders (280pt) prevent layout shifts when embedded tweets load
+  - **Scroll Debouncing**: Queue server updates during active scrolling, apply after scroll stops
+  - **GeometryReader Removal**: Removed from MediaGridView and SimpleVideoPlayer (mediaCell mode), use cached/fixed dimensions
+  - **Fixed Size Modifiers**: Applied throughout to prevent size changes
+  - **Drawing Group Isolation**: Prevent cascading layout shifts
+  - **Media Grid Stability**: Fixed dimensions, compositing group, stable IDs
+  - **Video Player Stability**: Fixed dimensions for mediaCell mode
+  - **TweetItemBodyView Stability**: Fixed sizes for all content elements
+  - **Result**: Zero layout shifts, smooth scroll experience, professional UX
+  - **Files**: `TweetItemView.swift`, `TweetListView.swift`, `MediaGridView.swift`, `SimpleVideoPlayer.swift`, `TweetItemBodyView.swift`, `MediaCell.swift`
+  - 📄 Updated [fixes/LAYOUT_STABILITY_IMPROVEMENTS.md](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) - Complete documentation of all stability mechanisms
 
 ### October 22, 2025
 - ✅ **CRITICAL RESOLVED**: Cached Tweets Blocking Fix

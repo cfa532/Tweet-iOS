@@ -2,31 +2,44 @@
 //  MediaGridView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/20.
+//  Created by Tomás Hongo on 2025/5/20.
 //
 
 import SwiftUI
 import AVKit
 
-struct MediaGridView: View {
+struct MediaGridView: View, Equatable {
     let parentTweet: Tweet
     let attachments: [MimeiFileType]
-    let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
+    let isEmbedded: Bool // Flag to indicate this is an embedded tweet (prevents video loading)
     let maxImages: Int = 4
-    @State private var shouldLoadVideo = true
+    
+    // Equatable conformance to help SwiftUI reuse views and prevent unnecessary recomposition
+    static func == (lhs: MediaGridView, rhs: MediaGridView) -> Bool {
+        return lhs.parentTweet.mid == rhs.parentTweet.mid &&
+               lhs.attachments.count == rhs.attachments.count &&
+               lhs.attachments.map { $0.mid } == rhs.attachments.map { $0.mid } &&
+               lhs.isEmbedded == rhs.isEmbedded
+    }
+    @State private var shouldLoadVideo: Bool
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
+    @State private var hasSetupSequentialPlayback = false // Track if we've already set up sequential playback
+    @State private var hasInitialized = false // Track if we've done initial setup
     @StateObject private var videoManager = VideoManager()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
     // Cache screen-based calculations to avoid repeated UIScreen.main calls
+    // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
-    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32)
+    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
+    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 140) // Narrower width for embedded/quoted tweets
     
-    init(parentTweet: Tweet, attachments: [MimeiFileType], visibleTweetId: String? = nil) {
+    init(parentTweet: Tweet, attachments: [MimeiFileType], isEmbedded: Bool = false) {
         self.parentTweet = parentTweet
         self.attachments = attachments
-        self.visibleTweetId = visibleTweetId
+        self.isEmbedded = isEmbedded
+        self._shouldLoadVideo = State(initialValue: true)
     }
     
     private func isPortrait(_ attachment: MimeiFileType) -> Bool {
@@ -72,18 +85,19 @@ struct MediaGridView: View {
     }
     
     private func onVideoFinished() {
-        videoManager.onVideoFinished()
+        print("DEBUG: [MediaGridView] onVideoFinished called for tweet \(parentTweet.mid)")
+        videoManager.onVideoFinished(tweetId: parentTweet.mid)
     }
     
     var body: some View {
         // Use cached dimensions to prevent repeated UIScreen.main calls
         let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-        let gridHeight = max(10, Self.cachedGridWidth / gridAspectRatio)
+        // Use different width for embedded vs regular tweets
+        let actualWidth = isEmbedded ? Self.cachedEmbeddedGridWidth : Self.cachedGridWidth
+        let gridHeight = max(10, actualWidth / gridAspectRatio)
         
-        GeometryReader { geometry in
-            let actualWidth = max(10, geometry.size.width)
-            
-            ZStack {
+        // Fixed frame to prevent layout shifts during image loading
+        ZStack(alignment: .center) {
                 switch attachments.count {
                 case 1:
                     MediaCell(
@@ -93,9 +107,9 @@ struct MediaGridView: View {
                         shouldLoadVideo: shouldLoadVideo,
                         onVideoFinished: onVideoFinished,
                         videoManager: videoManager,
-                        visibleTweetId: visibleTweetId
+                        isEmbedded: isEmbedded
                     )
-                    .frame(width: actualWidth, height: gridHeight)
+                    .frame(width: actualWidth, height: gridHeight, alignment: .center)
                     .clipped()
                     .contentShape(Rectangle())
                     // identify MediaCell border
@@ -119,7 +133,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -137,7 +151,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -156,7 +170,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -169,7 +183,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                    visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -183,7 +197,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 2/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -196,7 +210,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 1/3 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -229,7 +243,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth * 0.618 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -246,6 +260,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth * 0.382 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -265,7 +280,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth, height: gridHeight * 0.618 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -282,6 +297,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth/2 - 1, height: gridHeight * 0.382 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -300,7 +316,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -315,6 +331,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -332,7 +349,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -346,6 +363,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -373,7 +391,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -388,7 +406,8 @@ struct MediaGridView: View {
                                         
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
-                                        videoManager: videoManager
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
                                     )
                                         .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped().contentShape(Rectangle())
@@ -409,7 +428,7 @@ struct MediaGridView: View {
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
-                                        visibleTweetId: visibleTweetId
+                                    isEmbedded: isEmbedded
                                 )
                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -427,6 +446,7 @@ struct MediaGridView: View {
                                             shouldLoadVideo: shouldLoadVideo,
                                             onVideoFinished: onVideoFinished,
                                             videoManager: videoManager,
+                                            isEmbedded: isEmbedded
                                         )
                                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .clipped().contentShape(Rectangle())
@@ -445,14 +465,52 @@ struct MediaGridView: View {
                         }
                     }
                 }
-            }
-            .frame(width: actualWidth, height: gridHeight)
-            .clipped().contentShape(Rectangle())
         }
-        // Fix the height to prevent layout shifts during scrolling
-        .frame(height: gridHeight)
+        .frame(width: actualWidth)
+        .aspectRatio(gridAspectRatio, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8)) // Add rounded corners to media grid
+        .contentShape(Rectangle())
+        .id("mediagrid_\(parentTweet.mid)") // Stable identity to prevent unnecessary recomposition
+        .overlay(alignment: .bottomTrailing) {
+            // Show mute button only when there's exactly one video attachment
+            if attachments.count == 1,
+               let attachment = attachments.first,
+               attachment.type == .video || attachment.type == .hls_video {
+                MuteButton()
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 12)
+            }
+        }
         .onAppear {
-            // Mark the grid as visible
+            // CRITICAL: If already initialized, do NOTHING to prevent recomposition
+            // This is the key to smooth scrolling - once a retweet is rendered, it stays rendered
+            // No state changes, no checks, no work - just mark as visible
+            if hasInitialized {
+                isVisible = true
+                
+                // CRITICAL FIX: Even though initialized, we need to ensure VideoManager state
+                // is correct when grid reappears (e.g., after scrolling away and back)
+                let videoMids = attachments.enumerated().compactMap { index, attachment in
+                    if attachment.type == .video || attachment.type == .hls_video {
+                        return attachment.mid
+                    }
+                    return nil
+                }
+                
+                if videoMids.count >= 1 {
+                    // Check if VideoManager needs to be re-initialized for this tweet
+                    let needsReinit = videoManager.videoMids != videoMids || videoManager.videoMids.isEmpty
+                    if needsReinit {
+                        print("DEBUG: [MediaGridView] Re-initializing VideoManager on reappear for tweet \(parentTweet.mid)")
+                        videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                    }
+                }
+                
+                return
+            }
+            
+            // Mark as initialized immediately to prevent any future work
+            hasInitialized = true
             isVisible = true
             
             // Simulator video playback disabled - uncomment to re-enable
@@ -470,25 +528,37 @@ struct MediaGridView: View {
                 return nil
             }
             
-            // Always stop any existing playback first to handle reuse scenarios
-            videoManager.stopSequentialPlayback()
+            // Only stop sequential playback if we're switching to a different video set
+            // This preserves state when multiple MediaGrids exist during scrolling
+            let isSwitchingVideoSet = videoManager.videoMids != videoMids && !videoManager.videoMids.isEmpty
+            if isSwitchingVideoSet {
+                videoManager.stopSequentialPlayback()
+                hasSetupSequentialPlayback = false // Reset flag when switching
+            }
             
-            if videoMids.count > 1 {
-                videoManager.setupSequentialPlayback(for: videoMids)
-                print("DEBUG: [MediaGridView] Setup sequential playback for \(videoMids.count) videos")
-            } else if videoMids.count == 1 {
-                // For single videos, set up the video MID but don't enable sequential playback
-                let wasEmpty = videoManager.videoMids.isEmpty
-                let isNewSequence = videoManager.videoMids != videoMids && !wasEmpty
-                videoManager.videoMids = videoMids
-                videoManager.isSequentialPlaybackEnabled = false
-                videoManager.currentVideoIndex = 0
+            // Setup sequential playback for all videos (1 or more)
+            // Single video is just sequential playback with 1 item
+            // CRITICAL: Only setup if not already set up for this exact sequence to prevent duplicate calls
+            // This prevents recomposition when scrolling up past retweets
+            if videoMids.count >= 1 {
+                let alreadySetup = videoManager.videoMids == videoMids && videoManager.currentVideoIndex >= 0
+                print("DEBUG: [MediaGridView] onAppear for tweet \(parentTweet.mid): videoMids=\(videoMids), alreadySetup=\(alreadySetup), currentIndex=\(videoManager.currentVideoIndex)")
                 
-                if isNewSequence {
-                    print("DEBUG: [MediaGridView] Setup NEW single video playback for \(videoMids[0])")
-                    // Reset handled by SimpleVideoPlayer's internal state management
-                } else {
-                    print("DEBUG: [MediaGridView] Setup \(wasEmpty ? "FIRST TIME" : "EXISTING") single video playback for \(videoMids[0])")
+                if !alreadySetup && !hasSetupSequentialPlayback {
+                    videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                    hasSetupSequentialPlayback = true
+                    print("DEBUG: [MediaGridView] ✅ Setup sequential playback for tweet \(parentTweet.mid), currentIndex after setup: \(videoManager.currentVideoIndex)")
+                    
+                    // If all videos were finished (saved index >= count), restart from beginning
+                    if videoManager.currentVideoIndex >= videoMids.count {
+                        videoManager.currentVideoIndex = 0
+                        videoManager.saveCurrentIndex(for: parentTweet.mid)
+                        print("DEBUG: [MediaGridView] Reset currentVideoIndex to 0 (was >= count)")
+                    }
+                } else if alreadySetup {
+                    // Already set up - mark as done to prevent future checks
+                    hasSetupSequentialPlayback = true
+                    print("DEBUG: [MediaGridView] Already set up for tweet \(parentTweet.mid), currentIndex: \(videoManager.currentVideoIndex)")
                 }
             }
             
@@ -498,39 +568,59 @@ struct MediaGridView: View {
             let hasMedia = hasVideos || hasAudio
             
             if hasMedia {
-                
                 // Register this tweet as containing media (videos or audio)
                 // This is important for tweets with multiple attachments to be tracked
                 videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
                 
                 // Check if this tweet should load media based on VideoLoadingManager
-                let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
-                if shouldLoadVideo != shouldLoad {
-                    shouldLoadVideo = shouldLoad
+                // For embedded tweets, still check - if VideoLoadingManager says yes (e.g., it's the original
+                // of a visible retweet), then allow loading
+                // CRITICAL: Only check if shouldLoadVideo is false to avoid unnecessary state checks
+                // This prevents recomposition when scrolling up past already-loaded retweets
+                if !shouldLoadVideo {
+                    let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
+                    if shouldLoad {
+                        // Allow enabling loading even for embedded tweets if VideoLoadingManager approves
+                        // This allows videos in original tweets of visible retweets to load
+                        shouldLoadVideo = true
+                    }
                 }
+                // If shouldLoadVideo is already true, don't check or change it
+                // This keeps already-loaded videos loaded, preventing layout instability
             }
         }
         .onDisappear {
-            // Mark the grid as not visible
+            // CRITICAL: Only update visibility, don't do any other work
+            // This prevents state changes that cause recomposition when scrolling
+            // State saving is handled by SimpleVideoPlayer's handleOnDisappear
             isVisible = false
             
-            // TIMER DISABLED - no timer to invalidate
-            shouldLoadVideo = false
-            videoManager.stopSequentialPlayback()
+            // Save current video index to resume later (only if we have valid state)
+            // Do this silently without logging to reduce overhead
+            if videoManager.currentVideoIndex >= 0 && !videoManager.videoMids.isEmpty {
+                videoManager.saveCurrentIndex(for: parentTweet.mid)
+            }
+            
+            // Don't stop sequential playback state - preserve it so videos resume correctly when scrolling back
+            // SimpleVideoPlayer will handle pausing the actual playback when it becomes invisible
         }
         .onChange(of: isVisible) { _, newVisibility in
             // Handle visibility changes
-            if !newVisibility {
-                // Grid became invisible - stop video playback
-                videoManager.stopSequentialPlayback()
-            }
+            // Don't stop sequential playback state when visibility changes
+            // SimpleVideoPlayer handles pausing/resuming the actual playback based on visibility
         }
         .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
             if let tweetId = notification.userInfo?["tweetId"] as? String,
                tweetId == parentTweet.mid {
                 print("DEBUG: [MediaGridView] Received cancel video loading notification for tweet \(tweetId)")
+                // Don't cancel loading for a tweet that is currently visible.
+                // Fullscreen/login overlays can confuse global visibility/cancellation heuristics.
+                guard !isVisible else {
+                    print("DEBUG: [MediaGridView] Ignoring cancelVideoLoading for visible tweet \(tweetId)")
+                    return
+                }
                 shouldLoadVideo = false
-                videoManager.stopSequentialPlayback()
+                // DON'T stop sequential playback here; it breaks resume after overlays.
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
@@ -542,8 +632,20 @@ struct MediaGridView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
+            // Handle audio interruptions (calls, alarms, etc.) from AudioSessionManager
+            // Fullscreen opening now uses visibility detection instead of this notification
             shouldLoadVideo = false
-            videoManager.stopSequentialPlayback()
+            // DON'T call videoManager.stopSequentialPlayback() - this clears state
+            // Videos will be paused by SimpleVideoPlayer.handleStopAllVideos()
+            // And resumed when audio session is restored
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .overlayCoverageChanged)) { notification in
+            guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
+            // When overlays dismiss, re-enable loading only for grids that are currently visible.
+            // This replaces the old fullscreen "resumeMediaCellVideos" broadcast and keeps resume scoped.
+            if !isCovered, isVisible {
+                shouldLoadVideo = true
+            }
         }
     }
 }

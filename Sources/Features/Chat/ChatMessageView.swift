@@ -2,7 +2,7 @@
 //  ChatMessageView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/6/27.
+//  Created by Tomás Hongo on 2025/6/27.
 //
 
 import SwiftUI
@@ -306,7 +306,7 @@ struct ChatImageThumbnail: View {
                 }
         } else if isLoading {
             // Show loading state with cached placeholder
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
                 Image(uiImage: cachedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -339,7 +339,7 @@ struct ChatImageThumbnail: View {
             }
         } else {
             // Show cached placeholder if available, otherwise fallback
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
                 Image(uiImage: cachedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -398,7 +398,7 @@ struct ChatImageThumbnail: View {
         guard let url = attachment.getUrl(baseUrl) else { return }
         
         // First, try to get cached image immediately
-        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             self.image = cachedImage
             return
         }
@@ -406,7 +406,7 @@ struct ChatImageThumbnail: View {
         // If no cached image, start loading
         isLoading = true
         Task {
-            if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment, baseUrl: baseUrl) {
+            if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment) {
                 await MainActor.run {
                     self.image = loadedImage
                     self.isLoading = false
@@ -420,17 +420,24 @@ struct ChatImageThumbnail: View {
     }
     
     private func createMockTweet(for attachment: MimeiFileType) -> Tweet {
-        // Create a minimal Tweet object for MediaBrowserView
-        let mockAuthor = User(
-            mid: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? ""),
-            baseUrl: baseUrl,
-            name: isFromCurrentUser ? HproseInstance.shared.appUser.name : (senderUser?.name ?? ""),
-            avatar: isFromCurrentUser ? HproseInstance.shared.appUser.avatar : (senderUser?.avatar ?? "")
-        )
+        // Create a minimal Tweet object for MediaBrowserView using singletons
+        let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")
+        let mockAuthor = User.getInstance(mid: authorId)
+        // Update author properties if needed
+        if mockAuthor.baseUrl != baseUrl {
+            mockAuthor.baseUrl = baseUrl
+        }
+        if isFromCurrentUser {
+            mockAuthor.name = HproseInstance.shared.appUser.name
+            mockAuthor.avatar = HproseInstance.shared.appUser.avatar
+        } else if let senderUser = senderUser {
+            mockAuthor.name = senderUser.name
+            mockAuthor.avatar = senderUser.avatar
+        }
         
-        return Tweet(
+        return Tweet.getInstance(
             mid: MimeiId("chat_message_\(attachment.mid)"),
-            authorId: MimeiId(isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")),
+            authorId: MimeiId(authorId),
             content: "",
             timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
             author: mockAuthor,
@@ -447,7 +454,7 @@ struct ChatVideoPlayer: View {
     let senderUser: User?
     
     @State private var showFullScreen = false
-    @State private var showPlayButton = true
+    @State private var isPlaying = true  // Start with autoplay enabled
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -463,71 +470,38 @@ struct ChatVideoPlayer: View {
         Group {
             // Compact layout to minimize spacing
             if let url = attachment.getUrl(baseUrl) {
-                ZStack {
-                    CachingVideoPlayer(
-                        url: url,
-                        mid: attachment.mid,
-                        isVisible: true,
-                        mediaType: attachment.type,
-                        autoPlay: false, // Don't autoplay in chat
-                        videoAspectRatio: CGFloat(attachment.aspectRatio ?? 16.0/9.0),
-                        showNativeControls: false,
-                        isMuted: MuteState.shared.isMuted,
-                        onVideoTap: {
-                            // This is handled by the overlay below
-                        }
-                    )
-                    .aspectRatio(max(CGFloat(attachment.aspectRatio ?? 16.0/9.0), 0.9), contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .contentShape(Rectangle())
-                    
-                    // Play button overlay
-                    if showPlayButton {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 50))
-                            .foregroundColor(.white)
-                            .background(
-                                Circle()
-                                    .fill(Color.black.opacity(0.3))
-                                    .frame(width: 60, height: 60)
-                            )
-                            .transition(.opacity)
-                            .animation(.easeInOut(duration: 0.2), value: showPlayButton)
-                            .allowsHitTesting(false) // Allow taps to pass through to the overlay
-                    }
-                    
-                    // Clear overlay to capture taps for full-screen (like MediaCell)
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            showFullScreen = true
-                        }
-                    
-                    // Mute button overlay (bottom right corner)
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            MuteButton()
-                                .padding(.trailing, 8)
-                                .padding(.bottom, 8)
-                        }
-                    }
-                }
-                .onAppear {
-                    // Auto-hide play button after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showPlayButton = false
-                        }
-                    }
-                }
-                .fullScreenCover(isPresented: $showFullScreen) {
-                    // Create a temporary tweet-like structure for the video
-                    let tempTweet = Tweet(
+                // Calculate grid aspect ratio same as MediaGridViewModel
+                let videoAR = attachment.aspectRatio ?? 1.0
+                let isPortrait = videoAR < 0.9
+                let gridAspectRatio = isPortrait ? 0.9 : videoAR
+                
+                // Calculate grid dimensions (max width 70% of screen like images)
+                let maxWidth = UIScreen.main.bounds.width * 0.7
+                let gridHeight = maxWidth / CGFloat(gridAspectRatio)
+                
+                ChatVideoPlayerContent(
+                    url: url,
+                    attachment: attachment,
+                    videoAR: CGFloat(videoAR),
+                    gridAspectRatio: CGFloat(gridAspectRatio),
+                    maxWidth: maxWidth,
+                    gridHeight: gridHeight,
+                    showFullScreen: $showFullScreen,
+                    isPlaying: $isPlaying
+                )
+                .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
+                .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
+                    // Resume playing when returning from fullscreen
+                    isPlaying = true
+                }) {
+                    // Create a temporary tweet-like structure for the video using singleton
+                    let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID)
+                    let videoAuthor = User.getInstance(mid: authorId)
+                    let tempTweet = Tweet.getInstance(
                         mid: "chat_video_\(attachment.mid)",
-                        authorId: isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID),
+                        authorId: authorId,
                         content: "",
+                        author: videoAuthor,
                         attachments: [attachment]
                     )
                     
@@ -550,6 +524,85 @@ struct ChatVideoPlayer: View {
     }
 }
 
+// MARK: - Chat Video Player Content
+
+private struct ChatVideoPlayerContent: View {
+    let url: URL
+    let attachment: MimeiFileType
+    let videoAR: CGFloat
+    let gridAspectRatio: CGFloat
+    let maxWidth: CGFloat
+    let gridHeight: CGFloat
+    @Binding var showFullScreen: Bool
+    @Binding var isPlaying: Bool
+    
+    var body: some View {
+        ZStack {
+            CachingVideoPlayer(
+                url: url,
+                mid: attachment.mid,
+                isVisible: !showFullScreen, // Hide when full-screen is open
+                mediaType: attachment.type,
+                autoPlay: isPlaying, // Control playback based on state
+                loopOnCompletion: false, // Don't auto-replay when video finishes
+                videoAspectRatio: CGFloat(videoAR),
+                showNativeControls: false,
+                isMuted: MuteState.shared.isMuted,
+                onVideoTap: {
+                    // This is handled by the overlay below
+                },
+                onVideoFinished: {
+                    // Reset play button to triangle when video finishes
+                    isPlaying = false
+                }
+            )
+            .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
+            .frame(width: maxWidth, height: gridHeight) // Fixed grid size
+            .clipped() // Clip overflow
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+            
+            // Clear overlay to capture taps for full-screen
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Only open fullscreen if not tapping on play/mute buttons
+                    showFullScreen = true
+                }
+            
+             // Bottom overlay with play and mute buttons
+             VStack {
+                 Spacer()
+                 HStack {
+                     // Play/Pause button (bottom left, small and compact)
+                     Button {
+                         isPlaying.toggle()
+                     } label: {
+                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                             .font(.system(size: 24))
+                             .foregroundColor(.white)
+                             .background(
+                                 Circle()
+                                     .fill(Color.black.opacity(0.3))
+                                     .frame(width: 32, height: 32)
+                             )
+                     }
+                     .buttonStyle(PlainButtonStyle())
+                     .padding(.leading, 8)
+                     .padding(.bottom, 8)
+                     
+                     Spacer()
+                     
+                     // Mute button (bottom right)
+                     MuteButton()
+                         .padding(.trailing, 8)
+                         .padding(.bottom, 8)
+                 }
+             }
+        }
+    }
+}
+
 // MARK: - Chat Attachment Loader
 
 struct ChatAttachmentLoader: View {
@@ -559,7 +612,7 @@ struct ChatAttachmentLoader: View {
     @State private var isLoading = true
     @State private var loadError = false
     
-    private let baseUrl = HproseInstance.baseUrl
+    //private let baseUrl = HproseInstance.baseUrl
     
     var body: some View {
         Group {

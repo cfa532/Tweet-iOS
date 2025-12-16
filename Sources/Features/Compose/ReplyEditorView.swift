@@ -8,6 +8,7 @@
 import SwiftUI
 import PhotosUI
 import AVFoundation
+import UIKit
 
 @available(iOS 16.0, *)
 struct ReplyEditorView: View {
@@ -133,7 +134,17 @@ struct ReplyEditorView: View {
         )
         .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
             if let error = notification.object as? Error {
-                showToastMessage(error.localizedDescription, type: .error)
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+            }
+        }
+        .toolbar {
+            // Keyboard accessory: always provide an explicit "Done".
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(NSLocalizedString("Done", comment: "Dismiss keyboard")) {
+                    isTextFieldFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
             }
         }
         
@@ -167,7 +178,16 @@ struct ReplyEditorView: View {
     }
     
     private var expandedView: some View {
-        VStack(spacing: 12) {
+        ZStack {
+            // Tap anywhere outside the TextEditor to dismiss keyboard.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isTextFieldFocused = false
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+
+            VStack(spacing: 12) {
             // User profile section
             HStack(alignment: .top, spacing: 8) {
                 // User avatar
@@ -299,7 +319,7 @@ struct ReplyEditorView: View {
             
             // Error display
             if let error = error {
-                Text(error.localizedDescription)
+                Text(ErrorMessageHelper.userFriendlyMessage(from: error))
                     .foregroundColor(.red)
                     .font(.caption)
                     .padding(.horizontal)
@@ -317,6 +337,7 @@ struct ReplyEditorView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isTextFieldFocused = true
             }
+        }
         }
     }
     
@@ -380,14 +401,15 @@ struct ReplyEditorView: View {
             return
         }
         
-        // Create comment tweet
-        let comment = Tweet(
+        // Create comment tweet using singleton
+        let comment = Tweet.getInstance(
             mid: UUID().uuidString, // Temporary ID, will be replaced by server
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(),
             originalTweetId: isQuoting ? parentTweet.mid : nil,
-            originalAuthorId: isQuoting ? parentTweet.authorId : nil
+            originalAuthorId: isQuoting ? parentTweet.authorId : nil,
+            author: hproseInstance.appUser
         )
         
         do {

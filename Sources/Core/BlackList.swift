@@ -4,6 +4,7 @@ import Foundation
 /// Once a resource fails 14+ times over 1+ week, it's permanently blacklisted and never tried again
 class BlackList {
     static let shared = BlackList()
+    private let queue = DispatchQueue(label: "com.zz.BlackList", attributes: .concurrent)
     
     private init() {
         loadFromStorage()
@@ -36,76 +37,86 @@ class BlackList {
     
     /// Check if a resource is blacklisted
     func isBlacklisted(_ mimeiId: MimeiId) -> Bool {
-        return blacklist.contains(mimeiId)
+        queue.sync {
+            blacklist.contains(mimeiId)
+        }
     }
     
     /// Record a successful access to a resource
     func recordSuccess(_ mimeiId: MimeiId) {
-        let wasInCandidates = candidates.removeValue(forKey: mimeiId) != nil
-        
-        if wasInCandidates {
-            print("[BlackList] Removed \(mimeiId) from candidates after successful access")
+        queue.sync(flags: .barrier) {
+            let wasInCandidates = candidates.removeValue(forKey: mimeiId) != nil
+            
+            if wasInCandidates {
+                print("[BlackList] Removed \(mimeiId) from candidates after successful access")
+            }
+            
+            // Note: Blacklisted resources are never tried, so they can never succeed
+            // The blacklist is permanent - once a resource fails 14+ times over 1+ week, it's permanently ignored
+            
+            saveToStorageLocked()
         }
-        
-        // Note: Blacklisted resources are never tried, so they can never succeed
-        // The blacklist is permanent - once a resource fails 14+ times over 1+ week, it's permanently ignored
-        
-        saveToStorage()
     }
     
     /// Record a failed access to a resource
     func recordFailure(_ mimeiId: MimeiId) {
-        let now = Date().timeIntervalSince1970
-        
-        if let existingEntry = candidates[mimeiId] {
-            // Update existing candidate entry
-            let newFailureCount = existingEntry.failureCount + 1
-            let newEntry = CandidateEntry(
-                mimeiId: mimeiId,
-                failureCount: newFailureCount,
-                firstFailureTimestamp: existingEntry.firstFailureTimestamp
-            )
-            candidates[mimeiId] = newEntry
+        queue.sync(flags: .barrier) {
+            let now = Date().timeIntervalSince1970
             
-            print("[BlackList] Resource \(mimeiId) failed \(newFailureCount) times since \(Date(timeIntervalSince1970: existingEntry.firstFailureTimestamp))")
-            
-            // Check if it should be moved to blacklist (14+ failures over 1+ week)
-            if shouldMoveToBlacklist(newEntry) {
-                moveToBlacklist(mimeiId)
+            if let existingEntry = candidates[mimeiId] {
+                // Update existing candidate entry
+                let newFailureCount = existingEntry.failureCount + 1
+                let newEntry = CandidateEntry(
+                    mimeiId: mimeiId,
+                    failureCount: newFailureCount,
+                    firstFailureTimestamp: existingEntry.firstFailureTimestamp
+                )
+                candidates[mimeiId] = newEntry
+                
+                print("[BlackList] Resource \(mimeiId) failed \(newFailureCount) times since \(Date(timeIntervalSince1970: existingEntry.firstFailureTimestamp))")
+                
+                // Check if it should be moved to blacklist (14+ failures over 1+ week)
+                if shouldMoveToBlacklist(newEntry) {
+                    moveToBlacklist(mimeiId)
+                }
+            } else {
+                // Create new candidate entry
+                let newEntry = CandidateEntry(
+                    mimeiId: mimeiId,
+                    failureCount: 1,
+                    firstFailureTimestamp: now
+                )
+                candidates[mimeiId] = newEntry
+                print("[BlackList] Added \(mimeiId) to candidates after first failure")
             }
-        } else {
-            // Create new candidate entry
-            let newEntry = CandidateEntry(
-                mimeiId: mimeiId,
-                failureCount: 1,
-                firstFailureTimestamp: now
-            )
-            candidates[mimeiId] = newEntry
-            print("[BlackList] Added \(mimeiId) to candidates after first failure")
+            
+            saveToStorageLocked()
         }
-        
-        saveToStorage()
     }
     
     /// Process candidates and move eligible ones to blacklist
     /// A candidate is moved to blacklist if it has failed 14+ times over 1+ week
     /// This should be called periodically to check if candidates should be moved to blacklist
     func processCandidates() {
-        let candidatesToProcess = Array(candidates.values)
-        
-        for entry in candidatesToProcess {
-            if shouldMoveToBlacklist(entry) {
-                print("[BlackList] Moving \(entry.mimeiId) to blacklist after \(entry.failureCount) failures over \(Date().timeIntervalSince1970 - entry.firstFailureTimestamp) seconds")
-                moveToBlacklist(entry.mimeiId)
+        queue.sync(flags: .barrier) {
+            let candidatesToProcess = Array(candidates.values)
+            
+            for entry in candidatesToProcess {
+                if shouldMoveToBlacklist(entry) {
+                    print("[BlackList] Moving \(entry.mimeiId) to blacklist after \(entry.failureCount) failures over \(Date().timeIntervalSince1970 - entry.firstFailureTimestamp) seconds")
+                    moveToBlacklist(entry.mimeiId)
+                }
             }
+            
+            saveToStorageLocked()
         }
-        
-        saveToStorage()
     }
     
     /// Get statistics for monitoring
     func getStats() -> (candidates: Int, blacklisted: Int) {
-        return (candidates: candidates.count, blacklisted: blacklist.count)
+        queue.sync {
+            (candidates: candidates.count, blacklisted: blacklist.count)
+        }
     }
     
     // MARK: - Private Methods
@@ -141,29 +152,37 @@ class BlackList {
         // Load blacklist - prefer UserDefaults, fallback to iCloud
         if let blacklistData = localStore.data(forKey: "BlackList.blacklist"),
            let blacklistArray = try? JSONDecoder().decode([String].self, from: blacklistData) {
-            blacklist = Set(blacklistArray.map { MimeiId($0) })
-            print("[BlackList] Loaded \(blacklist.count) blacklisted items from UserDefaults")
+            queue.sync(flags: .barrier) {
+                blacklist = Set(blacklistArray.map { MimeiId($0) })
+                print("[BlackList] Loaded \(blacklist.count) blacklisted items from UserDefaults")
+            }
         } else if let blacklistData = iCloudStore.data(forKey: "BlackList.blacklist"),
                   let blacklistArray = try? JSONDecoder().decode([String].self, from: blacklistData) {
-            blacklist = Set(blacklistArray.map { MimeiId($0) })
-            print("[BlackList] Loaded \(blacklist.count) blacklisted items from iCloud (local missing)")
+            queue.sync(flags: .barrier) {
+                blacklist = Set(blacklistArray.map { MimeiId($0) })
+                print("[BlackList] Loaded \(blacklist.count) blacklisted items from iCloud (local missing)")
+            }
         }
         
         // Load candidates - prefer UserDefaults, fallback to iCloud
         if let candidatesData = localStore.data(forKey: "BlackList.candidates"),
            let candidatesArray = try? JSONDecoder().decode([CandidateEntry].self, from: candidatesData) {
-            candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
-            print("[BlackList] Loaded \(candidates.count) candidates from UserDefaults")
+            queue.sync(flags: .barrier) {
+                candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
+                print("[BlackList] Loaded \(candidates.count) candidates from UserDefaults")
+            }
         } else if let candidatesData = iCloudStore.data(forKey: "BlackList.candidates"),
                   let candidatesArray = try? JSONDecoder().decode([CandidateEntry].self, from: candidatesData) {
-            candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
-            print("[BlackList] Loaded \(candidates.count) candidates from iCloud (local missing)")
+            queue.sync(flags: .barrier) {
+                candidates = Dictionary(uniqueKeysWithValues: candidatesArray.map { ($0.mimeiId, $0) })
+                print("[BlackList] Loaded \(candidates.count) candidates from iCloud (local missing)")
+            }
         }
     }
     
     /// Save blacklist data to UserDefaults first, then mirror to iCloud as backup
     /// UserDefaults is the authoritative store; iCloud is best-effort backup
-    private func saveToStorage() {
+    private func saveToStorageLocked() {
         let blacklistArray = Array(blacklist).map { $0 }
         let candidatesArray = Array(candidates.values)
         

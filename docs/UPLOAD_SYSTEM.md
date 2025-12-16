@@ -211,6 +211,15 @@ output.mp4
 
 Upload to IPFS via regular route.
 
+### Sub-50MB Fast Path (Always MP4)
+
+- Trigger: original file size `< 50 MB`
+- Behavior: skip cloud-drive check and run the same MP4 pipeline locally
+- Resolution rule: cap the longer side at 720p; keep native resolution if already ≤720p
+- Encoding: `libx264` video + `aac` audio (`-crf 23`, `-preset fast`, `-movflags +faststart`)
+- Outcome: converted `.mp4` is uploaded via `uploadRegularFile` with standard metadata
+- Progress messaging: reuses the fallback stages (conversion → upload)
+
 ---
 
 ## Job Polling

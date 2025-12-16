@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 @available(iOS 16.0, *)
 struct ComposeTweetView: View {
@@ -13,6 +14,11 @@ struct ComposeTweetView: View {
     @State private var showLoginAlert = false
     @State private var showLoginView = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+
+    private func hideKeyboard() {
+        isEditorFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
     
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
@@ -79,6 +85,14 @@ struct ComposeTweetView: View {
                     }
                     .disabled(!viewModel.canPostTweet)
                 }
+
+                // Keyboard accessory: always provide an explicit "Done".
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(NSLocalizedString("Done", comment: "Dismiss keyboard")) {
+                        hideKeyboard()
+                    }
+                }
             }
             .task {
                 // Wait for sheet presentation animation to complete before focusing
@@ -90,7 +104,7 @@ struct ComposeTweetView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .errorOccurred)) { notification in
                 if let error = notification.object as? Error {
-                    viewModel.toastMessage = error.localizedDescription
+                    viewModel.toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                     viewModel.toastType = .error
                     viewModel.showToast = true
                     
@@ -141,18 +155,29 @@ struct ComposeTweetView: View {
     }
     
     private var mainContent: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                textEditor
-                mediaPreview
-                attachmentToolbar
+        ZStack {
+            // Tap anywhere outside the TextEditor to dismiss keyboard.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { hideKeyboard() }
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    textEditor
+                    mediaPreview
+                    attachmentToolbar
+                }
             }
+            .scrollDismissesKeyboard(.interactively)
+            // When the editor is focused, let the TextEditor handle vertical scrolling.
+            // Otherwise the outer ScrollView often steals the scroll gesture and long text feels "stuck".
+            .scrollDisabled(isEditorFocused)
         }
     }
     
     private var textEditor: some View {
         TextEditor(text: $viewModel.tweetContent)
-            .frame(minHeight: 150, maxHeight: 300) // Max height for ~12 lines
+            .frame(minHeight: 150, maxHeight: 292) // Reduced maxHeight by 8pt
             .padding()
             .focused($isEditorFocused)
             .background(Color(.systemBackground))
@@ -167,12 +192,15 @@ struct ComposeTweetView: View {
             selectedImages: viewModel.selectedImages,
             selectedVideos: viewModel.selectedVideos,
             onRemoveItem: { index in
+                guard index < viewModel.selectedItems.count else { return }
                 viewModel.selectedItems.remove(at: index)
             },
             onRemoveImage: { index in
+                guard index < viewModel.selectedImages.count else { return }
                 viewModel.selectedImages.remove(at: index)
             },
             onRemoveVideo: { index in
+                guard index < viewModel.selectedVideos.count else { return }
                 viewModel.selectedVideos.remove(at: index)
             }
         )
@@ -200,12 +228,13 @@ struct ComposeTweetView: View {
             return
         }
         
-        // Create tweet object
-        let tweet = Tweet(
+        // Create tweet object using singleton
+        let tweet = Tweet.getInstance(
             mid: Constants.GUEST_ID,        // placeholder Mimei Id
             authorId: hproseInstance.appUser.mid,
             content: trimmedContent,
             timestamp: Date(timeIntervalSince1970: Date().timeIntervalSince1970),
+            author: hproseInstance.appUser,
             attachments: nil,
             isPrivate: isPrivate
         )

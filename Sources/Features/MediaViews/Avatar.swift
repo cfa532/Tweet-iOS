@@ -2,7 +2,7 @@
 //  Avatar.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/20.
+//  Created by Tomás Hongo on 2025/5/20.
 //
 
 import SwiftUI
@@ -78,38 +78,42 @@ struct Avatar: View {
                     .clipShape(Circle())
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
+            // When user is updated (e.g., baseUrl resolved), reload avatar if avatarUrl is now available
+            guard let userId = notification.userInfo?["userId"] as? String,
+                  userId == user.mid,
+                  !isLoading,
+                  let avatarUrl = user.avatarUrl,
+                  cachedImage == nil else { return }
+            
+            // baseUrl was resolved, avatarUrl is now available - start loading
+            loadFailed = false
+            loadAvatar(from: avatarUrl)
+        }
         .id(user.mid) // Stable ID - notification handles avatar changes
     }
     
     private func loadAvatar(from urlString: String) {
-        NSLog("DEBUG: [Avatar.loadAvatar] Called for user \(user.mid), avatar: \(user.avatar ?? "nil")")
         
         guard !isLoading else { 
-            NSLog("DEBUG: [Avatar.loadAvatar] Already loading, skipping")
             return 
         }
         
         // IMPORTANT: Use user's avatar MimeiId as the cache key (stable identifier)
         // NOT the URL which can change when baseUrl changes
         let cacheKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
-        NSLog("DEBUG: [Avatar.loadAvatar] Using cache key: \(cacheKey)")
         
         // Create a MimeiFileType with the user's avatar MimeiId so caching works correctly
         let avatarAttachment = MimeiFileType(
             mid: cacheKey,
             mediaType: .image
         )
-        
-        let baseUrl = user.baseUrl ?? HproseInstance.baseUrl
-        
+                
         // Check cache first
-        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment, baseUrl: baseUrl) {
-            NSLog("DEBUG: [Avatar.loadAvatar] Found in cache: \(cacheKey)")
+        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
             cachedImage = cached
             return
         }
-        
-        NSLog("DEBUG: [Avatar.loadAvatar] Not in cache, loading from network: \(cacheKey)")
         
         // Load from network using regular image loading (no special avatar treatment)
         isLoading = true
@@ -123,7 +127,7 @@ struct Avatar: View {
                 return
             }
             
-            let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment, baseUrl: baseUrl)
+            let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment)
             
             await MainActor.run {
                 if let image = result {

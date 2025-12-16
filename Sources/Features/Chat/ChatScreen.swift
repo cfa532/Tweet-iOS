@@ -3,18 +3,36 @@ import PhotosUI
 
 struct ChatScreen: View {
     let receiptId: MimeiId
+    @Binding var navigationPath: NavigationPath
+    let onProfileNavigate: (() -> Void)?
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messages: [ChatMessage] = []
+    @State private var allCachedMessages: [ChatMessage] = [] // All messages from cache for pagination
     @State private var messageText = ""
     @State private var user: User?
     @State private var selectedAttachment: MimeiFileType?
     @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var attachmentData: Data?
+    @State private var attachmentItemData: HproseInstance.PendingTweetUpload.ItemData?
+    @State private var isProcessingAttachment = false
     @State private var keyboardHeight: CGFloat = 0
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var messageRefreshTimer: Timer?
+    
+    init(receiptId: MimeiId, navigationPath: Binding<NavigationPath> = .constant(NavigationPath()), onProfileNavigate: (() -> Void)? = nil) {
+        self.receiptId = receiptId
+        self._navigationPath = navigationPath
+        self.onProfileNavigate = onProfileNavigate
+    }
+    
+    // Pagination states
+    @State private var currentOffset = 0
+    @State private var hasMoreMessages = true
+    @State private var isLoadingMore = false
+    @State private var shouldScrollToBottom = false
+    @State private var isLoadMoreEnabled = false
+    @State private var shouldAnimateScroll = true
     
     // Toast message states
     @State private var showToast = false
@@ -42,12 +60,39 @@ struct ChatScreen: View {
                 ChatLoadingView(receiptId: receiptId)
             }
             // Header
-            ChatHeaderView(user: user, dismiss: dismiss)
+            ChatHeaderView(
+                user: user,
+                dismiss: dismiss,
+                onAvatarTap: {
+                    if let user = user {
+                        navigationPath.append(user)
+                        onProfileNavigate?()
+                    }
+                }
+            )
             
             // Messages - Take remaining space
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 8) {
+                        // Load more indicator at top
+                        if hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
+                            if isLoadingMore {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .padding()
+                                    Spacer()
+                                }
+                            } else {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .onAppear {
+                                        loadMoreMessages()
+                                    }
+                            }
+                        }
+                        
                         ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                             // Add time divider if there's a 5+ minute gap
                             if index > 0 {
@@ -69,19 +114,23 @@ struct ChatScreen: View {
                     }
                     .padding()
                 }
-                .onChange(of: messages.count) { _, _ in
-                    if let lastMessage = messages.last {
+                .onChange(of: shouldScrollToBottom) { _, newValue in
+                    guard newValue, let lastMessage = messages.last else { return }
+                    
+                    if shouldAnimateScroll {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
+                    } else {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
+                    
+                    shouldScrollToBottom = false
+                    shouldAnimateScroll = true
                 }
                 .onChange(of: keyboardHeight) { _, newHeight in
                     // Scroll to bottom when keyboard appears/disappears
-                    print("[ChatScreen] Keyboard height changed to: \(newHeight)")
                     if let lastMessage = messages.last {
-                        print("[ChatScreen] Scrolling to message: \(lastMessage.id)")
-                        // Animate synchronously with keyboard using easeOut curve to match iOS keyboard animation
                         withAnimation(.easeOut(duration: 0.25)) {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
@@ -89,9 +138,9 @@ struct ChatScreen: View {
                 }
                 .navigationBarHidden(true)
                 .onAppear {
-                    // Scroll to bottom when view appears
-                    if let lastMessage = messages.last {
-                        withAnimation(.easeInOut(duration: 0.3)) {
+                    // Scroll to bottom when messages are loaded
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if let lastMessage = messages.last {
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
                     }
@@ -110,8 +159,20 @@ struct ChatScreen: View {
             
             // Message Input - Fixed at bottom
             VStack(spacing: 0) {
-                // Attachment preview
-                if let attachment = selectedAttachment {
+                // Attachment preview or loading indicator
+                if isProcessingAttachment {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                        Text(NSLocalizedString("Preparing attachment...", comment: "Chat attachment loading"))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                } else if let attachment = selectedAttachment {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
@@ -120,6 +181,8 @@ struct ChatScreen: View {
                                 Text(attachment.fileName ?? "Attachment")
                                     .font(.caption)
                                     .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
                                 Spacer()
                             }
                             
@@ -132,7 +195,7 @@ struct ChatScreen: View {
                         
                         Button(action: {
                             selectedAttachment = nil
-                            attachmentData = nil
+                            attachmentItemData = nil
                             selectedPhotos = []
                         }) {
                             Image(systemName: "xmark.circle.fill")
@@ -157,6 +220,10 @@ struct ChatScreen: View {
                             .foregroundColor(.blue)
                     }
                     .onChange(of: selectedPhotos) { oldItems, newItems in
+                        // Ignore if clearing selection or already processing
+                        guard !newItems.isEmpty, !isProcessingAttachment else {
+                            return
+                        }
                         Task {
                             await handlePhotoSelection(newItems)
                         }
@@ -213,6 +280,9 @@ struct ChatScreen: View {
             hideKeyboard()
         }
         .toolbar(.hidden, for: .tabBar)
+        .navigationDestination(for: User.self) { user in
+            ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
+        }
         .overlay(
             // Toast message overlay
             VStack {
@@ -234,9 +304,34 @@ struct ChatScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardHeight = 0
         }
+        .onReceive(NotificationCenter.default.publisher(for: .chatMessageSent)) { notification in
+            // Handle successfully sent message
+            if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
+                print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
+                // Add message to UI and cache if not already there
+                if !messages.contains(where: { $0.id == sentMessage.id }) {
+                    messages.append(sentMessage)
+                    allCachedMessages.append(sentMessage)
+                    chatRepository.addMessagesToCoreData([sentMessage])
+                    
+                    // Scroll to bottom for sent message
+                    shouldAnimateScroll = true
+                    shouldScrollToBottom = true
+                    
+                    // Update chat session
+                    Task {
+                        await chatSessionManager.updateOrCreateChatSession(
+                            senderId: receiptId,
+                            message: sentMessage,
+                            hasNews: false
+                        )
+                    }
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
             if let error = notification.userInfo?["error"] as? Error {
-                showToastMessage(error.localizedDescription, type: .error)
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
             } else {
                 showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
             }
@@ -255,11 +350,6 @@ struct ChatScreen: View {
             startPeriodicMessageRefresh()
             
             print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
-        }
-        .onChange(of: selectedPhotos) { _, items in
-            Task {
-                await handlePhotoSelection(items)
-            }
         }
         .onDisappear {
             // Stop the periodic message refresh timer when leaving the screen
@@ -303,8 +393,13 @@ struct ChatScreen: View {
         // Clear input immediately
         messageText = ""
         
-        // Add message to UI immediately
+        // Add message to UI and cache immediately
         messages.append(message)
+        allCachedMessages.append(message)
+        
+        // Scroll to bottom for sent message
+        shouldAnimateScroll = true
+        shouldScrollToBottom = true
         
         // Send message directly (synchronously)
         Task {
@@ -356,7 +451,7 @@ struct ChatScreen: View {
                         timestamp: message.timestamp,
                         attachments: message.attachments,
                         success: false,
-                        errorMsg: error.localizedDescription
+                        errorMsg: ErrorMessageHelper.userFriendlyMessage(from: error)
                     )
                     
                     // Replace the original message with the failed message
@@ -374,97 +469,39 @@ struct ChatScreen: View {
     }
     
     private func sendMessageWithAttachments() {
+        // Check if attachment is still being processed
+        guard !isProcessingAttachment else {
+            print("[ChatScreen] Cannot send message - attachment is still being processed")
+            showToastMessage(NSLocalizedString("Please wait while the attachment is being prepared...", comment: "Chat attachment loading"), type: .info)
+            return
+        }
+        
+        guard let itemData = attachmentItemData else {
+            print("[ChatScreen] No attachment data available - cannot send message with attachment")
+            showToastMessage(NSLocalizedString("Attachment not ready. Please try selecting the media again.", comment: "Chat attachment error"), type: .error)
+            return
+        }
+        
         // Store current values for background processing
-        let currentMessageText = messageText
-        let currentAttachment = selectedAttachment
-        let currentAttachmentData = attachmentData
+        let currentMessageText = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         
         // Clear input immediately
         messageText = ""
         selectedAttachment = nil
-        attachmentData = nil
+        attachmentItemData = nil
         selectedPhotos = []
         
-        // Show toast message for background upload
-        showToastMessage(NSLocalizedString("Uploading attachment...", comment: "Chat status"), type: .info)
+        // Create message to send
+        let message = ChatMessage(
+            authorId: HproseInstance.shared.appUser.mid,
+            receiptId: receiptId,
+            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+            content: currentMessageText.isEmpty ? nil : currentMessageText,
+            attachments: nil  // Will be filled by TweetUploadManager
+        )
         
-        // Process attachment upload in background, then send message directly
-        Task.detached(priority: .background) {
-            do {
-                // Use the same tweet upload routine for attachments
-                var uploadedAttachments: [MimeiFileType]? = nil
-                
-                if let attachment = currentAttachment, let photoData = currentAttachmentData {
-                    print("[ChatScreen] Uploading attachment using tweet upload routine...")
-                    
-                    // Upload attachment directly using the same method as tweet uploads
-                    let (uploadedAttachment, _) = try await HproseInstance.shared.uploadToIPFS(
-                        data: photoData,
-                        typeIdentifier: attachment.type == .image ? "public.image" : "public.movie",
-                        fileName: attachment.fileName ?? "attachment"
-                    )
-                    if let uploadedAttachment = uploadedAttachment {
-                        uploadedAttachments = [uploadedAttachment]
-                        print("[ChatScreen] Attachment uploaded successfully using tweet routine")
-                    }
-                }
-                
-                // Create final message with uploaded attachments
-                let finalMessage = ChatMessage(
-                    authorId: HproseInstance.shared.appUser.mid,
-                    receiptId: receiptId,
-                    chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-                    content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
-                    attachments: uploadedAttachments
-                )
-                
-                // Send message directly (not in background)
-                print("[ChatScreen] Sending message directly...")
-                let resultMessage = try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: finalMessage)
-                
-                // Update the chat session with the result message
-                await chatSessionManager.updateOrCreateChatSession(
-                    senderId: receiptId,
-                    message: resultMessage,
-                    hasNews: false
-                )
-                
-                // Add message to UI and save to Core Data
-                await MainActor.run {
-                    messages.append(resultMessage)
-                    chatRepository.addMessagesToCoreData([resultMessage])
-                    
-                    if resultMessage.success == true {
-                        print("[ChatScreen] Message sent successfully")
-                    } else {
-                        print("[ChatScreen] Message failed to send: \(resultMessage.errorMsg ?? "Unknown error")")
-                    }
-                }
-                
-            } catch {
-                print("[ChatScreen] Error uploading attachment or sending message: \(error)")
-                
-                // Handle network exceptions
-                await MainActor.run {
-                    // Create a failed message with error details
-                    let failedMessage = ChatMessage(
-                        authorId: HproseInstance.shared.appUser.mid,
-                        receiptId: receiptId,
-                        chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
-                        content: currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : currentMessageText.trimmingCharacters(in: .whitespacesAndNewlines),
-                        attachments: nil,
-                        success: false,
-                        errorMsg: error.localizedDescription
-                    )
-                    
-                    // Add failed message to UI and save to Core Data
-                    messages.append(failedMessage)
-                    chatRepository.addMessagesToCoreData([failedMessage])
-                    
-                    print("[ChatScreen] Message failed to send: \(error.localizedDescription)")
-                }
-            }
-        }
+        // Delegate to TweetUploadManager - same as tweet attachments!
+        HproseInstance.shared.scheduleChatMessageUpload(message: message, itemData: [itemData])
     }
     
     private func loadUser() async {
@@ -475,52 +512,93 @@ struct ChatScreen: View {
             }
         } catch {
             print("[ChatScreen] Error loading user: \(error)")
+            await MainActor.run {
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+            }
         }
     }
     
     private func loadMessages() async {
-        // First, load the last 50 messages from local storage
-        let localMessages = chatRepository.getLastMessages(for: receiptId, limit: 50)
-        let validLocalMessages = localMessages.filter { isValidChatMessage($0) }
-        await MainActor.run {
-            messages = validLocalMessages
-        }
-        
-        print("[ChatScreen] Loaded \(validLocalMessages.count) valid messages from local storage (filtered from \(localMessages.count) total)")
-        
-        // Then, fetch new messages from backend
+        // First, fetch new messages from backend
         do {
             let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
             let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
             
-            // Merge new messages with existing ones, avoiding duplicates
-            var allMessages = Set(messages)
-            for message in validBackendMessages {
-                allMessages.insert(message)
-            }
-            
-            // Convert back to array and sort by timestamp
-            let sortedMessages = Array(allMessages).sorted { $0.timestamp < $1.timestamp }
-            
-            await MainActor.run {
-                messages = sortedMessages
-            }
-            
             // Save new messages to Core Data
-            chatRepository.addMessagesToCoreData(backendMessages)
+            chatRepository.addMessagesToCoreData(validBackendMessages)
             
-            // Update session timestamp if there are new messages
-            if let latestMessage = sortedMessages.last, latestMessage.timestamp > messages.first?.timestamp ?? 0 {
-                await chatSessionManager.updateOrCreateChatSession(
-                    senderId: receiptId,
-                    message: latestMessage,
-                    hasNews: false
-                )
-            }
-            
-            print("[ChatScreen] Fetched \(backendMessages.count) messages from backend, total: \(sortedMessages.count)")
+            print("[ChatScreen] Fetched \(validBackendMessages.count) messages from backend")
         } catch {
             print("[ChatScreen] Error fetching messages from backend: \(error)")
+        }
+        
+        // Load all messages from local storage for pagination
+        let localMessages = chatRepository.getMessages(for: receiptId)
+        let validLocalMessages = localMessages.filter { isValidChatMessage($0) }
+        let sortedMessages = validLocalMessages.sorted { $0.timestamp < $1.timestamp }
+        
+        await MainActor.run {
+            allCachedMessages = sortedMessages
+            
+            // Load only the most recent 20 messages initially
+            currentOffset = max(0, sortedMessages.count - 20)
+            let initialMessages = Array(sortedMessages.suffix(20))
+            messages = initialMessages
+            hasMoreMessages = currentOffset > 0
+            isLoadMoreEnabled = false
+            
+            print("[ChatScreen] Loaded \(initialMessages.count) initial messages (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
+            
+            // Scroll to bottom after messages are set
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    shouldAnimateScroll = false
+                    shouldScrollToBottom = true
+                    
+                    // Allow loading older messages only after initial scroll completes
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        isLoadMoreEnabled = true
+                    }
+                }
+        }
+        
+        // Update session timestamp if there are messages
+        if let latestMessage = messages.last {
+            await chatSessionManager.updateOrCreateChatSession(
+                senderId: receiptId,
+                message: latestMessage,
+                hasNews: false
+            )
+        }
+    }
+    
+    private func loadMoreMessages() {
+        guard hasMoreMessages && !isLoadingMore else { return }
+        
+        isLoadingMore = true
+        
+        Task {
+            await MainActor.run {
+                // Calculate how many more messages to load
+                let messagesToLoad = min(20, currentOffset)
+                guard messagesToLoad > 0 else {
+                    hasMoreMessages = false
+                    isLoadingMore = false
+                    return
+                }
+                
+                // Get the next 20 older messages
+                let newOffset = currentOffset - messagesToLoad
+                let olderMessages = Array(allCachedMessages[newOffset..<currentOffset])
+                
+                // Prepend older messages to the current list
+                messages = olderMessages + messages
+                currentOffset = newOffset
+                hasMoreMessages = currentOffset > 0
+                
+                print("[ChatScreen] Loaded \(messagesToLoad) more messages (offset: \(currentOffset), total: \(messages.count), hasMore: \(hasMoreMessages))")
+                
+                isLoadingMore = false
+            }
         }
     }
     
@@ -540,7 +618,19 @@ struct ChatScreen: View {
     }
     
     private var canSendMessage: Bool {
-        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedAttachment != nil
+        // If there's text, allow sending
+        if !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        
+        // If there's an attachment, only allow sending if:
+        // 1. Attachment is not currently being processed
+        // 2. Attachment data is ready
+        if let _ = selectedAttachment {
+            return !isProcessingAttachment && attachmentItemData != nil
+        }
+        
+        return false
     }
     
     private func getAttachmentIcon(for type: MediaType) -> String {
@@ -616,14 +706,14 @@ struct ChatScreen: View {
         // Stop any existing timer first
         stopPeriodicMessageRefresh()
         
-        // Start timer to refresh messages every 10 seconds
-        messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
+        // Start timer to refresh messages every 15 seconds
+        messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { _ in
             Task {
                 await refreshMessagesFromBackend()
             }
         }
         
-        print("[ChatScreen] Started periodic message refresh timer (10 seconds)")
+        print("[ChatScreen] Started periodic message refresh timer (15 seconds)")
     }
     
     private func stopPeriodicMessageRefresh() {
@@ -637,93 +727,80 @@ struct ChatScreen: View {
     private func handlePhotoSelection(_ items: [PhotosPickerItem]) async {
         guard let item = items.first else { return }
         
+        // Set processing flag to prevent concurrent selections
+        await MainActor.run {
+            isProcessingAttachment = true
+        }
+        
         do {
-            if let data = try await item.loadTransferable(type: Data.self) {
-                // Get the type identifier from the PhotosPickerItem
-                let typeIdentifier = item.supportedContentTypes.first?.identifier ?? "public.image"
-                print("[ChatScreen] Type identifier: \(typeIdentifier)")
-                
-                // Detect media type and set appropriate file extension
-                let mediaType: MediaType
-                let fileExtension: String
-                
-                // Determine media type and extension from type identifier
-                let isVideo = typeIdentifier.contains("movie") || typeIdentifier.contains("video") || 
-                typeIdentifier.contains("mpeg") || typeIdentifier.contains("mp4") || 
-                typeIdentifier.contains("mov") || typeIdentifier.contains("avi") || 
-                typeIdentifier.contains("wmv") || typeIdentifier.contains("flv") || 
-                typeIdentifier.contains("webm")
-                
-                if isVideo {
-                    mediaType = .video
-                    if typeIdentifier.contains("mp4") || typeIdentifier.contains("mpeg-4") {
-                        fileExtension = "mp4"
-                    } else if typeIdentifier.contains("mov") || typeIdentifier.contains("quicktime") {
-                        fileExtension = "mov"
-                    } else if typeIdentifier.contains("avi") {
-                        fileExtension = "avi"
-                    } else if typeIdentifier.contains("wmv") {
-                        fileExtension = "wmv"
-                    } else if typeIdentifier.contains("flv") {
-                        fileExtension = "flv"
-                    } else if typeIdentifier.contains("webm") {
-                        fileExtension = "webm"
-                    } else {
-                        fileExtension = "mp4" // Default for videos
-                    }
-                    print("[ChatScreen] Detected video with extension: \(fileExtension)")
-                } else {
-                    mediaType = .image
-                    if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
-                        fileExtension = "jpg"
-                    } else if typeIdentifier.contains("png") {
-                        fileExtension = "png"
-                    } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
-                        fileExtension = "heic"
-                    } else if typeIdentifier.contains("gif") {
-                        fileExtension = "gif"
-                    } else if typeIdentifier.contains("webp") {
-                        fileExtension = "webp"
-                    } else {
-                        fileExtension = "jpg" // Default for images
-                    }
-                    print("[ChatScreen] Detected image with extension: \(fileExtension)")
-                }
-                
-                // Use item identifier for uniqueness, fallback to timestamp
-                let uniqueId = item.itemIdentifier ?? String(Int(Date().timeIntervalSince1970))
-                // Sanitize the uniqueId to make it safe for filenames
-                let sanitizedId = uniqueId.replacingOccurrences(of: "/", with: "_")
-                    .replacingOccurrences(of: ":", with: "_")
-                    .replacingOccurrences(of: "\\", with: "_")
-                    .replacingOccurrences(of: "*", with: "_")
-                    .replacingOccurrences(of: "?", with: "_")
-                    .replacingOccurrences(of: "\"", with: "_")
-                    .replacingOccurrences(of: "<", with: "_")
-                    .replacingOccurrences(of: ">", with: "_")
-                    .replacingOccurrences(of: "|", with: "_")
-                
-                let fileName = "\(mediaType == .image ? "photo" : "video")_\(sanitizedId).\(fileExtension)"
-                print("[ChatScreen] Generated filename: \(fileName)")
-                
-                // Create a temporary MimeiFileType for the selected media
-                let tempAttachment = MimeiFileType(
-                    mid: UUID().uuidString,
-                    mediaType: mediaType,
-                    size: Int64(data.count),
-                    fileName: fileName,
-                    url: nil
-                )
-                
+            print("[ChatScreen] Starting to prepare attachment data...")
+            
+            // Use MediaUploadHelper to properly prepare the item data (same as tweet attachments)
+            let itemDataArray = try await MediaUploadHelper.prepareItemData(
+                selectedItems: [item],
+                selectedImages: [],
+                selectedVideos: []
+            )
+            
+            guard let itemData = itemDataArray.first else {
+                print("[ChatScreen] Failed to prepare item data")
                 await MainActor.run {
-                    // Replace current attachment with new one
-                    selectedAttachment = tempAttachment
-                    attachmentData = data // Store the actual file data
-                    selectedPhotos = [] // Clear selection
+                    isProcessingAttachment = false
+                }
+                return
+            }
+            
+            // Get the type identifier to determine media type
+            let typeIdentifier = itemData.typeIdentifier
+            print("[ChatScreen] Type identifier: \(typeIdentifier), data size: \(itemData.data.count) bytes")
+            
+            // Determine media type from type identifier
+            let typeIdLower = typeIdentifier.lowercased()
+            let isVideo = typeIdLower.contains("video") || 
+                          typeIdLower.contains("movie") || 
+                          typeIdLower.contains("mpeg") ||
+                          typeIdLower.contains("mp4") ||
+                          typeIdLower.contains("m4v") ||
+                          typeIdLower.contains("quicktime") ||
+                          typeIdLower.contains("avi") ||
+                          typeIdLower.contains("mov")
+            
+            let mediaType: MediaType = isVideo ? .video : .image
+            
+            print("[ChatScreen] Detected \(isVideo ? "video" : "image") with filename: \(itemData.fileName)")
+            
+            // Create a temporary MimeiFileType for the selected media
+            let tempAttachment = MimeiFileType(
+                mid: UUID().uuidString,
+                mediaType: mediaType,
+                size: Int64(itemData.data.count),
+                fileName: itemData.fileName,
+                url: nil
+            )
+            
+            // Set attachment and itemData atomically on main thread
+            await MainActor.run {
+                selectedAttachment = tempAttachment
+                attachmentItemData = itemData // Store the prepared item data - CRITICAL: set this before clearing photos
+                print("[ChatScreen] Attachment data prepared successfully. attachmentItemData is now set.")
+                
+                // Clear processing flag AFTER everything is set
+                isProcessingAttachment = false
+                
+                // Clear selection AFTER a small delay to ensure state is fully set
+                // This prevents onChange from being triggered while attachmentItemData is still nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    selectedPhotos = []
                 }
             }
+            
+            print("[ChatScreen] Attachment selection completed successfully")
         } catch {
             print("[ChatScreen] Error loading media: \(error)")
+            await MainActor.run {
+                isProcessingAttachment = false
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+            }
         }
     }
     
@@ -735,37 +812,43 @@ struct ChatScreen: View {
             let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
             
             // Check if we have new messages
-            let currentMessageIds = Set(messages.map { $0.id })
-            let newMessages = validBackendMessages.filter { !currentMessageIds.contains($0.id) }
+            let currentCachedIds = Set(allCachedMessages.map { $0.id })
+            let newMessages = validBackendMessages.filter { !currentCachedIds.contains($0.id) }
             
             if !newMessages.isEmpty {
                 print("[ChatScreen] Found \(newMessages.count) new messages from backend")
                 
-                // Merge new messages with existing ones
-                var allMessages = Set(messages)
-                for message in validBackendMessages {
-                    allMessages.insert(message)
-                }
-                
-                // Convert back to array and sort by timestamp
-                let sortedMessages = Array(allMessages).sorted { $0.timestamp < $1.timestamp }
-                
-                await MainActor.run {
-                    messages = sortedMessages
-                }
-                
                 // Save new messages to Core Data
                 chatRepository.addMessagesToCoreData(newMessages)
                 
+                await MainActor.run {
+                    // Add new messages to allCachedMessages
+                    var updatedCache = allCachedMessages + newMessages
+                    updatedCache.sort { $0.timestamp < $1.timestamp }
+                    allCachedMessages = updatedCache
+                    
+                    // Append new messages to displayed messages
+                    messages.append(contentsOf: newMessages)
+                    messages.sort { $0.timestamp < $1.timestamp }
+                    
+                    // Update offset to account for new messages
+                    currentOffset = max(0, allCachedMessages.count - messages.count)
+                    hasMoreMessages = currentOffset > 0
+                    
+                    // Scroll to bottom for new messages
+                    shouldAnimateScroll = true
+                    shouldScrollToBottom = true
+                }
+                
                 // Update session timestamp if there are new messages
-                if let latestMessage = sortedMessages.last {
+                if let latestMessage = messages.last {
                     await chatSessionManager.updateOrCreateChatSession(
                         senderId: receiptId,
                         message: latestMessage,
                         hasNews: false
                     )
                 }
-                print("[ChatScreen] Updated message list with \(newMessages.count) new messages, total: \(sortedMessages.count)")
+                print("[ChatScreen] Updated message list with \(newMessages.count) new messages, total displayed: \(messages.count), total cached: \(allCachedMessages.count)")
             } else {
                 print("[ChatScreen] No new messages found in periodic refresh")
             }
@@ -828,6 +911,7 @@ struct ChatLoadingView: View {
 struct ChatHeaderView: View {
     let user: User?
     let dismiss: DismissAction
+    let onAvatarTap: (() -> Void)?
     
     var body: some View {
         HStack {
@@ -848,6 +932,12 @@ struct ChatHeaderView: View {
             if let user = user {
                 HStack(spacing: 8) {
                     Avatar(user: user, size: 36)
+                        .contentShape(Circle())
+                        .highPriorityGesture(
+                            TapGesture().onEnded { _ in
+                                onAvatarTap?()
+                            }
+                        )
                     Text(user.name ?? "@\(user.username ?? "")")
                         .font(.headline)
                 }

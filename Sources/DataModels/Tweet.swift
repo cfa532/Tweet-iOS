@@ -5,7 +5,9 @@ class Tweet: Identifiable, Codable, ObservableObject {
     private static var instances: [MimeiId: Tweet] = [:]
     private static let instanceLock = NSLock()
     
-    private static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
+    /// Get or create a Tweet singleton instance
+    /// Always use this instead of direct Tweet() initialization to ensure singleton pattern
+    static func getInstance(mid: MimeiId, authorId: MimeiId, content: String? = nil, timestamp: Date = Date(timeIntervalSince1970: Date().timeIntervalSince1970), title: String? = nil,
                           originalTweetId: MimeiId? = nil, originalAuthorId: MimeiId? = nil, author: User? = nil,
                           favorites: [Bool]? = [false, false, false], favoriteCount: Int = 0, bookmarkCount: Int = 0, retweetCount: Int = 0,
                           commentCount: Int = 0, attachments: [MimeiFileType]? = nil, isPrivate: Bool? = nil,
@@ -74,12 +76,30 @@ class Tweet: Identifiable, Codable, ObservableObject {
     var originalAuthorId: MimeiId? // authorId of the forwarded tweet
         
     // Media attachments
-    var attachments: [MimeiFileType]?
+    var attachments: [MimeiFileType]? {
+        didSet {
+            // When attachments change, update them to observe the author's baseUrl
+            updateAttachmentsAuthor()
+        }
+    }
     var isPrivate: Bool?
     var downloadable: Bool?
 
     // Display only properties
-    @Published var author: User?
+    @Published var author: User? {
+        didSet {
+            // When author changes, update all attachments to observe the new author's baseUrl
+            updateAttachmentsAuthor()
+        }
+    }
+    
+    /// Update all attachments to observe the current author's baseUrl
+    private func updateAttachmentsAuthor() {
+        guard let author = author else { return }
+        attachments?.forEach { attachment in
+            attachment.setAuthor(author)
+        }
+    }
     
     // User interaction flags
     @Published var favorites: [Bool]? // [favorite, bookmark, retweeted]
@@ -181,6 +201,11 @@ class Tweet: Identifiable, Codable, ObservableObject {
         self.attachments = attachments
         self.isPrivate = isPrivate
         self.downloadable = downloadable
+        
+        // Update attachments to observe author's baseUrl if both are present
+        if author != nil {
+            updateAttachmentsAuthor()
+        }
     }
     
     func encode(to encoder: Encoder) throws {
@@ -489,53 +514,66 @@ class Tweet: Identifiable, Codable, ObservableObject {
 }
 // MARK: - Tweet Array Extension
 extension Array where Element == Tweet {
-    /// Merge new tweets into the array, overwriting existing ones with the same mid and appending new ones.
-    mutating func mergeTweets(_ newTweets: [Tweet]) {
-        // Create a dictionary to track unique tweets by their mid
-        var uniqueTweets: [String: Tweet] = [:]
-        
-        // Add existing tweets to dictionary
-        for tweet in self {
-            uniqueTweets[tweet.mid] = tweet
+    /// Determines whether `candidate` should appear before `other` in a descending timeline order.
+    private func shouldPlace(_ candidate: Tweet, before other: Tweet) -> Bool {
+        if candidate.timestamp == other.timestamp {
+            return candidate.mid > other.mid
         }
-        
-        // Add new tweets, overwriting existing ones if they have the same mid
-        for tweet in newTweets {
-            uniqueTweets[tweet.mid] = tweet
-        }
-        
-        // Convert back to array and sort by timestamp in descending order
-        self = Array(uniqueTweets.values).sorted { $0.timestamp > $1.timestamp }
+        return candidate.timestamp > other.timestamp
     }
     
-    /// Merge new tweets smoothly, preserving existing positions to prevent UI jumping
-    mutating func mergeTweetsSmoothly(_ newTweets: [Tweet]) {
-        // Create a set of existing tweet IDs for quick lookup
-        let existingIds = Set(self.map { $0.mid })
+    /// Finds the correct insertion index for `tweet` while keeping the array sorted by descending timestamp.
+    private func orderedInsertionIndex(for tweet: Tweet) -> Int {
+        var lowerBound = 0
+        var upperBound = count
         
-        // Filter out tweets that already exist to avoid unnecessary updates
-        let trulyNewTweets = newTweets.filter { !existingIds.contains($0.mid) }
-        
-        if trulyNewTweets.isEmpty {
-            return
-        }
-        
-        // Update existing tweets with new data (preserving positions)
-        for newTweet in newTweets {
-            if let existingIndex = self.firstIndex(where: { $0.mid == newTweet.mid }) {
-                // Update existing tweet in place to preserve position
-                self[existingIndex] = newTweet
+        while lowerBound < upperBound {
+            let midIndex = (lowerBound + upperBound) / 2
+            let comparisonTarget = self[midIndex]
+            
+            if shouldPlace(tweet, before: comparisonTarget) {
+                upperBound = midIndex
+            } else {
+                lowerBound = midIndex + 1
             }
         }
         
-        // Add truly new tweets at the end (they will be sorted by timestamp)
-        self.append(contentsOf: trulyNewTweets)
+        return lowerBound
+    }
+    
+    /// Core merge implementation shared by both merge variants.
+    private mutating func mergeTweetsInternal(_ newTweets: [Tweet]) {
+        guard !newTweets.isEmpty else { return }
         
-        // Sort only if we added new tweets to maintain chronological order
-        if !trulyNewTweets.isEmpty {
-            self.sort { $0.timestamp > $1.timestamp }
+        var processedIds = Set<String>()
+        
+        for newTweet in newTweets {
+            guard processedIds.insert(newTweet.mid).inserted else { continue }
+            
+            if let existingIndex = firstIndex(where: { $0.mid == newTweet.mid }) {
+                let previousNeighbor = existingIndex > 0 ? self[existingIndex - 1] : nil
+                let nextNeighbor = existingIndex + 1 < count ? self[existingIndex + 1] : nil
+                
+                let shouldMoveUp = previousNeighbor.map { shouldPlace(newTweet, before: $0) } ?? false
+                let shouldMoveDown = nextNeighbor.map { shouldPlace($0, before: newTweet) } ?? false
+                
+                if shouldMoveUp || shouldMoveDown {
+                    remove(at: existingIndex)
+                    let insertionIndex = orderedInsertionIndex(for: newTweet)
+                    insert(newTweet, at: insertionIndex)
+                } else {
+                    self[existingIndex] = newTweet
+                }
+            } else {
+                let insertionIndex = orderedInsertionIndex(for: newTweet)
+                insert(newTweet, at: insertionIndex)
+            }
         }
-        
+    }
+    
+    /// Merge new tweets into the array, overwriting existing ones with the same mid and inserting new ones at the correct position.
+    mutating func mergeTweets(_ newTweets: [Tweet]) {
+        mergeTweetsInternal(newTweets)
     }
 }
 

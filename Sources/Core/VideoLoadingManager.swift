@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 
 @MainActor
 class VideoLoadingManager: ObservableObject {
@@ -85,8 +86,7 @@ class VideoLoadingManager: ObservableObject {
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldLoadVideos(for tweetId: String) -> Bool {
         
-        // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
-        // This ensures videos in original tweets load immediately when their retweet is visible
+        // HIGHEST PRIORITY: Original tweets of visible retweets should load immediately
         let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
         if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing loading")
@@ -104,10 +104,21 @@ class VideoLoadingManager: ObservableObject {
             return true
         }
         
-        // SECOND PRIORITY: Check if tweet has cached content - if so, always allow loading regardless of performance constraints
+        // Calculate distance first to prevent loading tweets above current position
+        let distance = index - currentVisibleTweetIndex
+        
+        // CRITICAL: Never load videos for tweets above current position (scrolling up stability)
+        // This prevents layout instability when scrolling up past previously viewed tweets
+        if distance < 0 {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is above current position (distance: \(distance)), denying loading for scroll stability")
+            return false
+        }
+        
+        // SECOND PRIORITY: Check if tweet has cached content - but only for tweets at or near current position
+        // This allows fast loading of nearby cached content without causing layout shifts from distant tweets
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
-        if hasCachedContent {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, allowing loading")
+        if hasCachedContent && distance <= preloadCount {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content and is within preload range, allowing loading")
             return true
         }
         
@@ -124,14 +135,13 @@ class VideoLoadingManager: ObservableObject {
         }
         
         // Only load videos for current visible tweet and next few tweets (NOT past tweets)
-        let distance = index - currentVisibleTweetIndex
         return distance >= 0 && distance <= preloadCount
     }
     
     /// Check if a tweet should preload videos/audio
     /// Note: Despite the method name, this handles all media types (video, audio, etc.)
     func shouldPreloadVideos(for tweetId: String) -> Bool {
-        // CRITICAL: Check if this tweet is the original tweet of a currently visible retweet
+        // HIGHEST PRIORITY: Original tweets of visible retweets should preload
         let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
         if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
             print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing preloading")
@@ -149,10 +159,20 @@ class VideoLoadingManager: ObservableObject {
             return true
         }
         
-        // SECOND PRIORITY: Check if tweet has cached content - if so, allow preloading regardless of performance constraints
+        // Calculate distance first to prevent preloading tweets above current position
+        let distance = index - currentVisibleTweetIndex
+        
+        // CRITICAL: Never preload videos for tweets above current position (scrolling up stability)
+        // This prevents layout instability when scrolling up past previously viewed tweets
+        if distance <= 0 {
+            return false
+        }
+        
+        // SECOND PRIORITY: Check if tweet has cached content - but only for tweets ahead of current position
+        // This allows fast preloading of nearby cached content without causing layout shifts
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
-        if hasCachedContent {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, allowing preloading")
+        if hasCachedContent && distance <= preloadCount {
+            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content and is within preload range, allowing preloading")
             return true
         }
         
@@ -161,8 +181,7 @@ class VideoLoadingManager: ObservableObject {
             return false
         }
         
-        // Preload if tweet is within the next 2 tweets (reduced from 3)
-        let distance = index - currentVisibleTweetIndex
+        // Preload if tweet is within the next few tweets (ahead of current position only)
         return distance > 0 && distance <= preloadCount
     }
     
@@ -252,6 +271,14 @@ class VideoLoadingManager: ObservableObject {
     
     /// Process a batch of cancellations in background
     private func processCancellationBatch(_ tweetIds: [String]) async {
+        // If an overlay (fullscreen, login sheet, etc.) is presented, skip cancellations.
+        // Cancelling during overlays can stop videos that should resume after dismissal.
+        let isCovered = await MainActor.run { self.isContentCoveredByOverlay() }
+        if isCovered {
+            print("DEBUG: [VideoLoadingManager] Content covered by overlay, skipping cancellation batch (\(tweetIds.count) tweets)")
+            return
+        }
+
         for tweetId in tweetIds {
             // Check if tweet has cached content before cancelling
             let hasCachedContent = await MainActor.run {
@@ -279,6 +306,18 @@ class VideoLoadingManager: ObservableObject {
             
             // No artificial delay - process videos as fast as the system allows
         }
+    }
+
+    /// Returns true when a modal/sheet/fullscreen cover is presented over the app content.
+    @MainActor
+    private func isContentCoveredByOverlay() -> Bool {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) else {
+            return false
+        }
+        return window.rootViewController?.presentedViewController != nil
     }
     
     private func isLoadingTooFrequently() -> Bool {

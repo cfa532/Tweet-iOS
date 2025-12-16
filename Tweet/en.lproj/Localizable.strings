@@ -30,6 +30,7 @@
 "Checking video status..." = "Checking video status...";
 "Processing on server..." = "Processing on server...";
 "Your tweet will be posted when ready" = "Your tweet will be posted when ready";
+"Your message will be sent when ready" = "Your message will be sent when ready";
 "Uploading %@ %d/%d..." = "Uploading %@ %d/%d...";
 "Processing video %d/%d" = "Processing video %d/%d";
 "Uploading image %d/%d" = "Uploading image %d/%d";
@@ -85,12 +86,15 @@
 "Alias" = "Alias";
 "Profile" = "Profile";
 "Host ID (optional)" = "Host ID (optional)";
+"Host ID" = "Host ID";
 "Cloud Drive Port" = "Cloud Drive Port";
+"Share Domain" = "Share Domain";
 "Register" = "Register";
 "Cancel" = "Cancel";
 "Uploading..." = "Uploading...";
 "Saving..." = "Saving...";
 "Create Account" = "Create Account";
+"Registration successful. Please wait a few minutes before logging in." = "Registration successful. Please wait a few minutes before logging in.";
 
 // MARK: - Settings Screen
 "Account" = "Account";
@@ -124,10 +128,17 @@
 "Pinned" = "Pinned";
 "username" = "username";
 "Noone" = "Noone";
+"Fans@%@" = "Fans@%@";
+"Followings@%@" = "Followings@%@";
+"Your Fans" = "Your Fans";
+"Your Followings" = "Your Followings";
+"Your Bookmarks" = "Your Bookmarks";
+"Your Favorites" = "Your Favorites";
 
 // MARK: - Tweet Actions
 "Show more" = "Show more";
 "Forwarded by %@" = "Forwarded by %@";
+"Forwarded by you" = "Forwarded by you";
 "Quote Tweet" = "Quote Tweet";
 
 // MARK: - Media
@@ -232,6 +243,7 @@
 "Failed to load comments." = "Failed to load comments.";
 "Failed to load more comments." = "Failed to load more comments.";
 "Avatar updated successfully!" = "Avatar updated successfully!";
+"Login failed. Please try again." = "Login failed. Please try again.";
 "No image to download" = "No image to download";
 "Photo library access denied" = "Photo library access denied";
 "Image saved to Photos" = "Image saved to Photos";
@@ -376,9 +388,12 @@
 "Start a conversation to see your chats here" = "Start a conversation to see your chats here";
 "No results found" = "No results found";
 "Try searching for a different username" = "Try searching for a different username";
+"Try a different search term" = "Try a different search term";
 "Search for users" = "Search for users";
 "Enter a username to find users" = "Enter a username to find users";
 "Enter @username to find users" = "Enter @username to find users";
+"Search by username or name..." = "Search by username or name...";
+"Search by username or display name" = "Search by username or display name";
 "Start Chat" = "Start Chat";
 "%d attachments" = "%d attachments";
 "+%d" = "+%d";
@@ -461,6 +476,10 @@
 // MARK: - Chat Messages
 "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation.";
 "Receipt ID: %@" = "Receipt ID: %@";
+"Sent" = "Sent";
+"Received" = "Received";
+"Yesterday" = "Yesterday";
+"%@ %@" = "%@ %@";
 
 // MARK: - Video Player
 "Failed to load video" = "Failed to load video";
@@ -484,6 +503,7 @@
 "Passwords do not match." = "Passwords do not match.";
 "Host ID must be %d characters if provided." = "Host ID must be %d characters if provided.";
 "Cloud Drive Port must be between 8000 and 9000." = "Cloud Drive Port must be between 8000 and 9000.";
+"Cloud Drive Port must be between 8000 and 65535." = "Cloud Drive Port must be between 8000 and 65535.";
 
 // MARK: - Backend Error Messages
 "Unknown error occurred" = "Unknown error occurred";
@@ -549,3 +569,47 @@
 "Failed to update pinned tweet" = "Failed to update pinned tweet";
 "Failed to get pinned tweets" = "Failed to get pinned tweets";
 "Failed to report tweet" = "Failed to report tweet";
+
+// MARK: - User-Friendly Error Messages
+"Network connection lost. Please check your internet connection." = "Network connection lost. Please check your internet connection.";
+"The request took too long. Please try again." = "The request took too long. Please try again.";
+"Cannot reach the server. Please try again later." = "Cannot reach the server. Please try again later.";
+"Connection interrupted. Please try again." = "Connection interrupted. Please try again.";
+"Secure connection failed. Please check your network settings." = "Secure connection failed. Please check your network settings.";
+"Service temporarily unavailable. Please try again." = "Service temporarily unavailable. Please try again.";
+"Content not found." = "Content not found.";
+"Session expired. Please log in again." = "Session expired. Please log in again.";
+"You don't have permission to access this." = "You don't have permission to access this.";
+"Server error. Please try again later." = "Server error. Please try again later.";
+"Service temporarily unavailable. Please try again later." = "Service temporarily unavailable. Please try again later.";
+"Unable to process data. Please try again." = "Unable to process data. Please try again.";
+"Not enough storage space available." = "Not enough storage space available.";
+"Network error. Please check your connection and try again." = "Network error. Please check your connection and try again.";
+"Something went wrong. Please try again." = "Something went wrong. Please try again.";
+
+// MARK: - Server Error Messages
+"Username is taken" = "Username is taken";
+"User not found" = "User not found";
+"Wrong password" = "Wrong password";
+"Unknown error" = "Unknown error";
+"User not found or missing host" = "User not found or missing host";
+"User host not found" = "User host not found";
+"Author host not found" = "Author host not found";
+"User not found in database" = "User not found in database";
+"User missing host" = "User missing host";
+"Cannot follow yourself" = "Cannot follow yourself";
+"Cannot get followed user" = "Cannot get followed user";
+"Missing host for followed user" = "Missing host for followed user";
+"Tweet not found" = "Tweet not found";
+"Only the tweet author can update privacy settings" = "Only the tweet author can update privacy settings";
+"Not a friend of the host" = "Not a friend of the host";
+"No provider IP found." = "No provider IP found.";
+"Chunk size exceeds 1MB limit" = "Chunk size exceeds 1MB limit";
+"Failed to extract zip file" = "Failed to extract zip file";
+"Invalid HLS structure" = "Invalid HLS structure";
+"App ID mismatch" = "App ID mismatch";
+
+// MARK: - Cloud Drive Limit
+"Tweet Limit Reached" = "Tweet Limit Reached";
+"This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.";
+"Learn More" = "Learn More";

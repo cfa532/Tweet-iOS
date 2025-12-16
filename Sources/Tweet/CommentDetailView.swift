@@ -2,7 +2,7 @@
 //  CommentDetailView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/6/8.
+//  Created by Tomás Hongo on 2025/6/8.
 //
 
 import SwiftUI
@@ -54,7 +54,7 @@ struct CommentDetailViewWithParent: View {
         }
         
         do {
-            let parent = try await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+            let parent = try await hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId)
             await MainActor.run {
                 self.parentTweet = parent
                 self.isLoading = false
@@ -126,6 +126,14 @@ struct CommentDetailView: View {
             }
         }
         .overlay(toastOverlay)
+        .onAppear {
+            // Mark detail view as active to prevent MediaCell autoplay
+            NavigationStateManager.shared.setDetailViewActive(true)
+        }
+        .onDisappear {
+            // Mark detail view as inactive
+            NavigationStateManager.shared.setDetailViewActive(false)
+        }
         .task {
             // Refresh comment after a short delay
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
@@ -157,13 +165,16 @@ struct CommentDetailView: View {
     }
     
     private var commentHeader: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 0) {
             if let user = comment.author {
                 Avatar(user: user)
             }
             TweetItemHeaderView(tweet: comment)
+            Spacer(minLength: 0)
             CommentMenu(comment: comment, parentTweet: parentTweet)
+                .padding(.trailing, -20)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.top)
     }
@@ -181,7 +192,7 @@ struct CommentDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(tweet: comment)
+        TweetActionButtonsView(tweet: comment, isInDetailView: true)
             .padding(.leading, 48)
             .padding(.top, 8)
             .padding(.bottom, 4)
@@ -245,6 +256,7 @@ struct CommentDetailView: View {
                     }
                 )
             ],
+            isEmbedded: true, // Embedded in CommentDetailView's ScrollView, avoid nested scrolling
             rowView: { reply in
                 CommentItemView(
                     parentTweet: comment,
@@ -260,7 +272,7 @@ struct CommentDetailView: View {
     
     private func refreshComment() async {
         do {
-            if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
+            if let refreshedComment = try await hproseInstance.refreshTweet(tweetId: comment.mid, authorId: comment.authorId) {
                 try comment.update(from: refreshedComment)
             }
         } catch {

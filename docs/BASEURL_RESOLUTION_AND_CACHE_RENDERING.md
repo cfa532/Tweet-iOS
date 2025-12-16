@@ -584,34 +584,52 @@ When network returns:
 
 ## Tweet Author Loading
 
-### In-Memory First Strategy
+### Cached User as Placeholder Strategy
+
+When loading tweets from cache, the system prioritizes cached user data (even if expired) as placeholders to provide immediate UI feedback. Skeleton users are only used when server fetch fails to indicate an error.
 
 ```swift
 // In TweetCacheManager.fetchCachedTweets()
 for cdTweet in cdTweets {
-    // 1. Always get singleton first (creates if needed)
-    let authorSingleton = User.getInstance(mid: cdTweet.authorId)
+    let tweet = try Tweet.from(cdTweet: cdTweet)
     
-    // 2. If singleton has data, use it (FAST!)
-    if authorSingleton.username != nil {
-        tweet.author = authorSingleton
-        continue  // Skip Core Data lookup
+    if tweet.author == nil {
+        // 1. Get singleton first
+        let authorSingleton = User.getInstance(mid: tweet.authorId)
+        
+        // 2. If singleton doesn't have data, load from Core Data cache
+        if authorSingleton.username == nil {
+            let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+            userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+            if let cdUser = try? context.fetch(userRequest).first {
+                // Update singleton with cached data (even if expired)
+                _ = User.from(cdUser: cdUser)
+            }
+        }
+        
+        // 3. Use singleton (populated from cache or skeleton)
+        tweet.author = User.getInstance(mid: tweet.authorId)
     }
-    
-    // 3. Otherwise, check Core Data
-    if let cdUser = fetchCDUser(mid: cdTweet.authorId) {
-        _ = User.from(cdUser: cdUser)  // Updates singleton
-    }
-    
-    // 4. Use singleton (either populated or placeholder)
-    tweet.author = authorSingleton
 }
 ```
+
+### Author Loading Priority
+
+1. **Cached User (Expired or Not)** - Used as placeholder when loading from cache
+   - Provides immediate UI feedback with user data
+   - Background refresh updates the cached data
+   - Even expired cache is better than no data
+
+2. **Skeleton User** - Only used when server fetch fails
+   - Indicates to UI that something is wrong
+   - Prevents showing stale cached data after fetch failure
+   - Clear visual signal that user data couldn't be loaded
 
 **Performance:**
 - In-memory check: <1ms
 - Core Data fetch: ~2-5ms per user
 - Singleton pattern ensures each user loaded once
+- Cached users provide instant UI rendering
 
 ---
 

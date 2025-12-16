@@ -267,15 +267,17 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Trigger video preloading for a tweet
+    /// This works by posting a notification that MediaGridView listens to
+    /// MediaGridView will then set shouldLoadVideo=true, causing MediaCell to load the video
     @MainActor func triggerVideoPreloadingForTweet(_ tweetId: String) {
-        // Find all mediaIDs associated with this tweet and trigger preloading
-        let tweetMediaIDs = getMediaIDsForTweet(tweetId)
-        for mediaID in tweetMediaIDs {
-            // We need to reconstruct the URL from mediaID for preloading
-            // This is a limitation - we might need to store URLs separately for preloading
-            print("DEBUG: [SharedAssetCache] Cannot preload video for mediaID \(mediaID) without URL")
-        }
-        print("DEBUG: [SharedAssetCache] Triggered video preloading for tweet \(tweetId) with \(tweetMediaIDs.count) mediaIDs")
+        // Post notification for MediaGridView to handle
+        // MediaGridView will enable video loading for this tweet
+        NotificationCenter.default.post(
+            name: .triggerVideoPreloading,
+            object: nil,
+            userInfo: ["tweetId": tweetId]
+        )
+        print("DEBUG: [SharedAssetCache] Posted video preloading notification for tweet \(tweetId)")
     }
     
     /// Extract mediaID from URL
@@ -450,7 +452,7 @@ class SharedAssetCache: ObservableObject {
             // If no buffered data, force preroll to reload from disk cache
             if !hasBufferedData && playerItem.status == .readyToPlay {
                 print("DEBUG: [SHARED ASSET CACHE] Cached player has no buffered data - forcing preroll to reload from cache")
-                playerItem.preferredForwardBufferDuration = 5.0
+                playerItem.preferredForwardBufferDuration = 15.0  // Balanced prefetch
                 player.preroll(atRate: 1.0) { success in
                     print("DEBUG: [SHARED ASSET CACHE] Preroll completed for cached player: \(success)")
                 }
@@ -507,12 +509,16 @@ class SharedAssetCache: ObservableObject {
         }
         
         NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
-        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for tweetId: \(tweetId ?? "nil")")
+        if let tweetId {
+            NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer received tweetId (ignored for caching): \(tweetId)")
+        } else {
+            NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called with no tweetId")
+        }
         
-        // Use tweetId if provided (for mode-specific caching), otherwise use mediaID
-        // This allows TweetDetail to have separate players from MediaCell
-        let cacheKey = tweetId ?? mediaID
-        NSLog("DEBUG: [SHARED ASSET CACHE] Using cache key: \(cacheKey)")
+        // CRITICAL: Cache key must ALWAYS be the mediaID (video attachment mid).
+        // tweetId must never affect player caching; it caused incorrect reuse/eviction behavior.
+        let cacheKey = mediaID
+        NSLog("DEBUG: [SHARED ASSET CACHE] Using cache key (mediaID): \(cacheKey)")
         
         // Try to get cached player first
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
@@ -580,14 +586,14 @@ class SharedAssetCache: ObservableObject {
             // CRITICAL: Mute player at creation - will be unmuted by mode if needed
             player.isMuted = true
             
-            // Disable automatic waiting
+            // Optimize buffering for progressive video playback
             player.automaticallyWaitsToMinimizeStalling = false
+            playerItem.preferredForwardBufferDuration = 30.0  // Buffer 30 seconds ahead to reduce spinner frequency
             
             // Cache the player
-            let cacheKey = tweetId ?? mediaID
             await MainActor.run { 
-                cachePlayer(player, for: cacheKey)
-                NSLog("DEBUG: [SHARED ASSET CACHE] Cached progressive player with cacheKey: \(cacheKey)")
+                cachePlayer(player, for: mediaID)
+                NSLog("DEBUG: [SHARED ASSET CACHE] Cached progressive player with cacheKey (mediaID): \(mediaID)")
                 // Notify completion
                 VideoLoadingManager.shared.videoLoadCompleted()
             }
@@ -617,10 +623,25 @@ class SharedAssetCache: ObservableObject {
         } else {
             NSLog("DEBUG: [SHARED ASSET CACHE] No cached playlist found, resolving HLS URL from network")
             let resolveStart = Date()
-            resolvedURL = await resolveHLSURL(url)
+            let networkResolvedURL = await resolveHLSURL(url)
             let resolveTime = Date().timeIntervalSince(resolveStart)
             NSLog("⏱️ [HLS RESOLVE] Took \(String(format: "%.2f", resolveTime))s for mediaID: \(mediaID)")
-            NSLog("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL from network: \(resolvedURL.absoluteString)")
+            
+            // If network resolution returns the base URL unchanged (resolution failed),
+            // try cache check ONE MORE TIME with more relaxed validation
+            if networkResolvedURL == url {
+                NSLog("⚠️ [HLS FALLBACK] Network resolution failed, retrying cache check for mediaID: \(mediaID)")
+                if let fallbackCachedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url) {
+                    NSLog("✅ [HLS FALLBACK] Found cached playlist on retry: \(fallbackCachedURL.absoluteString)")
+                    resolvedURL = fallbackCachedURL
+                } else {
+                    NSLog("❌ [HLS FALLBACK] Cache check retry also failed for mediaID: \(mediaID)")
+                    resolvedURL = networkResolvedURL
+                }
+            } else {
+                NSLog("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL from network: \(networkResolvedURL.absoluteString)")
+                resolvedURL = networkResolvedURL
+            }
         }
         
         // Start LocalHTTPServer for HLS video serving
@@ -651,13 +672,12 @@ class SharedAssetCache: ObservableObject {
         
         // Optimize buffering for HLS playback
         player.automaticallyWaitsToMinimizeStalling = false
-        cachingPlayerItem.preferredForwardBufferDuration = 10.0  // Buffer 10 seconds ahead to prevent stalls
+        cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Buffer 15 seconds ahead (balanced prefetch)
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
-        // Cache the player using cacheKey
-        let cacheKey = tweetId ?? mediaID
+        // Cache the player using mediaID (video attachment mid)
         await MainActor.run { 
-            cachePlayer(player, for: cacheKey)
+            cachePlayer(player, for: mediaID)
             // Invalidate disk cache status since we're creating new cache content
             invalidateDiskCacheStatus(for: mediaID)
         }
@@ -756,10 +776,18 @@ class SharedAssetCache: ObservableObject {
             if possiblePlaylistNames.contains(fileName) {
                 // Validate that the cached playlist is not empty and contains valid content
                 if let data = try? Data(contentsOf: fileURL),
-                   let playlistString = String(data: data, encoding: .utf8),
-                   playlistString.contains("#EXTM3U") &&
-                   (playlistString.contains(".ts") || playlistString.contains(".m3u8")) {
-                    foundPlaylists.append((url: fileURL, name: fileName))
+                   let playlistString = String(data: data, encoding: .utf8) {
+                    
+                    // More lenient validation - just check for #EXTM3U header
+                    // Don't require .ts or .m3u8 in content since some playlists might use different formats
+                    if playlistString.contains("#EXTM3U") {
+                        foundPlaylists.append((url: fileURL, name: fileName))
+                        NSLog("DEBUG: [SHARED ASSET CACHE] Found valid cached playlist: \(fileName), size: \(data.count) bytes")
+                    } else {
+                        NSLog("DEBUG: [SHARED ASSET CACHE] Found playlist file but missing #EXTM3U: \(fileName)")
+                    }
+                } else {
+                    NSLog("DEBUG: [SHARED ASSET CACHE] Found playlist file but failed to read: \(fileName)")
                 }
             }
         }
@@ -781,7 +809,7 @@ class SharedAssetCache: ObservableObject {
             }
         }
         
-        NSLog("DEBUG: [SHARED ASSET CACHE] No valid cached playlist found for mediaID: \(mediaID)")
+        NSLog("DEBUG: [SHARED ASSET CACHE] No valid cached playlist found for mediaID: \(mediaID), searched playlists: \(foundPlaylists.map { $0.name })")
         return nil
     }
     
@@ -903,7 +931,7 @@ class SharedAssetCache: ObservableObject {
         loadingTasks.removeAll()
         
         // Cancel all preload tasks
-        for (key, task) in preloadTasks {
+        for (_, task) in preloadTasks {
             task.cancel()
         }
         preloadTasks.removeAll()
@@ -949,14 +977,14 @@ class SharedAssetCache: ObservableObject {
     func preloadVideo(for url: URL, tweetId: String? = nil) {
         // Use mediaID as cache key (stable identifier), not URL which can change
         guard let mediaID = extractMediaID(from: url) else { return }
-        let cacheKey = tweetId ?? mediaID
+        let cacheKey = mediaID
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         
         let task = Task {
             do {
-                _ = try await getOrCreatePlayer(for: url, tweetId: tweetId)
+                _ = try await getOrCreatePlayer(for: url)
             } catch {
                 // Handle error silently
             }
@@ -969,7 +997,7 @@ class SharedAssetCache: ObservableObject {
     func preloadAsset(for url: URL, tweetId: String? = nil) {
         // Use mediaID as cache key (stable identifier), not URL which can change
         guard let mediaID = extractMediaID(from: url) else { return }
-        let cacheKey = tweetId ?? mediaID
+        let cacheKey = mediaID
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()

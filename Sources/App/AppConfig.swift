@@ -17,7 +17,7 @@ struct AppConfig {
     static let baseUrl: String = {
         switch BuildConfiguration.current {
         case .debug:
-            return "http://g8.fireshare.us"
+            return "http://d2.fireshare.us"
         case .release:
             return "http://tweet.fireshare.us"
         }
@@ -35,9 +35,9 @@ struct AppConfig {
     static let appIdHash: String = {
         switch BuildConfiguration.current {
         case .debug:
-            return "FGPaNfKA-RwvJ-_hGN0JDWMbm9R"
+            return "5yOO4xP1QjAXhHpJtKMyIETVMxU"
         case .release:
-            return "FGPaNfKA-RwvJ-_hGN0JDWMbm9R"
+            return "h5U5jxPr2p2tg2kMr8UeyRMNIJ_"
         }
     }()
     

@@ -1,4 +1,7 @@
 import SwiftUI
+import UIKit
+import AVFoundation
+import LinkPresentation
 
 enum UserActions: Int {
     case FAVORITE = 0
@@ -6,17 +9,120 @@ enum UserActions: Int {
     case RETWEET = 2
 }
 
+// Wrapper to make share items identifiable for .sheet(item:)
+struct ShareSheetData: Identifiable {
+    let id = UUID()
+    let items: [Any]
+}
+
+// Global function to format count with abbreviations
+func formatCount(_ count: Int) -> String {
+    if count < 1000 {
+        return "\(count)"
+    } else if count < 10000 {
+        // 1000-9999: show as 1k, 1.1k, 1.2k, etc. (1 decimal place when needed)
+        let thousands = Double(count) / 1000.0
+        // Check if it's a whole number (e.g., 1000, 2000, 3000)
+        if thousands.truncatingRemainder(dividingBy: 1.0) == 0 {
+            return "\(Int(thousands))k"
+        } else {
+            return String(format: "%.1fk", thousands)
+        }
+    } else if count < 1000000 {
+        // 10000-999999: show as 11k, 12k, etc. (integer only)
+        let thousands = count / 1000
+        return "\(thousands)k"
+    } else if count < 10000000 {
+        // 1000000-9999999: show as 1M, 1.1M, 1.2M, etc. (1 decimal place when needed)
+        let millions = Double(count) / 1000000.0
+        // Check if it's a whole number (e.g., 1000000, 2000000, 3000000)
+        if millions.truncatingRemainder(dividingBy: 1.0) == 0 {
+            return "\(Int(millions))M"
+        } else {
+            return String(format: "%.1fM", millions)
+        }
+    } else {
+        // 10000000+: show as 10M, 11M, etc. (integer only)
+        let millions = count / 1000000
+        return "\(millions)M"
+    }
+}
+
+// Global function to compose attachment type text
+func composeAttachmentTypeText(for tweet: Tweet) -> String {
+    // Get attachments from the tweet or its original tweet
+    var attachments: [MimeiFileType]?
+    
+    if let tweetAttachments = tweet.attachments, !tweetAttachments.isEmpty {
+        attachments = tweetAttachments
+    } else if let originalTweetId = tweet.originalTweetId,
+              let original = Tweet.getInstance(for: originalTweetId),
+              let originalAttachments = original.attachments,
+              !originalAttachments.isEmpty {
+        attachments = originalAttachments
+    }
+    
+    guard let attachments = attachments, !attachments.isEmpty else {
+        return ""
+    }
+    
+    // Get first 3 attachment types
+    let firstThree = Array(attachments.prefix(3))
+    var typeTexts: [String] = []
+    
+    for attachment in firstThree {
+        switch attachment.type {
+        case .image:
+            typeTexts.append("📷 Image")
+        case .video, .hls_video:
+            typeTexts.append("🎬 Video")
+        case .audio:
+            typeTexts.append("🎵 Audio")
+        case .pdf:
+            typeTexts.append("📄 PDF")
+        case .word:
+            typeTexts.append("📝 Word")
+        case .excel:
+            typeTexts.append("📊 Excel")
+        case .ppt:
+            typeTexts.append("📊 PPT")
+        case .zip:
+            typeTexts.append("🗜️ Zip")
+        case .txt:
+            typeTexts.append("📄 Text")
+        case .html:
+            typeTexts.append("🌐 HTML")
+        case .unknown:
+            typeTexts.append("📎 File")
+        }
+    }
+    
+    // Add count if there are more attachments
+    if attachments.count > 3 {
+        let remaining = attachments.count - 3
+        return typeTexts.joined(separator: ", ") + " +\(remaining) more"
+    } else {
+        return typeTexts.joined(separator: ", ")
+    }
+}
+
 @available(iOS 16.0, *)
 struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
     var commentsVM: CommentsViewModel? = nil
     var onCommentTap: (() -> Void)? = nil
+    var isInDetailView: Bool = false  // NEW: Track if we're in TweetDetailView
+    var isFullScreen: Bool = false    // NEW: Track if we're in fullscreen player
+    var onShareVisibilityChange: ((Bool) -> Void)? = nil
     @State private var showCommentCompose = false
-    @State private var showShareSheet = false
     @State private var showLoginSheet = false
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
+    @State private var attachmentPreviewImage: UIImage? = nil
+    @State private var isPreparingShare = false
+    @State private var shareSheetItems: ShareSheetData? = nil
+    // Removed: @State private var hasPreloadedPreview = false - no longer needed since preloading is disabled
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     private func handleGuestAction() {
@@ -25,21 +131,77 @@ struct TweetActionButtonsView: View {
         }
     }
     
-    private func retweet(_ tweet: Tweet) async throws {
+    // DISABLED: Preload function removed - causes UI freezing when many video tweets are visible
+    // Preview is now generated on-demand only when user taps the share button
+    // private func preloadAttachmentPreview() { ... }
+    
+    private func retweet(tweet: Tweet) async throws {
+        // Use the tweet instance directly - user tapped the button, so tweet is available
+        // Since retweets use the same original tweet instance, refreshing it ensures all views are in sync
+        print("🔄 [Retweet] Starting retweet for tweet: \(tweet.mid)")
+        
         do {
-            let currentCount = tweet.retweetCount ?? 0
-            tweet.retweetCount = currentCount + 1
-
-            if let retweet = try await hproseInstance.retweet(tweet) {
-                NotificationCenter.default.post(name: .newTweetCreated,
-                                                object: nil,
-                                                userInfo: ["tweet": retweet])
-                // Update retweet count of the original tweet in backend.
-                // tweet, the original tweet now, is updated in the following function.
-                try? await hproseInstance.updateRetweetCount(tweet: tweet, retweetId: retweet.mid)
+            // Upload the retweet and update count (matches Android flow)
+            // HproseInstance.retweet() now handles:
+            // 1. Upload retweet
+            // 2. Update retweet count of original tweet
+            // 3. Cache the updated original tweet
+            // Note: Optimistic update already happened in button handler
+            print("🔄 [Retweet] Calling hproseInstance.retweet for tweet: \(tweet.mid)")
+            guard let retweet = try await hproseInstance.retweet(tweet) else {
+                // Retweet upload failed - refresh original tweet from server to restore correct state
+                print("❌ [Retweet] Upload failed for tweet: \(tweet.mid), refreshing from server")
+                if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
+                    await MainActor.run {
+                        try? tweet.update(from: refreshedTweet)
+                    }
+                }
+                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to upload retweet"])
             }
+            
+            print("✅ [Retweet] Retweet created with ID: \(retweet.mid) for original tweet: \(tweet.mid)")
+            
+            // Verify we got a valid retweet ID from server (not a temporary ID)
+            // Only post notification if server actually created a retweet with valid ID
+            guard !retweet.mid.isEmpty && !retweet.mid.hasPrefix("TEMP_") else {
+                print("❌ [Retweet] Invalid retweet ID from server for tweet: \(tweet.mid), refreshing from server")
+                // Refresh original tweet from server to restore correct state
+                if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
+                    await MainActor.run {
+                        try? tweet.update(from: refreshedTweet)
+                    }
+                }
+                throw NSError(domain: "RetweetError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid retweet ID from server"])
+            }
+            
+            // Refresh original tweet from server to ensure all views get the updated count
+            // updateRetweetCount() already updated it, but refresh ensures we have the latest from server
+            // and that all instances in the list see the update
+            if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
+                await MainActor.run {
+                    // refreshTweet() returns the singleton instance, so update from it to sync all properties
+                    if let existingTweet = Tweet.getInstance(for: tweet.mid) {
+                        try? existingTweet.update(from: refreshedTweet)
+                    }
+                    print("✅ [Retweet] Refreshed original tweet from server, retweetCount: \(refreshedTweet.retweetCount ?? 0)")
+                }
+            }
+            
+            // Post notification only after confirmed successful retweet creation with valid ID
+            print("✅ [Retweet] Posting notification for new tweet created: \(retweet.mid)")
+            NotificationCenter.default.post(name: .newTweetCreated,
+                                            object: nil,
+                                            userInfo: ["tweet": retweet])
         } catch {
-            print("Retweet failed in FollowingsTweetView")
+            // Refresh original tweet from server to restore correct state on failure
+            print("❌ [Retweet] Retweet failed for tweet: \(tweet.mid), error: \(error), refreshing from server")
+            if let refreshedTweet = try? await hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId) {
+                await MainActor.run {
+                    try? tweet.update(from: refreshedTweet)
+                    print("🔄 [Retweet] Restored original tweet from server, retweetCount: \(tweet.retweetCount ?? 0)")
+                }
+            }
+            throw error
         }
     }
     
@@ -57,18 +219,17 @@ struct TweetActionButtonsView: View {
                     onCommentTap?() ?? { showCommentCompose = true }()
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: "bubble.left")
                         .frame(width: 20)
-                    if let count = tweet.commentCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.commentCount ?? 0) > 0 ? formatCount(tweet.commentCount!) : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             Spacer(minLength: 12)
-            // Retweet button
+            // Retweet / forward button
             DebounceButton(
                 cooldownDuration: 0.5,
                 enableAnimation: true,
@@ -77,24 +238,54 @@ struct TweetActionButtonsView: View {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
+                    print("🔵 [Retweet Button] Button pressed for tweet: \(tweet.mid), author: \(tweet.authorId)")
+                    
                     Task {
+                        // Store original count for optimistic update
+                        let originalCount = tweet.retweetCount ?? 0
+                        
+                        // Optimistic UI update - increment retweet count immediately on MainActor
+                        // This ensures instant feedback before any network calls (non-blocking)
+                        await MainActor.run {
+                            tweet.retweetCount = originalCount + 1
+                            print("🔄 [Retweet] Optimistically incremented count to: \(tweet.retweetCount ?? 0) for tweet: \(tweet.mid)")
+                        }
+                        
+                        print("🔄 [Retweet Task] Starting async task for tweet: \(tweet.mid), author: \(tweet.authorId)")
+                        
                         do {
-                            try await retweet(tweet)
+                            // Use the tweet instance we already have (user tapped the button, so tweet is there)
+                            // Note: optimistic update already happened above
+                            try await retweet(tweet: tweet)
                         } catch {
-                            print("reTweet failed. \(tweet)")
+                            print("❌ [Retweet] Retweet failed for tweet: \(tweet.mid), error: \(error)")
+                            // Note: retweet() function already refreshes from server on failure, so no manual rollback needed
+                            
+                            // Show error toast only after all retries are exhausted
+                            // Note: uploadTweet() uses withRetry() which does 2 retries internally,
+                            // so this error is only reached after final retry fails
+                            await MainActor.run {
+                                showToast = true
+                                toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                                toastType = .error
+                                
+                                // Show error toast for 3 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                    showToast = false
+                                }
+                            }
                         }
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: "arrow.2.squarepath")
                         .frame(width: 20)
-                    if let count = tweet.retweetCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             Spacer(minLength: 12)
             // Like button
@@ -111,6 +302,7 @@ struct TweetActionButtonsView: View {
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
                         let originalFavoriteCount = tweet.favoriteCount ?? 0
                         let originalAppUserFavoriteCount = hproseInstance.appUser.favoritesCount ?? 0
+                        let originalFavorites = tweet.favorites // Save original favorites array
                         
                         // Optimistic UI update - only after debounce check passes
                         var newFavorites = tweet.favorites ?? [false, false, false]
@@ -154,7 +346,7 @@ struct TweetActionButtonsView: View {
                         } catch {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
-                                self.tweet.favorites = tweet.favorites
+                                self.tweet.favorites = originalFavorites
                                 self.tweet.favoriteCount = originalFavoriteCount
                                 hproseInstance.appUser.favoritesCount = originalAppUserFavoriteCount
                             }
@@ -174,15 +366,14 @@ struct TweetActionButtonsView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
                         .frame(width: 20)
-                    if let count = tweet.favoriteCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             Spacer(minLength: 12)
             // Bookmark button
@@ -199,6 +390,7 @@ struct TweetActionButtonsView: View {
                         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
                         let originalBookmarkCount = tweet.bookmarkCount ?? 0
                         let originalAppUserBookmarkCount = hproseInstance.appUser.bookmarksCount ?? 0
+                        let originalFavorites = tweet.favorites // Save original favorites array
                         
                         // Optimistic UI update - only after debounce check passes
                         var newFavorites = tweet.favorites ?? [false, false, false]
@@ -242,7 +434,7 @@ struct TweetActionButtonsView: View {
                         } catch {
                             // Rollback optimistic updates on failure
                             await MainActor.run {
-                                self.tweet.favorites = tweet.favorites
+                                self.tweet.favorites = originalFavorites
                                 self.tweet.bookmarkCount = originalBookmarkCount
                                 hproseInstance.appUser.bookmarksCount = originalAppUserBookmarkCount
                             }
@@ -262,33 +454,69 @@ struct TweetActionButtonsView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
                         .frame(width: 20)
-                    if let count = tweet.bookmarkCount, count > 0 {
-                        Text("\(count)")
-                            .frame(minWidth: 20, alignment: .leading)
-                    }
+                    Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
                 }
-                .frame(width: 48, alignment: .leading)
+                .frame(width: 52, alignment: .leading)
             }
             // Share button
             Spacer(minLength: 16)
-            DebounceButton(
-                cooldownDuration: 0.3,
-                enableAnimation: true,
-                enableVibration: false
-            ) {
-                showShareSheet = true
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .frame(width: 20)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+            ZStack {
+                DebounceButton(
+                    cooldownDuration: 0.3,
+                    enableAnimation: true,
+                    enableVibration: false
+                ) {
+                    // Show spinner immediately when button is tapped (synchronous on main thread)
+                    isPreparingShare = true
+                    
+                    Task {
+                        print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
+                        
+                        // If we don't have a preloaded preview, generate it now
+                        if attachmentPreviewImage == nil {
+                            print("DEBUG: [SHARE] No preloaded preview, generating now...")
+                            
+                            // Generate preview (will return quickly if it fails or succeeds)
+                            let preview = await loadAttachmentPreviewImage()
+                            
+                            await MainActor.run {
+                                attachmentPreviewImage = preview
+                                print("DEBUG: [SHARE] Preview image generated: \(preview != nil ? "YES" : "NO")")
+                            }
+                        } else {
+                            print("DEBUG: [SHARE] Using preloaded preview")
+                        }
+                        
+                        // Open sheet with preview (if available)
+                        await MainActor.run {
+                            let items = shareActivityItems()
+                            print("DEBUG: [SHARE] Opening sheet with items, count: \(items.count)")
+                            shareSheetItems = ShareSheetData(items: items)
+                            // Don't hide spinner here - wait for sheet to actually appear
+                        }
+                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .frame(width: 20)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .opacity(isPreparingShare ? 0.3 : 1.0)
+                }
+                
+                // Spinner overlay directly over share button
+                if isPreparingShare {
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .progressViewStyle(CircularProgressViewStyle(tint: .themeSecondaryText))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
         .foregroundColor(.themeSecondaryText)
-        .padding(.trailing, 8)
-        .padding(.leading, 0)
         .sheet(isPresented: $showCommentCompose) {
             if let commentsVM = commentsVM {
                 CommentComposeView(tweet: tweet, commentsVM: commentsVM)
@@ -297,13 +525,63 @@ struct TweetActionButtonsView: View {
             }
         }
         .onChange(of: showCommentCompose) { _, isPresented in
-            // Video management is now handled locally per grid
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
+            }
         }
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(activityItems: [createCustomShareItem(), createCustomShareImage()])
+        .sheet(item: $shareSheetItems, onDismiss: {
+            // Reset state when sheet is dismissed
+            attachmentPreviewImage = nil
+            isPreparingShare = false
+            print("DEBUG: [SHARE] Sheet dismissed, state cleared")
+            onShareVisibilityChange?(false)
+            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+        }) { sheetData in
+            let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
+            onShareVisibilityChange?(true)
+            return ZStack {
+                ShareSheet(activityItems: sheetData.items)
+                
+                // Show loading overlay if still generating preview
+                if isPreparingShare {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                    
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        
+                        Text("Generating preview...")
+                            .foregroundColor(.white)
+                            .font(.headline)
+                    }
+                    .padding(32)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(16)
+                }
+            }
+            .onAppear {
+                // Hide spinner only when share sheet actually appears
+                isPreparingShare = false
+                print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+            }
+            .onDisappear {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+            }
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .onChange(of: showLoginSheet) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "loginSheet", source: "TweetActionButtonsView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "loginSheet", source: "TweetActionButtonsView")
+            }
         }
         .overlay(
             // Toast message overlay
@@ -317,47 +595,642 @@ struct TweetActionButtonsView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: showToast)
         )
+        .onAppear {
+            // DISABLED: Preload attachment preview causes UI freezing when many video tweets are visible
+            // Preview will be generated on-demand when share button is tapped instead
+            // preloadAttachmentPreview()
+        }
     }
 
     private func createCustomShareItem() -> CustomShareItem {
         let shareText = tweetShareText(tweet)
-        return CustomShareItem(shareText: shareText, tweet: tweet)
+        return CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
     }
     
-    private func createCustomShareImage() -> UIImage {
-        // Create a simple app icon image
-        let size = CGSize(width: 120, height: 120) // Square app icon size
-        let renderer = UIGraphicsImageRenderer(size: size)
-        
-        return renderer.image { context in
-            let rect = CGRect(origin: .zero, size: size)
-            
-            // Draw the actual app icon
+    private func shareActivityItems() -> [Any] {
+        var items: [Any] = [createCustomShareItem()]
+        print("DEBUG: [SHARE] Creating share items, preview image: \(attachmentPreviewImage != nil ? "YES" : "NO")")
+        if let previewImage = attachmentPreviewImage {
+            items.append(CustomShareImage(image: previewImage))
+            print("DEBUG: [SHARE] Added CustomShareImage to share items")
+        } else {
+            // No attachment preview - use app icon as default
             if let appIcon = UIImage(named: "ic_splash") {
-                let iconSize = CGSize(width: 80, height: 80)
-                let iconRect = CGRect(
-                    x: rect.midX - iconSize.width / 2,
-                    y: rect.midY - iconSize.height / 2,
-                    width: iconSize.width,
-                    height: iconSize.height
-                )
-                appIcon.draw(in: iconRect)
+                items.append(CustomShareImage(image: appIcon))
+                print("DEBUG: [SHARE] Added app icon as default image (no attachments)")
             } else {
-                // Fallback to bird emoji if app icon not found
-                let iconAttributes: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: 40),
-                    .foregroundColor: UIColor.black
-                ]
-                let iconString = NSAttributedString(string: "😊", attributes: iconAttributes)
-                let iconStringSize = iconString.size()
-                let iconStringRect = CGRect(
-                    x: rect.midX - iconStringSize.width / 2,
-                    y: rect.midY - iconStringSize.height / 2,
-                    width: iconStringSize.width,
-                    height: iconStringSize.height
-                )
-                iconString.draw(in: iconStringRect)
+                print("DEBUG: [SHARE] No preview image to share and app icon not found")
             }
+        }
+        return items
+    }
+    
+    private func cachedAttachmentBaseURL(for sourceTweet: Tweet) -> URL? {
+        if let base = sourceTweet.author?.baseUrl {
+            return base
+        }
+        let author = User.getInstance(mid: sourceTweet.authorId)
+        if let base = author.baseUrl {
+            return base
+        }
+        if let appUserBase = hproseInstance.appUser.baseUrl {
+            return appUserBase
+        }
+        return URL(string: AppConfig.baseUrl)
+    }
+    
+    private func loadAttachmentPreviewImage() async -> UIImage? {
+        print("DEBUG: [SHARE] loadAttachmentPreviewImage called for tweet: \(tweet.mid)")
+        print("DEBUG: [SHARE] Tweet has attachments: \(tweet.attachments?.count ?? 0)")
+        print("DEBUG: [SHARE] Tweet originalTweetId: \(tweet.originalTweetId ?? "nil")")
+        
+        guard let sourceTweet = await resolveSourceTweetWithAttachments() else {
+            print("DEBUG: [SHARE] No source tweet with attachments found")
+            return nil
+        }
+        
+        print("DEBUG: [SHARE] Source tweet found: \(sourceTweet.mid), attachments: \(sourceTweet.attachments?.count ?? 0)")
+        
+        guard let attachment = sourceTweet.attachments?.first else {
+            print("DEBUG: [SHARE] No first attachment found")
+            return nil
+        }
+        
+        print("DEBUG: [SHARE] First attachment type: \(attachment.type), mid: \(attachment.mid)")
+        
+        let baseURL = await resolveAttachmentBaseURL(for: sourceTweet)
+        print("DEBUG: [SHARE] Resolved baseURL: \(baseURL?.absoluteString ?? "nil")")
+        
+        switch attachment.type {
+        case .image:
+            print("DEBUG: [SHARE] Processing image attachment")
+            var fullImage: UIImage?
+            
+            if let cached = ImageCacheManager.shared.getCachedCompressedImage(forMid: attachment.mid) {
+                print("DEBUG: [SHARE] Found cached image")
+                fullImage = cached
+            } else if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
+                print("DEBUG: [SHARE] Loading image from URL: \(url.absoluteString)")
+                fullImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment)
+                print("DEBUG: [SHARE] Image loaded: \(fullImage != nil ? "YES" : "NO")")
+            }
+            
+            // Crop to center square for preview
+            if let image = fullImage {
+                let croppedImage = cropToCenter(image: image)
+                print("DEBUG: [SHARE] Image cropped to center")
+                return croppedImage
+            }
+            return nil
+        case .video, .hls_video:
+            print("DEBUG: [SHARE] Processing video attachment, type: \(attachment.type)")
+            if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
+                print("DEBUG: [SHARE] Generating video preview from URL: \(url.absoluteString)")
+                let isHLS = attachment.type == .hls_video
+                let preview = await generateVideoPreviewImage(for: url, isHLS: isHLS)
+                print("DEBUG: [SHARE] Video preview generated: \(preview != nil ? "YES" : "NO")")
+                return preview
+            }
+        default:
+            print("DEBUG: [SHARE] Attachment type not supported: \(attachment.type)")
+            break
+        }
+        
+        print("DEBUG: [SHARE] No preview image could be generated")
+        return nil
+    }
+    
+    private func resolveSourceTweetWithAttachments() async -> Tweet? {
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            return tweet
+        }
+        if let originalTweetId = tweet.originalTweetId,
+           let originalAuthorId = tweet.originalAuthorId {
+            if let original = Tweet.getInstance(for: originalTweetId),
+               let attachments = original.attachments,
+               !attachments.isEmpty {
+                return original
+            }
+            if let original = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId
+            ),
+               let attachments = original.attachments,
+               !attachments.isEmpty {
+                return original
+            }
+        }
+        return nil
+    }
+    
+    private func resolveAttachmentBaseURL(for sourceTweet: Tweet) async -> URL? {
+        if let cached = cachedAttachmentBaseURL(for: sourceTweet) {
+            return cached
+        }
+        if let user = try? await hproseInstance.fetchUser(sourceTweet.authorId),
+           let base = user.baseUrl {
+            return base
+        }
+        return await MainActor.run {
+            hproseInstance.appUser.baseUrl
+        } ?? URL(string: AppConfig.baseUrl)
+    }
+    
+    private func resolvedAttachmentURL(for attachment: MimeiFileType, baseURL: URL?) -> URL? {
+        if let urlString = attachment.url,
+           let url = URL(string: urlString),
+           url.scheme != nil {
+            return url
+        }
+        if let urlString = attachment.url,
+           let base = baseURL {
+            return URL(string: urlString, relativeTo: base) ?? base.appendingPathComponent(urlString)
+        }
+        if let baseURL = baseURL {
+            return attachment.getUrl(baseURL)
+        }
+        return nil
+    }
+    
+    private func generateVideoPreviewImage(for url: URL, isHLS: Bool = false) async -> UIImage? {
+        print("DEBUG: [SHARE] Starting video preview generation for: \(url.absoluteString), isHLS: \(isHLS)")
+        let startTime = Date()
+        
+        // Extract mediaID from URL
+        let mediaID = extractMediaID(from: url)
+        print("DEBUG: [SHARE] Extracted mediaID: \(mediaID)")
+        
+        // If we're in fullscreen, try to use the fullscreen singleton player first
+        if isFullScreen,
+           let fullPlayer = FullScreenVideoManager.shared.singletonPlayer,
+           let fullItem = fullPlayer.currentItem {
+            print("DEBUG: [SHARE] Fullscreen context detected, trying singleton player for preview")
+            let duration = try? await fullItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                let currentTime = CMTimeGetSeconds(fullItem.currentTime())
+                print("DEBUG: [SHARE] Fullscreen player duration: \(durationSeconds)s, currentTime: \(currentTime)s")
+                
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    print("DEBUG: [SHARE] Capturing fullscreen frame at \(captureTime)s")
+                    if let image = await captureFrameFromPlayer(fullPlayer, at: captureTime) {
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        print("DEBUG: [SHARE] Fullscreen preview generated from singleton player in \(elapsed)s")
+                        return image
+                    }
+                }
+            }
+        }
+        
+        // Determine the cache key to use based on context
+        // When in TweetDetailView, the player is cached with "tweetDetail_\(mid)" key
+        let cacheKey: String
+        if isInDetailView {
+            cacheKey = "tweetDetail_\(mediaID)"
+            print("DEBUG: [SHARE] In TweetDetailView context, using cache key: \(cacheKey)")
+        } else {
+            cacheKey = mediaID
+            print("DEBUG: [SHARE] In feed/grid context, using cache key: \(cacheKey)")
+        }
+        
+        // For HLS videos, try to use cached player first
+        if isHLS {
+            print("DEBUG: [SHARE] HLS video detected, checking for cached player with key: \(cacheKey)...")
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: cacheKey),
+               let playerItem = cachedPlayer.currentItem {
+                print("DEBUG: [SHARE] Found cached player for HLS video")
+                
+                // Check if player has buffered data
+                let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                print("DEBUG: [SHARE] Cached player has buffered data: \(hasBufferedData)")
+                
+                if hasBufferedData && playerItem.status == .readyToPlay {
+                    let duration = try? await playerItem.asset.load(.duration)
+                    if let duration = duration {
+                        let durationSeconds = CMTimeGetSeconds(duration)
+                        print("DEBUG: [SHARE] Using cached HLS player, duration: \(durationSeconds)s")
+                        
+                        if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                            // Get current playback position
+                            let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+                            print("DEBUG: [SHARE] Current playback position: \(String(format: "%.2f", currentTime))s")
+                            
+                            // Use current position, or fallback to 1s if at beginning
+                            let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                            print("DEBUG: [SHARE] Capturing frame at \(String(format: "%.2f", captureTime))s")
+                            
+                            // Capture the frame at current position
+                            if let image = await captureFrameFromPlayer(cachedPlayer, at: captureTime) {
+                                let elapsed = Date().timeIntervalSince(startTime)
+                                print("DEBUG: [SHARE] HLS preview generated from player in \(String(format: "%.2f", elapsed))s")
+                                return image
+                            }
+                        }
+                    }
+                }
+            }
+            print("DEBUG: [SHARE] No usable cached player for HLS video, skipping preview")
+            return nil
+        }
+        
+        // For regular videos, try to use cached player first to get current position
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: cacheKey),
+           let playerItem = cachedPlayer.currentItem {
+            print("DEBUG: [SHARE] Found cached player for regular video with key: \(cacheKey)")
+            
+            let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+            print("DEBUG: [SHARE] Current playback position: \(String(format: "%.2f", currentTime))s")
+            
+            let duration = try? await playerItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    // Use current position, or fallback to 1s if at beginning
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    print("DEBUG: [SHARE] Capturing frame at \(String(format: "%.2f", captureTime))s")
+                    
+                    if let image = await captureFrameFromPlayer(cachedPlayer, at: captureTime) {
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        print("DEBUG: [SHARE] Regular video preview generated from player in \(String(format: "%.2f", elapsed))s")
+                        return image
+                    }
+                }
+            }
+        }
+        
+        // Fallback: use asset loading if no cached player
+        do {
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid)
+            
+            // Load duration and tracks to ensure video is ready
+            async let durationLoad = asset.load(.duration)
+            async let tracksLoad = asset.load(.tracks)
+            
+            let (duration, tracks) = try await (durationLoad, tracksLoad)
+            let durationSeconds = CMTimeGetSeconds(duration)
+            
+            print("DEBUG: [SHARE] Video duration: \(durationSeconds)s, tracks: \(tracks.count)")
+            
+            // Check if video has valid duration
+            guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else {
+                print("DEBUG: [SHARE] Invalid video duration: \(durationSeconds)")
+                return nil
+            }
+            
+            // Check if video has tracks
+            guard !tracks.isEmpty else {
+                print("DEBUG: [SHARE] Video has no tracks, cannot generate preview")
+                return nil
+            }
+            
+            // Fallback: Capture at 1 second, or at 10% of duration if video is shorter than 10 seconds
+            let captureTime = min(1.0, durationSeconds * 0.1)
+            print("DEBUG: [SHARE] Attempting fallback capture at \(String(format: "%.2f", captureTime))s")
+            
+            if let image = try? await captureFrame(from: asset, at: captureTime) {
+                let elapsed = Date().timeIntervalSince(startTime)
+                print("DEBUG: [SHARE] Video preview generated successfully at \(String(format: "%.2f", captureTime))s in \(String(format: "%.2f", elapsed))s")
+                return image
+            }
+            
+            print("DEBUG: [SHARE] Failed to capture frame at \(String(format: "%.2f", captureTime))s")
+        } catch {
+            let elapsed = Date().timeIntervalSince(startTime)
+            print("DEBUG: [SHARE] Failed to load asset for preview after \(String(format: "%.2f", elapsed))s: \(error.localizedDescription)")
+        }
+        return nil
+    }
+    
+    private func extractMediaID(from url: URL) -> String {
+        // Extract mediaID from URL path
+        // Format: http://baseurl/ipfs/MEDIAID or http://baseurl/ipfs/MEDIAID/master.m3u8
+        let pathComponents = url.pathComponents
+        if let ipfsIndex = pathComponents.firstIndex(of: "ipfs"),
+           ipfsIndex + 1 < pathComponents.count {
+            return pathComponents[ipfsIndex + 1]
+        }
+        // Fallback: use last path component
+        return url.lastPathComponent
+    }
+    
+    private func captureFrameFromPlayer(_ player: AVPlayer, at seconds: Double) async -> UIImage? {
+        print("DEBUG: [SHARE] Attempting to capture frame from player at \(seconds)s")
+        
+        guard let playerItem = player.currentItem else {
+            print("DEBUG: [SHARE] Player has no current item")
+            return nil
+        }
+        
+        // AVPlayer operations must be on main thread
+        // Note: CVBuffer is not Sendable in Swift 6, but all operations happen within MainActor
+        // and the pixel buffer is converted to UIImage (Sendable) before leaving this context
+        let videoOutput = await MainActor.run { () -> AVPlayerItemVideoOutput in
+            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ])
+            playerItem.add(output)
+            return output
+        }
+        
+        defer {
+            Task { @MainActor in
+                playerItem.remove(videoOutput)
+            }
+        } // swiftlint:disable:this line_length
+        
+        // Try capturing at different time positions: 0.1s, 0.3s, 0.5s from the requested time
+        // This increases the chance of finding a valid frame, especially for HLS videos
+        let retryTimes = [0.1, 0.3, 0.5]
+        
+        for retryOffset in retryTimes {
+            let targetTime = seconds + retryOffset
+            print("DEBUG: [SHARE] Attempting capture at \(targetTime)s (offset: \(retryOffset)s)")
+            
+            let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600) // 0.1s tolerance for faster seeking
+            let targetCMTime = CMTime(seconds: targetTime, preferredTimescale: 600)
+            
+            // CRITICAL: Wait for seek to complete using completion handler
+            // This is especially important for HLS videos where segments need to load
+            let seekCompleted = await MainActor.run { () -> Task<Bool, Never> in
+                return Task {
+                    await withCheckedContinuation { continuation in
+                        player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
+                            continuation.resume(returning: finished)
+                        }
+                    }
+                }
+            }
+            
+            let didSeek = await seekCompleted.value
+            guard didSeek else {
+                print("DEBUG: [SHARE] Seek failed at \(targetTime)s, trying next position...")
+                continue
+            }
+            
+            print("DEBUG: [SHARE] Seek completed to \(targetTime)s, waiting for segment to load...")
+            
+            // Wait for segment to load at this time position
+            var attempts = 0
+            let maxAttempts = 50 // 5 seconds total (50 * 0.1s)
+            var hasDataAtTime = false
+            
+            while attempts < maxAttempts {
+                hasDataAtTime = await MainActor.run { () -> Bool in
+                    let currentTime = playerItem.currentTime()
+                    let loadedRanges = playerItem.loadedTimeRanges
+                    
+                    // Check if current time is within any loaded range
+                    for timeRangeValue in loadedRanges {
+                        let range = timeRangeValue.timeRangeValue
+                        let start = range.start
+                        let end = CMTimeAdd(start, range.duration)
+                        // Check if currentTime is within [start, end)
+                        if CMTimeCompare(currentTime, start) >= 0 && CMTimeCompare(currentTime, end) < 0 {
+                            return true
+                        }
+                    }
+                    return false
+                }
+                
+                if hasDataAtTime {
+                    print("DEBUG: [SHARE] Segment loaded at \(targetTime)s after \(attempts) attempts")
+                    break
+                }
+                
+                // Wait 0.1s before checking again
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                attempts += 1
+            }
+            
+            if !hasDataAtTime {
+                print("DEBUG: [SHARE] Timeout waiting for segment at \(targetTime)s, trying next position...")
+                continue
+            }
+            
+            // Additional wait after segment is loaded to ensure pixel buffer is ready
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
+            
+            // Try to capture frame at this time position
+            // CRITICAL: All CVBuffer operations must happen within MainActor.run to avoid Sendable warnings
+            // The pixel buffer is converted to UIImage (which is Sendable) before leaving this context
+            let initialImage = await MainActor.run { () -> UIImage? in
+                let currentTime = playerItem.currentTime()
+                print("DEBUG: [SHARE] Attempting capture at seeked time: \(CMTimeGetSeconds(currentTime))s")
+                
+                // Check if we have a pixel buffer at this time
+                guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else {
+                    print("DEBUG: [SHARE] No pixel buffer available at current time")
+                    return nil
+                }
+                
+                // Copy the pixel buffer - CVPixelBuffer is not Sendable in Swift 6
+                // We must convert it to UIImage (Sendable) within this MainActor context
+                guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
+                    print("DEBUG: [SHARE] Failed to copy pixel buffer")
+                    return nil
+                }
+                
+                // Convert pixel buffer to UIImage on main thread (CVBuffer operations must be on main thread)
+                // This conversion happens synchronously within MainActor context, so CVBuffer never escapes
+                // The pixelBuffer is never passed across concurrency boundaries
+                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                let context = CIContext(options: [.useSoftwareRenderer: false]) // Use hardware acceleration when possible
+                
+                guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+                    print("DEBUG: [SHARE] Failed to create CGImage from pixel buffer")
+                    return nil
+                }
+                
+                // Convert to UIImage - UIImage is Sendable, so we can pass it to background task
+                // The pixelBuffer (CVPixelBuffer/CVBuffer) is never referenced after this point
+                let image = UIImage(cgImage: cgImage)
+                // Ensure pixelBuffer is fully deallocated before returning
+                _ = pixelBuffer  // Explicitly reference to ensure it's not captured in closure
+                return image
+            }
+            
+            // If we successfully captured a frame, process it and return
+            if let initialImage = initialImage {
+                print("DEBUG: [SHARE] Successfully captured frame at \(targetTime)s (offset: \(retryOffset)s)")
+                
+                // CRITICAL: Move heavy image processing to background thread to prevent UI freeze
+                // UIImage is Sendable, so safe to pass to detached task
+                return await Task.detached(priority: .userInitiated) { [initialImage] in
+                    // Re-render without alpha channel (off main thread using UIGraphicsImageRenderer for better performance)
+                    let renderer = UIGraphicsImageRenderer(size: initialImage.size)
+                    let cleanImage = renderer.image { _ in
+                        initialImage.draw(in: CGRect(origin: .zero, size: initialImage.size))
+                    }
+                    
+                    // Crop to center and resize to 270x270 (off main thread)
+                    // cropToCenter is pure image processing - safe to call off main thread
+                    let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
+                    
+                    print("DEBUG: [SHARE] Successfully captured and cropped frame from player to 270x270")
+                    return croppedImage
+                }.value
+            } else {
+                print("DEBUG: [SHARE] Failed to capture at \(targetTime)s, trying next position...")
+            }
+        }
+        
+        print("DEBUG: [SHARE] Failed to capture frame at all retry positions (0.1s, 0.3s, 0.5s)")
+        return nil
+    }
+    
+    private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 480, height: 480)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        
+        print("DEBUG: [SHARE] Generating CGImage at time: \(seconds)s")
+        
+        let cgImage = try await withCheckedThrowingContinuation { continuation in
+            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { requestedTime, image, actualTime, result, error in
+                print("DEBUG: [SHARE] Frame generation result: \(result.rawValue), requested: \(CMTimeGetSeconds(requestedTime)), actual: \(CMTimeGetSeconds(actualTime))")
+                
+                switch result {
+                case .succeeded:
+                    if let image = image {
+                        continuation.resume(returning: image)
+                    } else {
+                        continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -2, userInfo: [NSLocalizedDescriptionKey: "Image is nil"]))
+                    }
+                case .failed:
+                    let errorDesc = error?.localizedDescription ?? "Unknown error"
+                    print("DEBUG: [SHARE] CGImage generation failed: \(errorDesc)")
+                    continuation.resume(throwing: error ?? NSError(domain: "AttachmentPreview", code: -3, userInfo: [NSLocalizedDescriptionKey: "Generation failed"]))
+                case .cancelled:
+                    print("DEBUG: [SHARE] CGImage generation cancelled")
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -4, userInfo: [NSLocalizedDescriptionKey: "Cancelled"]))
+                @unknown default:
+                    print("DEBUG: [SHARE] CGImage generation unknown result")
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -5, userInfo: [NSLocalizedDescriptionKey: "Unknown result"]))
+                }
+            }
+        }
+        
+        let image = UIImage(cgImage: cgImage)
+        
+        // Re-render without alpha channel to avoid iOS warning, then crop
+        UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        let imageWithoutAlpha = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        guard let cleanImage = imageWithoutAlpha else {
+            print("DEBUG: [SHARE] Failed to remove alpha, using original")
+            return cropToCenter(image: image, targetSize: 270)
+        }
+        
+        // Crop to center and resize to 270x270
+        let croppedImage = cropToCenter(image: cleanImage, targetSize: 270)
+        return croppedImage
+    }
+    
+    // Mark as nonisolated since this is pure image processing - safe to call from any thread
+    nonisolated private func cropToCenter(image: UIImage, targetSize: CGFloat = 270) -> UIImage {
+        let size = image.size
+        let scale = image.scale
+        
+        // Determine the crop size (square based on the shorter dimension)
+        let cropSize = min(size.width, size.height)
+        
+        // Calculate the crop rect (centered)
+        let cropRect = CGRect(
+            x: (size.width - cropSize) / 2,
+            y: (size.height - cropSize) / 2,
+            width: cropSize,
+            height: cropSize
+        )
+        
+        // Create a scaled crop rect for the CGImage
+        let scaledCropRect = CGRect(
+            x: cropRect.origin.x * scale,
+            y: cropRect.origin.y * scale,
+            width: cropRect.size.width * scale,
+            height: cropRect.size.height * scale
+        )
+        
+        guard let cgImage = image.cgImage?.cropping(to: scaledCropRect) else {
+            return image
+        }
+        
+        let croppedImage = UIImage(cgImage: cgImage, scale: scale, orientation: image.imageOrientation)
+        
+        // Resize to target size (270x270)
+        let targetRect = CGRect(x: 0, y: 0, width: targetSize, height: targetSize)
+        UIGraphicsBeginImageContextWithOptions(CGSize(width: targetSize, height: targetSize), true, 1.0)
+        defer { UIGraphicsEndImageContext() }
+        
+        croppedImage.draw(in: targetRect)
+        guard let resizedImage = UIGraphicsGetImageFromCurrentImageContext() else {
+            return croppedImage
+        }
+        
+        return resizedImage
+    }
+    
+    private func composeAttachmentTypeText(for tweet: Tweet) -> String {
+        // Get attachments from the tweet or its original tweet
+        var attachments: [MimeiFileType]?
+        
+        if let tweetAttachments = tweet.attachments, !tweetAttachments.isEmpty {
+            attachments = tweetAttachments
+        } else if let originalTweetId = tweet.originalTweetId,
+                  let original = Tweet.getInstance(for: originalTweetId),
+                  let originalAttachments = original.attachments,
+                  !originalAttachments.isEmpty {
+            attachments = originalAttachments
+        }
+        
+        guard let attachments = attachments, !attachments.isEmpty else {
+            return ""
+        }
+        
+        // Get first 3 attachment types
+        let firstThree = Array(attachments.prefix(3))
+        var typeTexts: [String] = []
+        
+        for attachment in firstThree {
+            switch attachment.type {
+            case .image:
+                typeTexts.append("📷 Image")
+            case .video, .hls_video:
+                typeTexts.append("🎬 Video")
+            case .audio:
+                typeTexts.append("🎵 Audio")
+            case .pdf:
+                typeTexts.append("📄 PDF")
+            case .word:
+                typeTexts.append("📝 Word")
+            case .excel:
+                typeTexts.append("📊 Excel")
+            case .ppt:
+                typeTexts.append("📊 PPT")
+            case .zip:
+                typeTexts.append("🗜️ Zip")
+            case .txt:
+                typeTexts.append("📄 Text")
+            case .html:
+                typeTexts.append("🌐 HTML")
+            case .unknown:
+                typeTexts.append("📎 File")
+            }
+        }
+        
+        // Add count if there are more attachments
+        if attachments.count > 3 {
+            let remaining = attachments.count - 3
+            return typeTexts.joined(separator: ", ") + " +\(remaining) more"
+        } else {
+            return typeTexts.joined(separator: ", ")
         }
     }
     
@@ -366,33 +1239,51 @@ struct TweetActionButtonsView: View {
         var shareText = ""
         
         // Priority: title > content > attachment types
-        if let title = tweet.title, !title.isEmpty {
+        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use title if available
             let maxLength = 40
             let truncatedTitle = title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
             shareText += truncatedTitle
-        } else if let content = tweet.content, !content.isEmpty {
+        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use content if title is not available
             let maxLength = 40
             // Replace newlines with spaces in the content
-            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
             let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
             shareText += truncatedContent
-        } else if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Use attachment types if neither title nor content is available
-            let attachmentTypes = attachments.map { $0.type.rawValue }.joined(separator: ", ")
-            shareText += attachmentTypes
+        } else {
+            // No title or content, use attachment types
+            shareText += composeAttachmentTypeText(for: tweet)
         }
         
-        // Add URL
-        var text = hproseInstance.domainToShare
-        text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
+        // Add two newlines after text if there is text
+        if !shareText.isEmpty {
+            shareText += "\n\n"
+        }
+        
+        // Add URL - use different format based on context
+        let urlText: String
+        if isInDetailView {
+            // In detail view: use author's baseUrl with entry format
+            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
+            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
+        } else {
+            // In feed/grid: use traditional format
+            // Ensure domainToShare has http:// protocol prefix if it doesn't already have a protocol
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            var text = domain
+            text.append("/tweet/\(tweet.mid)/\(tweet.authorId)")
+            urlText = text
+        }
         
         // Only add space if there's content before the URL
         if !shareText.isEmpty {
-            shareText += " \(text.trimmingCharacters(in: .whitespacesAndNewlines))"
+            shareText += urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
-            shareText += text.trimmingCharacters(in: .whitespacesAndNewlines)
+            shareText += urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         
         return shareText
@@ -414,10 +1305,12 @@ struct ShareSheet: UIViewControllerRepresentable {
 class CustomShareItem: NSObject, UIActivityItemSource {
     let shareText: String
     let tweet: Tweet
+    let previewImage: UIImage?
     
-    init(shareText: String, tweet: Tweet) {
+    init(shareText: String, tweet: Tweet, previewImage: UIImage?) {
         self.shareText = shareText
         self.tweet = tweet
+        self.previewImage = previewImage
         super.init()
     }
     
@@ -434,29 +1327,93 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         var previewText = ""
         
         // Priority: title > content > attachment types
-        if let title = tweet.title, !title.isEmpty {
+        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use title if available
             let maxLength = 40
             let truncatedTitle = title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
             previewText = truncatedTitle
-        } else if let content = tweet.content, !content.isEmpty {
+            print("DEBUG: [SHARE] Subject from title: \(truncatedTitle)")
+        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Use content if title is not available
             let maxLength = 40
             // Replace newlines with spaces in the content
-            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ")
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
             let truncatedContent = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
             previewText = truncatedContent
-        } else if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Use attachment types if neither title nor content is available
-            let attachmentTypes = attachments.map { $0.type.rawValue }.joined(separator: ", ")
-            previewText = attachmentTypes
+            print("DEBUG: [SHARE] Subject from content: \(truncatedContent)")
+        } else {
+            // No title or content, use attachment types
+            previewText = composeAttachmentTypeText(for: tweet)
+            print("DEBUG: [SHARE] Subject from attachments: '\(previewText)'")
         }
         
         // Add smiling face emoji prefix
         if !previewText.isEmpty {
-            return "😊 Tweet: \(previewText)"
+            let result = "😊 Tweet: \(previewText)"
+            print("DEBUG: [SHARE] Final subject: \(result)")
+            return result
         } else {
+            print("DEBUG: [SHARE] Final subject: 😊 Tweet (fallback)")
             return "😊 Tweet"
         }
+    }
+    
+    @available(iOS 13.0, *)
+    func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
+        let metadata = LPLinkMetadata()
+        
+        print("DEBUG: [SHARE] Creating link metadata for tweet: \(tweet.mid)")
+        print("DEBUG: [SHARE] Tweet title: '\(tweet.title ?? "nil")'")
+        print("DEBUG: [SHARE] Tweet content: '\(tweet.content ?? "nil")'")
+        print("DEBUG: [SHARE] Tweet attachments count: \(tweet.attachments?.count ?? 0)")
+        
+        // Set the title
+        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            metadata.title = title
+            print("DEBUG: [SHARE] Link metadata title from tweet title: \(title)")
+        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let maxLength = 80
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            let truncated = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
+            metadata.title = truncated
+            print("DEBUG: [SHARE] Link metadata title from tweet content: \(truncated)")
+        } else {
+            // No title or content, compose from first 3 attachment types
+            let attachmentText = composeAttachmentTypeText(for: tweet)
+            metadata.title = attachmentText.isEmpty ? nil : attachmentText
+            print("DEBUG: [SHARE] Link metadata title from attachments: '\(attachmentText)'")
+            print("DEBUG: [SHARE] Final metadata.title value: '\(metadata.title ?? "nil")'")
+        }
+        
+        // Set the icon/thumbnail image
+        if let previewImage = previewImage {
+            metadata.iconProvider = NSItemProvider(object: previewImage)
+            metadata.imageProvider = NSItemProvider(object: previewImage)
+            print("DEBUG: [SHARE] Link metadata created with preview image")
+        } else if let appIcon = UIImage(named: "ic_splash") {
+            // No attachments - use app icon as default
+            metadata.iconProvider = NSItemProvider(object: appIcon)
+            metadata.imageProvider = NSItemProvider(object: appIcon)
+            print("DEBUG: [SHARE] Link metadata created with app icon fallback (no attachments)")
+        }
+        
+        return metadata
+    }
+}
+
+class CustomShareImage: NSObject, UIActivityItemSource {
+    let image: UIImage
+    
+    init(image: UIImage) {
+        self.image = image
+        super.init()
+    }
+    
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any {
+        return image
+    }
+    
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
+        return image
     }
 }

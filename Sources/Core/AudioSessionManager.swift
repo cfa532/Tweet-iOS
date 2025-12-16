@@ -13,6 +13,8 @@ import AVFoundation
 class AudioSessionManager {
     static let shared = AudioSessionManager()
     
+    private var isUsingPlaybackCategory = false
+    
     private init() {
         setupAudioSession()
     }
@@ -27,6 +29,7 @@ class AudioSessionManager {
             // It allows mixing with other audio sources and doesn't block communication apps
             try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
             try audioSession.setActive(true)
+            isUsingPlaybackCategory = false
             
             print("DEBUG: [AudioSessionManager] Audio session configured for call-friendly playback")
         } catch {
@@ -39,31 +42,42 @@ class AudioSessionManager {
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
-            // Ensure audio session is active with ambient category
-            if audioSession.category != .ambient {
-                try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            // Force playback category so audio ignores the mute switch in fullscreen/detail modes
+            let desiredOptions: AVAudioSession.CategoryOptions = [.mixWithOthers]
+            if audioSession.category != .playback ||
+                audioSession.mode != .moviePlayback ||
+                audioSession.categoryOptions != desiredOptions {
+                try audioSession.setCategory(.playback, mode: .moviePlayback, options: desiredOptions)
             }
             
-            if !audioSession.isOtherAudioPlaying {
-                try audioSession.setActive(true)
-            }
+            try audioSession.setActive(true)
+            isUsingPlaybackCategory = true
         } catch {
             print("DEBUG: [AudioSessionManager] Failed to activate audio session: \(error)")
         }
     }
     
     /// Deactivate audio session when video playback stops
+    /// NOTE: Does NOT call setActive(false) to avoid interrupting MediaCell playback
+    /// Only changes category back to .ambient while keeping session active
     func deactivateForVideoPlayback() {
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
-            // Only deactivate if no other audio is playing
-            if !audioSession.isOtherAudioPlaying {
-                try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
-                print("DEBUG: [AudioSessionManager] Audio session deactivated")
+            // CRITICAL: Do NOT call setActive(false) as it pauses all players including MediaCell
+            // Instead, just change category back to .ambient while keeping session active
+            // This allows MediaCell (muted videos) to continue playing seamlessly
+            if audioSession.category != .ambient ||
+                audioSession.mode != .default ||
+                !audioSession.categoryOptions.contains(.mixWithOthers) {
+                try audioSession.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
             }
+            // Keep session active - don't deactivate it
+            // try audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            isUsingPlaybackCategory = false
+            print("DEBUG: [AudioSessionManager] Audio session restored to ambient (kept active for MediaCell)")
         } catch {
-            print("DEBUG: [AudioSessionManager] Failed to deactivate audio session: \(error)")
+            print("DEBUG: [AudioSessionManager] Failed to restore audio session: \(error)")
         }
     }
     

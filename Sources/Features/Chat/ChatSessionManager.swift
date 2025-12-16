@@ -12,7 +12,10 @@ class ChatSessionManager: ObservableObject {
     
     // Private property to track badge count since UNUserNotificationCenter doesn't provide a way to read it
     private var currentBadgeCount: Int = 0
-    
+
+    // Track which messages have already been notified to prevent duplicates
+    private var notifiedMessageIds: Set<String> = []
+
     private let chatCacheManager = ChatCacheManager.shared
     private let hproseInstance = HproseInstance.shared
     
@@ -74,7 +77,8 @@ class ChatSessionManager: ObservableObject {
     }
     
     /// Check backend for new messages (for notification purposes only)
-    func checkBackendForNewMessages() async {
+    /// - Parameter suppressNotifications: If true, only updates badge, doesn't trigger notifications
+    func checkBackendForNewMessages(suppressNotifications: Bool = false) async {
         do {
             let newMessages = try await hproseInstance.checkNewMessages()
             
@@ -110,8 +114,10 @@ class ChatSessionManager: ObservableObject {
                                 saveChatSessionToCoreData(updatedSession)
                                 print("[ChatSessionManager] Updated session with new last message for \(partnerId): \(lastMessage.id)")
                                 
-                                // Trigger notification for new message
-                                await triggerNotificationForMessage(lastMessage, partnerId: partnerId)
+                                // Trigger notification for new message (unless suppressed)
+                                if !suppressNotifications {
+                                    await triggerNotificationForMessage(lastMessage, partnerId: partnerId)
+                                }
                             }
                         } else {
                             // No existing session - create new session with the actual message
@@ -127,8 +133,10 @@ class ChatSessionManager: ObservableObject {
                             saveChatSessionToCoreData(newSession)
                             print("[ChatSessionManager] Created new session for \(partnerId) with actual message: \(lastMessage.id)")
                             
-                            // Trigger notification for new message
-                            await triggerNotificationForMessage(lastMessage, partnerId: partnerId)
+                            // Trigger notification for new message (unless suppressed)
+                            if !suppressNotifications {
+                                await triggerNotificationForMessage(lastMessage, partnerId: partnerId)
+                            }
                         }
                     }
                 }
@@ -162,6 +170,7 @@ class ChatSessionManager: ObservableObject {
             print("[ChatSessionManager] Skipping session update for invalid message: \(message.id)")
             return
         }
+        let displayMessage = summarizedMessage(for: message)
         await MainActor.run {
             // Determine the other party's ID (the person we're chatting with)
             let otherPartyId: MimeiId
@@ -191,8 +200,8 @@ class ChatSessionManager: ObservableObject {
                     id: existingSession.id,
                     userId: hproseInstance.appUser.mid,
                     receiptId: otherPartyId,
-                    lastMessage: message,
-                    timestamp: message.timestamp,
+                    lastMessage: displayMessage,
+                    timestamp: displayMessage.timestamp,
                     hasNews: hasNews || existingSession.hasNews
                 )
                 chatSessions[existingIndex] = updatedSession
@@ -202,7 +211,7 @@ class ChatSessionManager: ObservableObject {
                 let newSession = ChatSession.createSession(
                     userId: hproseInstance.appUser.mid,
                     receiptId: otherPartyId,
-                    lastMessage: message,
+                    lastMessage: displayMessage,
                     hasNews: hasNews
                 )
                 chatSessions.append(newSession)
@@ -315,18 +324,53 @@ class ChatSessionManager: ObservableObject {
     // MARK: - Notification Handling
     
     private func triggerNotificationForMessage(_ message: ChatMessage, partnerId: String) async {
-        // Check if app is in background or inactive
-        let appState = UIApplication.shared.applicationState
-        guard appState == .background || appState == .inactive else {
-            print("[ChatSessionManager] App is in foreground, skipping notification for message: \(message.id)")
+        // Prevent duplicate notifications for the same message
+        guard !notifiedMessageIds.contains(message.id) else {
+            print("[ChatSessionManager] ⚠️ Message \(message.id) already notified, skipping duplicate")
             return
         }
-        
+
+        // Check if app is in background or inactive
+        let appState = UIApplication.shared.applicationState
+        print("[ChatSessionManager] 📱 App state: \(appState.rawValue) (0=active, 1=inactive, 2=background)")
+        guard appState == .background || appState == .inactive else {
+            print("[ChatSessionManager] ⚠️ App is in foreground, skipping notification for message: \(message.id)")
+            // Still update badge even when app is in foreground
+            currentBadgeCount += 1
+            let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
+            DispatchQueue.main.async {
+                UNUserNotificationCenter.current().setBadgeCount(newBadge) { error in
+                    if let error = error {
+                        print("[ChatSessionManager] Error setting badge count: \(error)")
+                    } else {
+                        print("[ChatSessionManager] Updated badge count to: \(newBadge > 9 ? "N" : "\(newBadge)")")
+                    }
+                }
+            }
+            return
+        }
+
         // Check notification permission
         let center = UNUserNotificationCenter.current()
+        // Set delegate to NotificationManager so notifications are handled properly
+        center.delegate = NotificationManager.shared
+
         let settings = await center.notificationSettings()
+        print("[ChatSessionManager] 🔔 Notification permission status: \(settings.authorizationStatus.rawValue) (0=notDetermined, 1=denied, 2=authorized, 3=provisional, 4=ephemeral)")
         guard settings.authorizationStatus == .authorized else {
-            print("[ChatSessionManager] No notification permission, skipping notification")
+            print("[ChatSessionManager] ⚠️ No notification permission, skipping notification")
+            // Still update badge even without permission
+            currentBadgeCount += 1
+            let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
+            DispatchQueue.main.async {
+                UNUserNotificationCenter.current().setBadgeCount(newBadge) { error in
+                    if let error = error {
+                        print("[ChatSessionManager] Error setting badge count: \(error)")
+                    } else {
+                        print("[ChatSessionManager] Updated badge count to: \(newBadge > 9 ? "N" : "\(newBadge)")")
+                    }
+                }
+            }
             return
         }
         
@@ -341,12 +385,20 @@ class ChatSessionManager: ObservableObject {
             // Fallback to partnerId if user fetch fails
         }
         
+        // Update badge count BEFORE creating notification
+        currentBadgeCount += 1
+        let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
+
         // Create notification content
         let content = UNMutableNotificationContent()
         content.title = senderName
         content.body = message.content ?? "New message"
         content.sound = .default
-        
+        content.badge = NSNumber(value: newBadge)
+
+        // Set thread identifier to group messages from the same conversation
+        content.threadIdentifier = message.chatSessionId
+
         // Add custom data for handling notification tap
         content.userInfo = [
             "messageId": message.id,
@@ -354,36 +406,66 @@ class ChatSessionManager: ObservableObject {
             "chatSessionId": message.chatSessionId,
             "type": "chat_message"
         ]
-        
+
         // Create notification trigger (immediate)
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
-        
+
         // Create notification request
+        let notificationIdentifier = "chat_message_\(message.id)"
         let request = UNNotificationRequest(
-            identifier: "chat_message_\(message.id)",
+            identifier: notificationIdentifier,
             content: content,
             trigger: trigger
         )
-        
+
+        // Remove any pending notification with the same identifier to prevent duplicates
+        // Don't remove delivered notifications - let them show naturally
+        center.removePendingNotificationRequests(withIdentifiers: [notificationIdentifier])
+
         // Schedule the notification
         do {
             try await center.add(request)
-            print("[ChatSessionManager] Chat notification scheduled for message: \(message.id)")
+            // Mark this message as notified to prevent duplicates
+            notifiedMessageIds.insert(message.id)
+            print("[ChatSessionManager] ✅ Chat notification scheduled for message: \(message.id), badge: \(newBadge)")
         } catch {
-            print("[ChatSessionManager] Error scheduling notification: \(error)")
+            print("[ChatSessionManager] ❌ Error scheduling notification: \(error)")
+            // Don't mark as notified if scheduling failed, so it can be retried
         }
-        
-        // Update badge count
-        currentBadgeCount += 1
-        let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
+
+        // Update badge count on the app icon (also set in notification content above)
         DispatchQueue.main.async {
             UNUserNotificationCenter.current().setBadgeCount(newBadge) { error in
                 if let error = error {
                     print("[ChatSessionManager] Error setting badge count: \(error)")
+                } else {
+                    print("[ChatSessionManager] Updated app badge count to: \(newBadge > 9 ? "N" : "\(newBadge)")")
                 }
             }
         }
         
         print("[ChatSessionManager] Triggered notification for message from \(senderName)")
+    }
+
+    // MARK: - Session Display Helpers
+    private func summarizedMessage(for message: ChatMessage) -> ChatMessage {
+        guard let summary = message.previewText(for: hproseInstance.appUser.mid) else {
+            return message
+        }
+        let trimmedContent = message.content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if summary == trimmedContent {
+            return message
+        }
+        return ChatMessage(
+            id: message.id,
+            authorId: message.authorId,
+            receiptId: message.receiptId,
+            chatSessionId: message.chatSessionId,
+            content: summary,
+            timestamp: message.timestamp,
+            attachments: message.attachments,
+            success: message.success,
+            errorMsg: message.errorMsg
+        )
     }
 }

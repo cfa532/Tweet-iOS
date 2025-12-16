@@ -2,7 +2,7 @@
 //  MediaCell.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/20.
+//  Created by Tomás Hongo on 2025/5/20.
 //
 
 import SwiftUI
@@ -26,19 +26,10 @@ class VideoVisibilityManager: ObservableObject {
 
 // MARK: - MediaCell
 struct MediaCell: View, Equatable {
-    /// Extract mediaID from URL
-    private func extractMediaID(from url: URL) -> String? {
-        let urlString = url.absoluteString
-        // Look for IPFS hash pattern (Qm...)
-        if let range = urlString.range(of: "Qm[A-Za-z0-9]{44}") {
-            return String(urlString[range])
-        }
-        return nil
-    }
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
-    let visibleTweetId: String? // The ID of the visible tweet in feed (for retweets)
+    let isEmbedded: Bool
     
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -49,20 +40,38 @@ struct MediaCell: View, Equatable {
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
-    let showMuteButton: Bool
+    @State private var shouldAutoPlay = false // Track if video should autoplay
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, showMuteButton: Bool = true, isVisible: Bool = false, videoManager: VideoManager, visibleTweetId: String? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager, isEmbedded: Bool = false) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
-        self.visibleTweetId = visibleTweetId
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
-        self.showMuteButton = showMuteButton
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
+        self.isEmbedded = isEmbedded
+        
+        // Initialize shouldAutoPlay based on initial conditions
+        if let attachments = parentTweet.attachments,
+           attachmentIndex >= 0 && attachmentIndex < attachments.count {
+            let attachment = attachments[attachmentIndex]
+            let isVideo = attachment.type == .video || attachment.type == .hls_video
+            if isVideo {
+                if isEmbedded {
+                    // Embedded/quoted tweet preview: allow autoplay for the first attachment only.
+                    self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible && attachmentIndex == 0)
+                } else {
+                    self._shouldAutoPlay = State(initialValue: videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo && isVisible)
+                }
+            } else {
+                self._shouldAutoPlay = State(initialValue: false)
+            }
+        } else {
+            self._shouldAutoPlay = State(initialValue: false)
+        }
     }
     
     private let imageCache = ImageCacheManager.shared
@@ -92,65 +101,76 @@ struct MediaCell: View, Equatable {
             if let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    // Always show video player, no placeholder
-                    videoPlayerView(url: url)
+                    // MediaGrid already sets fixed frame - content should fill parent naturally
+                    videoPlayerViewContent(url: url)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .audio:
                     SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
                         .environmentObject(MuteState.shared)
                         .onTapGesture {
-                            handleTap()
-                        }
-                case .image:
-                    if let image = image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                            .onTapGesture {
+                            if !isEmbedded {
                                 handleTap()
                             }
-                    } else if isLoading {
-                        // Show cached placeholder while loading original image
-                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                            Image(uiImage: cachedImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .overlay(
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                        .scaleEffect(0.8)
-                                        .background(Color.gray.opacity(0.3))
-                                        .clipShape(Circle())
-                                        .padding(4),
-                                    alignment: .topTrailing
-                                )
-                                .onTapGesture {
-                                    handleTap()
-                                }
-                        } else {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                                .scaleEffect(1.2)
-                                .onTapGesture {
-                                    handleTap()
-                                }
                         }
-                    } else {
-                        // Show cached placeholder if available, otherwise gray background
-                        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
-                            Image(uiImage: cachedImage)
+                case .image:
+                    // MediaGrid already sets fixed frame - content should fill parent naturally
+                    // Use .fill to maintain aspect ratio and clip overflow
+                    Group {
+                        if let image = image {
+                            Image(uiImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
-                                .clipped()
-                                .onTapGesture {
-                                    handleTap()
-                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if isLoading {
+                            // Show cached placeholder while loading original image
+                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
+                                Image(uiImage: cachedImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else {
+                                // Reserve space with placeholder color
+                                Color.gray.opacity(0.3)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
                         } else {
-                            Color.gray.opacity(0.3)
-                                .onTapGesture {
-                                    handleTap()
-                                }
+                            // Show cached placeholder if available, otherwise gray background
+                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
+                                Image(uiImage: cachedImage)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else {
+                                // Reserve space with placeholder color
+                                Color.gray.opacity(0.3)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                        }
+                    }
+                    .clipped()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(
+                        // Show loading indicator only when loading and no cached image
+                        Group {
+                            if isLoading, imageCache.getCompressedImage(for: attachment) == nil {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                                    .scaleEffect(1.2)
+                            } else if isLoading {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                                    .background(Color.gray.opacity(0.3))
+                                    .clipShape(Circle())
+                                    .padding(4)
+                            }
+                        },
+                        alignment: isLoading && imageCache.getCompressedImage(for: attachment) != nil ? .topTrailing : .center
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if !isEmbedded {
+                            handleTap()
                         }
                     }
                 default:
@@ -162,7 +182,34 @@ struct MediaCell: View, Equatable {
         }
         .onAppear {
             // Set visibility to true immediately when cell appears
+            // onAppear fires when any portion of the view becomes visible
             isVisible = true
+            
+            // For video attachments, update autoplay state based on current conditions
+            if isVideoAttachment {
+                if isEmbedded {
+                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
+                    print("DEBUG: [MediaCell] onAppear (embedded) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), shouldLoadVideo=\(shouldLoadVideo)")
+                } else {
+                    let managerSays = videoManager.shouldPlayVideo(for: attachment.mid)
+                    shouldAutoPlay = managerSays && shouldLoadVideo
+                    print("DEBUG: [MediaCell] onAppear for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), videoManager=\(managerSays), shouldLoadVideo=\(shouldLoadVideo), currentIndex=\(videoManager.currentVideoIndex), videoMids=\(videoManager.videoMids)")
+                    
+                    // CRITICAL FIX: If this is a new grid that just appeared and has videos,
+                    // ensure VideoManager knows to play the first video
+                    if !managerSays && shouldLoadVideo {
+                        // Check if this video is in the manager's list
+                        if let videoIndex = videoManager.videoMids.firstIndex(of: attachment.mid) {
+                            // This video is in the list but not set to play
+                            // If it's the current index, we should play it
+                            if videoIndex == videoManager.currentVideoIndex {
+                                print("⚠️ [MediaCell] VideoManager has video at current index but shouldPlayVideo=false. Forcing shouldAutoPlay=true")
+                                shouldAutoPlay = true
+                            }
+                        }
+                    }
+                }
+            }
             
             // Load image if not already loaded - ONLY for image attachments
             if attachment.type == .image && image == nil {
@@ -173,7 +220,8 @@ struct MediaCell: View, Equatable {
             // Individual cells just track visibility for playback
         }
         .onDisappear {
-            // Set visibility to false when cell disappears
+            // Set visibility to false immediately when cell disappears
+            // onDisappear fires when the view is scrolled completely off screen
             isVisible = false
             
             // Cancel any ongoing preload tasks
@@ -183,8 +231,27 @@ struct MediaCell: View, Equatable {
             GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(baseUrl.absoluteString)")
         }
         .onChange(of: isVisible) { _, newValue in
-            // Handle visibility changes - image loading is now handled in onAppear
-            // This prevents conflicts with the onAppear block
+            // Update autoplay state when visibility changes for video attachments
+            if isVideoAttachment && newValue {
+                if isEmbedded {
+                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
+                } else {
+                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo
+                }
+                print("DEBUG: [MediaCell] onChange(isVisible) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
+            }
+        }
+        
+        .onChange(of: shouldLoadVideo) { _, newValue in
+            // Update autoplay state when shouldLoadVideo changes for video attachments
+            if isVideoAttachment && isVisible && newValue {
+                if isEmbedded {
+                    shouldAutoPlay = attachmentIndex == 0
+                } else {
+                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid)
+                }
+                print("DEBUG: [MediaCell] onChange(shouldLoadVideo) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
+            }
         }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
@@ -200,18 +267,26 @@ struct MediaCell: View, Equatable {
             MediaBrowserView(
                 tweet: parentTweet,
                 initialIndex: attachmentIndex,
-                sourceTweetId: visibleTweetId ?? parentTweet.mid // Use visibleTweetId if available
+                sourceTweetId: parentTweet.mid
             )
         }
         .onChange(of: showFullScreen) { _, newValue in
             if newValue {
                 // Video is going into full-screen mode
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
+                OverlayVisibilityCoordinator.shared.beginOverlay(
+                    id: "mediaBrowserFullScreen",
+                    source: "MediaCell"
+                )
                 // Reset loading state once fullscreen is presented
                 isOpeningFullScreen = false
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
+                OverlayVisibilityCoordinator.shared.endOverlay(
+                    id: "mediaBrowserFullScreen",
+                    source: "MediaCell"
+                )
             }
         }
     }
@@ -234,10 +309,40 @@ struct MediaCell: View, Equatable {
         isPreloading = false
     }
     
+    private func saveVideoPositionForFullscreen() {
+        // Save current playback position before opening fullscreen
+        // This allows the video to continue from where it was playing in the cell
+        // Get the current time directly from the cached player (more accurate than cached playback info)
+        if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid) {
+            let currentTime = cachedState.player.currentTime()
+            let wasPlaying = cachedState.player.rate > 0
+            
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .fullScreen
+            )
+            print("💾 [MediaCell] Saved video position before opening fullscreen: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+        } else if let playbackInfo = VideoStateCache.shared.getCachedPlaybackInfo(for: attachment.mid) {
+            // Fallback to cached playback info if player is not available
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: playbackInfo.time,
+                wasPlaying: playbackInfo.wasPlaying,
+                context: .fullScreen
+            )
+            print("💾 [MediaCell] Saved video position (fallback) before opening fullscreen: \(playbackInfo.time.seconds)s, wasPlaying: \(playbackInfo.wasPlaying)")
+        }
+    }
+    
     private func handleTap() {
         // Use internal full screen logic
         switch attachment.type {
         case .video, .hls_video:
+            // Save current playback position before opening fullscreen
+            saveVideoPositionForFullscreen()
+            
             // Show loading spinner for videos
             isOpeningFullScreen = true
             // Delay opening fullscreen to allow spinner to render
@@ -258,11 +363,16 @@ struct MediaCell: View, Equatable {
     }
     
     private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { return }
+        guard let url = attachment.getUrl(baseUrl) else { 
+            // If no URL, ensure isLoading is false
+            isLoading = false
+            return 
+        }
         
         // First, try to get cached image immediately
-        if let cachedImage = imageCache.getCompressedImage(for: attachment, baseUrl: baseUrl) {
+        if let cachedImage = imageCache.getCompressedImage(for: attachment) {
             self.image = cachedImage
+            self.isLoading = false
             return
         }
         
@@ -276,8 +386,12 @@ struct MediaCell: View, Equatable {
             attachment: attachment,
             baseUrl: baseUrl
         ) { loadedImage in
-            self.image = loadedImage
-            self.isLoading = false
+            // Completion is already @MainActor, so state updates will happen on main thread
+            // Use Task to ensure SwiftUI view updates properly
+            Task { @MainActor in
+                self.image = loadedImage
+                self.isLoading = false
+            }
         }
     }
     
@@ -289,27 +403,28 @@ struct MediaCell: View, Equatable {
         return lhs.parentTweet.mid == rhs.parentTweet.mid &&
         lhs.attachmentIndex == rhs.attachmentIndex &&
         lhs.aspectRatio == rhs.aspectRatio &&
-        lhs.shouldLoadVideo == rhs.shouldLoadVideo &&
-        lhs.showMuteButton == rhs.showMuteButton
+        lhs.shouldLoadVideo == rhs.shouldLoadVideo
     }
     
     // MARK: - Video Player View
     @ViewBuilder
-    private func videoPlayerView(url: URL) -> some View {
+    private func videoPlayerViewContent(url: URL) -> some View {
         SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
                 parentTweetId: parentTweet.mid,
                 isVisible: isVisible,
                 mediaType: attachment.type,
-                autoPlay: videoManager.shouldPlayVideo(for: attachment.mid),
-                videoManager: videoManager,
+                autoPlay: shouldAutoPlay, // Use state variable instead of computed value
+                videoManager: isEmbedded ? nil : videoManager,
                 onVideoFinished: onVideoFinished,
                 cellAspectRatio: CGFloat(aspectRatio),
                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                 showNativeControls: false,
                 isMuted: muteState.isMuted,
-                onVideoTap: {
+                onVideoTap: isEmbedded ? nil : {
+                    // Save current playback position before opening fullscreen
+                    saveVideoPositionForFullscreen()
                     isOpeningFullScreen = true
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
@@ -318,13 +433,15 @@ struct MediaCell: View, Equatable {
                 },
                 disableAutoRestart: true,
                 shouldLoadVideo: shouldLoadVideo,
-                mode: .mediaCell
+                mode: isEmbedded ? .embeddedDetail : .mediaCell
             )
             .overlay(
                 // Invisible overlay to prevent tap propagation to parent views and add long press
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        // Save current playback position before opening fullscreen
+                        saveVideoPositionForFullscreen()
                         isOpeningFullScreen = true
                         Task { @MainActor in
                             try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
@@ -335,22 +452,6 @@ struct MediaCell: View, Equatable {
                         handleVideoReload()
                     }
             )
-            .overlay(
-            // Video controls overlay
-            Group {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        if showMuteButton {
-                            MuteButton()
-                                .padding(.trailing, 8)
-                                .padding(.bottom, 8)
-                        }
-                    }
-                }
-            }
-        )
         .overlay(
             // Loading spinner overlay when opening fullscreen
             Group {
@@ -378,7 +479,7 @@ struct MediaCell: View, Equatable {
         
         if let url = attachment.getUrl(baseUrl) {
             // Clear player cache
-            SharedAssetCache.shared.removeInvalidPlayer(for: extractMediaID(from: url) ?? attachment.mid)
+            SharedAssetCache.shared.removeInvalidPlayer(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
             
             // Clear video state cache
             VideoStateCache.shared.clearCache(for: attachment.mid)
@@ -386,7 +487,7 @@ struct MediaCell: View, Equatable {
             // Clear asset cache
             Task {
                 await MainActor.run {
-                    SharedAssetCache.shared.clearAssetCache(for: extractMediaID(from: url) ?? attachment.mid)
+                    SharedAssetCache.shared.clearAssetCache(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
                     print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
                 }
             }
@@ -414,11 +515,15 @@ struct MuteButton: View {
         }) {
             Image(systemName: muteState.isMuted ? "speaker.slash" : "speaker.wave.2")
                 .font(.system(size: 14))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(.white)
                 .frame(width: 30, height: 30)
-                .background(Color.gray.opacity(0.4))
-                .clipShape(Circle())
+                .background(
+                    // Semi-transparent dark background for visibility - no shadow
+                    Circle()
+                        .fill(Color.black.opacity(0.5))
+                )
                 .contentShape(Circle())
         }
+        .buttonStyle(PlainButtonStyle()) // Remove default button shadow
     }
 }

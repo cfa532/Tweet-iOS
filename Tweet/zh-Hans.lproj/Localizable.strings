@@ -30,6 +30,7 @@
 "Checking video status..." = "正在检查视频状态...";
 "Processing on server..." = "服务器处理中...";
 "Your tweet will be posted when ready" = "准备就绪后将发布您的推文";
+"Your message will be sent when ready" = "准备就绪后将发送您的消息";
 "Uploading %@ %d/%d..." = "正在上传%@ %d/%d...";
 "Processing video %d/%d" = "正在处理视频 %d/%d";
 "Uploading image %d/%d" = "正在上传图片 %d/%d";
@@ -85,12 +86,15 @@
 "Alias" = "昵称";
 "Profile" = "个人简介";
 "Host ID (optional)" = "主机 ID（可选）";
+"Host ID" = "主机 ID";
 "Cloud Drive Port" = "云盘端口";
+"Share Domain" = "分享域名";
 "Register" = "注册";
 "Cancel" = "取消";
 "Uploading..." = "上传中...";
 "Saving..." = "保存中...";
 "Create Account" = "创建账户";
+"Registration successful. Please wait a few minutes before logging in." = "注册成功。请等待几分钟后再登录。";
 
 // MARK: - Settings Screen
 "Account" = "账户";
@@ -112,10 +116,17 @@
 "Pinned" = "置顶";
 "username" = "用户名";
 "Noone" = "无";
+"Fans@%@" = "%@的粉丝";
+"Followings@%@" = "%@的关注";
+"Your Fans" = "你的粉丝";
+"Your Followings" = "你的关注";
+"Your Bookmarks" = "你的书签";
+"Your Favorites" = "你的收藏";
 
 // MARK: - Tweet Actions
 "Show more" = "显示更多";
 "Forwarded by %@" = "由 %@ 转发";
+"Forwarded by you" = "由你转发";
 "Quote Tweet" = "引用推文";
 
 // MARK: - Media
@@ -224,6 +235,7 @@
 "Photo library access denied" = "相册访问被拒绝";
 "Image saved to Photos" = "图片已保存到相册";
 "Failed to save image" = "图片保存失败";
+"Login failed. Please try again." = "登录失败。请重试。";
 "Loading chat..." = "正在加载聊天...";
 "Receipt ID: %@" = "收件人ID: %@";
 "Loading..." = "加载中...";
@@ -369,8 +381,11 @@
 "Start a conversation to see your chats here" = "开始对话以在此处查看您的聊天";
 "No results found" = "未找到结果";
 "Try searching for a different username" = "尝试搜索其他用户名";
+"Try a different search term" = "尝试不同的搜索词";
 "Search for users" = "搜索用户";
 "Enter @username to find users" = "输入 @用户名 以查找用户";
+"Search by username or name..." = "按用户名或名称搜索...";
+"Search by username or display name" = "按用户名或显示名称搜索";
 "Start Chat" = "开始聊天";
 "%d attachments" = "%d 个附件";
 "+%d" = "+%d";
@@ -453,6 +468,10 @@
 // MARK: - Chat Messages
 "Are you sure you want to delete the chat with %@? This will permanently delete all messages in this conversation." = "确定要删除与 %@ 的聊天吗？这将永久删除此对话中的所有消息。";
 "Receipt ID: %@" = "收件人ID: %@";
+"Sent" = "已发送";
+"Received" = "已接收";
+"Yesterday" = "昨天";
+"%@ %@" = "%@ %@";
 
 // MARK: - Video Player
 "Failed to load video" = "视频加载失败";
@@ -476,6 +495,7 @@
 "Passwords do not match." = "密码不匹配。";
 "Host ID must be %d characters if provided." = "主机 ID 如果提供，必须是 %d 个字符。";
 "Cloud Drive Port must be between 8000 and 9000." = "云盘端口必须在 8000 到 9000 之间。";
+"Cloud Drive Port must be between 8000 and 65535." = "云盘端口必须在 8000 到 65535 之间。";
 
 // MARK: - Backend Error Messages
 "Unknown error occurred" = "发生未知错误";
@@ -555,3 +575,47 @@
 "Failed to update pinned tweet" = "置顶推文更新失败";
 "Failed to get pinned tweets" = "获取置顶推文失败";
 "Failed to report tweet" = "举报推文失败";
+
+// MARK: - User-Friendly Error Messages
+"Network connection lost. Please check your internet connection." = "网络连接中断。请检查您的网络连接。";
+"The request took too long. Please try again." = "请求超时。请重试。";
+"Cannot reach the server. Please try again later." = "无法连接到服务器。请稍后重试。";
+"Connection interrupted. Please try again." = "连接中断。请重试。";
+"Secure connection failed. Please check your network settings." = "安全连接失败。请检查您的网络设置。";
+"Service temporarily unavailable. Please try again." = "服务暂时不可用。请重试。";
+"Content not found." = "未找到内容。";
+"Session expired. Please log in again." = "会话已过期。请重新登录。";
+"You don't have permission to access this." = "您没有权限访问此内容。";
+"Server error. Please try again later." = "服务器错误。请稍后重试。";
+"Service temporarily unavailable. Please try again later." = "服务暂时不可用。请稍后重试。";
+"Unable to process data. Please try again." = "无法处理数据。请重试。";
+"Not enough storage space available." = "存储空间不足。";
+"Network error. Please check your connection and try again." = "网络错误。请检查您的连接并重试。";
+"Something went wrong. Please try again." = "出现问题。请重试。";
+
+// MARK: - Server Error Messages
+"Username is taken" = "用户名已被占用";
+"User not found" = "未找到用户";
+"Wrong password" = "密码错误";
+"Unknown error" = "未知错误";
+"User not found or missing host" = "未找到用户或缺少主机";
+"User host not found" = "未找到用户主机";
+"Author host not found" = "未找到作者主机";
+"User not found in database" = "数据库中未找到用户";
+"User missing host" = "用户缺少主机";
+"Cannot follow yourself" = "无法关注自己";
+"Cannot get followed user" = "无法获取关注的用户";
+"Missing host for followed user" = "关注的用户缺少主机";
+"Tweet not found" = "未找到推文";
+"Only the tweet author can update privacy settings" = "只有推文作者可以更新隐私设置";
+"Not a friend of the host" = "不是主机的朋友";
+"No provider IP found." = "未找到提供者IP。";
+"Chunk size exceeds 1MB limit" = "块大小超过1MB限制";
+"Failed to extract zip file" = "解压ZIP文件失败";
+"Invalid HLS structure" = "无效的HLS结构";
+"App ID mismatch" = "应用ID不匹配";
+
+// MARK: - Cloud Drive Limit
+"Tweet Limit Reached" = "已达推文限制";
+"This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets." = "这是一个Web3推文应用。您已达到免费托管推文的最大数量。请设置您自己的节点或请朋友托管您未来的推文。";
+"Learn More" = "了解更多";

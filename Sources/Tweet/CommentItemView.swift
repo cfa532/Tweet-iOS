@@ -2,7 +2,7 @@
 //  CommentItemView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/30.
+//  Created by Tomás Hongo on 2025/5/30.
 //
 
 import SwiftUI
@@ -17,11 +17,7 @@ struct CommentItemView: View {
     var linkToComment: Bool = false // Enable NavigationLink for the comment
     var commentsVM: CommentsViewModel? = nil
     var backgroundColor: Color = Color(.systemBackground)
-    @State private var showDetail = false
     @State private var isVisible = false
-    @State private var showBrowser = false
-    @State private var selectedMediaIndex = 0
-    @EnvironmentObject private var hproseInstance: HproseInstance
 
     var body: some View {
         Group {
@@ -33,12 +29,6 @@ struct CommentItemView: View {
             } else {
                 commentContent
             }
-        }
-        .fullScreenCover(isPresented: $showBrowser) {
-            MediaBrowserView(
-                tweet: comment,
-                initialIndex: selectedMediaIndex
-            )
         }
         .task {
             isVisible = true
@@ -62,22 +52,23 @@ struct CommentItemView: View {
                     .buttonStyle(PlainButtonStyle())
                 }
             }
-            VStack(alignment: .leading) {
-                HStack {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top, spacing: 0) {
                     TweetItemHeaderView(tweet: comment)
+                    Spacer(minLength: 0)
                     CommentMenu(comment: comment, parentTweet: parentTweet)
+                        .padding(.trailing, -20)
                 }
-                .padding(.top, -8)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 
-                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible, visibleTweetId: comment.mid)
-                .padding(.top, -12)
+                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
                 
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
                     .padding(.top, 8)
             }
         }
-        .padding()
-        .padding(.horizontal, -4)
+        .padding(.vertical)
+        .padding(.horizontal, 16)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)

@@ -13,11 +13,13 @@ struct ContentView: View {
     @State private var navigationPath = NavigationPath()
     @State private var chatNavigationPath = NavigationPath()
     @State private var isInChatScreen = false
+    @State private var isInProfileFromChat = false
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .success
     @State private var pendingUpload: TweetUploadManager.PendingTweetUpload? = nil
     @State private var showPendingUploadDialog = false
+    @State private var showCloudDriveLimitAlert = false
     
     var body: some View {
         let _ = NSLog("DEBUG: [ContentView] ContentView body is being rendered")
@@ -39,10 +41,27 @@ struct ContentView: View {
                     }
                 } else if selectedTab == 1 {
                     NavigationStack(path: $chatNavigationPath) {
-                        ChatListScreen()
+                        ChatListScreen(
+                            navigationPath: $chatNavigationPath,
+                            onProfileNavigate: {
+                                isInProfileFromChat = true
+                            },
+                            onChatNavigate: {
+                                isInProfileFromChat = false
+                                isInChatScreen = true
+                            }
+                        )
                     }
                     .onChange(of: chatNavigationPath.count) { _, count in
-                        isInChatScreen = count > 0
+                        if count == 0 {
+                            // Reset all flags when back at root
+                            isInChatScreen = false
+                            isInProfileFromChat = false
+                        } else if !isInProfileFromChat {
+                            // If count > 0 and we haven't explicitly set profile flag, assume it's ChatScreen
+                            isInChatScreen = true
+                        }
+                        // If isInProfileFromChat is true, keep tab bar visible (isInChatScreen stays false)
                     }
                 } else if selectedTab == 3 {
                     SearchScreen()
@@ -54,8 +73,8 @@ struct ContentView: View {
                     .frame(height: 40)
             }
             
-            // Custom Tab Bar - Hide when in chat screen
-            if !isInChatScreen {
+            // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
+            if !isInChatScreen || isInProfileFromChat {
                 HStack(spacing: 0) {
                 // Home Tab
                 Button(action: {
@@ -74,7 +93,14 @@ struct ContentView: View {
                 
                 // Chat Tab
                 Button(action: {
-                    selectedTab = 1
+                    if selectedTab != 1 {
+                        selectedTab = 1
+                    } else {
+                        // Already on chat tab - navigate back to chat list
+                        chatNavigationPath.removeLast(chatNavigationPath.count)
+                        isInChatScreen = false
+                        isInProfileFromChat = false
+                    }
                 }) {
                     ZStack {
                         Image(systemName: "message")
@@ -90,7 +116,19 @@ struct ContentView: View {
                 
                 // Compose Tab
                 Button(action: {
-                    showComposeSheet = true
+                    // Check if user has no valid cloudDrivePort and has reached tweet limit
+                    let cloudDrivePort = hproseInstance.appUser.cloudDrivePort
+                    let tweetCount = hproseInstance.appUser.tweetCount ?? 0
+                    
+                    print("DEBUG: [Tweet Limit Check] cloudDrivePort: \(cloudDrivePort), tweetCount: \(tweetCount)")
+                    
+                    if (cloudDrivePort <= 0) && (tweetCount >= 5) {
+                        print("DEBUG: [Tweet Limit Check] ❌ LIMIT REACHED - Showing alert")
+                        showCloudDriveLimitAlert = true
+                    } else {
+                        print("DEBUG: [Tweet Limit Check] ✅ ALLOWED - cloudDrivePort: \(cloudDrivePort > 0 ? "valid" : "invalid"), tweetCount: \(tweetCount)/5")
+                        showComposeSheet = true
+                    }
                 }) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 24))
@@ -122,6 +160,32 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()
+        }
+        .onChange(of: showComposeSheet) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "composeSheet", source: "ContentView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "composeSheet", source: "ContentView")
+            }
+        }
+        .alert(NSLocalizedString("Tweet Limit Reached", comment: "Tweet limit alert title"), isPresented: $showCloudDriveLimitAlert) {
+            Button(NSLocalizedString("Learn More", comment: "Learn more button")) {
+                Task {
+                    await fetchDeveloperUserAndNavigate()
+                }
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
+                // Do nothing, just dismiss the alert
+            }
+        } message: {
+            Text(NSLocalizedString("This is a Web3 tweet app. You have reached the maximum number of benevolently hosted tweets. Please set up your own node or ask a friend to host your future tweets.", comment: "Tweet limit message"))
+        }
+        .onChange(of: showCloudDriveLimitAlert) { _, isPresented in
+            if isPresented {
+                OverlayVisibilityCoordinator.shared.beginOverlay(id: "tweetLimitAlert", source: "ContentView")
+            } else {
+                OverlayVisibilityCoordinator.shared.endOverlay(id: "tweetLimitAlert", source: "ContentView")
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetSubmitted)) { notification in
             if let message = notification.userInfo?["message"] as? String {
@@ -183,7 +247,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
             if let error = notification.userInfo?["error"] as? Error {
-                toastMessage = error.localizedDescription
+                toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 toastType = .error
                 showToast = true
                 
@@ -265,8 +329,53 @@ struct ContentView: View {
             // Check for pending uploads when app returns to foreground
             checkForPendingUpload()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .deeplinkReceived)) { notification in
+            // Handle deeplink navigation
+            print("[ContentView] ✅ Received deeplink notification")
+            if let url = notification.userInfo?["url"] as? URL {
+                print("[ContentView] URL from notification: \(url.absoluteString)")
+                handleDeeplink(url)
+            } else {
+                print("[ContentView] ⚠️ No URL found in notification userInfo")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .deeplinkTweetNotFound)) { notification in
+            // Show error toast when deeplink tweet is not found
+            if let message = notification.userInfo?["message"] as? String {
+                toastMessage = message
+                toastType = .error
+                showToast = true
+                
+                // Auto-hide toast after 5 seconds for errors
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                    withAnimation { showToast = false }
+                }
+            }
+        }
         .environmentObject(hproseInstance)
         .environmentObject(themeManager)
+    }
+    
+    // MARK: - Developer Profile Navigation
+    
+    private func fetchDeveloperUserAndNavigate() async {
+        do {
+            // Fetch developer user by username
+            if let userId = try await hproseInstance.getUserId("developer"),
+               let user = try await hproseInstance.fetchUser(userId) {
+                await MainActor.run {
+                    // Switch to home tab and navigate to developer's profile
+                    selectedTab = 0
+                    // Clear any existing navigation and push developer user
+                    navigationPath = NavigationPath()
+                    navigationPath.append(user)
+                }
+            } else {
+                print("DEBUG: Could not find @developer user")
+            }
+        } catch {
+            print("DEBUG: Error fetching @developer user: \(error)")
+        }
     }
     
     // MARK: - Pending Upload Handling
@@ -343,6 +452,39 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                     withAnimation { self.showToast = false }
                 }
+            }
+        }
+    }
+    
+    // MARK: - Deeplink Handling
+    
+    private func handleDeeplink(_ url: URL) {
+        print("[ContentView] Handling deeplink: \(url.absoluteString)")
+        
+        // Parse the URL
+        let deeplinkType = DeeplinkManager.shared.parseURL(url)
+        
+        // Switch to home tab if needed (for navigation)
+        // Use a small delay to ensure tab switch completes before navigation
+        if selectedTab != 0 {
+            selectedTab = 0
+            // Wait a bit for tab switch animation
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+                await DeeplinkManager.shared.handleDeeplink(
+                    deeplinkType,
+                    navigationPath: $navigationPath,
+                    hproseInstance: hproseInstance
+                )
+            }
+        } else {
+            // Already on home tab, navigate immediately
+            Task {
+                await DeeplinkManager.shared.handleDeeplink(
+                    deeplinkType,
+                    navigationPath: $navigationPath,
+                    hproseInstance: hproseInstance
+                )
             }
         }
     }

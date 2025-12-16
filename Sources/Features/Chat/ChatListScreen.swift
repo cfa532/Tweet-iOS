@@ -1,49 +1,31 @@
 import SwiftUI
 
 struct ChatListScreen: View {
+    @Binding var navigationPath: NavigationPath
+    let onProfileNavigate: (() -> Void)?
+    let onChatNavigate: (() -> Void)?
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messageCheckTimer: Timer?
-    @State private var showStartChat = false
     @State private var sessionToDelete: ChatSession?
     @State private var showDeleteConfirmation = false
+    @State private var followingUsers: [User] = []
+    @State private var isLoadingFollowings = false
+    @State private var showStartNewChat = false
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    init(navigationPath: Binding<NavigationPath>, onProfileNavigate: (() -> Void)? = nil, onChatNavigate: (() -> Void)? = nil) {
+        self._navigationPath = navigationPath
+        self.onProfileNavigate = onProfileNavigate
+        self.onChatNavigate = onChatNavigate
+    }
     
     var body: some View {
         VStack {
                 let currentUserSessions = chatSessionManager.chatSessions.filter { $0.userId == HproseInstance.shared.appUser.mid }
                 if currentUserSessions.isEmpty {
-                    VStack(spacing: 20) {
-                        Image(systemName: "message")
-                            .font(.system(size: 48))
-                            .foregroundColor(.gray)
-                        Text(LocalizedStringKey("No chats yet"))
-                            .font(.headline)
-                            .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Start a conversation to see your chats here"))
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        
-                        Button(action: {
-                            showStartChat = true
-                        }) {
-                            HStack {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 16, weight: .medium))
-                                Text(LocalizedStringKey("Start Chat"))
-                                    .font(.system(size: 16, weight: .medium))
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.blue)
-                            )
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Show followings list when no chats exist
+                    FollowingsListForChat(followingUsers: followingUsers, isLoadingFollowings: isLoadingFollowings)
                 } else {
                     List {
                         ForEach(chatSessionManager.chatSessions
@@ -57,13 +39,60 @@ struct ChatListScreen: View {
             }
             .navigationTitle(LocalizedStringKey("Chats"))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        showStartNewChat = true
+                    }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .medium))
+                    }
+                }
+            }
             .navigationDestination(for: String.self) { receiptId in
-                ChatScreen(receiptId: receiptId)
+                ChatScreen(
+                    receiptId: receiptId,
+                    navigationPath: $navigationPath,
+                    onProfileNavigate: {
+                        onProfileNavigate?()
+                    }
+                )
+                .onAppear {
+                    // When ChatScreen appears, reset profile flag
+                    onChatNavigate?()
+                }
+            }
+            .navigationDestination(for: User.self) { user in
+                ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
+            }
+            .sheet(isPresented: $showStartNewChat) {
+                NavigationStack {
+                    FollowingsListForChat(followingUsers: followingUsers, isLoadingFollowings: isLoadingFollowings)
+                        .navigationTitle(LocalizedStringKey("Start Chat"))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button(LocalizedStringKey("Done")) {
+                                    showStartNewChat = false
+                                }
+                            }
+                        }
+                }
+                .onAppear {
+                    // Refresh followings when opening the sheet
+                    if followingUsers.isEmpty {
+                        Task {
+                            await loadFollowings()
+                        }
+                    }
+                }
             }
             .task {
                 // Only load chat sessions if they're empty
                 if chatSessionManager.chatSessions.isEmpty {
                     await loadChatSessions()
+                    // Also load followings when no chats exist
+                    await loadFollowings()
                 }
             }
             .onAppear {
@@ -87,9 +116,6 @@ struct ChatListScreen: View {
             .onDisappear {
                 // Stop periodic checking when view disappears
                 stopPeriodicMessageCheck()
-            }
-            .sheet(isPresented: $showStartChat) {
-                StartChatView()
             }
             .alert(NSLocalizedString("Delete Chat", comment: "Delete chat alert title"), isPresented: $showDeleteConfirmation) {
                 Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) {
@@ -149,6 +175,108 @@ struct ChatListScreen: View {
         sessionToDelete = nil
         showDeleteConfirmation = false
     }
+    
+    // MARK: - Followings Loading
+    
+    private func loadFollowings() async {
+        isLoadingFollowings = true
+        do {
+            // Get current user's followings
+            let followingIds = try await hproseInstance.getListByType(
+                user: hproseInstance.appUser,
+                entry: .FOLLOWING
+            )
+            
+            // Fetch user objects for each following ID
+            var fetchedUsers: [User] = []
+            for userId in followingIds {
+                if let user = try await hproseInstance.fetchUser(userId) {
+                    // Ignore invalid users without username
+                    if user.username != nil {
+                        fetchedUsers.append(user)
+                    }
+                }
+            }
+            
+            await MainActor.run {
+                followingUsers = fetchedUsers
+                isLoadingFollowings = false
+            }
+        } catch {
+            await MainActor.run {
+                print("[ChatListScreen] Error loading followings: \(error)")
+                isLoadingFollowings = false
+            }
+        }
+    }
+}
+
+// MARK: - Followings List for Chat
+
+struct FollowingsListForChat: View {
+    let followingUsers: [User]
+    let isLoadingFollowings: Bool
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack {
+            if isLoadingFollowings {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if followingUsers.isEmpty {
+                VStack(spacing: 20) {
+                    Image(systemName: "person.2")
+                        .font(.system(size: 48))
+                        .foregroundColor(.gray)
+                    Text(LocalizedStringKey("No followings found"))
+                        .font(.headline)
+                        .foregroundColor(.gray)
+                    Text(LocalizedStringKey("Follow some users to start chatting"))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(followingUsers) { user in
+                    NavigationLink(value: user.mid) {
+                        HStack {
+                            Avatar(user: user, size: 40)
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("\(user.name ?? "")@\(user.username ?? "")")
+                                        .font(.headline)
+                                        .foregroundColor(.primary)
+                                    Spacer()
+                                }
+                                
+                                if let profile = user.profile, !profile.isEmpty {
+                                    Text(profile)
+                                        .font(.body)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            
+                            Image(systemName: "message")
+                                .foregroundColor(.blue)
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+        .navigationDestination(for: String.self) { receiptId in
+            ChatScreen(receiptId: receiptId)
+                .onAppear {
+                    // Dismiss the sheet when navigating to chat
+                    dismiss()
+                }
+        }
+    }
 }
 
 struct ChatSessionRow: View {
@@ -204,7 +332,7 @@ struct ChatSessionRow: View {
                     
                     // Message preview
                     Text(getMessagePreview())
-                        .font(.system(size: 15, weight: .regular))
+                        .font(.system(size: 16, weight: .regular))
                         .foregroundColor(.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -225,20 +353,11 @@ struct ChatSessionRow: View {
     
     private func getMessagePreview() -> String {
         let message = session.lastMessage
+        if let preview = message.previewText(for: hproseInstance.appUser.mid) {
+            return preview
+        }
         let isFromCurrentUser = message.authorId == hproseInstance.appUser.mid
-        
-        // If there's text content, show it
-        if let content = message.content, !content.isEmpty {
-            return content
-        }
-        
-        // If there are attachments, show appropriate message based on direction
-        if let attachments = message.attachments, !attachments.isEmpty {
-            return isFromCurrentUser ? "📎 Attachment sent" : "📎 Attachment received"
-        }
-        
-        // Fallback
-        return isFromCurrentUser ? "Message sent" : "Message received"
+        return isFromCurrentUser ? NSLocalizedString("Message sent", comment: "Sent fallback") : NSLocalizedString("Message received", comment: "Received fallback")
     }
     
     private func formatDate(_ timestamp: TimeInterval) -> String {
@@ -248,13 +367,14 @@ struct ChatSessionRow: View {
         
         if calendar.isDate(date, inSameDayAs: now) {
             let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm"
+            formatter.timeStyle = .short
             return formatter.string(from: date)
         } else if calendar.isDate(date, equalTo: calendar.date(byAdding: .day, value: -1, to: now) ?? now, toGranularity: .day) {
-            return "昨天"
+            return NSLocalizedString("Yesterday", comment: "Yesterday label")
         } else {
             let formatter = DateFormatter()
-            formatter.dateFormat = "M月d日"
+            formatter.dateStyle = .short
+            formatter.timeStyle = .none
             return formatter.string(from: date)
         }
     }

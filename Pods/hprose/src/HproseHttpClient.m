@@ -77,9 +77,9 @@
 - (void) close:(BOOL)cancelPendingTasks {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (cancelPendingTasks) {
-            [_session invalidateAndCancel];
+            [self->_session invalidateAndCancel];
         } else {
-            [_session finishTasksAndInvalidate];
+            [self->_session finishTasksAndInvalidate];
         }
     });
 }

@@ -2,7 +2,7 @@
 //  ProfileEditView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/5/24.
+//  Created by Tomás Hongo on 2025/5/24.
 //
 
 import SwiftUI
@@ -11,7 +11,7 @@ import PhotosUI
 @available(iOS 16.0, *)
 struct ProfileEditView: View {
     @Environment(\.dismiss) private var dismiss
-    var onSubmit: (String, String?, String?, String?, String?, Int) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort
+    var onSubmit: (String, String?, String?, String?, String?, Int, String?) async throws -> Void // username, password, alias, profile, hostId, cloudDrivePort, domainToShare
     var onSubmissionStateChange: ((Bool) -> Void)? = nil // Callback for submission state
     var onAvatarUploadStateChange: ((Bool) -> Void)? = nil // Callback for avatar upload state
     var onAvatarUploadSuccess: (() -> Void)? = nil // Callback for successful avatar upload
@@ -25,6 +25,7 @@ struct ProfileEditView: View {
     @State private var profile: String = ""
     @State private var hostId: String = ""
     @State private var cloudDrivePort: String = ""
+    @State private var domainToShare: String = ""
     @State private var errorMessage: String?
     @FocusState private var focusedField: Field?
     @State private var avatarId: String? = nil
@@ -37,15 +38,18 @@ struct ProfileEditView: View {
     @State private var showExitConfirmation = false
     @State private var hasUnsavedChanges = false
     @State private var initialValues: [String: String] = [:]
+    @State private var originalHostId: String? = nil
+    @State private var originalCloudDrivePort: Int = 0
+    @State private var originalDomainToShare: String? = nil
     @State private var avatarUpdateTrigger = 0 // Force avatar view update
     @State private var showImageCropper = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
-        case password, confirmPassword, alias, profile, hostId, cloudDrivePort
+        case password, confirmPassword, alias, profile, hostId, cloudDrivePort, shareDomain
     }
 
-    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil, onProfileUpdateFailure: ((String) -> Void)? = nil) {
+    init(onSubmit: @escaping (String, String?, String?, String?, String?, Int, String?) async throws -> Void, onSubmissionStateChange: ((Bool) -> Void)? = nil, onAvatarUploadStateChange: ((Bool) -> Void)? = nil, onAvatarUploadSuccess: (() -> Void)? = nil, onAvatarUploadFailure: ((String) -> Void)? = nil, onProfileUpdateFailure: ((String) -> Void)? = nil) {
         self.onSubmit = onSubmit
         self.onSubmissionStateChange = onSubmissionStateChange
         self.onAvatarUploadStateChange = onAvatarUploadStateChange
@@ -54,6 +58,37 @@ struct ProfileEditView: View {
         self.onProfileUpdateFailure = onProfileUpdateFailure
     }
 
+    private var shareDomainPlaceholder: String {
+        // Use backend domain from check_upgrade (not user's override) for placeholder
+        let domain = hproseInstance.backendDomainToShare
+        if domain.isEmpty {
+            return ""
+        }
+        if domain.hasPrefix("https://") {
+            return String(domain.dropFirst("https://".count))
+        } else if domain.hasPrefix("http://") {
+            return String(domain.dropFirst("http://".count))
+        }
+        return domain
+    }
+    
+    private var hostIdPlaceholder: String {
+        return hproseInstance.appUser.hostIds?.first ?? ""
+    }
+    
+    private var cloudDrivePortPlaceholder: String {
+        let port = hproseInstance.appUser.cloudDrivePort
+        return (port != 0) ? String(port) : ""
+    }
+    
+    private var profilePlaceholder: String {
+        return hproseInstance.appUser.profile ?? ""
+    }
+    
+    private var aliasPlaceholder: String {
+        return hproseInstance.appUser.name ?? ""
+    }
+    
     private var avatarSection: some View {
         VStack {
             ZStack(alignment: .bottomTrailing) {
@@ -105,7 +140,7 @@ struct ProfileEditView: View {
                 HStack {
                     Text(LocalizedStringKey("Username"))
                         .font(.caption)
-                        .foregroundColor(.themeSecondaryText)
+                        .foregroundColor(.themeText)
                     Spacer()
                 }
                 Text(username)
@@ -121,7 +156,7 @@ struct ProfileEditView: View {
                 HStack {
                     Text(LocalizedStringKey("New Password (optional)"))
                         .font(.caption)
-                        .foregroundColor(.themeSecondaryText)
+                        .foregroundColor(.themeText)
                     Spacer()
                 }
                 SecureField(LocalizedStringKey("New Password"), text: $password)
@@ -135,7 +170,7 @@ struct ProfileEditView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(LocalizedStringKey("Confirm New Password"))
                         .font(.caption)
-                        .foregroundColor(.themeSecondaryText)
+                        .foregroundColor(.themeText)
                     SecureField(LocalizedStringKey("Confirm New Password"), text: $confirmPassword)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .focused($focusedField, equals: .confirmPassword)
@@ -148,7 +183,7 @@ struct ProfileEditView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringKey("Alias"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
+                    .foregroundColor(.themeText)
                 TextField(LocalizedStringKey("Alias"), text: $alias)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .focused($focusedField, equals: .alias)
@@ -159,7 +194,7 @@ struct ProfileEditView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringKey("Profile"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
+                    .foregroundColor(.themeText)
                 TextEditor(text: $profile)
                     .frame(minHeight: 60, maxHeight: 120)
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.themeBorder.opacity(0.3)))
@@ -168,10 +203,10 @@ struct ProfileEditView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringKey("Host ID (optional)"))
+                Text(LocalizedStringKey("Host ID"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
-                TextField("", text: $hostId)
+                    .foregroundColor(.themeText)
+                TextField("", text: $hostId, prompt: Text(hostIdPlaceholder))
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .focused($focusedField, equals: .hostId)
                     .contentShape(Rectangle())
@@ -186,7 +221,7 @@ struct ProfileEditView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(LocalizedStringKey("Cloud Drive Port"))
                     .font(.caption)
-                    .foregroundColor(.themeSecondaryText)
+                    .foregroundColor(.themeText)
                 TextField(LocalizedStringKey("Cloud Drive Port"), text: $cloudDrivePort)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .keyboardType(.numberPad)
@@ -200,6 +235,20 @@ struct ProfileEditView: View {
                             cloudDrivePort = filtered
                         }
                     }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey("Share Domain"))
+                    .font(.caption)
+                    .foregroundColor(.themeText)
+                TextField("", text: $domainToShare, prompt: Text(shareDomainPlaceholder))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .keyboardType(.URL)
+                    .autocorrectionDisabled(true)
+                    .textInputAutocapitalization(.never)
+                    .focused($focusedField, equals: .shareDomain)
+                    .contentShape(Rectangle())
+                    .onTapGesture { focusedField = .shareDomain }
             }
 
             if let errorMessage = errorMessage {
@@ -246,6 +295,8 @@ struct ProfileEditView: View {
         .onChange(of: profile) { _, _ in checkForChanges() }
         .onChange(of: hostId) { _, _ in checkForChanges() }
         .onChange(of: cloudDrivePort) { _, _ in checkForChanges() }
+        .onChange(of: domainToShare) { _, _ in checkForChanges() }
+        .interactiveDismissDisabled(hasUnsavedChanges)
         .confirmationDialog(
             NSLocalizedString("Unsaved Changes", comment: "Confirmation dialog title"),
             isPresented: $showExitConfirmation,
@@ -262,6 +313,7 @@ struct ProfileEditView: View {
     
     private var closeButton: some View {
         Button(NSLocalizedString("Close", comment: "Close button")) {
+            checkForChanges() // Ensure we have the latest change state
             if hasUnsavedChanges {
                 showExitConfirmation = true
             } else {
@@ -311,16 +363,33 @@ struct ProfileEditView: View {
         .onChange(of: showImageCropper) { _, newValue in
             NSLog("🔄 [Avatar] showImageCropper changed to: \(newValue)")
         }
+        .onChange(of: showExitConfirmation) { _, newValue in
+            // When confirmation dialog is dismissed without action, ensure we check changes again
+            if !newValue {
+                checkForChanges()
+            }
+        }
     }
     
     private func loadInitialData() {
         let appUser = hproseInstance.appUser
         username = appUser.username ?? ""
-        alias = appUser.name ?? ""
-        profile = appUser.profile ?? ""
-        hostId = appUser.hostIds?.first ?? ""
+        alias = appUser.name ?? "" // Show existing name in the field
+        profile = appUser.profile ?? "" // Show existing profile in the field
+        hostId = "" // Always leave hostId empty when profile editor opens
         avatarId = appUser.avatar
-        cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description
+        cloudDrivePort = (appUser.cloudDrivePort == 0) ? "" : appUser.cloudDrivePort.description // Show existing cloudDrivePort value in the field
+        // Show appUser.domainToShare if not empty, otherwise leave empty (placeholder will show system default)
+        if let userDomain = appUser.domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines), !userDomain.isEmpty {
+            domainToShare = userDomain
+        } else {
+            domainToShare = ""
+        }
+        
+        // Store original values to send if user doesn't provide new input
+        originalHostId = appUser.hostIds?.first
+        originalCloudDrivePort = appUser.cloudDrivePort
+        originalDomainToShare = appUser.domainToShare
         
         // Store initial values for change detection
         initialValues = [
@@ -328,7 +397,8 @@ struct ProfileEditView: View {
             "alias": alias,
             "profile": profile,
             "hostId": hostId,
-            "cloudDrivePort": cloudDrivePort
+            "cloudDrivePort": cloudDrivePort,
+            "domainToShare": domainToShare // This will be the user's domainToShare if not empty, or empty string
         ]
     }
 
@@ -380,7 +450,7 @@ struct ProfileEditView: View {
                     
                     // Pre-cache the uploaded image locally so Avatar doesn't show spinner
                     let avatarAttachment = MimeiFileType(mid: confirmedAvatar, mediaType: .image)
-                    ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment, baseUrl: hproseInstance.appUser.baseUrl ?? HproseInstance.baseUrl)
+                    _ = ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment)
                     NSLog("✅ [Avatar Upload] Pre-cached new avatar image locally")
                     
                     // Update UI state
@@ -409,7 +479,7 @@ struct ProfileEditView: View {
                     onAvatarUploadFailure?(errorMessage)
                 }
             } catch {
-                let errorMessage = error.localizedDescription
+                let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                 await MainActor.run {
                     avatarUploadError = errorMessage
                     isUploadingAvatar = false
@@ -425,16 +495,25 @@ struct ProfileEditView: View {
         // Prevent repeated submission
         guard !isSubmitting else { return }
         
-        // Validation
-        if hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != 0 && hostId.trimmingCharacters(in: .whitespacesAndNewlines).count != Constants.MIMEI_ID_LENGTH {
+        // Validation: if hostId is provided, it must be exactly 27 characters
+        let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedHostId.isEmpty && trimmedHostId.count != Constants.MIMEI_ID_LENGTH {
             errorMessage = String(format: NSLocalizedString("Host ID must be %d characters if provided.", comment: "Validation error"), Constants.MIMEI_ID_LENGTH)
             return
         }
         
-        // Validate cloudDrivePort
-        if let port = Int(cloudDrivePort), port < 8000 || port > 9000 {
-            errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 9000.", comment: "Validation error")
-            return
+        // Validate cloudDrivePort: must be empty/null or between 8000-65535 (inclusive)
+        let trimmedPort = cloudDrivePort.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedPort.isEmpty {
+            if let port = Int(trimmedPort) {
+                if port < 8000 || port > 65535 {
+                    errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 65535.", comment: "Validation error")
+                    return
+                }
+            } else {
+                errorMessage = NSLocalizedString("Cloud Drive Port must be a valid number.", comment: "Validation error")
+                return
+            }
         }
         
         // Password validation (optional, but if provided, must match confirm)
@@ -452,12 +531,22 @@ struct ProfileEditView: View {
         // Call the submit function asynchronously
         Task {
             do {
-                // Convert cloudDrivePort: empty string → 0 (to explicitly clear on server)
-                let portValue: Int
-                if cloudDrivePort.isEmpty {
-                    portValue = 0  // Explicitly send 0 to clear the port
+                // For hostId, cloudDrivePort, and domainToShare:
+                // If user provided input, use it; otherwise use original value
+                let trimmedHostId = hostId.trimmingCharacters(in: .whitespacesAndNewlines)
+                let hostIdValue = trimmedHostId.isEmpty ? originalHostId : trimmedHostId
+                
+                // For domainToShare: if empty, send empty string (will be converted to nil and excluded from JSON)
+                let trimmedShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
+                let shareDomainValue = trimmedShareDomain.isEmpty ? "" : trimmedShareDomain
+                
+                // For cloudDrivePort: if empty, use original value (or 0 if original was 0); if provided, use it
+                let trimmedPort = cloudDrivePort.trimmingCharacters(in: .whitespacesAndNewlines)
+                let finalPortValue: Int
+                if trimmedPort.isEmpty {
+                    finalPortValue = originalCloudDrivePort
                 } else {
-                    portValue = Int(cloudDrivePort) ?? 0
+                    finalPortValue = Int(trimmedPort) ?? originalCloudDrivePort
                 }
                 
                 try await onSubmit(
@@ -465,8 +554,9 @@ struct ProfileEditView: View {
                     password.isEmpty ? nil : password,
                     alias.isEmpty ? nil : alias,
                     profile.isEmpty ? nil : profile,
-                    hostId,
-                    portValue
+                    hostIdValue,
+                    finalPortValue,
+                    shareDomainValue
                 )
                 
                 // Success - update initial values and close the screen
@@ -477,7 +567,8 @@ struct ProfileEditView: View {
                         "alias": alias,
                         "profile": profile,
                         "hostId": hostId,
-                        "cloudDrivePort": cloudDrivePort
+                        "cloudDrivePort": cloudDrivePort,
+                        "domainToShare": shareDomainValue
                     ]
                     
                     // Reset password fields since they were saved
@@ -491,6 +582,9 @@ struct ProfileEditView: View {
                     isSubmitting = false
                     onSubmissionStateChange?(false)
                     
+                    // Normalize share domain field to trimmed value
+                    domainToShare = shareDomainValue
+                    
                     // Show success toast and close the screen
                     showToastMessage(NSLocalizedString("Profile updated successfully", comment: "Success message"), type: .success)
                     
@@ -502,7 +596,7 @@ struct ProfileEditView: View {
             } catch {
                 // Handle profile update failure with toast
                 await MainActor.run {
-                    let errorMessage = error.localizedDescription
+                    let errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
                     showToastMessage(errorMessage, type: .error)
                     onProfileUpdateFailure?(errorMessage)
                     isSubmitting = false
@@ -525,13 +619,20 @@ struct ProfileEditView: View {
     }
     
     private func checkForChanges() {
+        // Normalize domainToShare for comparison (trim whitespace, treat empty as nil)
+        let currentShareDomain = domainToShare.trimmingCharacters(in: .whitespacesAndNewlines)
+        let initialShareDomain = (initialValues["domainToShare"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedCurrent = currentShareDomain.isEmpty ? "" : currentShareDomain
+        let normalizedInitial = initialShareDomain.isEmpty ? "" : initialShareDomain
+        
         // Check if any field has been modified from initial state
         let hasChanges = !password.isEmpty || 
                         !confirmPassword.isEmpty || 
                         alias != initialValues["alias"] || 
                         profile != initialValues["profile"] || 
                         hostId != initialValues["hostId"] || 
-                        cloudDrivePort != initialValues["cloudDrivePort"]
+                        cloudDrivePort != initialValues["cloudDrivePort"] ||
+                        normalizedCurrent != normalizedInitial
         
         hasUnsavedChanges = hasChanges
     }

@@ -2,9 +2,10 @@
 //  UserRowView.swift
 //  Tweet
 //
-//  Created by 超方 on 2025/6/10.
+//  Created by Tomás Hongo on 2025/6/10.
 //
 import SwiftUI
+import Combine
 
 @available(iOS 16.0, *)
 struct UserRowView: View {
@@ -13,17 +14,17 @@ struct UserRowView: View {
     let onFollowToggle: ((User) async -> Void)?
     let onTap: ((User) -> Void)?
     let onLoadFailed: ((String) -> Void)?
-    @State private var user: User?
+    @ObservedObject private var user: User
     @State private var isFollowing: Bool = false
     @State private var showFullProfile: Bool = false
     @State private var isLoading: Bool = true
     @State private var loadFailed: Bool = false
     @State private var loadingTask: Task<Void, Never>?
     @State private var currentCancellationToken: UUID
+    @State private var showToast: Bool = false
+    @State private var toastMessage: String = ""
+    @State private var toastType: ToastView.ToastType = .error
     @EnvironmentObject private var hproseInstance: HproseInstance
-    
-    // Sequential loading control
-    @State private var shouldStartLoading: Bool = false
     
     // MARK: - Initialization
     init(
@@ -39,6 +40,8 @@ struct UserRowView: View {
         self.onTap = onTap
         self.onLoadFailed = onLoadFailed
         self._currentCancellationToken = State(initialValue: cancellationToken)
+        // Initialize ObservedObject with singleton instance
+        self._user = ObservedObject(wrappedValue: User.getInstance(mid: userId))
     }
     
     private func formatRegistrationDate(_ date: Date) -> String {
@@ -63,7 +66,7 @@ struct UserRowView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-            } else if let user = user {
+            } else {
                 HStack(alignment: .top, spacing: 4) {
                     Avatar(user: user, size: 48)
                     
@@ -117,9 +120,10 @@ struct UserRowView: View {
                             cooldownDuration: 0.5,
                             enableVibration: false
                         ) {
+                            // Toggle optimistically first
+                            isFollowing.toggle()
                             Task {
-                                await onFollowToggle(user)
-                                isFollowing.toggle()
+                                await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
                             }
                         } label: {
                             Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
@@ -146,6 +150,16 @@ struct UserRowView: View {
             Divider()
                 .padding(.horizontal, 8)
         }
+        .overlay(
+            VStack {
+                Spacer()
+                if showToast {
+                    ToastView(message: toastMessage, type: toastType)
+                        .padding(.bottom, 20)
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: showToast)
+        )
         .onAppear {
             loadUser()
         }
@@ -159,6 +173,84 @@ struct UserRowView: View {
                 loadingTask?.cancel()
                 currentCancellationToken = newToken
             }
+        }
+    }
+    
+    private func handleToggleFollowing(for user: User, onFollowToggle: ((User) async -> Void)?) async {
+        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+            // Update the isFollowing state based on the result
+            await MainActor.run {
+                isFollowing = ret
+            }
+            
+            // Update app user's followingList based on the result
+            if ret {
+                // User is now following - add to followingList
+                if hproseInstance.appUser.followingList == nil {
+                    hproseInstance.appUser.followingList = []
+                }
+                if !hproseInstance.appUser.followingList!.contains(user.mid) {
+                    hproseInstance.appUser.followingList!.append(user.mid)
+                }
+            } else {
+                // User is no longer following - remove from followingList
+                hproseInstance.appUser.followingList?.removeAll { $0 == user.mid }
+            }
+            
+            // Update the followed user's fansList and counts on main thread
+            await MainActor.run {
+                if ret {
+                    // User is now following - add app user to followed user's fansList
+                    if user.fansList == nil {
+                        user.fansList = []
+                    }
+                    if !user.fansList!.contains(hproseInstance.appUser.mid) {
+                        user.fansList!.append(hproseInstance.appUser.mid)
+                    }
+                    // Increment the followed user's followers count
+                    user.followersCount = (user.followersCount ?? 0) + 1
+                    
+                    // Fetch and add recent tweets from newly followed user to main feed
+                    Task {
+                        await FollowingsTweetViewModel.shared.addTweetsFromNewlyFollowedUser(user)
+                    }
+                } else {
+                    // User is no longer following - remove app user from followed user's fansList
+                    user.fansList?.removeAll { $0 == hproseInstance.appUser.mid }
+                    // Decrement the followed user's followers count
+                    user.followersCount = max(0, (user.followersCount ?? 0) - 1)
+                    
+                    // Remove unfollowed user's tweets from main feed
+                    FollowingsTweetViewModel.shared.removeTweetsFromUser(user.mid)
+                }
+                
+                // Update app user's following count
+                if ret {
+                    // User is now following - increment app user's following count
+                    hproseInstance.appUser.followingCount = (hproseInstance.appUser.followingCount ?? 0) + 1
+                } else {
+                    // User is no longer following - decrement app user's following count
+                    hproseInstance.appUser.followingCount = max(0, (hproseInstance.appUser.followingCount ?? 0) - 1)
+                }
+            }
+        } else {
+            // Revert the isFollowing state on failure
+            await MainActor.run {
+                isFollowing.toggle()
+            }
+            showToastMessage(NSLocalizedString("Failed to toggle following status", comment: "Profile action error"))
+        }
+    }
+    
+    private func showToastMessage(_ message: String) {
+        toastMessage = message
+        toastType = .error
+        showToast = true
+        
+        // Auto-hide toast after 3 seconds
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            showToast = false
         }
     }
     
@@ -179,74 +271,54 @@ struct UserRowView: View {
                 }
                 
                 print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
-                if let fetchedUser = try await hproseInstance.fetchUser(userId) {
-                    // Check if task should be cancelled before processing
-                    guard taskCancellationToken == currentCancellationToken else {
-                        print("DEBUG: [UserRowView] Task cancelled during processing for user \(userId)")
-                        return
-                    }
-                    
-                    // Accept user even if username is nil (it will be populated by background fetch)
-                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(fetchedUser.username ?? "nil")")
+                // Keep spinner showing while fetchUser is in progress (includes retries)
+                // fetchUser will retry up to 3 times before returning skeleton on failure
+                let fetchedUser = try await hproseInstance.fetchUser(userId)
+                
+                // Check if task should be cancelled before processing
+                guard taskCancellationToken == currentCancellationToken else {
+                    print("DEBUG: [UserRowView] Task cancelled during processing for user \(userId)")
+                    return
+                }
+                
+                // The user singleton will be automatically updated by fetchUser's background task
+                // @ObservedObject will cause view to refresh when singleton's @Published properties change
+                let sanitizedUsername = fetchedUser?.username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                
+                // Only remove user row if fetchUser failed after retries (returns skeleton with no username)
+                // Otherwise keep showing spinner until valid user is loaded
+                if let fetchedUser = fetchedUser, !sanitizedUsername.isEmpty {
+                    // Valid user loaded - hide spinner and show user
+                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(sanitizedUsername)")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                        self.user = fetchedUser
                         self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
-                        // Always show the user row, even if username is nil (will update via background fetch)
                         self.isLoading = false
-                        
-                        // If username is nil, start a delayed check to verify background fetch succeeded
-                        if fetchedUser.username == nil || fetchedUser.username?.isEmpty == true {
-                            Task {
-                                // Wait 15 seconds for background fetch to complete
-                                // This accounts for:
-                                // - Network latency
-                                // - 3 retries with 1s and 2s delays = ~3s
-                                // - Server processing time
-                                // - IP resolution time
-                                try? await Task.sleep(nanoseconds: 15_000_000_000)
-                                
-                                // Check if username is still nil after background fetch
-                                // Fetch from singleton to get latest data
-                                let updatedUser = User.getInstance(mid: userId)
-                                
-                                await MainActor.run {
-                                    guard taskCancellationToken == currentCancellationToken else { return }
-                                    if updatedUser.username == nil || updatedUser.username?.isEmpty == true {
-                                        print("DEBUG: [UserRowView] Background fetch failed after 15s timeout for \(userId), hiding row")
-                                        self.loadFailed = true
-                                        self.onLoadFailed?(userId)
-                                    } else {
-                                        print("DEBUG: [UserRowView] Background fetch succeeded for \(userId): \(updatedUser.username ?? ""), updating view")
-                                        // Update the view with the populated user data
-                                        self.user = updatedUser
-                                    }
-                                }
-                            }
-                        }
                     }
                 } else {
-                    print("DEBUG: [UserRowView] No user found for ID: \(userId)")
+                    // fetchUser returned skeleton (no username) after all retries failed
+                    // Remove the user row to indicate failure
+                    print("⚠️ [UserRowView] fetchUser failed after retries for ID: \(userId) - removing row")
                     await MainActor.run {
-                        // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                         self.loadFailed = true
                         self.isLoading = false
-                        // Notify parent that this user failed to load
                         self.onLoadFailed?(userId)
                     }
                 }
             } catch is CancellationError {
                 print("DEBUG: [UserRowView] Loading cancelled for user \(userId)")
             } catch {
-                print("DEBUG: [UserRowView] Error loading user \(userId): \(error)")
+                // fetchUser threw error after all retries failed
+                // Remove the user row to indicate failure
+                print("DEBUG: [UserRowView] Error loading user \(userId) after retries: \(error)")
                 await MainActor.run {
                     // Check if task was cancelled before updating UI
                     guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                     self.loadFailed = true
                     self.isLoading = false
-                    // Notify parent that this user failed to load
+                    // Notify parent that this user failed to load after retries
                     self.onLoadFailed?(userId)
                 }
             }

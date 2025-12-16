@@ -15,10 +15,12 @@ struct CachingVideoPlayer: View {
     let isVisible: Bool
     let mediaType: MediaType
     let autoPlay: Bool
+    let loopOnCompletion: Bool
     let videoAspectRatio: CGFloat
     let showNativeControls: Bool
     let isMuted: Bool
     let onVideoTap: (() -> Void)?
+    let onVideoFinished: (() -> Void)?
     
     @State private var player: AVPlayer?
     @State private var cachingPlayerItem: CachingPlayerItem?
@@ -27,6 +29,11 @@ struct CachingVideoPlayer: View {
     @State private var hasFinishedPlaying = false
     @State private var loadFailed = false
     @State private var videoCompletionObserver: NSObjectProtocol?
+    @State private var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
+    @State private var hasRecoveredThisCycle = false
+    @State private var playerRefreshID = UUID()
+    @State private var recoveryTask: Task<Void, Never>?
+    @State private var isRecovering = false
     
     init(
         url: URL,
@@ -34,44 +41,71 @@ struct CachingVideoPlayer: View {
         isVisible: Bool,
         mediaType: MediaType,
         autoPlay: Bool = true,
+        loopOnCompletion: Bool = true,
         videoAspectRatio: CGFloat = 16.0/9.0,
         showNativeControls: Bool = true,
         isMuted: Bool = false,
         onVideoTap: (() -> Void)? = nil,
+        onVideoFinished: (() -> Void)? = nil
     ) {
         self.url = url
         self.mid = mid
         self.isVisible = isVisible
         self.mediaType = mediaType
         self.autoPlay = autoPlay
+        self.loopOnCompletion = loopOnCompletion
         self.videoAspectRatio = videoAspectRatio
         self.showNativeControls = showNativeControls
         self.isMuted = isMuted
         self.onVideoTap = onVideoTap
+        self.onVideoFinished = onVideoFinished
     }
     
     var body: some View {
         Group {
             if let player = player {
-                if showNativeControls {
-                    VideoPlayer(player: player)
-                        .aspectRatio(videoAspectRatio, contentMode: .fit)
-                        .clipped()
-                        .onTapGesture {
-                            onVideoTap?()
+                ZStack {
+                    if showNativeControls {
+                        VideoPlayer(player: player)
+                            .aspectRatio(videoAspectRatio, contentMode: .fit)
+                            .clipped()
+                            .id(playerRefreshID) // Force view refresh when player is recreated
+                            .onTapGesture {
+                                onVideoTap?()
+                            }
+                    } else {
+                        VideoPlayer(player: player)
+                            .aspectRatio(videoAspectRatio, contentMode: .fit)
+                            .clipped()
+                            .id(playerRefreshID) // Force view refresh when player is recreated
+                            .onTapGesture {
+                                onVideoTap?()
+                            }
+                    }
+                    
+                    // Show subtle loading indicator while buffering
+                    if isLoading {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Spacer()
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(0.8)
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.5))
+                                    .clipShape(Circle())
+                                    .padding(8)
+                            }
                         }
-                } else {
-                    VideoPlayer(player: player)
-                        .aspectRatio(videoAspectRatio, contentMode: .fit)
-                        .clipped()
-                        .onTapGesture {
-                            onVideoTap?()
-                        }
+                    }
                 }
             } else if isLoading {
-                ProgressView("Loading video...")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.1))
+                Color.black.opacity(0.1)
+                    .overlay(
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                    )
             } else if loadFailed {
                 Color.black
                     .overlay(
@@ -99,11 +133,38 @@ struct CachingVideoPlayer: View {
             cleanupPlayer()
         }
         .onChange(of: isVisible) { _, visible in
-            if visible && autoPlay {
-                player?.play()
+            if visible {
+                // When view becomes visible, check if player needs recovery
+                if player != nil && isPlayerBroken() {
+                    print("DEBUG: [CachingVideoPlayer] Player is broken when becoming visible for \(mid), recovering...")
+                    recoverFromBackground()
+                } else if visible && autoPlay {
+                    player?.play()
+                }
             } else {
                 player?.pause()
             }
+        }
+        .onChange(of: autoPlay) { _, shouldPlay in
+            if shouldPlay && isVisible {
+                player?.play()
+                print("DEBUG: [CachingVideoPlayer] Started playing \(mid)")
+            } else {
+                player?.pause()
+                print("DEBUG: [CachingVideoPlayer] Paused \(mid)")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            handleWillResignActive()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            handleDidEnterBackground()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            handleWillEnterForeground()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            handleDidBecomeActive()
         }
     }
     
@@ -114,7 +175,8 @@ struct CachingVideoPlayer: View {
                 
                 
                 // Use SharedAssetCache.getOrCreatePlayer to get cached player or create new one
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: mid, mediaType: mediaType)
+                // Cache key is always the video's mediaID (mid); do not pass tweetId.
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaType: mediaType)
                 
                 await MainActor.run {
                     // Store references
@@ -162,30 +224,74 @@ struct CachingVideoPlayer: View {
                         // Store the delegate to prevent deallocation
                         self.playerDelegate = delegate
                         cachingPlayerItem.delegate = delegate
+                        
+                        // Check if player item is already ready
+                        if cachingPlayerItem.status == .readyToPlay {
+                            print("DEBUG: [CachingVideoPlayer] Player item already ready for \(self.mid)")
+                            self.isLoading = false
+                            if self.autoPlay && self.isVisible {
+                                newPlayer.play()
+                            }
+                        } else {
+                            // Poll status asynchronously to hide loading indicator ASAP
+                            Task {
+                                while cachingPlayerItem.status != .readyToPlay && cachingPlayerItem.status != .failed {
+                                    try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                                }
+                                
+                                await MainActor.run {
+                                    if cachingPlayerItem.status == .readyToPlay {
+                                        print("DEBUG: [CachingVideoPlayer] Player item became ready for \(self.mid)")
+                                        self.isLoading = false
+                                        if self.autoPlay && self.isVisible {
+                                            newPlayer.play()
+                                        }
+                                    } else if cachingPlayerItem.status == .failed {
+                                        print("DEBUG: [CachingVideoPlayer] Player item failed for \(self.mid)")
+                                        self.handleLoadFailure()
+                                    }
+                                }
+                            }
+                        }
                     } else {
-                        // For regular AVPlayerItem, set loading to false immediately
-                        // The player will be ready by the time view renders
-                        self.isLoading = false
-                        if self.autoPlay && self.isVisible {
-                            newPlayer.play()
+                        // For regular AVPlayerItem, check status
+                        if let playerItem = newPlayer.currentItem {
+                            if playerItem.status == .readyToPlay {
+                                self.isLoading = false
+                                if self.autoPlay && self.isVisible {
+                                    newPlayer.play()
+                                }
+                            } else {
+                                // Poll status for non-caching player items
+                                Task {
+                                    while playerItem.status != .readyToPlay && playerItem.status != .failed {
+                                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                                    }
+                                    
+                                    await MainActor.run {
+                                        if playerItem.status == .readyToPlay {
+                                            self.isLoading = false
+                                            if self.autoPlay && self.isVisible {
+                                                newPlayer.play()
+                                            }
+                                        } else {
+                                            self.handleLoadFailure()
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // No player item, set loading to false
+                            self.isLoading = false
                         }
                     }
                     
                     // Set up video completion observer
                     self.setupVideoCompletionObserver(newPlayer)
                     
-                    // Check if video is at the end and restart if needed
+                    // Start playback if needed - don't automatically rewind
                     if self.autoPlay && self.isVisible {
-                        if self.isVideoAtEnd(newPlayer) {
-                            print("DEBUG: [CachingVideoPlayer] Video is at end, restarting from beginning for \(self.mid)")
-                            newPlayer.seek(to: .zero) { finished in
-                                if finished {
-                                    newPlayer.play()
-                                }
-                            }
-                        } else {
-                            newPlayer.play()
-                        }
+                        newPlayer.play()
                     }
                 }
             } catch {
@@ -231,27 +337,28 @@ struct CachingVideoPlayer: View {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
             queue: .main
-        ) { notification in
+        ) { [onVideoFinished, loopOnCompletion] notification in
             print("DEBUG: [CachingVideoPlayer] Video completion notification received for \(mid)")
             print("DEBUG: [CachingVideoPlayer] Notification object: \(notification.object ?? "nil")")
             print("DEBUG: [CachingVideoPlayer] Player current item: \(player.currentItem?.description ?? "nil")")
             
-            // Reset video to beginning
-            player.seek(to: .zero) { finished in
-                guard finished else { 
-                    print("DEBUG: [CachingVideoPlayer] Seek to zero failed for \(mid)")
-                    return 
-                }
-                
-                print("DEBUG: [CachingVideoPlayer] Successfully seeked to zero for \(mid)")
-                
-                // Auto-restart if in fullscreen (autoPlay is true)
-                if autoPlay {
-                    print("DEBUG: [CachingVideoPlayer] Auto-restarting video for \(mid)")
+            // Notify that video finished
+            onVideoFinished?()
+            
+            // Auto-restart only if looping is enabled
+            if loopOnCompletion {
+                print("DEBUG: [CachingVideoPlayer] Auto-restarting video (loop enabled) for \(mid)")
+                // Only rewind if looping
+                player.seek(to: .zero) { finished in
+                    guard finished else { 
+                        print("DEBUG: [CachingVideoPlayer] Seek to zero failed for \(mid)")
+                        return 
+                    }
+                    print("DEBUG: [CachingVideoPlayer] Successfully seeked to zero for \(mid)")
                     player.play()
-                } else {
-                    print("DEBUG: [CachingVideoPlayer] Video ready to replay for \(mid)")
                 }
+            } else {
+                print("DEBUG: [CachingVideoPlayer] Video finished, not looping for \(mid)")
             }
         }
         
@@ -259,6 +366,11 @@ struct CachingVideoPlayer: View {
     }
     
     private func cleanupPlayer() {
+        // Cancel any ongoing recovery task
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        isRecovering = false
+        
         // Remove video completion observer
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -279,6 +391,159 @@ struct CachingVideoPlayer: View {
         // Clear local references but keep the player alive
         cachingPlayerItem = nil
         playerDelegate = nil
+    }
+    
+    // MARK: - Background Recovery
+    
+    private func handleWillResignActive() {
+        print("DEBUG: [CachingVideoPlayer] App will resign active for \(mid)")
+        hasRecoveredThisCycle = false
+        
+        // Cancel any ongoing recovery task
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        isRecovering = false
+        
+        // Save playback state
+        if let player = player {
+            let wasPlaying = player.rate > 0
+            let currentTime = player.currentTime()
+            savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
+            
+            // Pause the player
+            player.pause()
+            
+            print("DEBUG: [CachingVideoPlayer] Saved state - wasPlaying: \(wasPlaying), time: \(currentTime.seconds)")
+        }
+    }
+    
+    private func handleDidEnterBackground() {
+        print("DEBUG: [CachingVideoPlayer] App entering background for \(mid)")
+        // State already saved in willResignActive
+    }
+    
+    private func handleWillEnterForeground() {
+        print("DEBUG: [CachingVideoPlayer] App entering foreground for \(mid)")
+        recoverFromBackground()
+    }
+    
+    private func handleDidBecomeActive() {
+        print("DEBUG: [CachingVideoPlayer] App became active for \(mid)")
+        // Recover from screen lock if we haven't already recovered
+        if !hasRecoveredThisCycle {
+            print("DEBUG: [CachingVideoPlayer] Recovering from screen lock for \(mid)")
+            recoverFromBackground()
+        }
+    }
+    
+    private func recoverFromBackground() {
+        // Cancel any ongoing recovery task first
+        recoveryTask?.cancel()
+        
+        // Check if we're already recovering
+        if isRecovering {
+            print("DEBUG: [CachingVideoPlayer] Recovery already in progress for \(mid), skipping")
+            return
+        }
+        
+        // Always check if player is broken, even if we don't have one yet
+        if let player = player, !isPlayerBroken() {
+            // Player is healthy, restore state
+            if let state = savedPlaybackState {
+                print("DEBUG: [CachingVideoPlayer] Restoring playback state for \(mid) - wasPlaying: \(state.wasPlaying)")
+                
+                // Seek to saved position
+                player.seek(to: state.time) { finished in
+                    if finished && state.wasPlaying && self.isVisible {
+                        player.play()
+                        print("DEBUG: [CachingVideoPlayer] Resumed playback for \(self.mid)")
+                    }
+                }
+                
+                savedPlaybackState = nil
+            }
+            hasRecoveredThisCycle = true
+            return
+        }
+        
+        // Player is broken or doesn't exist - recreate it
+        print("DEBUG: [CachingVideoPlayer] Player is broken or missing for \(mid), recreating...")
+        
+        // Mark as recovering
+        isRecovering = true
+        
+        // Create recovery task that can be cancelled
+        recoveryTask = Task { @MainActor in
+            // Check if cancelled before proceeding
+            guard !Task.isCancelled else {
+                print("DEBUG: [CachingVideoPlayer] Recovery cancelled before starting for \(mid)")
+                isRecovering = false
+                return
+            }
+            
+            // Clear broken player
+            if let observer = videoCompletionObserver {
+                NotificationCenter.default.removeObserver(observer)
+                videoCompletionObserver = nil
+            }
+            
+            player?.pause()
+            self.player = nil
+            isLoading = true
+            loadFailed = false
+            
+            // Force view refresh when recreating player
+            playerRefreshID = UUID()
+            
+            // Check if cancelled before recreating player
+            guard !Task.isCancelled else {
+                print("DEBUG: [CachingVideoPlayer] Recovery cancelled during cleanup for \(mid)")
+                isRecovering = false
+                return
+            }
+            
+            // Recreate player
+            setupPlayer()
+            
+            savedPlaybackState = nil
+            hasRecoveredThisCycle = true
+            isRecovering = false
+            recoveryTask = nil
+            
+            print("DEBUG: [CachingVideoPlayer] Recovery completed for \(mid)")
+        }
+    }
+    
+    private func isPlayerBroken() -> Bool {
+        guard let player = player else { return true }
+        guard let playerItem = player.currentItem else { return true }
+        
+        // Check if player item is in failed state
+        if playerItem.status == .failed {
+            print("DEBUG: [CachingVideoPlayer] Player item status is failed for \(mid)")
+            return true
+        }
+        
+        // Check if player item is in unknown state (common after backgrounding)
+        if playerItem.status == .unknown {
+            print("DEBUG: [CachingVideoPlayer] Player item status is unknown for \(mid) - likely broken after backgrounding")
+            return true
+        }
+        
+        // Check if player has invalid time
+        let currentTime = player.currentTime()
+        if !currentTime.isValid || currentTime.isIndefinite {
+            print("DEBUG: [CachingVideoPlayer] Player has invalid time for \(mid)")
+            return true
+        }
+        
+        // Check if player item error exists
+        if let error = playerItem.error {
+            print("DEBUG: [CachingVideoPlayer] Player item has error for \(mid): \(error.localizedDescription)")
+            return true
+        }
+        
+        return false
     }
 }
 

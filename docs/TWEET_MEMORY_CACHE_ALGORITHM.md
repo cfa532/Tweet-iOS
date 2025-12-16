@@ -16,7 +16,7 @@ The system uses a **dual-layer architecture** with in-memory singleton instances
 ### 2. Cache Layer (Core Data)
 - **Purpose**: Persistent storage and offline access
 - **Implementation**: `TweetCacheManager` with Core Data
-- **Key Feature**: Dual-cache strategy (main_feed + user profile)
+- **Key Feature**: User-specific cache strategy (appUser.mid) that persists across logouts
 
 ## Memory Management Algorithm
 
@@ -59,38 +59,67 @@ class Tweet: Identifiable, Codable, ObservableObject {
 
 ## Cache Management Algorithm
 
-### Dual-Cache Strategy
+### Dual-Strategy Cache (January 2026)
 
-The system maintains two separate caches:
+The system uses a **dual-strategy approach** based on context:
 
-1. **Main Feed Cache** (`uid: "main_feed"`)
-   - Used by `FollowingTweetView`
-   - Contains tweets from user's following feed
-   - Separate from profile browsing
+1. **Main Feed Cache Strategy**
+   - **All tweets cached under `appUser.mid`**
+   - Aggregates tweets from multiple authors for efficient main feed loading
+   - Single cache lookup for all main feed tweets
+   - Used by main feed and appUser's profile (with filtering)
 
-2. **User Profile Cache** (`uid: appUser.mid`)
-   - Used by `ProfileView` (only for appUser's profile)
-   - Contains tweets from appUser's profile
-   - Not used for other users' profiles
+2. **Profile Cache Strategy**
+   - **Tweets cached under their `authorId`**
+   - Author-specific cache for profile views
+   - Direct lookup without filtering needed
+   - Used by other users' profiles
+
+3. **Single Tweet Cache Strategy**
+   - **Tweets cached under their `authorId`**
+   - Consistent with profile caching strategy
+   - Enables efficient author-based queries
+
+4. **Cache Persistence Policy**
+   - Cache survives logout/login cycles
+   - When user logs out, in-memory tweets are cleared but cache persists
+   - Cache is cleared periodically (2 weeks) or manually by user
+   - Different cache keys for different contexts (appUser.mid vs authorId)
 
 ### Cache Update Policy
 
+**Main Feed:**
+```swift
+// In HproseInstance.fetchTweetFeed()
+TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+```
+
+**Profile:**
+```swift
+// In HproseInstance.fetchUserTweets()
+TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+```
+
+**Single Tweet:**
+```swift
+// In HproseInstance.getTweet()
+TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
+```
+
+**Update Method:**
 ```swift
 func updateTweetInAppUserCaches(_ tweet: Tweet, appUserId: String) {
-    // Always update in main_feed cache
-    saveTweet(tweet, userId: "main_feed")
-    
-    // Also update in appUser's profile cache if the tweet belongs to the appUser
-    if tweet.authorId == appUserId {
-        saveTweet(tweet, userId: appUserId)
-    }
+    // Cache main feed tweets under appUser.mid
+    saveTweet(tweet, userId: appUserId)
 }
 ```
 
 **Benefits:**
-- ✅ **Consistency**: Updates reflected in both caches
-- ✅ **Efficiency**: Only caches appUser's own tweets in profile cache
-- ✅ **Separation**: Main feed and profile data are isolated
+- ✅ **Performance**: Main feed uses single cache lookup (appUser.mid) for all tweets
+- ✅ **Flexibility**: Profile uses author-specific cache (authorId) for direct lookup
+- ✅ **Persistence**: Cache survives logout, providing faster re-login experience
+- ✅ **Efficiency**: No unnecessary filtering for main feed, direct lookup for profiles
+- ✅ **Periodic Cleanup**: Old tweets automatically expire after 2 weeks
 
 ## Complete Data Flow
 
@@ -186,29 +215,42 @@ func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt) async -> 
 
 ## Cache Loading Strategy
 
-### FollowingTweetView
+### Main Feed (FollowingTweetView)
 ```swift
-// Load from main_feed cache
+// Load from appUser.mid cache (contains all main feed tweets)
 if isFromCache {
     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-        for: "main_feed", page: page, pageSize: size, currentUserId: appUser.mid)
+        for: viewModel.hproseInstance.appUser.mid, 
+        page: page, 
+        pageSize: size, 
+        currentUserId: viewModel.hproseInstance.appUser.mid)
     return cachedTweets
 }
 ```
 
-### ProfileView
+### Profile View
+
+**AppUser's Profile:**
 ```swift
-// Load from user profile cache (only for appUser)
-if isFromCache {
-    if user.mid == hproseInstance.appUser.mid {
-        let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-            for: user.mid, page: page, pageSize: size, currentUserId: appUser.mid)
-        return cachedTweets
-    } else {
-        // Don't cache other users' tweets
-        return []
-    }
-}
+// Load from appUser.mid cache (mainfeed cache) with filtering
+// TweetCacheManager.fetchCachedTweets() handles filtering by authorId
+let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+    for: user.mid,  // appUser.mid
+    page: page, 
+    pageSize: size, 
+    currentUserId: appUser.mid)  // Enables filtering logic
+// Returns only appUser's tweets (filtered from mainfeed cache)
+```
+
+**Other User's Profile:**
+```swift
+// Load from userId cache (which is their authorId)
+let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+    for: user.mid,  // userId equals authorId for profile
+    page: page, 
+    pageSize: size, 
+    currentUserId: appUser.mid)
+// Returns tweets directly from author's cache (no filtering needed)
 ```
 
 ## Key Features
@@ -290,25 +332,58 @@ let tweet = Tweet.getInstance(
 ```
 
 ### Caching Tweets
-```swift
-// Cache in main feed
-TweetCacheManager.shared.saveTweet(tweet, userId: "main_feed")
 
-// Cache in user profile (if it's the appUser's tweet)
-if tweet.authorId == appUser.mid {
-    TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
-}
+**Main Feed:**
+```swift
+// Cache main feed tweets under appUser.mid
+TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
+```
+
+**Profile:**
+```swift
+// Cache profile tweets under their authorId
+TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+```
+
+**Single Tweet:**
+```swift
+// Cache single tweet under its authorId
+TweetCacheManager.shared.saveTweet(tweet, userId: authorId)
 ```
 
 ### Loading from Cache
-```swift
-// Load main feed tweets
-let mainFeedTweets = await TweetCacheManager.shared.fetchCachedTweets(
-    for: "main_feed", page: 0, pageSize: 20, currentUserId: appUser.mid)
 
-// Load user profile tweets
-let profileTweets = await TweetCacheManager.shared.fetchCachedTweets(
-    for: appUser.mid, page: 0, pageSize: 20, currentUserId: appUser.mid)
+**Main Feed:**
+```swift
+// Load from appUser.mid cache (contains all main feed tweets)
+let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+    for: appUser.mid, 
+    page: 0, 
+    pageSize: 20, 
+    currentUserId: appUser.mid)
+// Private tweets are automatically filtered out
+```
+
+**AppUser's Profile:**
+```swift
+// Load from appUser.mid cache with filtering by authorId
+let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+    for: appUser.mid, 
+    page: 0, 
+    pageSize: 20, 
+    currentUserId: appUser.mid)
+// Automatically filtered to show only appUser's tweets
+```
+
+**Other User's Profile:**
+```swift
+// Load from userId cache (equals authorId)
+let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+    for: userId,  // equals authorId for profile
+    page: 0, 
+    pageSize: 20, 
+    currentUserId: appUser.mid)
+// Direct lookup from author's cache
 ```
 
 ## User Cache Management Algorithm
@@ -410,25 +485,42 @@ func updateUserFromServer(_ userId: String) async throws -> User? {
     return user
 }
 
-// 4. Checking Cache Validity
+// 4. Checking Cache Validity and Fetching User
 func fetchUser(_ userId: String) async throws -> User? {
     let cachedUser = TweetCacheManager.shared.fetchUser(mid: userId)
+    let hasExpired = await cachedUser.hasExpired()
     
-    // Return cached user only if:
+    // Return cached user immediately if:
     // 1. Valid username exists
     // 2. Cache hasn't expired (< 30 minutes)
     // 3. IP address is resolved (baseUrl != nil)
-    if cachedUser.username != nil && !cachedUser.hasExpired && cachedUser.baseUrl != nil {
+    if cachedUser.username != nil && !hasExpired && cachedUser.baseUrl != nil {
+        return cachedUser
+    }
+    
+    // If cached user has no username, return it and update in background
+    // This ensures UI shows cached data (even if expired) as placeholder
+    if cachedUser.username == nil {
+        // Start background update
+        Task {
+            _ = try? await updateUserFromServer(userId, baseUrl: baseUrl)
+        }
         return cachedUser
     }
     
     // Re-resolve if baseUrl is nil (loaded from disk)
     if cachedUser.username != nil && cachedUser.baseUrl == nil {
-        // Fall through to updateUserFromServer
+        // Fall through to updateUserFromServer to resolve IP
     }
     
     // Update from server
-    return try await updateUserFromServer(userId)
+    do {
+        return try await updateUserFromServer(userId, baseUrl: baseUrl)
+    } catch {
+        // Server fetch failed - return skeleton to indicate error
+        // This signals to UI that something is wrong, rather than showing stale cached data
+        return User.getInstance(mid: userId)
+    }
 }
 ```
 
@@ -440,6 +532,11 @@ App Start
 Load User from Core Data (baseUrl = nil, writableUrl = nil)
   ↓
 Memory Instance (baseUrl = nil preserved, not overwritten)
+  ↓
+Load Cached Tweets
+  ├─ Load author from Core Data cache (even if expired)
+  ├─ Use cached user as placeholder
+  └─ UI renders immediately with cached data ✅
   ↓
 First API Call Needs User
   ↓
@@ -463,7 +560,27 @@ updateUserFromServer() → Calls getProviderIP()
 Get Fresh IP: 192.168.1.20 (if changed) ✅
   ↓
 Update Memory & Core Data → New 30-minute window
+  ↓
+If Server Fetch Fails
+  ↓
+Return Skeleton User (indicates error) ⚠️
+  ↓
+UI shows skeleton instead of stale cached data
 ```
+
+### User Placeholder Strategy
+
+When loading tweets, the system uses this priority:
+
+1. **Cached User (Expired or Not)** - Used as placeholder when loading from cache
+   - Provides immediate UI feedback
+   - Background refresh updates the data
+   - Even expired cache is better than no data
+
+2. **Skeleton User** - Only when server fetch fails
+   - Indicates to UI that something is wrong
+   - Prevents showing stale cached data after error
+   - Clear visual signal that user data couldn't be loaded
 
 ### User Data Encoding/Decoding
 
@@ -593,8 +710,9 @@ func saveUser(_ user: User) {
 | **Disk** | Full data persisted | Full data except IPs |
 | **TTL** | 30 days | 30 minutes |
 | **Update Frequency** | On user interaction | On cache expiry |
-| **Cache Key** | Tweet ID + User ID | User ID only |
-| **Dual Cache** | main_feed + profile | Single cache |
+| **Cache Key** | Tweet ID + User ID (appUser.mid) | User ID only |
+| **Cache Strategy** | User-specific (appUser.mid), persists across logout | Single cache |
+| **Cache Clearing** | Periodic (2 weeks) or manual, NOT on logout | On cache expiry |
 | **Special Handling** | Count fields | IP addresses |
 
 ## Conclusion

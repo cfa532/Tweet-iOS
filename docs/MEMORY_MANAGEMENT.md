@@ -625,6 +625,36 @@ private func processNextPendingAvatar() {
 
 ---
 
+## Avatar Loading Strategy
+
+**All avatars (including appUser) use the same caching mechanism** via `ImageCacheManager` for consistent behavior and optimal performance. The only exception is the full-size avatar view, which uses direct URL loading to always show the latest image.
+
+### Standard Avatar Loading (All Users)
+
+All avatars in tweets, toolbars, and profile views use the unified `AvatarImageView` component which:
+- Checks `ImageCacheManager` memory cache first (instant)
+- Falls back to disk cache if available (fast)
+- Downloads from network if cache miss (with deduplication)
+- Uses stable cache keys based on `user.avatar` MimeiId
+
+### Full-Size Avatar View (Direct URL)
+
+`AvatarFullScreenView` uses **direct URL loading** that bypasses cache to ensure users always see the latest avatar when viewing full-size:
+
+```swift
+var request = URLRequest(url: url)
+request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+let (data, response) = try await URLSession.shared.data(for: request)
+```
+
+**Why direct loading for full-size only:**
+- Full-size view is explicitly opened by user (intentional action)
+- Users expect to see the absolute latest avatar when viewing full-size
+- Small avatars in lists benefit from caching for performance
+- Full-size view is infrequent, so bypassing cache has minimal impact
+
+---
+
 ## Best Practices
 
 ### 1. Always Use Stable Cache Keys
@@ -893,6 +923,19 @@ print("DEBUG: [ImageCacheManager] ...")
 - **Problem:** Two instances doing identical work
 - **Solution:** Synchronized both with 1GB threshold
 - **Impact:** No double cleanup on warnings
+
+---
+
+## Open Discoveries (November 2025)
+
+### 1. Progressive Video Spikes on Poor Networks (November 11, 2025)
+- **Observed Behaviour:** When several **progressive** clips load for the first time on a degraded connection (high latency / repeated stalls), the app requests full-range byte spans (0-N). LocalHTTPServer forwards those large ranges, and multiple concurrent `URLSessionDataTask`s retain in-flight buffers that can climb into the hundreds of MB before playback begins. Once the same clips are cached, memory usage returns to normal.
+- **Current Mitigation Status:** No code change yet. We plan to cap the first-serve window (e.g. stream only the first few MB), throttle concurrent progressive downloads, and tighten retry behaviour so overlapping ranges reuse existing work instead of spawning fresh network tasks.
+- **Next Steps:** Prototype smaller initial ranges inside `StreamingDownloadDelegate`, add a semaphore around progressive downloads, and adjust the progressive buffer ladder so `preferredForwardBufferDuration` stays minimal until stable playback.
+
+### 2. Suspected Spillover to HLS & Image Fetches
+- **Observation:** The same conditions (slow / flaky network + aggressive retries) may occur for **HLS playlists** and large **image** downloads. The proxies and loaders already deduplicate by filename, but we need to verify that retries do not issue overlapping requests that hold onto large buffers.
+- **Planned Actions:** Run throttled-network tests for HLS streams and image loads, capture Instruments allocation traces, and verify that each pipeline drops partial buffers promptly. Any issues will be documented here once confirmed.
 
 ---
 

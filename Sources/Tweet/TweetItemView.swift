@@ -3,7 +3,6 @@ import SwiftUI
 @available(iOS 16.0, *)
 struct TweetItemView: View, Equatable {
     @ObservedObject var tweet: Tweet
-    let embedded: Bool = false
     var isPinned: Bool = false
     var isInProfile: Bool = false
     var showDeleteButton: Bool = false
@@ -13,34 +12,17 @@ struct TweetItemView: View, Equatable {
     var currentProfileUser: User? = nil
     var hideActions: Bool = false
     var backgroundColor: Color = Color(.systemBackground)
-    @State private var showDetail = false
-    @State private var detailTweet: Tweet = Tweet(mid: Constants.GUEST_ID, authorId: Constants.GUEST_ID)   //place holder
     @State private var originalTweet: Tweet?
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
-    @State private var showEmbeddedBrowser = false
-    @State private var selectedEmbeddedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
     
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
         return tweet.originalTweetId != nil && tweet.originalAuthorId != nil
-    }
-
-    private func mediaGrid(for tweet: Tweet) -> some View {
-        Group {
-            if let attachments = tweet.attachments, !attachments.isEmpty {
-                MediaGridView(
-                    parentTweet: tweet,
-                    attachments: attachments,
-                    visibleTweetId: tweet.mid
-                )
-                .padding(.top, 8)
-            }
-        }
     }
     
     @ViewBuilder
@@ -112,26 +94,25 @@ struct TweetItemView: View, Equatable {
                 sourceTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
         }
-        .fullScreenCover(isPresented: $showEmbeddedBrowser) {
-            MediaBrowserView(
-                tweet: originalTweet ?? tweet,
-                initialIndex: selectedEmbeddedMediaIndex,
-                sourceTweetId: tweet.mid // Pass visible tweet ID (the retweet)
-            )
-        }
         .task {
             isVisible = true
             tweet.isVisible = true
-            // Usually TweetDetailView is not orignalTweet
-            detailTweet = tweet
             
             // Load author if not already loaded
             if tweet.author == nil {
-                // No author at all - create placeholder and fetch in background
+                // No author at all - try to load from cache first, then fetch in background
+                let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
                 await MainActor.run {
-                    tweet.author = User.getInstance(mid: tweet.authorId)
+                    if cachedAuthor.username != nil {
+                        // Use cached user as placeholder until refresh succeeds
+                        tweet.author = cachedAuthor
+                        print("⚡ [RENDER] Tweet rendering with cached author (@\(cachedAuthor.username ?? "?")), fetching in background")
+                    } else {
+                        // No cached user, use skeleton as last resort
+                        tweet.author = User.getInstance(mid: tweet.authorId)
+                        print("⚡ [RENDER] Tweet rendering with placeholder (no author), fetching in background")
+                    }
                 }
-                print("⚡ [RENDER] Tweet rendering with placeholder (no author), fetching in background")
                 Task.detached(priority: .background) {
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
@@ -143,7 +124,7 @@ struct TweetItemView: View, Equatable {
                 }
             } else if tweet.author?.baseUrl == nil {
                 print("⚡ [RENDER] Tweet rendering immediately (@\(tweet.author?.username ?? "?")) - fetching baseUrl in background")
-                // Author exists with username but no baseUrl - resolve IP in background
+                // Author exists but no baseUrl (old cache data or new user) - resolve IP in background
                 Task.detached(priority: .background) {
                     _ = try? await hproseInstance.fetchUser(tweet.authorId)
                 }
@@ -154,36 +135,46 @@ struct TweetItemView: View, Equatable {
                 // print("⚡ [RENDER] Tweet ready (@\(tweet.author?.username ?? "?"))")
             }
         }
-        .onAppear {
-            // Defer original tweet loading to reduce async operations during scrolling
-            if !hasLoadedOriginalTweet, 
-               let originalTweetId = tweet.originalTweetId, 
-               let originalAuthorId = tweet.originalAuthorId {
-                hasLoadedOriginalTweet = true
-                // TweetCacheManager already handles caching, so this will be fast
-                Task {
-                    if let t = try? await hproseInstance.getTweet(
-                        tweetId: originalTweetId,
-                        authorId: originalAuthorId
-                    ) {
-                        // CRITICAL: Register relationship IMMEDIATELY before setting originalTweet
-                        // This ensures MediaGridView (which may appear via TweetItemBodyView) 
-                        // already knows about the relationship when it checks shouldLoadVideos
-                        VideoLoadingManager.shared.registerRetweetRelationship(
-                            retweetId: tweet.mid,
-                            originalTweetId: t.mid
-                        )
-                        
-                        await MainActor.run {
-                            originalTweet = t
-                            detailTweet = t
-                        }
-                    } else {
-                        // Could not fetch original tweet, remove this tweet from the list
-                        await MainActor.run {
-                            onRemove?(tweet.mid)
-                        }
-                    }
+        // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
+        // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
+        .task(id: tweet.originalTweetId, priority: .userInitiated) {
+            // Load original tweet if this is a retweet/quoted tweet
+            // Use .userInitiated priority for faster loading of visible content
+            guard let originalTweetId = tweet.originalTweetId,
+                  let originalAuthorId = tweet.originalAuthorId else {
+                return
+            }
+            
+            // First, try to restore from cache immediately to prevent layout shifts
+            if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
+                await MainActor.run {
+                    originalTweet = cachedTweet
+                    hasLoadedOriginalTweet = true
+                    VideoLoadingManager.shared.registerRetweetRelationship(
+                        retweetId: tweet.mid,
+                        originalTweetId: cachedTweet.mid
+                    )
+                }
+            }
+            
+            // Then fetch from server to get the latest version
+            if let t = try? await hproseInstance.getTweet(
+                tweetId: originalTweetId,
+                authorId: originalAuthorId
+            ) {
+                VideoLoadingManager.shared.registerRetweetRelationship(
+                    retweetId: tweet.mid,
+                    originalTweetId: t.mid
+                )
+                
+                await MainActor.run {
+                    originalTweet = t
+                    hasLoadedOriginalTweet = true
+                }
+            } else if originalTweet == nil {
+                // Could not fetch original tweet and no cache, remove this tweet from the list
+                await MainActor.run {
+                    onRemove?(tweet.mid)
                 }
             }
         }
@@ -191,8 +182,6 @@ struct TweetItemView: View, Equatable {
             isVisible = false
             tweet.isVisible = false
         }
-        // Add stable identity to prevent unnecessary re-composition
-        .id("\(tweet.mid)_\(originalTweet?.mid ?? "none")")
     }
     
     private var tweetContent: some View {
@@ -213,25 +202,33 @@ struct TweetItemView: View, Equatable {
                     }
                     
                     // Show original tweet with retweet menu.
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 4) {
                             Image(systemName: "arrow.2.squarepath")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text(String(format: NSLocalizedString("Forwarded by %@", comment: "Tweet forwarded by user"), tweet.author?.name ?? tweet.author?.username ?? ""))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            if let author = tweet.author, author.mid == hproseInstance.appUser.mid {
+                                // If the forwarder is the appUser, show "Forwarded by you"
+                                Text(NSLocalizedString("Forwarded by you", comment: "Tweet forwarded by appUser"))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                // Otherwise, show "Forwarded by [username]"
+                                Text(String(format: NSLocalizedString("Forwarded by %@", comment: "Tweet forwarded by user"), tweet.author?.name ?? tweet.author?.username ?? ""))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
-                        .padding(.top, -8)
                         
-                        HStack(alignment: .top) {
+                        HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: originalTweet)
+                            Spacer(minLength: 0)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
-                                .padding(.top, -8)
+                                .padding(.trailing, -24)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, visibleTweetId: tweet.mid)
-                            .padding(.top, -12)
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
@@ -250,24 +247,31 @@ struct TweetItemView: View, Equatable {
                         }
                     }
                     
-                    VStack(alignment: .leading) {
-                        HStack {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: tweet)
+                            Spacer(minLength: 0)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                                .padding(.trailing, -24)
                         }
-                        .padding(.top, -8)
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
-                            .padding(.top, -12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         EmbeddedTweetView(
                             tweet: originalTweet,
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
-                            backgroundColor: Color(.systemGray4).opacity(0.6)
+                            backgroundColor: Color(.systemGray4).opacity(0.6),
+                            isEmbedded: true
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
+                        .padding(.top, 8)
+                        .padding(.bottom, 8)
+                        .frame(minHeight: 60)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
                         
                         if !hideActions {
                             TweetActionButtonsView(tweet: tweet)
@@ -275,9 +279,64 @@ struct TweetItemView: View, Equatable {
                         }
                     }
                 }
+            } else if isRetweetOrQuotedTweet && !hasLoadedOriginalTweet {
+                // originalTweet is nil and hasn't loaded yet - show placeholder
+                Group {
+                    if let user = tweet.author {
+                        avatarView(for: user, context: "retweet-loading")
+                    } else {
+                        // Show placeholder while author loads
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 40, height: 40)
+                    }
+                }
+                
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
+                        TweetItemHeaderView(tweet: tweet)
+                        Spacer(minLength: 0)
+                        TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            .padding(.trailing, -16)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    
+                    // Show tweet content if available
+                    if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                    }
+                    
+                    // Placeholder for embedded tweet
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 40, height: 40)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.2))
+                                .frame(height: 20)
+                                .cornerRadius(4)
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.2))
+                                .frame(height: 16)
+                                .cornerRadius(4)
+                        }
+                    }
+                    .padding(8)
+                    .background(Color(.systemGray4).opacity(0.3))
+                    .cornerRadius(8)
+                    .frame(height: 60)
+                    .padding(.top, (tweet.content?.isEmpty ?? true) ? 0 : 8)
+                    
+                    if !hideActions {
+                        TweetActionButtonsView(tweet: tweet)
+                            .padding(.top, 8)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
             } else {
                 // Regular tweet
-                // Use Group to force re-evaluation when tweet.author changes (@Published)
                 Group {
                     if let user = tweet.author {
                         avatarView(for: user, context: "regular-tweet")
@@ -293,14 +352,15 @@ struct TweetItemView: View, Equatable {
                             )
                     }
                 }
-                VStack(alignment: .leading) {
-                    HStack {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
+                        Spacer(minLength: 0)
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
+                            .padding(.trailing, -24)
                     }
-                    .padding(.top, -8)
-                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
-                        .padding(.top, -12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
@@ -308,9 +368,8 @@ struct TweetItemView: View, Equatable {
                 }
             }
         }
-        .padding()
-        .padding(.leading, -4)
-        .padding(.trailing, -8)
+        .padding(.top)
+        .padding(.bottom)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
@@ -325,7 +384,8 @@ struct TweetItemView: View, Equatable {
                lhs.showDeleteButton == rhs.showDeleteButton &&
                lhs.hideActions == rhs.hideActions &&
                lhs.backgroundColor == rhs.backgroundColor &&
-               lhs.originalTweet?.mid == rhs.originalTweet?.mid
+               lhs.originalTweet?.mid == rhs.originalTweet?.mid &&
+               lhs.tweet.originalTweetId == rhs.tweet.originalTweetId
     }
 }
 
@@ -336,6 +396,7 @@ struct EmbeddedTweetView: View, Equatable {
     var isPinned: Bool = false
     var onTap: ((Tweet) -> Void)? = nil
     var backgroundColor: Color = Color(.systemBackground)
+    var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -368,7 +429,7 @@ struct EmbeddedTweetView: View, Equatable {
             isVisible = false
             tweet.isVisible = false
         }
-        // Add stable identity for embedded tweets
+        // Add identity for embedded tweets
         .id("embedded_\(tweet.mid)")
     }
     
@@ -385,15 +446,18 @@ struct EmbeddedTweetView: View, Equatable {
                         .frame(width: 40, height: 40)
                 }
             }
-            VStack(alignment: .leading) {
-                HStack {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .top) {
                     TweetItemHeaderView(tweet: tweet)
                     Spacer()
                 }
-                .padding(.top, 0)
                 
-                TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible, visibleTweetId: tweet.mid)
-                .padding(.top, 0)
+                TweetItemBodyView(
+                    tweet: tweet,
+                    enableTap: false,
+                    isVisible: isVisible,
+                    isEmbedded: isEmbedded
+                )
             }
         }
         .padding(8)
@@ -404,6 +468,7 @@ struct EmbeddedTweetView: View, Equatable {
     static func == (lhs: EmbeddedTweetView, rhs: EmbeddedTweetView) -> Bool {
         return lhs.tweet.mid == rhs.tweet.mid &&
                lhs.isPinned == rhs.isPinned &&
-               lhs.backgroundColor == rhs.backgroundColor
+               lhs.backgroundColor == rhs.backgroundColor &&
+               lhs.isEmbedded == rhs.isEmbedded
     }
 }
