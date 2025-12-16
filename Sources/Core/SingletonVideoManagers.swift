@@ -308,6 +308,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var loadGeneration: Int = 0
     private var loadingMid: String?
+
+    // MARK: - Prewarm (startup UX)
+    // Preload a first AVPlayerItem to reduce first-open latency.
+    private var didPrewarmFirstItem: Bool = false
+    private var prewarmTask: Task<Void, Never>?
     
     /// Initialize singleton player early (called during app startup)
     func initializePlayerEarly() {
@@ -322,6 +327,45 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer?.isMuted = false
         
         print("DEBUG: [FullScreenVideoManager] ✅ Initialized singleton player early during app startup")
+    }
+
+    /// Prewarm the singleton by creating (and optionally attaching) a first AVPlayerItem.
+    /// This should NOT start playback.
+    func prewarmFirstItemIfNeeded(url: URL, mediaID: String, mediaType: MediaType) {
+        guard !didPrewarmFirstItem else { return }
+        didPrewarmFirstItem = true
+
+        // Ensure the singleton player exists.
+        initializePlayerEarly()
+
+        prewarmTask?.cancel()
+        prewarmTask = Task.detached(priority: .utility) { [url, mediaID, mediaType] in
+            do {
+                let item = try await SharedAssetCache.shared.getOrCreatePlayerItem(
+                    for: url,
+                    mediaID: mediaID,
+                    mediaType: mediaType
+                )
+                await MainActor.run {
+                    guard let player = self.singletonPlayer else { return }
+                    // Attach the item to warm decoder + video pipeline, but keep paused.
+                    if player.currentItem == nil {
+                        player.replaceCurrentItem(with: item)
+                    }
+                    player.pause()
+                    // IMPORTANT: `preroll(atRate:)` will throw an Obj-C exception unless
+                    // `player.status == .readyToPlay`. Never call it during prewarm unless ready.
+                    if player.status == .readyToPlay {
+                        player.preroll(atRate: 0.0) { _ in }
+                    }
+                    NSLog("✅ [FullScreenVideoManager] Prewarmed first item for \(mediaID)")
+                }
+            } catch {
+                await MainActor.run {
+                    NSLog("⚠️ [FullScreenVideoManager] Failed to prewarm first item for \(mediaID): \(error)")
+                }
+            }
+        }
     }
     
     /// Set the video search function from TweetListView
@@ -1245,6 +1289,9 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     // We solve this by scheduling a delayed clear that gets cancelled when another detail view appears.
     private var activeDetailViewCount: Int = 0
     private var scheduledClearTask: Task<Void, Never>?
+    private var prewarmTask: Task<Void, Never>?
+    private var didPrewarmFirstItem: Bool = false
+    private var prewarmPlayer: AVPlayer? // separate from currentPlayer (doesn't affect detail playback state)
 
     func beginDetailViewSession() {
         activeDetailViewCount += 1
@@ -1266,6 +1313,44 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
             guard self.activeDetailViewCount == 0 else { return }
             self.clearCurrentVideo()
+        }
+    }
+
+    /// Prewarm the detail video pipeline by preparing a first AVPlayerItem at startup.
+    /// Uses a dedicated hidden player so it won't affect the active detail singleton state.
+    func prewarmFirstItemIfNeeded(url: URL, mediaID: String, mediaType: MediaType) {
+        guard !didPrewarmFirstItem else { return }
+        didPrewarmFirstItem = true
+
+        if prewarmPlayer == nil {
+            prewarmPlayer = AVPlayer()
+            prewarmPlayer?.isMuted = true
+        }
+
+        prewarmTask?.cancel()
+        prewarmTask = Task.detached(priority: .utility) { [url, mediaID, mediaType] in
+            do {
+                let item = try await SharedAssetCache.shared.getOrCreatePlayerItem(
+                    for: url,
+                    mediaID: mediaID,
+                    mediaType: mediaType
+                )
+                await MainActor.run {
+                    guard let player = self.prewarmPlayer else { return }
+                    player.replaceCurrentItem(with: item)
+                    player.pause()
+                    // IMPORTANT: `preroll(atRate:)` will throw an Obj-C exception unless
+                    // `player.status == .readyToPlay`. Never call it during prewarm unless ready.
+                    if player.status == .readyToPlay {
+                        player.preroll(atRate: 0.0) { _ in }
+                    }
+                    NSLog("✅ [DetailVideoManager] Prewarmed first item for \(mediaID)")
+                }
+            } catch {
+                await MainActor.run {
+                    NSLog("⚠️ [DetailVideoManager] Failed to prewarm first item for \(mediaID): \(error)")
+                }
+            }
         }
     }
     

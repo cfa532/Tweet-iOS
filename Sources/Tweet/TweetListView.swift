@@ -32,6 +32,7 @@ struct TweetListView<RowView: View>: View {
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
     @State private var lastScrollOffset: CGFloat = 0
+    @State private var didPrewarmSingletonFirstItem: Bool = false
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -339,6 +340,11 @@ struct TweetListView<RowView: View>: View {
                     initialLoadComplete = false
                 }
             }
+
+            // Prewarm singleton players based on the first available cached video (best-effort).
+            await MainActor.run {
+                self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+            }
             
             // Step 2: Load from server to get the most up-to-date data
             await loadFromServer(page: page, pageSize: pageSize) { _ in }
@@ -577,6 +583,7 @@ struct TweetListView<RowView: View>: View {
             if page == 0 {
                 isLoading = false
                 initialLoadComplete = true
+                prewarmSingletonPlayersFromFirstVideoIfNeeded()
             }
         } else if tweetsFromServer.count < pageSize {
             hasMoreTweets = false
@@ -597,6 +604,36 @@ struct TweetListView<RowView: View>: View {
             currentPage = page
             hasMoreTweets = true
             print("[TweetListView] Full page with all nil tweets, setting hasMoreTweets=true to continue searching")
+        }
+    }
+
+    @MainActor
+    private func prewarmSingletonPlayersFromFirstVideoIfNeeded() {
+        guard !didPrewarmSingletonFirstItem else { return }
+
+        // Find the first video/HLS attachment we can resolve to a URL.
+        for tweet in tweets {
+            guard let attachments = tweet.attachments else { continue }
+            let baseUrl = tweet.author?.baseUrl ?? hproseInstance.appUser.baseUrl ?? HproseInstance.baseUrl
+
+            for attachment in attachments where (attachment.type == .video || attachment.type == .hls_video) {
+                guard let url = attachment.getUrl(baseUrl) else { continue }
+
+                didPrewarmSingletonFirstItem = true
+
+                // Prewarm both singleton pipelines (no playback).
+                FullScreenVideoManager.shared.prewarmFirstItemIfNeeded(
+                    url: url,
+                    mediaID: attachment.mid,
+                    mediaType: attachment.type
+                )
+                DetailVideoManager.shared.prewarmFirstItemIfNeeded(
+                    url: url,
+                    mediaID: attachment.mid,
+                    mediaType: attachment.type
+                )
+                return
+            }
         }
     }
 
