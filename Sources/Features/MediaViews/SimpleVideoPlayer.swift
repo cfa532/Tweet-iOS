@@ -2201,10 +2201,13 @@ struct SimpleVideoPlayer: View {
                     
                     let waitingForData = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                     let bufferEmpty = item?.isPlaybackBufferEmpty ?? false
+                    let isFinished = (playbackState == .finished)
                     let shouldShowPlaceholder =
                         isHoldingRecoveryCover ||
                         isPlayerDetached ||
                         loadingState.isLoading ||
+                        // If finished, prefer the cached last frame over any end-of-stream black frame.
+                        isFinished ||
                         (!readyForFirstFrame && (waitingForData || bufferEmpty || !loadingState.isLoaded))
                     
                     if shouldShowPlaceholder {
@@ -2218,7 +2221,8 @@ struct SimpleVideoPlayer: View {
                                 .overlay(Color.black.opacity(0.08))
                             
                             // Spinner over the cover frame during recovery/buffering.
-                            if loadingState.isLoading || waitingForData || bufferEmpty {
+                            // IMPORTANT: Never show spinner when the video is finished.
+                            if !isFinished && (loadingState.isLoading || waitingForData || bufferEmpty) {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(1.1)
@@ -2458,7 +2462,7 @@ struct SimpleVideoPlayer: View {
     /// After a video finishes, some files show a black end-frame. This captures a non-black frame
     /// by scanning backward from the end and caching the first frame with content.
     @MainActor
-    private func captureLastFrameNearEndIfPossible(reason: String) {
+    private func captureLastFrameNearEndIfPossible(reason: String) async {
         guard mode == .mediaCell else { return }
         guard isAnyVideoMedia else { return }
         guard let player = player, let item = player.currentItem else { return }
@@ -2474,34 +2478,43 @@ struct SimpleVideoPlayer: View {
         let currentSeconds = player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0
         let endSeconds = durationSeconds > 0.5 ? durationSeconds : max(currentSeconds, item.currentTime().seconds)
 
-        // Scan backward from end to find a non-black frame.
-        let backoffs: [Double] = [0.0, 0.06, 0.15, 0.30, 0.60, 1.0, 1.6, 2.4]
-        let candidateSeconds: [Double] = backoffs.map { max(0, endSeconds - $0) }
-        
-        // Do the scan on the main actor: avoids Swift 6 sendability issues with AVFoundation objects.
-        // This only runs on "finished" events, so the cost is acceptable.
-        var displayTime = CMTime.zero
-        var chosenSeconds: Double? = nil
-        var chosenImage: UIImage? = nil
-        
-        for s in candidateSeconds {
-            let t = CMTime(seconds: s, preferredTimescale: 600)
-            guard t.isValid else { continue }
-            guard let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) else { continue }
-            guard let img = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720) else { continue }
-            if VideoFrameExtractor.isMostlyBlack(img) { continue }
-            chosenSeconds = s
-            chosenImage = img
-            break
+        // IMPORTANT: AVPlayerItemVideoOutput only has *recently decoded* frames.
+        // After finishing, asking for "end - 2s" often returns nil/black because that frame was never decoded.
+        // Instead: seek slightly backwards (while paused) to force decoding, then snapshot.
+        let seekBackoffs: [Double] = [0.10, 0.25, 0.50, 0.90, 1.40, 2.20, 3.20]
+
+        func seekAsync(to time: CMTime) async -> Bool {
+            await withCheckedContinuation { cont in
+                player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    cont.resume(returning: finished)
+                }
+            }
         }
-        
-        guard let image = chosenImage else { return }
-        VideoLastFrameCache.shared.set(image, for: mid)
-        lastFrameVersion += 1
-        if let s = chosenSeconds {
-            print("🖼️ [LAST FRAME] Captured near end for \(mid) (\(reason)) at t=\(String(format: "%.2f", s))s")
-        } else {
-            print("🖼️ [LAST FRAME] Captured near end for \(mid) (\(reason))")
+
+        for back in seekBackoffs {
+            let target = max(0, endSeconds - back)
+            let t = CMTime(seconds: target, preferredTimescale: 600)
+            guard t.isValid else { continue }
+
+            let ok = await seekAsync(to: t)
+            guard ok else { continue }
+
+            // Give AVFoundation a beat to produce a decoded frame at the new time.
+            // (This stays paused; we just want a frame.)
+            try? await Task.sleep(nanoseconds: 30_000_000) // 0.03s
+
+            var displayTime = CMTime.zero
+            // Prefer the current item time after seek.
+            let itemTime = item.currentTime()
+            guard let pb = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime) else { continue }
+            guard let img = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720) else { continue }
+            // Slightly stricter threshold here; end-frames can be near-black.
+            if VideoFrameExtractor.isMostlyBlack(img, luminanceThreshold: 0.08) { continue }
+
+            VideoLastFrameCache.shared.set(img, for: mid)
+            lastFrameVersion += 1
+            print("🖼️ [LAST FRAME] Captured near end for \(mid) (\(reason)) via seekBack=\(String(format: "%.2f", back))s at t=\(String(format: "%.2f", target))s")
+            return
         }
     }
     
@@ -3122,7 +3135,9 @@ struct SimpleVideoPlayer: View {
         ) { _ in
             // The notification is already scoped to playerItem, so this will only fire for our item
             // The guard in handleVideoFinished prevents duplicate processing
-            self.handleVideoFinished()
+            Task { @MainActor in
+                await self.handleVideoFinished()
+            }
         }
         
         NSLog("✅ [OBSERVER SETUP] videoCompletionObserver attached for \(mid)")
@@ -3554,7 +3569,7 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    private func handleVideoFinished() {
+    private func handleVideoFinished() async {
         // CRITICAL: Prevent duplicate calls - if already finished, ignore
         // This can happen if the notification fires multiple times or if the video finishes again
         guard playbackState != .finished else {
@@ -3570,11 +3585,13 @@ struct SimpleVideoPlayer: View {
         // This ensures smooth transition between videos
         player?.pause()
         playbackState = .finished
+        loadingState = .loaded
+        isHoldingRecoveryCover = false
 
         // Cache a good last-frame for finished videos (some videos end on black).
         // Run after pausing so we capture a stable decoded frame.
         if mode == .mediaCell {
-            captureLastFrameNearEndIfPossible(reason: "didPlayToEnd")
+            await captureLastFrameNearEndIfPossible(reason: "didPlayToEnd")
         }
         
         // For MediaCell mode, ensure mute state is correct and prevent any view updates
