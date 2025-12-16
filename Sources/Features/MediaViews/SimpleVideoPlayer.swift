@@ -118,6 +118,23 @@ class VideoStateCache {
         return getCachedPlaybackInfo(for: mid) != nil
     }
     
+    /// Check if video finished playing in mediaCell by comparing cached time with duration
+    func hasVideoFinishedInMediaCell(for mid: String, duration: CMTime) -> Bool {
+        guard let cachedInfo = getCachedPlaybackInfo(for: mid) else {
+            return false
+        }
+        
+        guard duration.isValid && duration.seconds > 0 else {
+            return false
+        }
+        
+        let cachedTimeSeconds = cachedInfo.time.seconds
+        let durationSeconds = duration.seconds
+        
+        // Consider finished if within 0.5 seconds of end
+        return cachedTimeSeconds >= durationSeconds - 0.5
+    }
+    
     func clearCache(for mid: String) {
         print("DEBUG: [VIDEO CACHE] Clearing cache for \(mid)")
         cache.removeValue(forKey: mid)
@@ -392,6 +409,39 @@ struct SimpleVideoPlayer: View {
         if isApplyingDetailRestore { return true }
         if hasAppliedDetailRestore { return false }
         
+        // Check if video finished in mediaCell - if so, restart from beginning
+        // Check VideoStateCache first (even if player item not ready yet)
+        if VideoStateCache.shared.hasCachedPlaybackInfo(for: mid) {
+            // If player item is ready, check duration
+            if let playerItem = player.currentItem,
+               playerItem.status == .readyToPlay {
+                let duration = playerItem.duration
+                if duration.isValid && duration.seconds > 0 {
+                    if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
+                        NSLog("🔄 [TWEET DETAIL RESTORE] Video \(mid) finished in mediaCell - restarting from beginning")
+                        isApplyingDetailRestore = true
+                        player.pause()
+                        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                            Task { @MainActor in
+                                self.isApplyingDetailRestore = false
+                                self.hasAppliedDetailRestore = true
+                                
+                                if finished {
+                                    // Start playback from beginning
+                                    if self.currentAutoPlay {
+                                        self.checkPlaybackConditions(autoPlay: true, isVisible: self.isVisible)
+                                    }
+                                } else {
+                                    self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
+                                }
+                            }
+                        }
+                        return true
+                    }
+                }
+            }
+        }
+        
         guard PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .detailView),
               let saved = PersistentVideoStateManager.shared.getState(videoMid: mid) else {
             hasAppliedDetailRestore = true
@@ -402,6 +452,37 @@ struct SimpleVideoPlayer: View {
         guard savedSeconds.isFinite, savedSeconds > 0.25 else {
             hasAppliedDetailRestore = true
             return false
+        }
+        
+        // Check if saved position is near the end (video finished in previous detail view session)
+        // If player item is ready, check duration; otherwise wait for it to become ready
+        if let playerItem = player.currentItem,
+           playerItem.status == .readyToPlay {
+            let duration = playerItem.duration
+            if duration.isValid && duration.seconds > 0 {
+                // If saved position is within 0.5s of end, restart from beginning
+                if savedSeconds >= duration.seconds - 0.5 {
+                    NSLog("🔄 [TWEET DETAIL RESTORE] Video \(mid) saved position (\(String(format: "%.2f", savedSeconds))s) is near end (\(String(format: "%.2f", duration.seconds))s) - restarting from beginning")
+                    isApplyingDetailRestore = true
+                    player.pause()
+                    player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                        Task { @MainActor in
+                            self.isApplyingDetailRestore = false
+                            self.hasAppliedDetailRestore = true
+                            
+                            if finished {
+                                // Start playback from beginning
+                                if self.currentAutoPlay {
+                                    self.checkPlaybackConditions(autoPlay: true, isVisible: self.isVisible)
+                                }
+                            } else {
+                                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
+                            }
+                        }
+                    }
+                    return true
+                }
+            }
         }
         
         let currentSeconds = player.currentTime().seconds
@@ -3115,8 +3196,42 @@ struct SimpleVideoPlayer: View {
         // This prevents flicker from multiple playback attempts
         if !hasRecoveredThisCycle {
             // TweetDetail: restore saved position BEFORE any playback to prevent "play then jump back".
-            if mode == .tweetDetail, startTweetDetailRestoreIfNeeded(for: player) {
-                return
+            // For tweetDetail mode, wait for player item to be ready before checking if video finished
+            if mode == .tweetDetail {
+                // If player item is ready, check immediately
+                if let playerItem = player.currentItem,
+                   playerItem.status == .readyToPlay {
+                    if startTweetDetailRestoreIfNeeded(for: player) {
+                        return
+                    }
+                } else {
+                    // Player item not ready yet - set up observer to check when ready
+                    let playerItem = player.currentItem
+                    if playerItem != nil {
+                        // Wait for player item to become ready, then check
+                        let capturedPlayer = player
+                        Task { @MainActor in
+                            var attempts = 0
+                            while attempts < 50 {
+                                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                                if let item = self.player?.currentItem,
+                                   item.status == .readyToPlay,
+                                   self.player === capturedPlayer {
+                                    if self.startTweetDetailRestoreIfNeeded(for: capturedPlayer) {
+                                        return
+                                    }
+                                    break
+                                }
+                                attempts += 1
+                            }
+                            // If still not ready after waiting, proceed with normal playback
+                            if !self.hasAppliedDetailRestore && self.player === capturedPlayer {
+                                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
+                            }
+                        }
+                        return // Don't proceed with normal playback yet
+                    }
+                }
             }
             // Start playback if needed (normal flow, not recovery)
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
