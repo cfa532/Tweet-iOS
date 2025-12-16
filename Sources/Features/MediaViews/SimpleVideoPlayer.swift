@@ -3215,15 +3215,19 @@ struct SimpleVideoPlayer: View {
                                 if let item = self.player?.currentItem,
                                    item.status == .readyToPlay,
                                    self.player === capturedPlayer {
+                                    // If restore starts an async seek, it will re-trigger playback later.
                                     if self.startTweetDetailRestoreIfNeeded(for: capturedPlayer) {
                                         return
                                     }
-                                    break
+                                    // No restore needed (or restore was a no-op): now that we're ready,
+                                    // re-run playback conditions to ensure autoplay actually starts.
+                                    self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
+                                    return
                                 }
                                 attempts += 1
                             }
-                            // If still not ready after waiting, proceed with normal playback
-                            if !self.hasAppliedDetailRestore && self.player === capturedPlayer {
+                            // If still not ready after waiting, give normal playback a chance (it will gate on readiness).
+                            if self.player === capturedPlayer {
                                 self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
                             }
                         }
