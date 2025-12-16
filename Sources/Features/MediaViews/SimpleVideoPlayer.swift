@@ -3950,6 +3950,14 @@ struct SimpleVideoPlayer: View {
                 return
             }
         }
+
+        // TweetDetail: do not start playback until the item is ready.
+        // Otherwise we can briefly play a few frames and then seek/rewind (e.g. "finished in MediaCell"),
+        // which causes a momentary black flash.
+        if mode == .tweetDetail {
+            guard let player = player, let item = player.currentItem else { return }
+            guard item.status == .readyToPlay else { return }
+        }
         
         // Check if all conditions are met for autoplay
         // For fullscreen and detail modes, bypass shouldLoadVideo check

@@ -422,6 +422,9 @@ struct TweetDetailView: View {
 
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
+
+            // Coordinate singleton lifecycle across nested detail navigations (quoted -> original).
+            DetailVideoManager.shared.beginDetailViewSession()
             
             // Detail view playback position is persisted independently (not seeded from feed positions).
         }
@@ -435,11 +438,10 @@ struct TweetDetailView: View {
 
             // Mark detail view as inactive
             NavigationStateManager.shared.setDetailViewActive(false)
-            
-            // CRITICAL: Stop video playback immediately when navigating away
-            // This ensures video doesn't keep playing in background when user leaves detail view
-            DetailVideoManager.shared.clearCurrentVideo()
-            print("DEBUG: [TweetDetailView] Cleared video on view disappear - video stopped")
+
+            // End session: we pause immediately, and clear only if no other detail view appears shortly.
+            // This avoids black flashes when pushing from one detail view to another.
+            DetailVideoManager.shared.endDetailViewSession()
             
             // Reset top navigation visibility when view disappears
             withAnimation(.easeInOut(duration: 0.3)) {
@@ -466,19 +468,6 @@ struct TweetDetailView: View {
             }
             
             print("DEBUG: [TweetDetailView] onDisappear called")
-        }
-        .task {
-            // This task is cancelled when the view is permanently dismissed
-            // Keep singleton alive while view exists
-            defer {
-                // This runs when task is cancelled (view dismissed)
-                // Use clearCurrentVideo() for proper cleanup (removes observers, deactivates audio session)
-                DetailVideoManager.shared.clearCurrentVideo()
-                print("DEBUG: [TweetDetailView] Task cancelled - cleaned up singleton")
-            }
-            
-            // Just wait forever - cleanup happens in defer when cancelled
-            try? await Task.sleep(for: .seconds(3600))
         }
     }
     

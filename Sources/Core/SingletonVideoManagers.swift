@@ -1238,6 +1238,36 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         setupAppLifecycleNotifications()
         setupAudioInterruptionNotifications()
     }
+
+    // MARK: - DetailView lifecycle coordination
+    // When navigating DetailView -> DetailView (quoted -> original), the first view's disappearance
+    // must NOT immediately clear the singleton player, otherwise the next DetailView will go black.
+    // We solve this by scheduling a delayed clear that gets cancelled when another detail view appears.
+    private var activeDetailViewCount: Int = 0
+    private var scheduledClearTask: Task<Void, Never>?
+
+    func beginDetailViewSession() {
+        activeDetailViewCount += 1
+        scheduledClearTask?.cancel()
+        scheduledClearTask = nil
+    }
+
+    func endDetailViewSession() {
+        activeDetailViewCount = max(0, activeDetailViewCount - 1)
+        guard activeDetailViewCount == 0 else { return }
+
+        // Pause immediately to prevent audio bleed when leaving detail, but don't clear yet.
+        // Clearing too early causes black flashes during push transitions.
+        currentPlayer?.pause()
+        isPlaying = false
+
+        scheduledClearTask?.cancel()
+        scheduledClearTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
+            guard self.activeDetailViewCount == 0 else { return }
+            self.clearCurrentVideo()
+        }
+    }
     
     // MARK: - VideoPlayerLifecycleManager Protocol
     var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
