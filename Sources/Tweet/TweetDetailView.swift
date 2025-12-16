@@ -166,20 +166,8 @@ struct DetailMediaCell: View {
                         
                         print("🔄 [DetailMediaCell] Found saved state for \(attachment.mid): time=\(savedState.currentTime.seconds)s, wasPlaying=\(savedState.wasPlaying)")
                         hasRestoredPosition = true
-                        
-                        // Post notification for SimpleVideoPlayer to restore position
-                        // SimpleVideoPlayer will handle the actual seek operation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            NotificationCenter.default.post(
-                                name: NSNotification.Name("RestoreVideoPosition"),
-                                object: nil,
-                                userInfo: [
-                                    "videoMid": attachment.mid,
-                                    "time": savedState.currentTime,
-                                    "wasPlaying": savedState.wasPlaying
-                                ]
-                            )
-                        }
+                        // No notification needed: SimpleVideoPlayer now restores (seek) before starting playback,
+                        // preventing the visible "start at 0 then jump back" in TweetDetailView.
                     }
                 }
             }
