@@ -306,6 +306,9 @@ struct SimpleVideoPlayer: View {
     @State private var lastFrameCaptureAt: Date = .distantPast
     @State private var lastFrameVersion: Int = 0 // bumps when we store a new frame (forces view update)
     @State private var isStartingPlayback = false // Prevent duplicate playback attempts during recovery
+    @State private var playbackWatchdogTask: Task<Void, Never>? = nil
+    @State private var isHoldingRecoveryCover: Bool = false
+    @State private var recoveryCoverTask: Task<Void, Never>? = nil
 
     // MARK: - Helper Functions
     
@@ -336,18 +339,24 @@ struct SimpleVideoPlayer: View {
         // can be 0 during buffering/background transitions even if the user considers it "playing".
         guard let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) else {
             player.play()
+            scheduleRecoveryCoverRelease(reason: "playNoCache")
+            startPlaybackWatchdogIfNeeded(player: player, reason: "playNoCache")
             return
         }
 
         let targetSeconds = info.time.seconds
         guard targetSeconds.isFinite, targetSeconds > 0.25 else {
             player.play()
+            scheduleRecoveryCoverRelease(reason: "playNoResumeTime")
+            startPlaybackWatchdogIfNeeded(player: player, reason: "playNoResumeTime")
             return
         }
 
         let currentSeconds = player.currentTime().seconds
         if currentSeconds.isFinite, abs(currentSeconds - targetSeconds) <= 0.25 {
             player.play()
+            scheduleRecoveryCoverRelease(reason: "playAlreadyAtResumeTime")
+            startPlaybackWatchdogIfNeeded(player: player, reason: "playAlreadyAtResumeTime")
             return
         }
 
@@ -355,9 +364,152 @@ struct SimpleVideoPlayer: View {
         player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
             guard finished else {
                 player.play()
+                Task { @MainActor in
+                    self.scheduleRecoveryCoverRelease(reason: "playAfterSeekNotFinished")
+                    self.startPlaybackWatchdogIfNeeded(player: player, reason: "playAfterSeekNotFinished")
+                }
                 return
             }
             player.play()
+            Task { @MainActor in
+                self.scheduleRecoveryCoverRelease(reason: "playAfterSeekFinished")
+                self.startPlaybackWatchdogIfNeeded(player: player, reason: "playAfterSeekFinished")
+            }
+        }
+    }
+
+    /// Watchdog for the "spinner forever" case:
+    /// autoplay is approved + visible, but the player never advances time / stays waiting.
+    /// This can happen even when `loadingState` is already `.loaded`, so the existing loading-only
+    /// health checks won't fire.
+    @MainActor
+    private func startPlaybackWatchdogIfNeeded(player: AVPlayer, reason: String) {
+        guard mode == .mediaCell else { return }
+        guard isVisible, shouldLoadVideo else { return }
+        guard currentAutoPlay else { return }
+
+        // For sequential playback, only watchdog the approved video.
+        let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
+        guard approved else { return }
+
+        // Cancel any previous watchdog for this view instance.
+        playbackWatchdogTask?.cancel()
+
+        let baselineTime = player.currentTime().seconds
+        let baselineIsFinite = baselineTime.isFinite
+        let baselinePlayer = player
+        let baselinePlayerItem = player.currentItem
+
+        playbackWatchdogTask = Task { @MainActor in
+            // Give AVPlayer a moment to actually start.
+            try? await Task.sleep(nanoseconds: 2_500_000_000) // 2.5s
+            guard !Task.isCancelled else { return }
+
+            // Still relevant?
+            guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { return }
+            guard self.shouldLoadVideo, self.currentAutoPlay else { return }
+            guard let currentPlayer = self.player, currentPlayer === baselinePlayer else { return }
+            guard let item = currentPlayer.currentItem else { return }
+
+            // If the item changed, let normal observers handle it.
+            if let baselineItem = baselinePlayerItem, baselineItem !== item {
+                return
+            }
+
+            let nowTime = currentPlayer.currentTime().seconds
+            let progressed = baselineIsFinite && nowTime.isFinite ? (nowTime > baselineTime + 0.2) : (currentPlayer.rate > 0)
+
+            // If we're playing or advancing, we're good.
+            if currentPlayer.rate > 0 || currentPlayer.timeControlStatus == .playing || progressed {
+                return
+            }
+
+            // Only treat as stuck if we're waiting/empty/likely-to-keep-up says no.
+            let waiting = currentPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            let bufferEmpty = item.isPlaybackBufferEmpty
+            let notLikelyToKeepUp = !item.isPlaybackLikelyToKeepUp
+            guard waiting || bufferEmpty || notLikelyToKeepUp else { return }
+
+            NSLog("⚠️ [WATCHDOG] Playback stuck after autoplay (reason: \(reason)) for \(self.mid). waiting=\(waiting), bufferEmpty=\(bufferEmpty), likely=\(!notLikelyToKeepUp). Forcing reload.")
+
+            // Keep UX smooth: capture a last frame so the cover can stay up.
+            self.captureLastFrameIfPossible(reason: "watchdogReload")
+
+            // Force a clean recreate like manual reset.
+            SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
+            currentPlayer.pause()
+            self.player = nil
+            self.loadingState = .idle
+            self.playbackState = .notStarted
+            // Don't force view recreation here; it causes visible flicker on foreground.
+            // If we need a layer refresh, we do it later *behind the recovery cover*.
+            self.setupPlayer()
+        }
+    }
+
+    /// Foreground recovery UX: keep last-frame cover until we confirm frames are rendering.
+    /// This prevents a "blink" (black frame) while AVPlayerLayer / AVPlayerItem rewires.
+    @MainActor
+    private func scheduleRecoveryCoverRelease(reason: String) {
+        guard mode == .mediaCell else { return }
+        guard isHoldingRecoveryCover else { return }
+        guard isVisible, isActuallyVisible else { return }
+
+        recoveryCoverTask?.cancel()
+
+        let baselinePlayer = self.player
+        let baselineSeconds = baselinePlayer?.currentTime().seconds ?? 0
+
+        recoveryCoverTask = Task { @MainActor in
+            var didRefreshLayer = false
+
+            // Poll for a short period; we release the cover only after we see fresh frames/time progress.
+            for i in 0..<35 { // ~3.5s
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+
+                guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { return }
+                guard self.isHoldingRecoveryCover else { return }
+                guard !self.isPlayerDetached else { continue }
+
+                guard let player = self.player else { continue }
+                if let bp = baselinePlayer, player !== bp { return } // player swapped; new flow will handle
+                guard let item = player.currentItem else { continue }
+
+                // Preferred signal: AVPlayerItemVideoOutput says a new frame is available.
+                var hasNewFrame = false
+                if let output = self.videoOutput {
+                    let itemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+                    hasNewFrame = output.hasNewPixelBuffer(forItemTime: itemTime)
+                }
+
+                // Fallback: time advances (even if output is temporarily missing).
+                let nowSeconds = player.currentTime().seconds
+                let advanced = baselineSeconds.isFinite && nowSeconds.isFinite && nowSeconds > baselineSeconds + 0.15
+                let playing = player.timeControlStatus == .playing || player.rate > 0
+
+                if hasNewFrame || (playing && advanced) {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        self.isHoldingRecoveryCover = false
+                    }
+                    return
+                }
+
+                // After ~2.0s, do a single layer refresh behind the cover if we're still waiting.
+                if !didRefreshLayer, i == 20 {
+                    let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    let bufferEmpty = item.isPlaybackBufferEmpty
+                    let noRanges = item.loadedTimeRanges.isEmpty
+                    if waiting || bufferEmpty || noRanges {
+                        didRefreshLayer = true
+                        self.representableId += 1
+                        // Keep cover up; we'll release once we see frames.
+                    }
+                }
+            }
+
+            // If we still didn't see frames, keep the cover (spinner stays) and let watchdog/retry handle.
+            NSLog("⏳ [RECOVERY COVER] Still holding after polling (reason: \(reason)) for \(self.mid)")
         }
     }
     
@@ -1090,6 +1242,8 @@ struct SimpleVideoPlayer: View {
                     // Only pause the player, not the state
                     NSLog("DEBUG: [STOP ALL VIDEOS] Paused \(mid) - was playing (keeping playbackState: .playing), will resume when fullscreen closes")
                 }
+                // Capture the last visible frame right before pausing (covers interruptions / audio session changes).
+                captureLastFrameIfPossible(reason: "stopAllVideos")
                 player.pause()
                 player.isMuted = true
             }
@@ -1111,6 +1265,8 @@ struct SimpleVideoPlayer: View {
         
         // Cache player state but DON'T detach yet - keep video visible
         captureLastFrameIfPossible(reason: "willResignActive")
+        // Hold last-frame cover across background → foreground to prevent black blink.
+        isHoldingRecoveryCover = true
         cachePlayerStateForBackground()
     }
     
@@ -1740,22 +1896,33 @@ struct SimpleVideoPlayer: View {
 
         print("DEBUG: [VIDEO RELOAD VISIBLE] Reload requested for visible video \(mid)")
 
+        // Keep cover up during foreground recovery; we’ll release when frames are rendering again.
+        isHoldingRecoveryCover = true
+
         // Ensure we don't get stuck showing the explicit "Video paused" overlay.
         // Visible videos should either show last-frame/spinner placeholders or the player itself.
         isPlayerDetached = false
 
-        // If we're already loading, don't thrash.
-        if loadingState.isLoading {
-            print("DEBUG: [VIDEO RELOAD VISIBLE] Already loading \(mid), skipping")
-            return
-        }
-
+        // CRITICAL FIX: After short background, AppDelegate clears all players via
+        // clearVideoPlayersForBackgroundRecovery(), which sets currentItem to nil.
+        // Videos may be stuck in loading state or have no player. We need to recreate them.
+        let playerMissing = (player == nil)
         let itemMissing = (player?.currentItem == nil)
         let timeInvalid = !(player?.currentTime().seconds.isFinite ?? true)
         let broken = itemMissing || timeInvalid || isPlayerBroken()
+        
+        // For videos that should be loaded but don't have a player, or have a broken player, recreate
+        // Also reset stuck loading states - after background recovery, loading state might be stuck
+        let needsRecreation = (playerMissing && shouldLoadVideo) || broken
+        let hasStuckLoading = loadingState.isLoading && (playerMissing || broken)
 
-        if broken {
-            print("⚠️ [VIDEO RELOAD VISIBLE] Player missing/broken for \(mid) (itemMissing: \(itemMissing), timeInvalid: \(timeInvalid)) - recreating")
+        if needsRecreation || hasStuckLoading {
+            if hasStuckLoading {
+                print("⚠️ [VIDEO RELOAD VISIBLE] Resetting stuck loading state for \(mid)")
+                loadingState = .idle
+            }
+            
+            print("⚠️ [VIDEO RELOAD VISIBLE] Player missing/broken for \(mid) (playerMissing: \(playerMissing), itemMissing: \(itemMissing), timeInvalid: \(timeInvalid)) - recreating")
 
             // Clean up time observer if attached.
             if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
@@ -1771,14 +1938,103 @@ struct SimpleVideoPlayer: View {
             loadingState = .idle
             playbackState = .notStarted
 
-            // Don't increment representableId here - let setupPlayer/configurePlayer handle it
-            // when the player is actually ready, to avoid showing loading placeholder unnecessarily
+            // Setup player - this will recreate it and properly initialize
             setupPlayer()
-        } else {
-            // Player is intact; still refresh the layer and re-evaluate autoplay.
-            // CRITICAL: Don't increment representableId for intact players to avoid flicker.
-            // The player layer should still work fine without forcing recreation.
+            
+            // CRITICAL: After background recovery, ensure videos that should be playing actually start.
+            // Add a delayed check to catch cases where videos get stuck in loading state.
+            Task { @MainActor in
+                // Wait for player to be created and ready
+                var attempts = 0
+                while (self.player == nil || self.loadingState.isLoading) && attempts < 30 {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                    attempts += 1
+                }
+                
+                // Check if player is ready and should be playing
+                guard let player = self.player,
+                      let playerItem = player.currentItem,
+                      playerItem.status == .readyToPlay,
+                      self.isVisible,
+                      self.shouldLoadVideo else {
+                    return
+                }
+                
+                // Check if loading state is stuck
+                if self.loadingState.isLoading {
+                    let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                    let bufferedDuration = self.bufferedTimeAhead(for: playerItem, player: player)
+                    
+                    if hasBufferedData && bufferedDuration >= self.firstFrameMinimumBuffer {
+                        print("⚠️ [VIDEO RELOAD] LoadingState stuck at .loading after recovery for \(self.mid), fixing")
+                        self.loadingState = .loaded
+                        self.retryAttempts = 0
+                        if self.mode == .mediaCell {
+                            self.hasInitialized = true
+                        }
+                    }
+                }
+                
+                // If video should be playing according to VideoManager, ensure it starts
+                let shouldPlay = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
+                if shouldPlay && self.currentAutoPlay && self.loadingState.isLoaded {
+                    let noOverlaysActive = !self.isCoveredByOverlay
+                    let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                    
+                    if noOverlaysActive && noDetailViewActive {
+                        print("✅ [VIDEO RELOAD] Ensuring playback starts after recovery for \(self.mid)")
+                        self.checkPlaybackConditions(autoPlay: true, isVisible: true)
+                    }
+                }
+
+                // Start polling to release the cover once frames render again.
+                self.scheduleRecoveryCoverRelease(reason: "reloadVisibleVideosOnlyDelayed")
+            }
+        } else if player != nil {
+            // Player is intact; re-evaluate autoplay conditions.
+            // CRITICAL: Don't unconditionally refresh view to avoid flicker.
+            // Use delayed check to detect if layer is actually stale (similar to recoverFromBackground).
+            // Most intact players will work fine without view refresh.
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+            
+            // Delayed check: only refresh if player appears to have stale layer
+            // This prevents unnecessary flicker while still fixing actual black screen issues
+            Task { @MainActor in
+                // Give iOS a moment to re-wire the underlying layer pipeline after foregrounding
+                try? await Task.sleep(nanoseconds: 250_000_000) // 0.25s
+                
+                // Only check if still visible and player still exists
+                guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { return }
+                guard let player = self.player, let item = player.currentItem else { return }
+                
+                // If player is actually broken, the normal recovery path will handle it
+                if self.isPlayerBroken() { return }
+                
+                let statusReady = item.status == .readyToPlay
+                let hasBufferedData = !item.loadedTimeRanges.isEmpty
+                let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
+                
+                // Heuristic: refresh only if we're "ready" but have no frames buffered,
+                // or if we're stuck waiting with insufficient buffer (indicates stale layer)
+                let stuckWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate || item.isPlaybackBufferEmpty
+                let shouldRefresh =
+                    (statusReady && !hasBufferedData) ||
+                    (stuckWaiting && bufferedAhead < self.firstFrameMinimumBuffer)
+                
+                if shouldRefresh {
+                    print("✅ [VIDEO RELOAD] Intact player appears to have stale layer, refreshing view for \(self.mid)")
+                    self.representableId += 1
+                } else {
+                    print("DEBUG: [VIDEO RELOAD] Intact player appears healthy, no refresh needed for \(self.mid)")
+                }
+            }
+
+            // Even for intact players, release cover once we see frames.
+            scheduleRecoveryCoverRelease(reason: "reloadVisibleVideosOnlyIntact")
+        } else {
+            // Player is nil but shouldLoadVideo is false - this is expected for non-playing videos
+            // in a grid waiting for sequential playback. Just ensure state is clean.
+            print("DEBUG: [VIDEO RELOAD VISIBLE] Player nil but shouldLoadVideo=false for \(mid) - waiting for sequential playback")
         }
     }
     
@@ -1946,24 +2202,30 @@ struct SimpleVideoPlayer: View {
                     let waitingForData = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                     let bufferEmpty = item?.isPlaybackBufferEmpty ?? false
                     let shouldShowPlaceholder =
+                        isHoldingRecoveryCover ||
                         isPlayerDetached ||
                         loadingState.isLoading ||
                         (!readyForFirstFrame && (waitingForData || bufferEmpty || !loadingState.isLoaded))
                     
                     if shouldShowPlaceholder {
-                        Image(uiImage: frame)
-                            .resizable()
-                            .scaledToFill()
-                            .clipped()
-                            .overlay(Color.black.opacity(0.08))
-                        
-                        // Spinner over the placeholder while waiting.
-                        if loadingState.isLoading || waitingForData || bufferEmpty {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.1)
-                                .opacity(0.7)
+                        // IMPORTANT: This overlay must be tap-through so taps still reach the video layer
+                        // (and ultimately the fullscreen tap handler).
+                        Group {
+                            Image(uiImage: frame)
+                                .resizable()
+                                .scaledToFill()
+                                .clipped()
+                                .overlay(Color.black.opacity(0.08))
+                            
+                            // Spinner over the cover frame during recovery/buffering.
+                            if loadingState.isLoading || waitingForData || bufferEmpty {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(1.1)
+                                    .opacity(0.7)
+                            }
                         }
+                        .allowsHitTesting(false)
                     }
                 }
                 
@@ -2000,21 +2262,26 @@ struct SimpleVideoPlayer: View {
         } else {
             // No player yet - show last frame if available, otherwise black placeholder.
             ZStack {
-                if mode == .mediaCell, let frame = cachedLastFrame {
-                    Image(uiImage: frame)
-                        .resizable()
-                        .scaledToFill()
-                        .clipped()
-                        .overlay(Color.black.opacity(0.10))
-                } else {
-                    Color.black.opacity(0.9)
+                // Tap-through cover: let MediaCell's overlay / parent tap gestures still work
+                // even while the player is being created.
+                Group {
+                    if mode == .mediaCell, let frame = cachedLastFrame {
+                        Image(uiImage: frame)
+                            .resizable()
+                            .scaledToFill()
+                            .clipped()
+                            .overlay(Color.black.opacity(0.10))
+                    } else {
+                        Color.black.opacity(0.9)
+                    }
+                    
+                    // Always show spinner when no player (loading or retrying)
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.2)
+                        .opacity(0.5)
                 }
-                
-                // Always show spinner when no player (loading or retrying)
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.2)
-                    .opacity(0.5)
+                .allowsHitTesting(false)
                 
                 // Long press indicator with reload icon
                 if isLongPressing {
@@ -2104,18 +2371,52 @@ struct SimpleVideoPlayer: View {
         lastFrameCaptureAt = now
         
         let mid = self.mid
+        // Capture times on the main actor to avoid touching AVFoundation objects from the detached task.
+        let playerTimeNow = player.currentTime()
+        let itemTimeNow = item.currentTime()
+        let hostTimeNow = CACurrentMediaTime()
+        let hostItemTimeNow = output.itemTime(forHostTime: hostTimeNow)
+
         Task.detached(priority: .utility) {
-            // Try to capture the frame corresponding to the current host time.
-            let hostTime = CACurrentMediaTime()
-            var itemTime = output.itemTime(forHostTime: hostTime)
-            
-            // If no new pixel buffer is available, fall back to the player's currentTime().
-            if !output.hasNewPixelBuffer(forItemTime: itemTime) {
-                itemTime = item.currentTime()
+            // IMPORTANT: On willResignActive, host-time mapping can drift and player/item times can jump.
+            // We never want to overwrite a good cached frame with a "way off" one.
+            //
+            // Strategy:
+            // - If resign-active: only accept a *fresh* host-time pixel buffer; otherwise, skip caching.
+            // - Otherwise: try player time with small backoffs, then item time, then host-time.
+            var candidateTimes: [CMTime] = []
+            if reason == "willResignActive" {
+                if hostItemTimeNow.isValid, output.hasNewPixelBuffer(forItemTime: hostItemTimeNow) {
+                    candidateTimes = [hostItemTimeNow]
+                } else {
+                    // Keep the previous cached frame; don't overwrite with something stale/off.
+                    return
+                }
+            } else {
+                let base = playerTimeNow
+                let backoffs: [Double] = [0.0, -0.08, -0.20, -0.40]
+                for d in backoffs {
+                    let t = CMTime(seconds: max(0, base.seconds + d), preferredTimescale: 600)
+                    if t.isValid { candidateTimes.append(t) }
+                }
+                if itemTimeNow.isValid { candidateTimes.append(itemTimeNow) }
+                if hostItemTimeNow.isValid { candidateTimes.append(hostItemTimeNow) }
             }
-            
+
+            var pixelBuffer: CVPixelBuffer? = nil
+            var chosenSeconds: Double = 0
             var displayTime = CMTime.zero
-            guard let pixelBuffer = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime) else {
+
+            for t in candidateTimes {
+                // Don't require "hasNewPixelBuffer" here; we just want the nearest available decoded frame.
+                if let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) {
+                    pixelBuffer = pb
+                    chosenSeconds = t.seconds.isFinite ? t.seconds : 0
+                    break
+                }
+            }
+
+            guard let pixelBuffer else {
                 if reason == "willResignActive" {
                     print("🖼️ [LAST FRAME] Skip (no pixelBuffer) for \(mid) (\(reason))")
                 }
@@ -2138,11 +2439,69 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
+            // Swift 6: freeze values before actor hop.
+            let chosenSecondsFrozen = chosenSeconds
+            let playerNowSeconds = playerTimeNow.seconds
+            
             await MainActor.run {
                 VideoLastFrameCache.shared.set(image, for: mid)
                 self.lastFrameVersion += 1
-                print("🖼️ [LAST FRAME] Captured for \(mid) (\(reason))")
+                if reason == "willResignActive" {
+                    print("🖼️ [LAST FRAME] Captured for \(mid) (\(reason)) at t=\(String(format: "%.2f", chosenSecondsFrozen))s (playerNow=\(String(format: "%.2f", playerNowSeconds))s)")
+                } else {
+                    print("🖼️ [LAST FRAME] Captured for \(mid) (\(reason))")
+                }
             }
+        }
+    }
+
+    /// After a video finishes, some files show a black end-frame. This captures a non-black frame
+    /// by scanning backward from the end and caching the first frame with content.
+    @MainActor
+    private func captureLastFrameNearEndIfPossible(reason: String) {
+        guard mode == .mediaCell else { return }
+        guard isAnyVideoMedia else { return }
+        guard let player = player, let item = player.currentItem else { return }
+
+        ensureVideoOutputAttachedIfNeeded(for: player)
+        guard let output = videoOutput else { return }
+
+        guard item.status == .readyToPlay else { return }
+        guard !item.loadedTimeRanges.isEmpty else { return }
+
+        // Pick an "end" anchor that works for both HLS and progressive.
+        let durationSeconds = item.duration.seconds.isFinite ? item.duration.seconds : 0
+        let currentSeconds = player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0
+        let endSeconds = durationSeconds > 0.5 ? durationSeconds : max(currentSeconds, item.currentTime().seconds)
+
+        // Scan backward from end to find a non-black frame.
+        let backoffs: [Double] = [0.0, 0.06, 0.15, 0.30, 0.60, 1.0, 1.6, 2.4]
+        let candidateSeconds: [Double] = backoffs.map { max(0, endSeconds - $0) }
+        
+        // Do the scan on the main actor: avoids Swift 6 sendability issues with AVFoundation objects.
+        // This only runs on "finished" events, so the cost is acceptable.
+        var displayTime = CMTime.zero
+        var chosenSeconds: Double? = nil
+        var chosenImage: UIImage? = nil
+        
+        for s in candidateSeconds {
+            let t = CMTime(seconds: s, preferredTimescale: 600)
+            guard t.isValid else { continue }
+            guard let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) else { continue }
+            guard let img = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720) else { continue }
+            if VideoFrameExtractor.isMostlyBlack(img) { continue }
+            chosenSeconds = s
+            chosenImage = img
+            break
+        }
+        
+        guard let image = chosenImage else { return }
+        VideoLastFrameCache.shared.set(image, for: mid)
+        lastFrameVersion += 1
+        if let s = chosenSeconds {
+            print("🖼️ [LAST FRAME] Captured near end for \(mid) (\(reason)) at t=\(String(format: "%.2f", s))s")
+        } else {
+            print("🖼️ [LAST FRAME] Captured near end for \(mid) (\(reason))")
         }
     }
     
@@ -2661,25 +3020,12 @@ struct SimpleVideoPlayer: View {
         }
         self.playbackState = .notStarted
         
-        // Cache player state in VideoStateCache for sharing (MediaCell only, NOT TweetDetail or MediaBrowser)
-        // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
-        // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
-        if mode == .mediaCell {
-            if let playerItem = player.currentItem, playerItem.status == .readyToPlay, !playerItem.loadedTimeRanges.isEmpty {
-                let currentTime = player.currentTime()
-                let wasPlaying = player.rate > 0
-                VideoStateCache.shared.cacheVideoState(
-                    for: mid,
-                    player: player,
-                    time: currentTime,
-                    wasPlaying: wasPlaying,
-                    originalMuteState: player.isMuted
-                )
-                NSLog("DEBUG: [VIDEO CONFIGURE] ✅ Cached READY player with buffered data in VideoStateCache for \(mid)")
-            }
-        } else {
-            NSLog("DEBUG: [VIDEO CONFIGURE] Skipping VideoStateCache for TweetDetail mode (uses DetailVideoManager singleton)")
-        }
+        // NOTE: We intentionally do NOT cache `player.currentTime()` here.
+        // During foreground recovery, a freshly recreated player starts at ~0s and this block can
+        // overwrite the real resume time captured in `cachePlayerStateForBackground()`, causing
+        // MediaCell to restart from the beginning.
+        //
+        // Resume time is owned by background/visibility caching + the periodic time observer once playing.
         
         
         // CRITICAL: Verify observers are set up, retry if needed
@@ -2714,8 +3060,12 @@ struct SimpleVideoPlayer: View {
             // Cache/update playback time periodically.
             // Don't require loadedTimeRanges; HLS can advance time before ranges populate reliably.
             guard player.currentItem != nil else { return }
+            // Only record progress while actually playing.
+            // This avoids caching near-zero times during foreground recovery/buffering, which can
+            // clobber the resume time captured on background.
+            guard player.rate > 0 || player.timeControlStatus == .playing else { return }
             let currentTime = player.currentTime()
-            guard currentTime.seconds.isFinite, currentTime.seconds > 0 else { return }
+            guard currentTime.seconds.isFinite, currentTime.seconds > 0.25 else { return }
             let wasPlaying = player.rate > 0
             VideoStateCache.shared.cacheVideoState(
                 for: mid,
@@ -3220,6 +3570,12 @@ struct SimpleVideoPlayer: View {
         // This ensures smooth transition between videos
         player?.pause()
         playbackState = .finished
+
+        // Cache a good last-frame for finished videos (some videos end on black).
+        // Run after pausing so we capture a stable decoded frame.
+        if mode == .mediaCell {
+            captureLastFrameNearEndIfPossible(reason: "didPlayToEnd")
+        }
         
         // For MediaCell mode, ensure mute state is correct and prevent any view updates
         if mode == .mediaCell {
@@ -3318,7 +3674,11 @@ struct SimpleVideoPlayer: View {
                     if mode == .mediaCell {
                         player.isMuted = MuteState.shared.isMuted
                     }
-                    player.play()
+                    if mode == .mediaCell {
+                        playWithResumeIfNeeded(player)
+                    } else {
+                        player.play()
+                    }
                     playbackState = .playing
                     NSLog("▶️ [HEALTH CHECK] Started playback after fixing stuck state for \(mid)")
                 }
