@@ -423,29 +423,46 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     }
                 }
             } else {
-                // SHORT background (<5min) - simple approach: always clear and let videos recreate
-                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players for clean state")
-                AppDelegate.isVideoInfrastructureReady = false
+                // SHORT background (<5min) - SMART recovery: only clear if server restarted
+                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - smart recovery")
                 
-                // Always clear players for predictable recovery
-                // Trying to keep them "intact" creates too many edge cases
-                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                // Check if server is still running on the same port
+                let wasServerRunning = LocalHTTPServer.shared.isRunning
+                let oldPort = LocalHTTPServer.shared.currentPort
                 
-                // Reset connection pool
-                LocalHTTPServer.shared.resetConnectionPool()
-                
-                // Ensure server is running
-                if !LocalHTTPServer.shared.isRunning {
+                if !wasServerRunning {
+                    // Server died - need full recovery
                     NSLog("⚠️ [AppDelegate] Server not running, restarting...")
+                    AppDelegate.isVideoInfrastructureReady = false
+                    
+                    // Clear players because server will restart on a new port
+                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                    
+                    // Restart server
                     LocalHTTPServer.shared.startAndWait()
+                    
+                    let newPort = LocalHTTPServer.shared.currentPort
+                    NSLog("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
+                    
+                    AppDelegate.isVideoInfrastructureReady = true
+                    
+                    // Post notification for visible videos to reload with new port
+                    NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                    NSLog("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
+                } else {
+                    // Server still running - KEEP PLAYERS INTACT!
+                    NSLog("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
+                    
+                    // Just refresh video layers and reset connection pool
+                    SharedAssetCache.shared.refreshVideoLayersForShortBackground()
+                    LocalHTTPServer.shared.resetConnectionPool()
+                    
+                    NSLog("✅ [AppDelegate] Short background recovery complete - players preserved")
+                    
+                    // Still post notification to refresh any stale players
+                    NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                    NSLog("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
                 }
-                
-                NSLog("✅ [AppDelegate] Short background recovery complete - players cleared")
-                AppDelegate.isVideoInfrastructureReady = true
-                
-                // Post notification for ONLY visible videos to reload
-                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                NSLog("[AppDelegate] Short background recovery - posted reloadVisibleVideosOnly notification")
             }
         } else {
             // No background timestamp - this means app was just launched or killed

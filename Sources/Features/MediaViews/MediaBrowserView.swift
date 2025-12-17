@@ -100,6 +100,19 @@ struct MediaBrowserView: View {
             .onDisappear {
                 FullScreenVideoManager.shared.clearSingletonPlayer()
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
+                
+                // CRITICAL FIX: Force reload of visible videos after dismissing fullscreen
+                // This handles the case where app returned from background while fullscreen was active:
+                // 1. Background recovery cleared all players and posted .reloadVisibleVideosOnly
+                // 2. But MediaCell didn't reload because it wasn't visible (overlay was active)
+                // 3. Now that fullscreen is dismissed, MediaCell is visible but has a cleared player
+                // Solution: Post reload notification again after overlay ends
+                Task { @MainActor in
+                    // Small delay to ensure overlay state is fully updated
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                    print("DEBUG: [MediaBrowserView] Posted reloadVisibleVideosOnly after fullscreen dismissed")
+                }
             }
     }
     

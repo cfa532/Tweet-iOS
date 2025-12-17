@@ -178,6 +178,11 @@ public class LocalHTTPServer: @unchecked Sendable {
     public private(set) var isRunning = false   // Track if server is running (public read)
     private var isStopping = false  // Track if server is currently stopping
     
+    // Computed property for current port (returns nil if not running)
+    public var currentPort: UInt16? {
+        return isRunning ? port : nil
+    }
+    
     // DEDUPLICATION: Track active downloads to prevent duplicates
     private var activeDownloads: [String: DispatchSemaphore] = [:]
     private let activeDownloadsLock = NSLock()
