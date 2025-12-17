@@ -19,6 +19,7 @@ struct TweetItemView: View, Equatable {
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
+    @State private var hasRegisteredRetweetRelationship = false
     
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
@@ -150,10 +151,15 @@ struct TweetItemView: View, Equatable {
                 await MainActor.run {
                     originalTweet = cachedTweet
                     hasLoadedOriginalTweet = true
-                    VideoLoadingManager.shared.registerRetweetRelationship(
-                        retweetId: tweet.mid,
-                        originalTweetId: cachedTweet.mid
-                    )
+                    
+                    // Register retweet relationship ASAP from cache for immediate priority boost
+                    if !hasRegisteredRetweetRelationship {
+                        VideoLoadingManager.shared.registerRetweetRelationship(
+                            retweetId: tweet.mid,
+                            originalTweetId: cachedTweet.mid
+                        )
+                        hasRegisteredRetweetRelationship = true
+                    }
                 }
             }
             
@@ -162,10 +168,15 @@ struct TweetItemView: View, Equatable {
                 tweetId: originalTweetId,
                 authorId: originalAuthorId
             ) {
-                VideoLoadingManager.shared.registerRetweetRelationship(
-                    retweetId: tweet.mid,
-                    originalTweetId: t.mid
-                )
+                // Register relationship from server fetch only if not already registered
+                // (handles case where cache miss but server fetch succeeds)
+                if !hasRegisteredRetweetRelationship {
+                    VideoLoadingManager.shared.registerRetweetRelationship(
+                        retweetId: tweet.mid,
+                        originalTweetId: t.mid
+                    )
+                    hasRegisteredRetweetRelationship = true
+                }
                 
                 await MainActor.run {
                     originalTweet = t
