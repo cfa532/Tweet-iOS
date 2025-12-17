@@ -3499,7 +3499,7 @@ final class HproseInstance: ObservableObject {
                     -c:v libx264 \
                     -c:a aac \
                     -vf "\(scaleFilter)" \
-                    -preset fast \
+                    -preset veryfast \
                     -b:v \(bitrateKbps)k \
                     -b:a 128k \
                     -movflags +faststart \
