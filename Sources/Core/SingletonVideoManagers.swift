@@ -341,24 +341,20 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         prewarmTask?.cancel()
         prewarmTask = Task.detached(priority: .utility) { [url, mediaID, mediaType] in
             do {
+                // CRITICAL FIX: Just create the asset/item to warm up the cache
+                // DON'T attach it to singletonPlayer - that causes the prewarmed video
+                // to flash on screen when first opening fullscreen
                 let item = try await SharedAssetCache.shared.getOrCreatePlayerItem(
                     for: url,
                     mediaID: mediaID,
                     mediaType: mediaType
                 )
+                
+                // Just accessing the item warms up the asset cache
+                // The item will be cached and ready for quick loading later
                 await MainActor.run {
-                    guard let player = self.singletonPlayer else { return }
-                    // Attach the item to warm decoder + video pipeline, but keep paused.
-                    if player.currentItem == nil {
-                        player.replaceCurrentItem(with: item)
-                    }
-                    player.pause()
-                    // IMPORTANT: `preroll(atRate:)` will throw an Obj-C exception unless
-                    // `player.status == .readyToPlay`. Never call it during prewarm unless ready.
-                    if player.status == .readyToPlay {
-                        player.preroll(atRate: 0.0) { _ in }
-                    }
-                    NSLog("✅ [FullScreenVideoManager] Prewarmed first item for \(mediaID)")
+                    // Don't attach to player - just warm up the cache
+                    NSLog("✅ [FullScreenVideoManager] Prewarmed asset cache for \(mediaID) without attaching to player")
                 }
             } catch {
                 await MainActor.run {
@@ -386,6 +382,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // Still ensure buffering observers are attached (covers view recreation edge cases).
             setupTimeControlStatusObserver()
             return
+        }
+        
+        // CRITICAL FIX: Clear any prewarmed item to prevent flash of wrong video
+        // This ensures we start with a clean slate when loading a new video
+        if singletonPlayer?.currentItem != nil && currentVideoMid != mid {
+            print("DEBUG: [FullScreenVideoManager] Clearing prewarmed/old item before loading new video")
+            singletonPlayer?.pause()
+            singletonPlayer?.replaceCurrentItem(with: nil)
         }
 
         // Bump generation so any prior async completions are ignored.
