@@ -1105,13 +1105,22 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let wasPlaying = player.rate > 0
             let currentTime = player.currentTime()
             
+            // Save to fullScreen context
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
                 wasPlaying: wasPlaying,
                 context: .fullScreen
             )
-            print("💾 [FULLSCREEN] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+            
+            // ALSO save to mediaCell context so MediaCell can resume from this position
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: videoMid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .mediaCell
+            )
+            print("💾 [FULLSCREEN] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying) (saved to both fullScreen and mediaCell contexts)")
         }
         
         // Pause and clear the current item, but keep the player instance

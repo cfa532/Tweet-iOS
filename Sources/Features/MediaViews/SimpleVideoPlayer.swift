@@ -1358,12 +1358,36 @@ struct SimpleVideoPlayer: View {
                 let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
                 if shouldResume && noDetailViewActive {
-                    if player.rate == 0 {
+                    // CRITICAL: Check for saved position from fullscreen exit before resuming
+                    if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .mediaCell),
+                       let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .mediaCell) {
+                        print("🔄 [ACTUAL VISIBILITY] Restoring video \(mid) to fullscreen exit position: \(savedState.currentTime.seconds)s (was at \(player.currentTime().seconds)s)")
+                        
+                        player.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                            guard finished else { return }
+                            
+                            Task { @MainActor in
+                                print("✅ [ACTUAL VISIBILITY] Restored position to \(savedState.currentTime.seconds)s")
+                                
+                                // Apply mute state and resume playback if it was playing in fullscreen
+                                self.player?.isMuted = MuteState.shared.isMuted
+                                if savedState.wasPlaying {
+                                    self.player?.play()
+                                    self.playbackState = .playing
+                                    print("▶️ [ACTUAL VISIBILITY] Resumed video \(self.mid) from fullscreen exit position")
+                                }
+                                
+                                // Clear the saved state so we don't restore again
+                                PersistentVideoStateManager.shared.clearState(videoMid: self.mid, context: .mediaCell)
+                            }
+                        }
+                    } else if player.rate == 0 {
+                        // No saved position from fullscreen - resume normally
                         print("▶️ [ACTUAL VISIBILITY] Resuming video \(mid) after overlay dismissed")
                         player.isMuted = MuteState.shared.isMuted
                         player.play()
+                        playbackState = .playing
                     }
-                    playbackState = .playing
                 } else {
                     // Otherwise, re-check playback conditions on uncover (VideoManager decides).
                     if player.rate == 0 {
