@@ -633,6 +633,9 @@ struct SimpleVideoPlayer: View {
                     withAnimation(.easeOut(duration: 0.15)) {
                         self.isHoldingRecoveryCover = false
                     }
+                    // CRITICAL: Ensure playback flag is reset when we confirm frames are rendering
+                    // This prevents the flag from blocking future playback attempts
+                    self.isStartingPlayback = false
                     return
                 }
 
@@ -1650,6 +1653,10 @@ struct SimpleVideoPlayer: View {
         // Mark that we've recovered (but don't reattach yet)
         hasRecoveredThisCycle = true
         
+        // CRITICAL: Reset playback flags to allow fresh playback attempts after recovery
+        // If previous recovery partially failed, these flags can block future playback
+        isStartingPlayback = false
+        
         // CONSERVATIVE RECOVERY STRATEGY:
         // Only recreate players that are actually broken, leave healthy ones alone
         // This prevents unnecessary work and potential issues with working players
@@ -1908,6 +1915,8 @@ struct SimpleVideoPlayer: View {
                         
                         // Validate player is ready before playing
                         if playerItem.status == .readyToPlay {
+                            // CRITICAL: Reset flag before playing to allow KVO observers to work
+                            isStartingPlayback = false
                             player.play()
                             playbackState = .playing
                             print("✅ [VIDEO RECOVERY] Resumed playback for \(mid) (MediaCell, approved)")
@@ -1924,15 +1933,22 @@ struct SimpleVideoPlayer: View {
                                     attempts += 1
                                 }
                                 if self.playerItem?.status == .readyToPlay && self.isVisible && approved && noOverlaysActive && noDetailViewActive {
+                                    // CRITICAL: Reset flag before playing to allow future playback attempts
+                                    self.isStartingPlayback = false
                                     player.isMuted = MuteState.shared.isMuted
                                     player.play()
                                     self.playbackState = .playing
                                     print("✅ [VIDEO RECOVERY] Resumed playback after waiting for ready state for \(self.mid)")
+                                } else {
+                                    // Playback conditions changed while waiting - ensure flag is reset
+                                    self.isStartingPlayback = false
+                                    print("⚠️ [VIDEO RECOVERY] Playback conditions no longer met after waiting for \(self.mid)")
                                 }
                             }
                         }
                     } else {
                         print("⏳ [VIDEO RECOVERY] Video was playing but not approved yet or not visible - will resume when approved")
+                        // Defer to checkPlaybackConditions via the delayed check below
                     }
                 } else {
                     // For other modes, resume if was playing
@@ -1940,6 +1956,8 @@ struct SimpleVideoPlayer: View {
                     if shouldResume {
                         // Validate player is ready before playing
                         if playerItem.status == .readyToPlay {
+                            // CRITICAL: Reset flag before playing
+                            isStartingPlayback = false
                             player.play()
                             playbackState = .playing
                             print("✅ [VIDEO RECOVERY] Resumed playback for \(mid)")
@@ -1953,9 +1971,15 @@ struct SimpleVideoPlayer: View {
                                     attempts += 1
                                 }
                                 if playerItem.status == .readyToPlay {
+                                    // CRITICAL: Reset flag before playing
+                                    self.isStartingPlayback = false
                                     player.play()
                                     self.playbackState = .playing
                                     print("✅ [VIDEO RECOVERY] Resumed playback after waiting for ready state for \(self.mid)")
+                                } else {
+                                    // Player didn't become ready - ensure flag is reset
+                                    self.isStartingPlayback = false
+                                    print("⚠️ [VIDEO RECOVERY] Player failed to become ready for \(self.mid)")
                                 }
                             }
                         }
@@ -1970,7 +1994,15 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaCell, isVisible, isActuallyVisible {
             Task { @MainActor in
                 // Give SwiftUI/AVPlayerLayer a beat to reattach before evaluating autoplay.
-                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                
+                // CRITICAL: Only trigger autoplay if the flag is clear and player isn't already playing
+                // This prevents competing with the direct play() calls above
+                guard !self.isStartingPlayback, self.player?.rate == 0 else {
+                    print("DEBUG: [VIDEO RECOVERY] Skipping delayed autoplay check - already starting or playing for \(self.mid)")
+                    return
+                }
+                
                 self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
             }
         }
@@ -2050,6 +2082,10 @@ struct SimpleVideoPlayer: View {
             if shouldLoadVideo || mode == .tweetDetail {
                 setupPlayer()
             }
+        
+        // CRITICAL: Reset playback flag to allow fresh playback attempts
+        isStartingPlayback = false
+
         } else {
             // Non-MediaCell healthy player - refresh view
             print("DEBUG: [VIDEO INFRA RESTART] Non-MediaCell healthy - refresh view")
