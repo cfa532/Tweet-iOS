@@ -304,6 +304,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var wasPlayingBeforeWaiting = false
     private var hasRestoredPosition = false // Track if we've restored position from saved state
     private var isSeekingToRestoredPosition = false // Track if we're currently seeking to restored position
+    
+    // Debouncing for buffering state to prevent rapid spinner blinking during seeks
+    private var bufferingDebounceTask: DispatchWorkItem?
 
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var loadGeneration: Int = 0
@@ -684,6 +687,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         wasPlayingBeforeWaiting = false
         hasRestoredPosition = false
         isSeekingToRestoredPosition = false
+        
+        // Cancel any pending buffering debounce task
+        bufferingDebounceTask?.cancel()
+        bufferingDebounceTask = nil
     }
     
     /// Setup timeControlStatus observer for buffering detection and autoplay
@@ -730,13 +737,25 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     NSLog("🔄 [FULLSCREEN WAITING] Video was playing, will autoplay when ready")
                 }
                 
-                // Show spinner
+                // Debounce: Only show spinner if buffering lasts > 0.5 seconds
+                // This prevents flashing spinner during brief buffering pauses (e.g., during seeking)
                 if !self.isBuffering {
-                    self.isBuffering = true
-                    NSLog("🔄 [FULLSCREEN WAITING] Showing spinner")
+                    // Cancel any pending hide task
+                    self.bufferingDebounceTask?.cancel()
+                    
+                    let task = DispatchWorkItem { [weak self] in
+                        guard let self = self else { return }
+                        self.isBuffering = true
+                        NSLog("🔄 [FULLSCREEN WAITING] Showing spinner")
+                    }
+                    self.bufferingDebounceTask = task
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
                 }
             } else {
-                // Player has enough data - hide spinner
+                // Player has enough data - hide spinner immediately (no debounce for hiding)
+                // Cancel any pending show task
+                self.bufferingDebounceTask?.cancel()
+                
                 if self.isBuffering {
                     self.isBuffering = false
                     NSLog("✅ [FULLSCREEN DATA READY] Hiding spinner (buffered: \(String(format: "%.1f", bufferedDuration))s)")
