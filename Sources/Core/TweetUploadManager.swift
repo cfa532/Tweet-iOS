@@ -33,9 +33,12 @@ class TweetUploadManager {
     
     /// Cancel current upload task
     func cancelCurrentUpload() {
-        currentUploadTask?.cancel()
-        currentUploadTask = nil
-        print("🛑 [TweetUploadManager] Current upload task cancelled")
+        if let task = currentUploadTask {
+            task.cancel()
+            currentUploadTask = nil
+            print("🛑 [TweetUploadManager] Current upload task cancelled")
+        }
+        // If no task exists, silently do nothing (this is normal when starting a new upload)
     }
     
     // MARK: - Public Upload Methods
