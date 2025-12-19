@@ -1449,7 +1449,7 @@ extension TweetUploadManager {
                             // Use the captured isVideo value, not message content
                             let progressMessage: String
                             if isVideo {
-                                progressMessage = String(format: NSLocalizedString("Processing video %d/%d", comment: "Upload progress"), itemNumber, totalItems)
+                                progressMessage = String(format: NSLocalizedString("Processing video %d/%d - Please stay on this screen", comment: "Upload progress for video processing"), itemNumber, totalItems)
                             } else {
                                 progressMessage = String(format: NSLocalizedString("Uploading image %d/%d", comment: "Upload progress"), itemNumber, totalItems)
                             }

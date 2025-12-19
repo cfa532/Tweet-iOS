@@ -33,6 +33,7 @@
 "Your message will be sent when ready" = "Your message will be sent when ready";
 "Uploading %@ %d/%d..." = "Uploading %@ %d/%d...";
 "Processing video %d/%d" = "Processing video %d/%d";
+"Processing video %d/%d - Please stay on this screen" = "Processing video %d/%d - Please stay on this screen";
 "Uploading image %d/%d" = "Uploading image %d/%d";
 "Tweet posted successfully" = "Tweet posted successfully";
 "Failed to check video status" = "Failed to check video status";

@@ -75,20 +75,21 @@ class UploadProgressManager: ObservableObject {
         }
     }
     
-    func startUpload(type: String) {
+    func startUpload(type: String, hasVideos: Bool = false) {
         isUploading = true
         uploadType = type
         currentStage = .preparing
-        stageMessage = NSLocalizedString("Preparing upload...", comment: "Upload stage")
+            stageMessage = NSLocalizedString("Preparing upload... Please stay on this screen", comment: "Upload stage with video warning")
+
         progress = 0.0
         detailedProgress = ""
         uploadStartTime = Date()
         wasBackgrounded = false
-        
+
         // Prevent screen from auto-locking during upload
         UIApplication.shared.isIdleTimerDisabled = true
-        
-        print("📤 [UploadProgress] Started \(type) upload (idle timer disabled)")
+
+        print("📤 [UploadProgress] Started \(type) upload (idle timer disabled, videos: \(hasVideos))")
     }
     
     func updateProgress(stage: UploadStage, message: String, progress: Double = 0.0, detail: String = "") {

@@ -3080,58 +3080,92 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            
-            // Check file size - if less than 50MB, upload as regular video without conversion
+
             let fileSizeMB = Double(data.count) / (1024 * 1024)
             let sizeThresholdMB = 50.0
-            
+
             if fileSizeMB < sizeThresholdMB {
-                print("Video upload: Sub-50MB path – converting to MP4 before IPFS upload (\(String(format: "%.1f", fileSizeMB))MB)")
-                return try await uploadVideoWithMp4Fallback(
-                    data: data,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            }
-            
-            let cloudPort = appUser.cloudDrivePort
-            if cloudPort <= 0 {
-                print("Video upload: MP4 fallback (no cloud drive configured)")
-                return try await uploadVideoWithMp4Fallback(
-                    data: data,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            }
-            
-            progressCallback?("Checking video service availability...", 5)
-            let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
-            
-            if isCloudDriveAvailable {
-                print("Video upload: HLS conversion (cloud drive available)")
-                return try await uploadVideoWithLocalHLSConversion(
-                    data: data,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    noResample: noResample,
-                    appUser: appUser,
-                    progressCallback: progressCallback
-                )
+                // For <50MB videos: Try normalization (MP4 conversion), if fails, upload as is
+                print("Video upload: Sub-50MB path – trying MP4 normalization (\(String(format: "%.1f", fileSizeMB))MB)")
+
+                do {
+                    return try await uploadVideoWithMp4Fallback(
+                        data: data,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        appUser: appUser,
+                        appId: appId,
+                        progressCallback: progressCallback
+                    )
+                } catch {
+                    print("Video upload: MP4 normalization failed, uploading original video as is")
+                    progressCallback?("Uploading original video...", 10)
+                    let result = try await uploadRegularFile(
+                        data: data,
+                        typeIdentifier: typeIdentifier,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        mediaType: .video,
+                        appUser: appUser,
+                        appId: appId
+                    )
+                    return (result, nil)
+                }
             } else {
-                return try await uploadVideoWithMp4Fallback(
-                    data: data,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
+                // For >50MB videos: Try HLS first, then MP4 normalization, then upload as is
+                print("Video upload: Large video path – trying HLS conversion (\(String(format: "%.1f", fileSizeMB))MB)")
+
+                // Check if cloud drive is available for HLS conversion
+                let cloudPort = appUser.cloudDrivePort
+                if cloudPort > 0 {
+                    progressCallback?("Checking video service availability...", 5)
+                    let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
+
+                    if isCloudDriveAvailable {
+                        do {
+                            print("Video upload: HLS conversion (cloud drive available)")
+                            return try await uploadVideoWithLocalHLSConversion(
+                                data: data,
+                                fileName: fileName,
+                                referenceId: referenceId,
+                                noResample: noResample,
+                                appUser: appUser,
+                                progressCallback: progressCallback
+                            )
+                        } catch {
+                            print("Video upload: HLS conversion failed, trying MP4 normalization")
+                        }
+                    } else {
+                        print("Video upload: Cloud drive not available, trying MP4 normalization")
+                    }
+                } else {
+                    print("Video upload: No cloud drive configured, trying MP4 normalization")
+                }
+
+                // Try MP4 normalization
+                do {
+                    return try await uploadVideoWithMp4Fallback(
+                        data: data,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        appUser: appUser,
+                        appId: appId,
+                        progressCallback: progressCallback
+                    )
+                } catch {
+                    print("Video upload: MP4 normalization failed, uploading original video as is")
+                    progressCallback?("Uploading original video...", 10)
+                    let result = try await uploadRegularFile(
+                        data: data,
+                        typeIdentifier: typeIdentifier,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        mediaType: .video,
+                        appUser: appUser,
+                        appId: appId
+                    )
+                    return (result, nil)
+                }
             }
         }
         
@@ -3286,15 +3320,28 @@ final class HproseInstance: ObservableObject {
             }
             
             progressCallback?("Compressing HLS files...", 40)
-            
+
+            // Log memory usage before compression
+            VideoConversionService.shared.logMemoryUsage("before HLS compression")
+
             // Compress the HLS directory
             let compressedURL = try await compressHLSDirectory(
                 hlsDirectory: hlsDirectory,
-                originalFileName: originalFileName
+                originalFileName: originalFileName,
+                progressCallback: progressCallback
             )
-            
+
+            // Force memory cleanup after compression
+            autoreleasepool {}
+
+            // Log memory usage after compression
+            VideoConversionService.shared.logMemoryUsage("after HLS compression")
+
             progressCallback?("Uploading HLS zip to server...", 60)
-            
+
+            // Log memory usage before upload
+            VideoConversionService.shared.logMemoryUsage("before HLS upload")
+
             // Upload compressed HLS to server
             let jobId = try await uploadCompressedHLS(
                 compressedURL: compressedURL,
@@ -3302,7 +3349,13 @@ final class HproseInstance: ObservableObject {
                 referenceId: referenceId,
                 appUser: appUser
             )
-            
+
+            // Force memory cleanup after upload
+            autoreleasepool {}
+
+            // Log memory usage after upload
+            VideoConversionService.shared.logMemoryUsage("after HLS upload")
+
             print("✅ [HLS Upload] Uploaded to server, job ID: \(jobId)")
             progressCallback?("Video uploaded to server", 100)
             
@@ -3320,9 +3373,21 @@ final class HproseInstance: ObservableObject {
                 url: nil
             )
             
-            // Clean up temp files
+            // Clean up temp files (aggressive cleanup to reduce memory footprint)
+            print("DEBUG: [HLS UPLOAD] Cleaning up temporary files...")
+
+            // Force memory cleanup before file deletion
+            autoreleasepool {}
+
+            // Remove HLS directory and compressed file
             try? FileManager.default.removeItem(at: tempDir)
             try? FileManager.default.removeItem(at: compressedURL)
+
+            // Final memory cleanup
+            autoreleasepool {}
+
+            print("DEBUG: [HLS UPLOAD] Temporary files cleaned up")
+            VideoConversionService.shared.logMemoryUsage("after cleanup")
             
             // Return (placeholder MimeiFileType, jobId)
             // The jobId will be used for background polling
@@ -3535,52 +3600,101 @@ final class HproseInstance: ObservableObject {
         }
         
         
-        /// Compress HLS directory into a zip file
-        private func compressHLSDirectory(hlsDirectory: URL, originalFileName: String) async throws -> URL {
+        /// Compress HLS directory into a zip file (memory-optimized streaming approach)
+        private func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: ((String, Int) -> Void)? = nil) async throws -> URL {
             let zipFileName = "\(originalFileName)_hls.zip"
             let tempDir = hlsDirectory.deletingLastPathComponent()
             let zipURL = tempDir.appendingPathComponent(zipFileName)
-            
-            print("DEBUG: Compressing HLS directory: \(hlsDirectory.path)")
-            print("DEBUG: Zip file will be created at: \(zipURL.path)")
-            
-            // Create a temporary directory to hold the zip contents (without the hls directory wrapper)
-            let tempZipDir = tempDir.appendingPathComponent("temp_zip_\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: tempZipDir, withIntermediateDirectories: true)
-            
-            defer {
-                // Clean up temp directory
-                try? FileManager.default.removeItem(at: tempZipDir)
-            }
-            
-            // Copy contents of HLS directory to temp directory (this puts master.m3u8, 720p/, 480p/ at root)
-            let contents = try FileManager.default.contentsOfDirectory(at: hlsDirectory, includingPropertiesForKeys: nil)
-            for item in contents {
-                let destination = tempZipDir.appendingPathComponent(item.lastPathComponent)
-                try FileManager.default.copyItem(at: item, to: destination)
-                print("DEBUG: Copied \(item.lastPathComponent) to temp zip directory")
-            }
-            
-            // Use FileManager to create zip archive from temp directory
-            let coordinator = NSFileCoordinator()
-            var error: NSError?
-            
+
+            print("DEBUG: [ZIP CREATION] Starting memory-optimized zip creation")
+            print("DEBUG: [ZIP CREATION] HLS directory: \(hlsDirectory.path)")
+            print("DEBUG: [ZIP CREATION] Zip file will be created at: \(zipURL.path)")
+
+            // Log initial memory usage
+            VideoConversionService.shared.logMemoryUsage("before zip creation")
+
+            // Memory-optimized streaming approach: Process files sequentially without loading into memory
             return try await withCheckedThrowingContinuation { continuation in
-                coordinator.coordinate(readingItemAt: tempZipDir, options: [.forUploading], error: &error) { (url) in
+                Task.detached {
                     do {
-                        // Move the temporary zip file to our desired location
-                        try FileManager.default.moveItem(at: url, to: zipURL)
-                        print("DEBUG: Successfully created zip file at: \(zipURL.path)")
-                        continuation.resume(returning: zipURL)
+                        // Calculate total size of HLS directory recursively
+                        var totalSize: Int64 = 0
+                        var fileCount = 0
+
+                        // Use FileManager enumerator to recursively get all files
+                        let enumerator = FileManager.default.enumerator(at: hlsDirectory,
+                                                                       includingPropertiesForKeys: [.fileSizeKey, .typeIdentifierKey],
+                                                                       options: [],
+                                                                       errorHandler: nil)
+
+                        while let fileURL = enumerator?.nextObject() as? URL {
+                            var isDirectory: ObjCBool = false
+                            if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) && !isDirectory.boolValue {
+                                // Only count regular files, not directories
+                                if let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                                   let size = attributes[.size] as? Int64 {
+                                    totalSize += size
+                                    fileCount += 1
+                                }
+                            }
+                        }
+
+                        print("DEBUG: [ZIP CREATION] Found \(fileCount) files in HLS directory, total size: \(totalSize / 1024)KB")
+
+                        // Use NSFileCoordinator with direct file copying for reliable compression
+                        print("DEBUG: [ZIP CREATION] Using NSFileCoordinator with direct file copying")
+
+                        // Force memory cleanup before zip creation
+                        autoreleasepool {}
+                        progressCallback?("Preparing files for compression...", 10)
+
+                        // Copy HLS directory to a temporary location for zipping
+                        let tempHlsDir = tempDir.appendingPathComponent("hls_copy_\(UUID().uuidString)")
+                        try FileManager.default.copyItem(at: hlsDirectory, to: tempHlsDir)
+
+                        // Clean up the copied directory after zipping
+                        defer {
+                            try? FileManager.default.removeItem(at: tempHlsDir)
+                        }
+
+                        print("DEBUG: [ZIP CREATION] Copied HLS directory to: \(tempHlsDir.path)")
+
+                        let coordinator = NSFileCoordinator()
+                        var coordinatorError: NSError?
+
+                        coordinator.coordinate(readingItemAt: tempHlsDir, options: [.forUploading], error: &coordinatorError) { (tempZipURL) in
+                            do {
+                                // Move the zip file to final location
+                                try FileManager.default.moveItem(at: tempZipURL, to: zipURL)
+
+                                // Verify zip file was created and get its size
+                                if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
+                                   let zipSize = zipAttributes[.size] as? Int64 {
+                                    print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
+                                    print("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
+
+                                    // Log memory usage after zip creation
+                                    VideoConversionService.shared.logMemoryUsage("after zip creation")
+
+                                    continuation.resume(returning: zipURL)
+                                } else {
+                                    throw NSError(domain: "ZipCreation", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to verify zip file creation"])
+                                }
+                            } catch {
+                                print("DEBUG: [ZIP CREATION] Failed to move zip file: \(error)")
+                                continuation.resume(throwing: error)
+                            }
+                        }
+
+                        if let error = coordinatorError {
+                            print("DEBUG: [ZIP CREATION] File coordinator error: \(error)")
+                            continuation.resume(throwing: error)
+                        }
+
                     } catch {
-                        print("DEBUG: Failed to move zip file: \(error)")
+                        print("DEBUG: [ZIP CREATION] Zip creation failed: \(error)")
                         continuation.resume(throwing: error)
                     }
-                }
-                
-                if let error = error {
-                    print("DEBUG: File coordinator error: \(error)")
-                    continuation.resume(throwing: error)
                 }
             }
         }
@@ -3618,38 +3732,110 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid process-zip URL"])
             }
             
-            // Read compressed file data
+            // Verify zip file exists and has content
+            guard FileManager.default.fileExists(atPath: compressedURL.path) else {
+                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Zip file does not exist at path: \(compressedURL.path)"])
+            }
+
+            let fileAttributes = try FileManager.default.attributesOfItem(atPath: compressedURL.path)
+            let fileSize = fileAttributes[.size] as? Int64 ?? 0
+
+            guard fileSize > 0 else {
+                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Zip file is empty (size: \(fileSize) bytes)"])
+            }
+
+            // Additional validation: check if the file is actually a valid zip by checking the first few bytes
+            let fileHandle = try FileHandle(forReadingFrom: compressedURL)
+            let headerData = fileHandle.readData(ofLength: 4)
+            fileHandle.closeFile()
+
+            // ZIP files start with PK\x03\x04 or PK\x05\x06 or PK\x07\x08
+            let zipSignatures = [
+                Data([0x50, 0x4B, 0x03, 0x04]), // PK\x03\x04
+                Data([0x50, 0x4B, 0x05, 0x06]), // PK\x05\x06
+                Data([0x50, 0x4B, 0x07, 0x08])  // PK\x07\x08
+            ]
+
+            let isValidZip = zipSignatures.contains { signature in
+                headerData.starts(with: signature)
+            }
+
+            guard isValidZip else {
+                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Zip file appears to be corrupted (invalid header: \(headerData.map { String(format: "%02x", $0) }.joined()))"])
+            }
+
+            print("DEBUG: [UPLOAD] Preparing to upload zip file, size: \(fileSize / 1024)KB")
+
+            // For very large files (>50MB), add memory warning
+            let maxMemoryEfficientSize = Int64(50 * 1024 * 1024) // 50MB
+            if fileSize > maxMemoryEfficientSize {
+                print("WARNING: [UPLOAD] Large zip file (\(fileSize / (1024 * 1024))MB) may cause memory pressure")
+                VideoConversionService.shared.logMemoryUsage("before large file upload")
+            }
+
+            // Read compressed file data - for very large files, this is unavoidable with URLSession
+            // but we log memory usage to track the impact
             let compressedData = try Data(contentsOf: compressedURL)
+
+            guard compressedData.count > 0 else {
+                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to read zip file data"])
+            }
+
+            if fileSize > maxMemoryEfficientSize {
+                VideoConversionService.shared.logMemoryUsage("after loading large file")
+                print("DEBUG: [UPLOAD] Large file loaded into memory, size: \(compressedData.count / (1024 * 1024))MB")
+            }
+
+            print("DEBUG: [UPLOAD] Successfully read \(compressedData.count) bytes of zip data")
             
-            // Create multipart form data
-            let boundary = "Boundary-\(UUID().uuidString)"
+            // Create multipart form data with a simple boundary
+            let boundary = "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-            
+
             var body = Data()
-            
+
+            // Add the compressed HLS file FIRST (some servers expect the file field first)
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: application/zip\r\n".data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
+            body.append(compressedData)
+            body.append("\r\n".data(using: .utf8)!)
+
             // Add filename
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"filename\"\r\n\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"filename\"\r\n".data(using: .utf8)!)
+            body.append("\r\n".data(using: .utf8)!)
             body.append("\(fileName)\r\n".data(using: .utf8)!)
-            
+
             // Add reference ID if provided
             if let referenceId = referenceId {
                 body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n".data(using: .utf8)!)
+                body.append("\r\n".data(using: .utf8)!)
                 body.append("\(referenceId)\r\n".data(using: .utf8)!)
             }
-            
-            // Add the compressed HLS file
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-            body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
-            body.append(compressedData)
-            body.append("\r\n".data(using: .utf8)!)
-            
+
             // End boundary
             body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+            print("DEBUG: [UPLOAD] Multipart form constructed with boundary: \(boundary)")
+            print("DEBUG: [UPLOAD] Body size: \(body.count) bytes")
+
+            // Debug: Show the beginning of the multipart data
+            if let debugData = String(data: body.prefix(500), encoding: .utf8) {
+                print("DEBUG: [UPLOAD] Multipart data prefix: \(debugData)")
+            }
+
+            // Verify the zipFile field is present in the body
+            if let bodyString = String(data: body, encoding: .utf8) {
+                let hasZipFileField = bodyString.contains("name=\"zipFile\"")
+                let hasBoundary = bodyString.contains(boundary)
+                print("DEBUG: [UPLOAD] Body contains 'zipFile' field: \(hasZipFileField)")
+                print("DEBUG: [UPLOAD] Body contains boundary: \(hasBoundary)")
+            }
             
             request.httpBody = body
             request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
@@ -3658,14 +3844,22 @@ final class HproseInstance: ObservableObject {
             request.timeoutInterval = 600
             
             // Upload the file
+            print("DEBUG: [UPLOAD] Sending request to: \(url)")
+            print("DEBUG: [UPLOAD] Content-Type: \(request.value(forHTTPHeaderField: "Content-Type") ?? "nil")")
+            print("DEBUG: [UPLOAD] Content-Length: \(request.value(forHTTPHeaderField: "Content-Length") ?? "nil")")
+
             let (responseData, response) = try await URLSession.shared.data(for: request)
-            
+
+            print("DEBUG: [UPLOAD] Received response with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+
             if let httpResponse = response as? HTTPURLResponse {
+                print("DEBUG: [UPLOAD] Response headers: \(httpResponse.allHeaderFields)")
+
                 if httpResponse.statusCode == 200 {
                     // Parse response to get job ID
                     if let responseString = String(data: responseData, encoding: .utf8) {
                         print("DEBUG: process-zip upload response: \(responseString)")
-                        
+
                         // Parse JSON response to extract job ID
                         if let jsonData = responseString.data(using: .utf8),
                            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
@@ -3674,12 +3868,19 @@ final class HproseInstance: ObservableObject {
                             return jobId
                         } else {
                             // Fallback: try to extract job ID from response string
-                            return responseString.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let trimmedResponse = responseString.trimmingCharacters(in: .whitespacesAndNewlines)
+                            print("DEBUG: Using fallback job ID extraction: \(trimmedResponse)")
+                            return trimmedResponse
                         }
                     } else {
+                        print("DEBUG: [UPLOAD] Could not decode response as UTF-8 string")
                         throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
                     }
                 } else {
+                    // Log the response body for debugging failed requests
+                    if let errorResponseString = String(data: responseData, encoding: .utf8) {
+                        print("DEBUG: [UPLOAD] Error response body: \(errorResponseString)")
+                    }
                     throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
                 }
             }

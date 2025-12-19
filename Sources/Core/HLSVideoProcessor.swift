@@ -21,50 +21,87 @@ public class HLSVideoProcessor {
     /// Get video aspect ratio with multiple fallback approaches
     public func getVideoAspectRatio(filePath: String) async throws -> Float? {
         print("DEBUG: Getting video aspect ratio for file: \(filePath)")
-        
+
         let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard let track = tracks.first else { return nil }
-        
+
         let size = try await track.load(.naturalSize)
-        guard size.height > 0 else { return nil }
-        
+
+        // Validate dimensions are reasonable (allow small videos but reject impossible values)
+        guard size.width >= 1, size.height >= 1,
+              size.width.isFinite, size.height.isFinite,
+              size.width < 100000, size.height < 100000 else {
+            print("DEBUG: Unreasonable video dimensions: width=\(size.width), height=\(size.height), using fallback")
+            // For truly invalid dimensions, return a standard aspect ratio instead of failing
+            return 16.0/9.0 // Standard widescreen fallback
+        }
+
         // Get comprehensive video parameters
         await printVideoParameters(filePath: filePath, track: track, size: size)
-        
+
         // Calculate display aspect ratio that accounts for rotation
         let displayAspectRatio = await getDisplayAspectRatio(track: track, naturalSize: size)
-        print("DEBUG: Display aspect ratio: \(displayAspectRatio)")
-        return displayAspectRatio
+
+        // Validate and clamp the calculated aspect ratio to reasonable bounds
+        let clampedAspectRatio: Float
+        if displayAspectRatio.isFinite && displayAspectRatio > 0 {
+            // Clamp to reasonable bounds (0.1:1 to 10:1 aspect ratios)
+            clampedAspectRatio = max(0.1, min(10.0, displayAspectRatio))
+        } else {
+            print("DEBUG: Invalid calculated aspect ratio: \(displayAspectRatio), using fallback")
+            clampedAspectRatio = 16.0/9.0 // Standard widescreen fallback
+        }
+
+        print("DEBUG: Display aspect ratio: \(clampedAspectRatio)")
+        return clampedAspectRatio
     }
     
     /// Calculate display aspect ratio accounting for video rotation
     private func getDisplayAspectRatio(track: AVAssetTrack, naturalSize: CGSize) async -> Float {
         do {
             let preferredTransform = try await track.load(.preferredTransform)
-            
+
             // Calculate rotation from transform
             let angle = atan2(preferredTransform.b, preferredTransform.a) * 180 / .pi
             let rotation = Int(round(angle))
-            
+
             // Check if dimensions should be swapped for display
-            let isRotated90or270 = rotation == 90 || rotation == 270 || 
+            let isRotated90or270 = rotation == 90 || rotation == 270 ||
                                   (abs(preferredTransform.a) < 0.1 && abs(preferredTransform.d) < 0.1)
-            
+
             let aspectRatio: Float
             if isRotated90or270 {
                 // For 90° or 270° rotation, swap width and height
-                aspectRatio = Float(naturalSize.height / naturalSize.width)
+                // Use max() to avoid division by zero, but allow very small dimensions
+                let safeWidth = max(Float(naturalSize.width), 1.0)
+                aspectRatio = Float(naturalSize.height) / safeWidth
             } else {
                 // For 0° or 180° rotation, use normal dimensions
-                aspectRatio = Float(naturalSize.width / naturalSize.height)
+                // Use max() to avoid division by zero, but allow very small dimensions
+                let safeHeight = max(Float(naturalSize.height), 1.0)
+                aspectRatio = Float(naturalSize.width) / safeHeight
             }
-            
+
+            // Ensure aspect ratio is reasonable (clamp to valid range or use fallback)
+            if !aspectRatio.isFinite || aspectRatio <= 0 {
+                print("DEBUG: Invalid aspect ratio calculated: \(aspectRatio), using fallback")
+                return 16.0/9.0 // Standard widescreen fallback
+            }
+
             return aspectRatio
         } catch {
             print("DEBUG: Error getting preferred transform, using natural aspect ratio: \(error)")
             // Fallback to natural aspect ratio if transform loading fails
-            return Float(naturalSize.width / naturalSize.height)
+            // Use max() to avoid division by zero
+            let safeHeight = max(Float(naturalSize.height), 1.0)
+            let fallbackRatio = Float(naturalSize.width) / safeHeight
+
+            if !fallbackRatio.isFinite || fallbackRatio <= 0 {
+                print("DEBUG: Invalid fallback aspect ratio: \(fallbackRatio), using standard fallback")
+                return 16.0/9.0 // Standard widescreen fallback
+            }
+            return fallbackRatio
         }
     }
     

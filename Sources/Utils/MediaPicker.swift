@@ -567,8 +567,17 @@ struct VideoThumbnailView: View {
                     do {
                         let cgImage = try await imageGenerator.image(at: timePosition).image
                         let uiImage = UIImage(cgImage: cgImage)
-                        
-                        print("DEBUG: [VideoThumbnailView] Successfully generated thumbnail at time: \(timePosition.seconds)")
+
+                        // Validate image dimensions before using
+                        let imageSize = uiImage.size
+                        guard imageSize.width.isFinite, imageSize.height.isFinite,
+                              imageSize.width > 0, imageSize.height > 0,
+                              imageSize.width < 10000, imageSize.height < 10000 else {
+                            print("DEBUG: [VideoThumbnailView] Invalid thumbnail dimensions: \(imageSize), trying next time position")
+                            continue // Try next time position instead of failing
+                        }
+
+                        print("DEBUG: [VideoThumbnailView] Successfully generated thumbnail at time: \(timePosition.seconds) with size: \(imageSize)")
                         
                         await MainActor.run {
                             self.thumbnail = uiImage
@@ -588,20 +597,58 @@ struct VideoThumbnailView: View {
                 }
                 
                 if !thumbnailGenerated {
-                    print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at any time position")
+                    print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at any time position, using placeholder")
                     await MainActor.run {
+                        self.thumbnail = generatePlaceholderVideoThumbnail()
                         self.isLoading = false
-                        self.hasError = true
+                        self.hasError = false // Don't show error state since we have a placeholder
+
+                        // Cache the placeholder
+                        Self.thumbnailCache[videoPath] = self.thumbnail
                     }
                 }
                 
             } catch {
                 print("DEBUG: [VideoThumbnailView] Error generating video thumbnail: \(error)")
                 await MainActor.run {
+                    self.thumbnail = generatePlaceholderVideoThumbnail()
                     self.isLoading = false
-                    self.hasError = true
+                    self.hasError = false // Use placeholder instead of error state
                 }
             }
+        }
+    }
+
+    private func generatePlaceholderVideoThumbnail() -> UIImage {
+        let size = CGSize(width: 120, height: 120)
+        let renderer = UIGraphicsImageRenderer(size: size)
+
+        return renderer.image { context in
+            // Fill with a neutral background
+            UIColor.systemGray5.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+
+            // Draw a simple video icon
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let iconSize: CGFloat = 40
+
+            // Draw rounded rectangle background
+            let bgRect = CGRect(x: center.x - iconSize/2, y: center.y - iconSize/2,
+                               width: iconSize, height: iconSize)
+            let bgPath = UIBezierPath(roundedRect: bgRect, cornerRadius: 6)
+            UIColor.systemGray4.setFill()
+            bgPath.fill()
+
+            // Draw play triangle
+            let triangleSize: CGFloat = iconSize * 0.3
+            let trianglePath = UIBezierPath()
+            trianglePath.move(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y - triangleSize * 0.6))
+            trianglePath.addLine(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y + triangleSize * 0.6))
+            trianglePath.addLine(to: CGPoint(x: center.x + triangleSize * 0.7, y: center.y))
+            trianglePath.close()
+
+            UIColor.white.setFill()
+            trianglePath.fill()
         }
     }
 }

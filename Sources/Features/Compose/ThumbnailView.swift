@@ -395,14 +395,22 @@ struct ThumbnailView: View {
                 }
                 
                 let originalImage = UIImage(cgImage: cgImage)
-                
+
+                // Validate image dimensions before processing
+                let imageSize = originalImage.size
+                guard imageSize.width.isFinite, imageSize.height.isFinite,
+                      imageSize.width > 0, imageSize.height > 0,
+                      imageSize.width < 10000, imageSize.height < 10000 else {
+                    print("DEBUG: [Thumbnail] Invalid image dimensions from video frame: \(imageSize), trying next time position")
+                    continue // Try next time position instead of failing
+                }
+
                 // Center-crop thumbnail to fill
                 let targetSize = CGSize(width: 200, height: 200)
                 let format = UIGraphicsImageRendererFormat()
                 format.scale = 1.0
                 let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
                 let thumbnail = renderer.image { context in
-                    let imageSize = originalImage.size
                     let scale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
                     let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
                     let x = (targetSize.width - scaledSize.width) / 2
@@ -416,9 +424,45 @@ struct ThumbnailView: View {
                 continue
             }
         }
-        
-        // If all time positions fail, throw error
-        throw ThumbnailError.thumbnailGenerationFailed
+
+        // If all time positions fail, return a placeholder thumbnail instead of failing
+        print("DEBUG: [Thumbnail] All time positions failed, returning placeholder thumbnail")
+        return generatePlaceholderVideoThumbnail()
+    }
+
+    private func generatePlaceholderVideoThumbnail() -> UIImage {
+        let size = CGSize(width: 200, height: 200)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+
+        return renderer.image { context in
+            // Fill with a neutral gray color
+            UIColor.systemGray4.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+
+            // Add a simple video/play icon
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let iconSize: CGFloat = 60
+
+            // Draw a rounded rectangle background
+            let backgroundRect = CGRect(x: center.x - iconSize/2, y: center.y - iconSize/2,
+                                      width: iconSize, height: iconSize)
+            let backgroundPath = UIBezierPath(roundedRect: backgroundRect, cornerRadius: 8)
+            UIColor.systemGray5.setFill()
+            backgroundPath.fill()
+
+            // Draw a play triangle
+            let triangleSize: CGFloat = iconSize * 0.4
+            let trianglePath = UIBezierPath()
+            trianglePath.move(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y - triangleSize * 0.5))
+            trianglePath.addLine(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y + triangleSize * 0.5))
+            trianglePath.addLine(to: CGPoint(x: center.x + triangleSize * 0.6, y: center.y))
+            trianglePath.close()
+
+            UIColor.white.setFill()
+            trianglePath.fill()
+        }
     }
     
     private func generateImageThumbnail() async throws -> UIImage {

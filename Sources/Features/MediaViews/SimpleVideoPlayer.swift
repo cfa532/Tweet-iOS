@@ -211,7 +211,20 @@ enum VideoFrameExtractor {
     /// Convert a pixel buffer to a downscaled UIImage (for feed placeholders).
     static func makeDownscaledUIImage(from pixelBuffer: CVPixelBuffer, maxDimension: CGFloat = 720) -> UIImage? {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        let extent = ciImage.extent
+
+        // Validate extent dimensions are finite, positive, and reasonable
+        guard extent.width.isFinite, extent.height.isFinite,
+              extent.width > 0, extent.height > 0,
+              extent.width < 10000, extent.height < 10000 else {
+            print("Invalid frame dimension (negative, non-finite, or unreasonable): width=\(extent.width), height=\(extent.height)")
+            return nil
+        }
+
+        guard let cgImage = ciContext.createCGImage(ciImage, from: extent) else {
+            print("Failed to create CGImage from CIImage")
+            return nil
+        }
         let image = UIImage(cgImage: cgImage)
         return downscale(image, maxDimension: maxDimension)
     }
@@ -219,12 +232,36 @@ enum VideoFrameExtractor {
     /// Downscale without changing aspect ratio.
     static func downscale(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
         let size = image.size
+
+        // Validate image dimensions are finite, positive, and reasonable
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0,
+              size.width < 10000, size.height < 10000 else {
+            print("Invalid frame dimension (negative, non-finite, or unreasonable): width=\(size.width), height=\(size.height)")
+            return image
+        }
+
         let maxSide = max(size.width, size.height)
         guard maxSide > maxDimension, maxSide > 0 else { return image }
-        
+
         let scale = maxDimension / maxSide
+
+        // Ensure scale is valid
+        guard scale.isFinite, scale > 0, scale <= 1 else {
+            print("Invalid scale factor: \(scale)")
+            return image
+        }
+
         let targetSize = CGSize(width: size.width * scale, height: size.height * scale)
-        
+
+        // Ensure target size is also finite, positive, and reasonable
+        guard targetSize.width.isFinite, targetSize.height.isFinite,
+              targetSize.width > 0, targetSize.height > 0,
+              targetSize.width < 10000, targetSize.height < 10000 else {
+            print("Invalid target size (negative, non-finite, or unreasonable): width=\(targetSize.width), height=\(targetSize.height)")
+            return image
+        }
+
         let renderer = UIGraphicsImageRenderer(size: targetSize)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: targetSize))
@@ -239,7 +276,7 @@ enum VideoFrameExtractor {
 
         let ciImage = CIImage(cgImage: cgImage)
         let extent = ciImage.extent
-        guard extent.width > 0, extent.height > 0 else { return false }
+        guard extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return false }
         guard let filter = CIFilter(name: "CIAreaAverage") else { return false }
 
         filter.setValue(ciImage, forKey: kCIInputImageKey)

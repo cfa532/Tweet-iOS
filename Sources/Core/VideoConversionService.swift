@@ -25,8 +25,7 @@ class VideoConversionService {
     
     private var currentConversion: Task<Void, Never>?
     private var progressCallback: ((ConversionProgress) -> Void)?
-    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
-    
+
     private init() {
         // FFmpegKit configuration
     }
@@ -46,34 +45,12 @@ class VideoConversionService {
         
         // Store progress callback
         self.progressCallback = progressCallback
-        
-        // Start background task
-        startBackgroundTask()
-        
-        // Determine configuration based on file size
-        let fileSizeMB = Double(fileSizeBytes) / (1024 * 1024)
-        let sizeThreshold256MB = 256.0
-        
-        let resolution720pBitrate: String
-        let lowerResolution: Int
-        let lowerResolutionBitrate: String
-        
-        // Bitrate settings: 720p = 1500k, other resolutions proportional
-        // 480p = 1500 * (480/720) = 1000k
-        // 360p = 1500 * (360/720) = 750k
-        if fileSizeMB >= sizeThreshold256MB {
-            // >= 256MB: 720p (1500kb) + 360p (750kb)
-            resolution720pBitrate = "1500k"
-            lowerResolution = 360
-            lowerResolutionBitrate = "750k"
-            print("DEBUG: [VIDEO CONVERSION] File size \(String(format: "%.1f", fileSizeMB))MB >= 256MB, using 720p (1500k) + 360p (750k)")
-        } else {
-            // < 256MB: 720p (1500kb) + 480p (1000kb)
-            resolution720pBitrate = "1500k"
-            lowerResolution = 480
-            lowerResolutionBitrate = "1000k"
-            print("DEBUG: [VIDEO CONVERSION] File size \(String(format: "%.1f", fileSizeMB))MB < 256MB, using 720p (1500k) + 480p (1000k)")
-        }
+
+        // Standard HLS conversion configuration
+        // Always use 720p (1500kb) + 480p (1000kb) regardless of file size
+        let resolution720pBitrate = "1500k"
+        let lowerResolution = 480
+        let lowerResolutionBitrate = "1000k"
         
         // Create HLS directory structure
         let hlsDirectory = outputDirectory.appendingPathComponent("hls")
@@ -109,21 +86,6 @@ class VideoConversionService {
         }
     }
     
-    // MARK: - Background Task Management
-    
-    private func startBackgroundTask() {
-        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "VideoConversion") { [weak self] in
-            // Background time expired, end the task
-            self?.endBackgroundTask()
-        }
-    }
-    
-    private func endBackgroundTask() {
-        if backgroundTaskID != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTaskID)
-            backgroundTaskID = .invalid
-        }
-    }
     
     // MARK: - Memory Management
     
@@ -160,9 +122,15 @@ class VideoConversionService {
         }
     }
     
-    private func logMemoryUsage(_ context: String) {
+    func logMemoryUsage(_ context: String) {
         let memory = getMemoryUsage()
         print("DEBUG: [VIDEO CONVERSION] Memory usage \(context): \(String(format: "%.1f", memory)) MB")
+
+        // Warn if memory usage is getting high (>200MB)
+        let highMemoryThreshold: Double = 200.0
+        if memory > highMemoryThreshold {
+            print("WARNING: [VIDEO CONVERSION] High memory usage detected: \(String(format: "%.1f", memory)) MB")
+        }
     }
     
     private func forceMemoryCleanup() {
@@ -170,15 +138,21 @@ class VideoConversionService {
         autoreleasepool {
             // This will help release any autoreleased objects
         }
-        
+
         // Log memory after cleanup
         logMemoryUsage("after cleanup")
+
+        // If memory is still high after cleanup, warn
+        let memory = getMemoryUsage()
+        let criticalMemoryThreshold: Double = 300.0 // 300MB
+        if memory > criticalMemoryThreshold {
+            print("CRITICAL: [VIDEO CONVERSION] Memory usage still high after cleanup: \(String(format: "%.1f", memory)) MB")
+        }
     }
     
     func cancelCurrentConversion() {
         currentConversion?.cancel()
         currentConversion = nil
-        endBackgroundTask()
     }
     
     // MARK: - Async Conversion
@@ -231,7 +205,6 @@ class VideoConversionService {
                     errorMessage: "Failed to convert to 720p HLS"
                 ))
             }
-            endBackgroundTask()
             return
         }
         
@@ -261,7 +234,6 @@ class VideoConversionService {
                     errorMessage: "Failed to convert to \(lowerResolution)p HLS"
                 ))
             }
-            endBackgroundTask()
             return
         }
         
@@ -295,8 +267,6 @@ class VideoConversionService {
                 errorMessage: resultLowerRes ? (masterPlaylistCreated ? nil : "Failed to create master playlist") : "Failed to convert to \(lowerResolution)p HLS"
             ))
         }
-        
-        endBackgroundTask()
     }
     
     private func updateProgress(stage: String, progress: Int) async {
@@ -356,21 +326,45 @@ class VideoConversionService {
                 return "\(targetResolution * 16 / 9)x\(targetResolution)"
             }
         }
-        
+
+        // Validate aspect ratio is finite and reasonable
+        guard aspectRatio.isFinite, aspectRatio > 0, aspectRatio < 100 else {
+            print("DEBUG: [VIDEO CONVERSION] Invalid aspect ratio: \(aspectRatio), using default resolution")
+            return "\(targetResolution * 16 / 9)x\(targetResolution)"
+        }
+
         if aspectRatio < 1.0 {
             // Portrait: scale to target width, calculate height
             let width = targetResolution
-            let height = Int(Float(targetResolution) / aspectRatio)
-            // Ensure height is even
+            let heightFloat = Float(targetResolution) / aspectRatio
+
+            // Ensure height calculation is valid
+            guard heightFloat.isFinite, heightFloat > 0, heightFloat < 10000 else {
+                print("DEBUG: [VIDEO CONVERSION] Invalid height calculation: \(heightFloat), using default")
+                return "\(width)x\(targetResolution)"
+            }
+
+            let height = Int(heightFloat)
+            // Ensure height is even and reasonable
             let evenHeight = height % 2 == 0 ? height : height - 1
-            return "\(width)x\(evenHeight)"
+            let clampedHeight = max(1, min(evenHeight, targetResolution * 4)) // Reasonable bounds
+            return "\(width)x\(clampedHeight)"
         } else {
             // Landscape: scale to target height, calculate width
             let height = targetResolution
-            let width = Int(Float(targetResolution) * aspectRatio)
-            // Ensure width is even
+            let widthFloat = Float(targetResolution) * aspectRatio
+
+            // Ensure width calculation is valid
+            guard widthFloat.isFinite, widthFloat > 0, widthFloat < 10000 else {
+                print("DEBUG: [VIDEO CONVERSION] Invalid width calculation: \(widthFloat), using default")
+                return "\(targetResolution * 16 / 9)x\(height)"
+            }
+
+            let width = Int(widthFloat)
+            // Ensure width is even and reasonable
             let evenWidth = width % 2 == 0 ? width : width - 1
-            return "\(evenWidth)x\(height)"
+            let clampedWidth = max(1, min(evenWidth, targetResolution * 4)) // Reasonable bounds
+            return "\(clampedWidth)x\(height)"
         }
     }
     
