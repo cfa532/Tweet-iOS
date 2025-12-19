@@ -21,6 +21,10 @@
 "Submitting tweet..." = "正在提交推文...";
 "Retrying upload..." = "正在重试上传...";
 "Upload completed" = "上传完成";
+"Upload cancelled" = "上传已取消";
+"Cancel Upload" = "取消上传";
+"Are you sure you want to cancel this upload? This action cannot be undone." = "您确定要取消此上传吗？此操作无法撤销。";
+"Continue" = "继续";
 "Posting Tweet" = "正在发布推文";
 "Posting Comment" = "正在发布评论";
 "Sending Message" = "正在发送消息";

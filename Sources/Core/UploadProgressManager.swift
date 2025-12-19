@@ -28,11 +28,12 @@ class UploadProgressManager: ObservableObject {
     @Published var progress: Double = 0.0 // 0.0 to 1.0
     @Published var detailedProgress: String = ""
     @Published var uploadType: String = "" // "tweet", "comment", "chat"
-    
+
     private var uploadStartTime: Date?
     private var backgroundObserver: NSObjectProtocol?
     private var foregroundObserver: NSObjectProtocol?
     private var wasBackgrounded: Bool = false
+    private var userInteractionDisabled: Bool = false
     
     private init() {
         setupBackgroundObserver()
@@ -89,6 +90,9 @@ class UploadProgressManager: ObservableObject {
         // Prevent screen from auto-locking during upload
         UIApplication.shared.isIdleTimerDisabled = true
 
+        // Note: User interaction blocking is handled by the overlay's background
+        // The dialog itself remains interactive for the close button
+
         print("📤 [UploadProgress] Started \(type) upload (idle timer disabled, videos: \(hasVideos))")
     }
     
@@ -105,15 +109,18 @@ class UploadProgressManager: ObservableObject {
         currentStage = .completed
         stageMessage = NSLocalizedString("Upload completed", comment: "Upload stage")
         progress = 1.0
-        
+
         // Re-enable auto-lock
         UIApplication.shared.isIdleTimerDisabled = false
-        
+
+        // Restore user interaction
+        unblockUserInteraction()
+
         if let startTime = uploadStartTime {
             let duration = Date().timeIntervalSince(startTime)
-            print("✅ [UploadProgress] Upload completed in \(String(format: "%.1f", duration))s (idle timer re-enabled)")
+            print("✅ [UploadProgress] Upload completed in \(String(format: "%.1f", duration))s (idle timer re-enabled, user interaction restored)")
         }
-        
+
         // Reset after a short delay
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
@@ -128,12 +135,15 @@ class UploadProgressManager: ObservableObject {
         currentStage = .failed
         stageMessage = message
         progress = 0.0
-        
+
         // Re-enable auto-lock
         UIApplication.shared.isIdleTimerDisabled = false
-        
-        print("❌ [UploadProgress] Upload failed: \(message) (idle timer re-enabled)")
-        
+
+        // Restore user interaction
+        unblockUserInteraction()
+
+        print("❌ [UploadProgress] Upload failed: \(message) (idle timer re-enabled, user interaction restored)")
+
         // Keep failed state visible longer
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
@@ -144,10 +154,75 @@ class UploadProgressManager: ObservableObject {
         }
     }
     
+    func cancelUpload() {
+        print("🛑 [UploadProgress] User cancelled upload")
+        
+        // Cancel video conversion if in progress
+        VideoConversionService.shared.cancelCurrentConversion()
+        
+        // Cancel upload task in TweetUploadManager
+        HproseInstance.shared.uploadManager.cancelCurrentUpload()
+        
+        // Remove pending upload file
+        Task {
+            await HproseInstance.shared.uploadManager.removePendingUpload()
+        }
+        
+        // Re-enable auto-lock
+        UIApplication.shared.isIdleTimerDisabled = false
+        
+        // Restore user interaction
+        unblockUserInteraction()
+        
+        // Reset upload state
+        currentStage = .failed
+        stageMessage = NSLocalizedString("Upload cancelled", comment: "Upload cancelled message")
+        progress = 0.0
+        isUploading = false
+        uploadType = ""
+        detailedProgress = ""
+        
+        // Post notification for upload cancellation
+        NotificationCenter.default.post(
+            name: .uploadCancelled,
+            object: nil
+        )
+    }
+    
     private func handleBackgroundInterruption() {
         // If still uploading after backgrounding, it likely failed
         // The upload manager will detect the actual failure
         print("⚠️ [UploadProgress] Detected potential upload interruption")
+    }
+
+    private func blockUserInteraction() {
+        guard !userInteractionDisabled else { return }
+
+        Task { @MainActor in
+            userInteractionDisabled = true
+            // Block user interaction on all windows to prevent other tasks during upload
+            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                for window in windowScene.windows {
+                    window.isUserInteractionEnabled = false
+                }
+                print("🚫 [UploadProgress] User interaction blocked during upload")
+            }
+        }
+    }
+
+    private func unblockUserInteraction() {
+        guard userInteractionDisabled else { return }
+
+        Task { @MainActor in
+            userInteractionDisabled = false
+            // Restore user interaction on all windows
+            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                for window in windowScene.windows {
+                    window.isUserInteractionEnabled = true
+                }
+                print("✅ [UploadProgress] User interaction restored after upload")
+            }
+        }
     }
     
     deinit {

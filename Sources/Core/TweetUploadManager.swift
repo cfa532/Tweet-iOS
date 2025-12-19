@@ -24,8 +24,18 @@ class TweetUploadManager {
     // Reference to parent HproseInstance for accessing shared properties
     weak var hproseInstance: HproseInstance?
     
+    // Track current upload task for cancellation
+    private var currentUploadTask: Task<Void, Never>?
+    
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
+    }
+    
+    /// Cancel current upload task
+    func cancelCurrentUpload() {
+        currentUploadTask?.cancel()
+        currentUploadTask = nil
+        print("🛑 [TweetUploadManager] Current upload task cancelled")
     }
     
     // MARK: - Public Upload Methods
@@ -62,16 +72,20 @@ class TweetUploadManager {
     
     /// Schedule a tweet upload with persistence and retry
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
+        // Cancel any existing upload task
+        cancelCurrentUpload()
+        
+        currentUploadTask = Task(priority: .high) {
             // Note: Upload dialog is already shown by the caller (ComposeTweetView)
             // before prepareItemData, so we don't call startUpload here
             await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
+            currentUploadTask = nil
         }
     }
     
     /// Schedule a chat message upload
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
+        Task(priority: .high) {
             // Start progress tracking on main thread
             await MainActor.run {
                 UploadProgressManager.shared.startUpload(type: "chat")
@@ -87,7 +101,7 @@ class TweetUploadManager {
         itemData: [PendingTweetUpload.ItemData],
         isQuoting: Bool = false
     ) {
-        Task.detached(priority: .background) {
+        Task(priority: .high) {
             // Start progress tracking on main thread
             await MainActor.run {
                 UploadProgressManager.shared.startUpload(type: "comment")
@@ -98,7 +112,7 @@ class TweetUploadManager {
                 await MainActor.run {
                     UploadProgressManager.shared.updateProgress(
                         stage: .uploadingAttachments,
-                        message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
                         progress: 0.2
                     )
                 }
@@ -419,7 +433,7 @@ extension TweetUploadManager {
             await MainActor.run {
                 UploadProgressManager.shared.updateProgress(
                     stage: .uploadingAttachments,
-                    message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
                     progress: 0.2
                 )
             }
@@ -1308,7 +1322,7 @@ extension TweetUploadManager {
             await MainActor.run {
                 UploadProgressManager.shared.updateProgress(
                     stage: .uploadingAttachments,
-                    message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
                     progress: 0.2
                 )
             }
@@ -1536,7 +1550,7 @@ extension TweetUploadManager {
         }
     }
     
-    private func removePendingUpload() async {
+    func removePendingUpload() async {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
         try? FileManager.default.removeItem(at: fileURL)
         print("Removed pending upload from disk")

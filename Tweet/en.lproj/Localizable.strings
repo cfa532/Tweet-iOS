@@ -21,6 +21,10 @@
 "Submitting tweet..." = "Submitting tweet...";
 "Retrying upload..." = "Retrying upload...";
 "Upload completed" = "Upload completed";
+"Upload cancelled" = "Upload cancelled";
+"Cancel Upload" = "Cancel Upload";
+"Are you sure you want to cancel this upload? This action cannot be undone." = "Are you sure you want to cancel this upload? This action cannot be undone.";
+"Continue" = "Continue";
 "Posting Tweet" = "Posting Tweet";
 "Posting Comment" = "Posting Comment";
 "Sending Message" = "Sending Message";

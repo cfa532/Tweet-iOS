@@ -21,6 +21,10 @@
 "Submitting tweet..." = "ツイートを送信中...";
 "Retrying upload..." = "アップロードを再試行中...";
 "Upload completed" = "アップロード完了";
+"Upload cancelled" = "アップロードがキャンセルされました";
+"Cancel Upload" = "アップロードをキャンセル";
+"Are you sure you want to cancel this upload? This action cannot be undone." = "このアップロードをキャンセルしてもよろしいですか？この操作は元に戻せません。";
+"Continue" = "続ける";
 "Posting Tweet" = "ツイートを投稿中";
 "Posting Comment" = "コメントを投稿中";
 "Sending Message" = "メッセージを送信中";

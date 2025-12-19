@@ -65,6 +65,7 @@ extension Notification.Name {
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")
     static let backgroundUploadRetrying = Notification.Name("backgroundUploadRetrying")
+    static let uploadCancelled = Notification.Name("uploadCancelled")
     static let tweetPublishFailed = Notification.Name("TweetPublishFailed")
     static let tweetDeletdFailed = Notification.Name("TweetDeletdFailed")
     static let commentPublishFailed = Notification.Name("CommentPublishFailed")

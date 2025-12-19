@@ -38,7 +38,7 @@ class VideoConversionService {
         progressCallback: @escaping (ConversionProgress) -> Void,
         completion: @escaping (HLSConversionResult) -> Void
     ) {
-        print("DEBUG: [VIDEO CONVERSION] Starting background conversion for \(inputURL.lastPathComponent)")
+        print("DEBUG: [VIDEO CONVERSION] Starting foreground conversion for \(inputURL.lastPathComponent)")
         
         // Cancel any existing conversion
         cancelCurrentConversion()
@@ -69,8 +69,8 @@ class VideoConversionService {
         // Log initial memory usage
         logMemoryUsage("before conversion")
         
-        // Run conversion in background task
-        currentConversion = Task.detached { [weak self] in
+        // Run conversion in foreground task with high priority
+        currentConversion = Task(priority: .high) { [weak self] in
             await self?.performConversion(
                 inputURL: inputURL,
                 hls720pURL: hls720pURL,

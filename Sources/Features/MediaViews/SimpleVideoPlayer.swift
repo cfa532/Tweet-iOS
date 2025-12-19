@@ -210,19 +210,32 @@ enum VideoFrameExtractor {
     
     /// Convert a pixel buffer to a downscaled UIImage (for feed placeholders).
     static func makeDownscaledUIImage(from pixelBuffer: CVPixelBuffer, maxDimension: CGFloat = 720) -> UIImage? {
+        // Validate pixel buffer dimensions first before creating CIImage
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        
+        guard width > 0, height > 0, width < 10000, height < 10000 else {
+            // Silently return nil for invalid dimensions - this can happen with some video formats
+            return nil
+        }
+        
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         let extent = ciImage.extent
 
         // Validate extent dimensions are finite, positive, and reasonable
-        guard extent.width.isFinite, extent.height.isFinite,
-              extent.width > 0, extent.height > 0,
-              extent.width < 10000, extent.height < 10000 else {
-            print("Invalid frame dimension (negative, non-finite, or unreasonable): width=\(extent.width), height=\(extent.height)")
-            return nil
+        // Use pixel buffer dimensions as fallback if extent is invalid
+        let validExtent: CGRect
+        if extent.width.isFinite && extent.height.isFinite &&
+           extent.width > 0 && extent.height > 0 &&
+           extent.width < 10000 && extent.height < 10000 {
+            validExtent = extent
+        } else {
+            // Use pixel buffer dimensions if extent is invalid
+            validExtent = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
         }
 
-        guard let cgImage = ciContext.createCGImage(ciImage, from: extent) else {
-            print("Failed to create CGImage from CIImage")
+        guard let cgImage = ciContext.createCGImage(ciImage, from: validExtent) else {
+            // Silently return nil - this can happen with some video formats during loading
             return nil
         }
         let image = UIImage(cgImage: cgImage)
@@ -2683,6 +2696,16 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
+            // Validate pixel buffer dimensions before processing
+            let width = CVPixelBufferGetWidth(pixelBuffer)
+            let height = CVPixelBufferGetHeight(pixelBuffer)
+            guard width > 0, height > 0, width < 10000, height < 10000 else {
+                if reason == "willResignActive" {
+                    print("🖼️ [LAST FRAME] Skip (invalid pixel buffer dimensions: \(width)x\(height)) for \(mid) (\(reason))")
+                }
+                return
+            }
+            
             guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else {
                 if reason == "willResignActive" {
                     print("🖼️ [LAST FRAME] Skip (image conversion failed) for \(mid) (\(reason))")
@@ -2763,6 +2786,12 @@ struct SimpleVideoPlayer: View {
             // Prefer the current item time after seek.
             let itemTime = item.currentTime()
             guard let pb = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime) else { continue }
+            
+            // Validate pixel buffer dimensions before processing
+            let pbWidth = CVPixelBufferGetWidth(pb)
+            let pbHeight = CVPixelBufferGetHeight(pb)
+            guard pbWidth > 0, pbHeight > 0, pbWidth < 10000, pbHeight < 10000 else { continue }
+            
             guard let img = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720) else { continue }
             // Slightly stricter threshold here; end-frames can be near-black.
             if VideoFrameExtractor.isMostlyBlack(img, luminanceThreshold: 0.08) { continue }

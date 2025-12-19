@@ -1,5 +1,4 @@
 import Foundation
-import Foundation
 import hprose
 import PhotosUI
 import AVFoundation
@@ -3271,6 +3270,9 @@ final class HproseInstance: ObservableObject {
         ) async throws -> (MimeiFileType?, String?) {
             print("Starting local HLS conversion with FFmpeg")
             progressCallback?("Converting video to HLS...", 10)
+
+            // Log initial memory state
+            VideoConversionService.shared.logMemoryUsage("start of HLS conversion")
             
             // Create temporary directory for conversion
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -3279,7 +3281,14 @@ final class HproseInstance: ObservableObject {
             // Save original video to temp file
             let originalFileName = fileName ?? "video.mp4"
             let originalVideoURL = tempDir.appendingPathComponent(originalFileName)
+
+            // Log memory before writing temp file
+            VideoConversionService.shared.logMemoryUsage("before writing temp video file")
+
             try data.write(to: originalVideoURL)
+
+            // Log memory after writing temp file (this is where memory usage spikes)
+            VideoConversionService.shared.logMemoryUsage("after writing temp video file")
             
             // Get video info using FFmpeg (like the server does)
             let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
@@ -3293,7 +3302,7 @@ final class HproseInstance: ObservableObject {
                 print("DEBUG: [HLS CONVERSION] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0)")
             }
             
-            // Convert to HLS using FFmpeg with background processing
+            // Convert to HLS using FFmpeg with foreground processing (high priority)
             let conversionResult = await withCheckedContinuation { continuation in
                 VideoConversionService.shared.convertVideoToHLS(
                     inputURL: originalVideoURL,
@@ -3318,11 +3327,20 @@ final class HproseInstance: ObservableObject {
                 try? FileManager.default.removeItem(at: tempDir)
                 throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to HLS"])
             }
-            
+
+            // Log memory after HLS conversion completes
+            VideoConversionService.shared.logMemoryUsage("after HLS conversion complete")
+
             progressCallback?("Compressing HLS files...", 40)
 
             // Log memory usage before compression
             VideoConversionService.shared.logMemoryUsage("before HLS compression")
+
+            // Monitor HLS directory size for memory planning
+            if let hlsAttributes = try? FileManager.default.attributesOfItem(atPath: hlsDirectory.path),
+               let hlsSize = hlsAttributes[.size] as? Int64 {
+                print("DEBUG: [MEMORY MONITORING] HLS directory size: \(hlsSize / 1024)KB")
+            }
 
             // Compress the HLS directory
             let compressedURL = try await compressHLSDirectory(
@@ -3615,80 +3633,60 @@ final class HproseInstance: ObservableObject {
 
             // Memory-optimized streaming approach: Process files sequentially without loading into memory
             return try await withCheckedThrowingContinuation { continuation in
-                Task.detached {
+                Task(priority: .high) {
                     do {
-                        // Calculate total size of HLS directory recursively
+                        // Calculate total size and get file list
                         var totalSize: Int64 = 0
-                        var fileCount = 0
+                        var fileURLs: [URL] = []
 
-                        // Use FileManager enumerator to recursively get all files
+                        // Use FileManager enumerator to get all files without loading them
                         let enumerator = FileManager.default.enumerator(at: hlsDirectory,
-                                                                       includingPropertiesForKeys: [.fileSizeKey, .typeIdentifierKey],
+                                                                       includingPropertiesForKeys: [.fileSizeKey],
                                                                        options: [],
                                                                        errorHandler: nil)
 
                         while let fileURL = enumerator?.nextObject() as? URL {
                             var isDirectory: ObjCBool = false
                             if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) && !isDirectory.boolValue {
-                                // Only count regular files, not directories
                                 if let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
                                    let size = attributes[.size] as? Int64 {
                                     totalSize += size
-                                    fileCount += 1
+                                    fileURLs.append(fileURL)
                                 }
                             }
                         }
 
-                        print("DEBUG: [ZIP CREATION] Found \(fileCount) files in HLS directory, total size: \(totalSize / 1024)KB")
-
-                        // Use NSFileCoordinator with direct file copying for reliable compression
-                        print("DEBUG: [ZIP CREATION] Using NSFileCoordinator with direct file copying")
+                        print("DEBUG: [ZIP CREATION] Found \(fileURLs.count) files, total size: \(totalSize / 1024)KB")
+                        
+                        // Log some file paths for debugging
+                        if !fileURLs.isEmpty {
+                            let samplePaths = fileURLs.prefix(3).map { $0.lastPathComponent }
+                            print("DEBUG: [ZIP CREATION] Sample files: \(samplePaths.joined(separator: ", "))")
+                        }
 
                         // Force memory cleanup before zip creation
                         autoreleasepool {}
-                        progressCallback?("Preparing files for compression...", 10)
+                        progressCallback?("Creating ZIP file...", 10)
 
-                        // Copy HLS directory to a temporary location for zipping
-                        let tempHlsDir = tempDir.appendingPathComponent("hls_copy_\(UUID().uuidString)")
-                        try FileManager.default.copyItem(at: hlsDirectory, to: tempHlsDir)
+                        // Create ZIP file directly without copying directory
+                        // Use parent directory as base so "hls/" is included in ZIP structure
+                        let baseDirectory = hlsDirectory.deletingLastPathComponent()
+                        print("DEBUG: [ZIP CREATION] Base directory: \(baseDirectory.path)")
+                        print("DEBUG: [ZIP CREATION] HLS directory name: \(hlsDirectory.lastPathComponent)")
+                        try self.createZipFile(from: fileURLs, relativeTo: baseDirectory, to: zipURL, progressCallback: progressCallback)
 
-                        // Clean up the copied directory after zipping
-                        defer {
-                            try? FileManager.default.removeItem(at: tempHlsDir)
-                        }
+                        // Verify zip file was created and get its size
+                        if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
+                           let zipSize = zipAttributes[.size] as? Int64 {
+                            print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
+                            print("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
 
-                        print("DEBUG: [ZIP CREATION] Copied HLS directory to: \(tempHlsDir.path)")
+                            // Log memory usage after zip creation
+                            VideoConversionService.shared.logMemoryUsage("after zip creation")
 
-                        let coordinator = NSFileCoordinator()
-                        var coordinatorError: NSError?
-
-                        coordinator.coordinate(readingItemAt: tempHlsDir, options: [.forUploading], error: &coordinatorError) { (tempZipURL) in
-                            do {
-                                // Move the zip file to final location
-                                try FileManager.default.moveItem(at: tempZipURL, to: zipURL)
-
-                                // Verify zip file was created and get its size
-                                if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
-                                   let zipSize = zipAttributes[.size] as? Int64 {
-                                    print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
-                                    print("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
-
-                                    // Log memory usage after zip creation
-                                    VideoConversionService.shared.logMemoryUsage("after zip creation")
-
-                                    continuation.resume(returning: zipURL)
-                                } else {
-                                    throw NSError(domain: "ZipCreation", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to verify zip file creation"])
-                                }
-                            } catch {
-                                print("DEBUG: [ZIP CREATION] Failed to move zip file: \(error)")
-                                continuation.resume(throwing: error)
-                            }
-                        }
-
-                        if let error = coordinatorError {
-                            print("DEBUG: [ZIP CREATION] File coordinator error: \(error)")
-                            continuation.resume(throwing: error)
+                            continuation.resume(returning: zipURL)
+                        } else {
+                            throw NSError(domain: "ZipCreation", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to verify zip file creation"])
                         }
 
                     } catch {
@@ -3699,6 +3697,158 @@ final class HproseInstance: ObservableObject {
             }
         }
         
+        /// Create ZIP file from array of file URLs using system ZIP functionality (memory efficient)
+        private func createZipFile(from fileURLs: [URL], relativeTo baseURL: URL, to zipURL: URL, progressCallback: ((String, Int) -> Void)? = nil) throws {
+            let fileManager = FileManager.default
+            var processedCount = 0
+            let totalFiles = fileURLs.count
+
+            // Create a temporary directory structure for ZIP creation
+            let tempDir = zipURL.deletingLastPathComponent()
+            let tempZipDir = tempDir.appendingPathComponent("temp_zip_parts_\(UUID().uuidString)")
+            try fileManager.createDirectory(at: tempZipDir, withIntermediateDirectories: true)
+
+            defer {
+                try? fileManager.removeItem(at: tempZipDir)
+            }
+
+            // Process each file individually to minimize memory usage
+            for fileURL in fileURLs {
+                autoreleasepool {
+                    do {
+                        let relativePath = fileURL.path.replacingOccurrences(of: baseURL.path + "/", with: "")
+                        
+                        // Log first few relative paths for debugging
+                        if processedCount < 3 {
+                            print("DEBUG: [ZIP CREATION] File \(processedCount + 1): relativePath=\(relativePath), fullPath=\(fileURL.path)")
+                        }
+
+                        // Create a temporary directory structure that mirrors the relative path
+                        let tempFileDir = tempZipDir.appendingPathComponent(relativePath).deletingLastPathComponent()
+                        try fileManager.createDirectory(at: tempFileDir, withIntermediateDirectories: true)
+
+                        let tempFileURL = tempZipDir.appendingPathComponent(relativePath)
+
+                        // Copy file to temporary location with correct relative structure
+                        try fileManager.copyItem(at: fileURL, to: tempFileURL)
+                        
+                        // Verify file was copied
+                        if !fileManager.fileExists(atPath: tempFileURL.path) {
+                            print("DEBUG: [ZIP CREATION] WARNING: File copy verification failed for \(relativePath)")
+                        }
+
+                        processedCount += 1
+                        if processedCount % 5 == 0 || processedCount == totalFiles {
+                            let progressPercent = 10 + Int((Double(processedCount) / Double(totalFiles)) * 15.0)
+                            progressCallback?("Preparing files... (\(processedCount)/\(totalFiles))", progressPercent)
+                        }
+
+                    } catch {
+                        print("DEBUG: [ZIP CREATION] Error processing file \(fileURL.lastPathComponent): \(error)")
+                        // Continue with other files rather than failing completely
+                    }
+                }
+            }
+
+            progressCallback?("Creating ZIP archive...", 25)
+
+            // Verify tempZipDir structure before zipping
+            print("DEBUG: [ZIP CREATION] Verifying tempZipDir structure: \(tempZipDir.path)")
+            let contents = try? fileManager.contentsOfDirectory(at: tempZipDir, includingPropertiesForKeys: [.isDirectoryKey])
+            print("DEBUG: [ZIP CREATION] tempZipDir top-level contents: \(contents?.map { $0.lastPathComponent } ?? [])")
+            
+            // Find the "hls" subdirectory in tempZipDir
+            let hlsSubdir = tempZipDir.appendingPathComponent("hls")
+            var isDirectory: ObjCBool = false
+            let hlsExists = fileManager.fileExists(atPath: hlsSubdir.path, isDirectory: &isDirectory) && isDirectory.boolValue
+            
+            // Determine which directory to zip
+            // If hls subdirectory exists, zip it directly (ZIP will contain hls/720p/, hls/480p/, etc.)
+            // If not, zip tempZipDir (structure might be different)
+            let dirToZip = hlsExists ? hlsSubdir : tempZipDir
+            print("DEBUG: [ZIP CREATION] Zipping directory: \(dirToZip.path) (hls subdir exists: \(hlsExists))")
+
+            // Use NSFileCoordinator to create ZIP from the directory
+            // When zipping a directory with .forUploading, the ZIP will contain that directory's name
+            // So if we zip "hls", the ZIP will have "hls/" at the root, which is what the server expects
+            let coordinator = NSFileCoordinator()
+            var coordinatorError: NSError?
+            var localError: NSError?
+
+            coordinator.coordinate(readingItemAt: dirToZip, options: [.forUploading], error: &localError) { (tempZipURL) in
+                do {
+                    print("DEBUG: [ZIP CREATION] NSFileCoordinator created temporary ZIP at: \(tempZipURL.path)")
+                    
+                    // Verify temporary ZIP exists and has content
+                    if let tempAttributes = try? fileManager.attributesOfItem(atPath: tempZipURL.path),
+                       let tempSize = tempAttributes[.size] as? Int64 {
+                        print("DEBUG: [ZIP CREATION] Temporary ZIP size: \(tempSize / 1024)KB")
+                        
+                        if tempSize == 0 {
+                            throw NSError(domain: "ZipCreation", code: -1,
+                                        userInfo: [NSLocalizedDescriptionKey: "ZIP file is empty"])
+                        }
+                    }
+                    
+                    // The coordinator creates a temporary ZIP file, move it to final location
+                    if fileManager.fileExists(atPath: zipURL.path) {
+                        try fileManager.removeItem(at: zipURL)
+                    }
+                    try fileManager.moveItem(at: tempZipURL, to: zipURL)
+                    print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
+                } catch {
+                    print("DEBUG: [ZIP CREATION] Failed to create final zip file: \(error)")
+                    coordinatorError = error as NSError
+                }
+            }
+
+            // Check for errors from the coordinator itself
+            if let error = localError ?? coordinatorError {
+                // Clean up temporary directory
+                try? fileManager.removeItem(at: tempZipDir)
+                print("DEBUG: [ZIP CREATION] File coordinator error: \(error)")
+                throw error
+            }
+            
+            // Verify ZIP was created successfully
+            guard fileManager.fileExists(atPath: zipURL.path) else {
+                try? fileManager.removeItem(at: tempZipDir)
+                throw NSError(domain: "ZipCreation", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "ZIP file was not created"])
+            }
+
+            // Verify ZIP file was created
+            if !fileManager.fileExists(atPath: zipURL.path) {
+                throw NSError(domain: "ZipCreation", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "ZIP file was not created"])
+            }
+
+            // Get final ZIP size and verify it's not empty
+            if let zipAttributes = try? fileManager.attributesOfItem(atPath: zipURL.path),
+               let zipSize = zipAttributes[.size] as? Int64 {
+                print("DEBUG: [ZIP CREATION] Final ZIP size: \(zipSize / 1024)KB")
+                
+                if zipSize == 0 {
+                    throw NSError(domain: "ZipCreation", code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: "ZIP file is empty"])
+                }
+                
+                // Verify ZIP file is readable (basic validation)
+                if zipSize < 100 {
+                    print("DEBUG: [ZIP CREATION] WARNING: ZIP file seems too small (\(zipSize) bytes)")
+                }
+            } else {
+                throw NSError(domain: "ZipCreation", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Cannot read ZIP file attributes"])
+            }
+            
+            // Log ZIP file path for server debugging
+            print("DEBUG: [ZIP CREATION] ZIP file ready for upload: \(zipURL.lastPathComponent)")
+
+            progressCallback?("ZIP creation completed", 30)
+            print("DEBUG: [ZIP CREATION] Memory-efficient zip creation completed")
+        }
+
         /// Upload compressed HLS to server via process-zip route
         private func uploadCompressedHLS(
             compressedURL: URL,

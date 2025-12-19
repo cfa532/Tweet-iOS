@@ -9,16 +9,17 @@ import SwiftUI
 
 struct UploadProgressOverlay: View {
     @ObservedObject var progressManager: UploadProgressManager
+    @State private var showCancelConfirmation = false
     
     var body: some View {
         if progressManager.isUploading {
             ZStack {
-                // Semi-transparent background
+                // Semi-transparent background - blocks interaction with content behind
+                // This will naturally block taps to content behind without intercepting dialog taps
                 Color.black.opacity(0.3)
                     .edgesIgnoringSafeArea(.all)
-                    .allowsHitTesting(true)
                 
-                // Progress card
+                // Progress card - positioned on top, fully interactive
                 VStack(spacing: 20) {
                     // Icon and title
                     HStack(spacing: 12) {
@@ -43,6 +44,19 @@ struct UploadProgressOverlay: View {
                         }
                         
                         Spacer()
+                        
+                        // Close button
+                        Button(action: {
+                            showCancelConfirmation = true
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundColor(.primary)
+                                .opacity(0.6)
+                        }
+                        .frame(width: 44, height: 44) // Ensure adequate tap target (iOS minimum)
+                        .contentShape(Rectangle()) // Make entire frame tappable
+                        .buttonStyle(PlainButtonStyle())
                     }
                     
                     // Progress bar
@@ -84,6 +98,16 @@ struct UploadProgressOverlay: View {
             }
             .transition(.opacity)
             .zIndex(1000)
+            .alert(isPresented: $showCancelConfirmation) {
+                Alert(
+                    title: Text(NSLocalizedString("Cancel Upload", comment: "Cancel upload alert title")),
+                    message: Text(NSLocalizedString("Are you sure you want to cancel this upload? This action cannot be undone.", comment: "Cancel upload confirmation message")),
+                    primaryButton: .destructive(Text(NSLocalizedString("Cancel Upload", comment: "Cancel upload button"))) {
+                        progressManager.cancelUpload()
+                    },
+                    secondaryButton: .cancel(Text(NSLocalizedString("Continue", comment: "Continue upload button")))
+                )
+            }
         }
     }
     
