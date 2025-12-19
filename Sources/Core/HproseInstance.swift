@@ -3068,7 +3068,12 @@ final class HproseInstance: ObservableObject {
             return (result, nil)
         }
         
-        /// Process and upload video files
+        /// Process and upload video files with new routing logic:
+        /// 1. Normalize to 720p/1000k (preserving original if lower)
+        /// 2. Route based on normalized size:
+        ///    - < 32MB: Progressive video route
+        ///    - 32MB-128MB: HLS Route 1 (720p + 480p)
+        ///    - >= 128MB: HLS Route 2 (720p + 360p)
         func processVideo(
             data: Data,
             typeIdentifier: String,
@@ -3079,91 +3084,142 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-
-            let fileSizeMB = Double(data.count) / (1024 * 1024)
-            let sizeThresholdMB = 50.0
-
-            if fileSizeMB < sizeThresholdMB {
-                // For <50MB videos: Try normalization (MP4 conversion), if fails, upload as is
-                print("Video upload: Sub-50MB path – trying MP4 normalization (\(String(format: "%.1f", fileSizeMB))MB)")
-
-                do {
-                    return try await uploadVideoWithMp4Fallback(
-                        data: data,
-                        fileName: fileName,
-                        referenceId: referenceId,
-                        appUser: appUser,
-                        appId: appId,
-                        progressCallback: progressCallback
-                    )
-                } catch {
-                    print("Video upload: MP4 normalization failed, uploading original video as is")
-                    progressCallback?("Uploading original video...", 10)
-                    let result = try await uploadRegularFile(
-                        data: data,
-                        typeIdentifier: typeIdentifier,
-                        fileName: fileName,
-                        referenceId: referenceId,
-                        mediaType: .video,
-                        appUser: appUser,
-                        appId: appId
-                    )
-                    return (result, nil)
-                }
+            print("Starting video processing with routing logic")
+            
+            // Step 1: Normalize video to 720p/1000k (preserving original if lower)
+            progressCallback?("Normalizing video...", 5)
+            
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer {
+                try? FileManager.default.removeItem(at: tempDir)
+            }
+            
+            // Ensure video file has proper .mp4 extension for AVFoundation/FFmpeg compatibility
+            let originalFileName = fileName ?? "video.mp4"
+            let fileExtension = (originalFileName as NSString).pathExtension.lowercased()
+            let baseFileName = (originalFileName as NSString).deletingPathExtension
+            
+            // Use .mp4 extension if file has wrong extension or no extension
+            let properFileName: String
+            if fileExtension.isEmpty || fileExtension == "file" || !["mp4", "mov", "m4v", "mkv", "avi", "wmv", "flv", "webm", "3gp"].contains(fileExtension) {
+                properFileName = "\(baseFileName).mp4"
             } else {
-                // For >50MB videos: Try HLS first, then MP4 normalization, then upload as is
-                print("Video upload: Large video path – trying HLS conversion (\(String(format: "%.1f", fileSizeMB))MB)")
-
-                // Check if cloud drive is available for HLS conversion
+                properFileName = originalFileName
+            }
+            
+            let originalVideoURL = tempDir.appendingPathComponent(properFileName)
+            try data.write(to: originalVideoURL)
+            
+            let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
+            let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
+            
+            let normalizationSuccess = await normalizeTo720p1000k(
+                inputURL: originalVideoURL,
+                outputURL: normalizedVideoURL,
+                progressCallback: progressCallback
+            )
+            
+            guard normalizationSuccess else {
+                print("Video normalization failed, falling back to original video")
+                progressCallback?("Uploading original video...", 10)
+                let result = try await uploadRegularFile(
+                    data: data,
+                    typeIdentifier: typeIdentifier,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    mediaType: .video,
+                    appUser: appUser,
+                    appId: appId
+                )
+                return (result, nil)
+            }
+            
+            // Step 2: Check normalized video size
+            let normalizedData = try Data(contentsOf: normalizedVideoURL)
+            let normalizedSize = Int64(normalizedData.count)
+            let normalizedSizeMB = Double(normalizedSize) / (1024 * 1024)
+            
+            print("Normalized video size: \(String(format: "%.1f", normalizedSizeMB))MB (\(normalizedSize) bytes)")
+            
+            // Step 3: Route based on normalized size
+            if normalizedSize < Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
+                // < 32MB: progressive video route
+                print("Normalized video < 32MB, using progressive video route")
+                progressCallback?("Uploading video...", 50)
+                let result = try await uploadRegularFile(
+                    data: normalizedData,
+                    typeIdentifier: "public.mpeg-4",
+                    fileName: normalizedFileName,
+                    referenceId: referenceId,
+                    mediaType: .video,
+                    appUser: appUser,
+                    appId: appId
+                )
+                print("Progressive video uploaded: \(result.mid)")
+                return (result, nil)
+            } else {
+                // >= 32MB: Need HLS conversion - check if cloud drive is available
                 let cloudPort = appUser.cloudDrivePort
-                if cloudPort > 0 {
-                    progressCallback?("Checking video service availability...", 5)
-                    let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
-
-                    if isCloudDriveAvailable {
-                        do {
-                            print("Video upload: HLS conversion (cloud drive available)")
-                            return try await uploadVideoWithLocalHLSConversion(
-                                data: data,
-                                fileName: fileName,
-                                referenceId: referenceId,
-                                noResample: noResample,
-                                appUser: appUser,
-                                progressCallback: progressCallback
-                            )
-                        } catch {
-                            print("Video upload: HLS conversion failed, trying MP4 normalization")
-                        }
-                    } else {
-                        print("Video upload: Cloud drive not available, trying MP4 normalization")
-                    }
-                } else {
-                    print("Video upload: No cloud drive configured, trying MP4 normalization")
-                }
-
-                // Try MP4 normalization
-                do {
-                    return try await uploadVideoWithMp4Fallback(
-                        data: data,
-                        fileName: fileName,
-                        referenceId: referenceId,
-                        appUser: appUser,
-                        appId: appId,
-                        progressCallback: progressCallback
-                    )
-                } catch {
-                    print("Video upload: MP4 normalization failed, uploading original video as is")
-                    progressCallback?("Uploading original video...", 10)
+                guard cloudPort > 0 else {
+                    print("Video upload: No cloud drive configured, falling back to progressive video")
+                    progressCallback?("Uploading video...", 50)
                     let result = try await uploadRegularFile(
-                        data: data,
-                        typeIdentifier: typeIdentifier,
-                        fileName: fileName,
+                        data: normalizedData,
+                        typeIdentifier: "public.mpeg-4",
+                        fileName: normalizedFileName,
                         referenceId: referenceId,
                         mediaType: .video,
                         appUser: appUser,
                         appId: appId
                     )
                     return (result, nil)
+                }
+                
+                progressCallback?("Checking video service availability...", 10)
+                let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
+                
+                guard isCloudDriveAvailable else {
+                    print("Video upload: Cloud drive not available, falling back to progressive video")
+                    progressCallback?("Uploading video...", 50)
+                    let result = try await uploadRegularFile(
+                        data: normalizedData,
+                        typeIdentifier: "public.mpeg-4",
+                        fileName: normalizedFileName,
+                        referenceId: referenceId,
+                        mediaType: .video,
+                        appUser: appUser,
+                        appId: appId
+                    )
+                    return (result, nil)
+                }
+                
+                if normalizedSize < Constants.HLS_ROUTE_2_THRESHOLD_BYTES {
+                    // < 128MB: HLS route 1 (720p + 480p)
+                    print("Normalized video < 128MB, using HLS route 1 (720p + 480p)")
+                    return try await uploadVideoWithLocalHLSConversion(
+                        data: normalizedData,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        noResample: noResample,
+                        appUser: appUser,
+                        useRoute2: false,
+                        isNormalized: true,
+                        progressCallback: progressCallback
+                    )
+                } else {
+                    // >= 128MB: HLS route 2 (720p + 360p)
+                    print("Normalized video >= 128MB, using HLS route 2 (720p + 360p)")
+                    return try await uploadVideoWithLocalHLSConversion(
+                        data: normalizedData,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        noResample: noResample,
+                        appUser: appUser,
+                        useRoute2: true,
+                        isNormalized: true,
+                        progressCallback: progressCallback
+                    )
                 }
             }
         }
@@ -3266,6 +3322,8 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             noResample: Bool,
             appUser: User,
+            useRoute2: Bool = false,
+            isNormalized: Bool = false,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
             print("Starting local HLS conversion with FFmpeg")
@@ -3278,9 +3336,20 @@ final class HproseInstance: ObservableObject {
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             
-            // Save original video to temp file
+            // Save original video to temp file - ensure proper .mp4 extension
             let originalFileName = fileName ?? "video.mp4"
-            let originalVideoURL = tempDir.appendingPathComponent(originalFileName)
+            let fileExtension = (originalFileName as NSString).pathExtension.lowercased()
+            let baseFileName = (originalFileName as NSString).deletingPathExtension
+            
+            // Use .mp4 extension if file has wrong extension or no extension
+            let properFileName: String
+            if fileExtension.isEmpty || fileExtension == "file" || !["mp4", "mov", "m4v", "mkv", "avi", "wmv", "flv", "webm", "3gp"].contains(fileExtension) {
+                properFileName = "\(baseFileName).mp4"
+            } else {
+                properFileName = originalFileName
+            }
+            
+            let originalVideoURL = tempDir.appendingPathComponent(properFileName)
 
             // Log memory before writing temp file
             VideoConversionService.shared.logMemoryUsage("before writing temp video file")
@@ -3309,6 +3378,8 @@ final class HproseInstance: ObservableObject {
                     outputDirectory: tempDir,
                     fileSizeBytes: Int64(data.count),
                     aspectRatio: videoAspectRatio,
+                    useRoute2: useRoute2,
+                    isNormalized: isNormalized,
                     progressCallback: { progress in
                         DispatchQueue.main.async {
                             progressCallback?(progress.stage, 10 + Int(Double(progress.progress) * 0.2)) // 10-30% for conversion
@@ -3618,6 +3689,201 @@ final class HproseInstance: ObservableObject {
         }
         
         
+        /// Normalize video to 720p/1000k bitrate, preserving original resolution/bitrate if lower
+        private func normalizeTo720p1000k(
+            inputURL: URL,
+            outputURL: URL,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async -> Bool {
+            return await withCheckedContinuation { continuation in
+                // Get video info to check original resolution and bitrate
+                Task {
+                    // Try to get video info with FFmpeg first
+                    var videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: inputURL.path)
+                    
+                    // If FFmpeg fails, try AVFoundation with a temporary file with proper extension
+                    if videoInfo == nil {
+                        print("FFmpeg probe failed, trying AVFoundation with temporary file...")
+                        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+                        let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
+                        
+                        do {
+                            // Copy file data to temporary location with .mp4 extension
+                            let fileData = try Data(contentsOf: inputURL)
+                            try fileData.write(to: tempVideoURL)
+                            
+                            // Try to get video info using AVFoundation
+                            let dimensions = await HLSVideoProcessor.shared.getVideoDimensions(filePath: tempVideoURL.path)
+                            if dimensions.width > 0 && dimensions.height > 0 {
+                                // Get rotation info if available
+                                let asset = AVURLAsset(url: tempVideoURL)
+                                var rotation = 0
+                                if let tracks = try? await asset.loadTracks(withMediaType: .video),
+                                   let track = tracks.first {
+                                    let transform = try? await track.load(.preferredTransform)
+                                    if let transform = transform {
+                                        // Calculate rotation from transform
+                                        let angle = atan2(transform.b, transform.a) * 180 / .pi
+                                        rotation = Int(angle)
+                                    }
+                                }
+                                
+                                var displayWidth = Int(dimensions.width)
+                                var displayHeight = Int(dimensions.height)
+                                
+                                // Apply rotation if needed
+                                if rotation == 90 || rotation == -90 {
+                                    swap(&displayWidth, &displayHeight)
+                                }
+                                
+                                videoInfo = (Int(dimensions.width), Int(dimensions.height), displayWidth, displayHeight, rotation)
+                                print("✅ Got video info via AVFoundation: \(displayWidth)x\(displayHeight) (rotation: \(rotation)°)")
+                            }
+                            
+                            // Clean up temp file
+                            try? FileManager.default.removeItem(at: tempDir)
+                        } catch {
+                            print("Failed to get video info via AVFoundation: \(error)")
+                            try? FileManager.default.removeItem(at: tempDir)
+                        }
+                    }
+                    
+                    // Get original bitrate
+                    var originalBitrateKbps: Int? = nil
+                    do {
+                        originalBitrateKbps = try await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: inputURL.path)
+                    } catch {
+                        print("Could not get original bitrate: \(error)")
+                        // Try with temporary file if original failed
+                        if originalBitrateKbps == nil {
+                            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                            try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+                            let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
+                            
+                            do {
+                                let fileData = try Data(contentsOf: inputURL)
+                                try fileData.write(to: tempVideoURL)
+                                originalBitrateKbps = try await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: tempVideoURL.path)
+                                try? FileManager.default.removeItem(at: tempDir)
+                            } catch {
+                                print("Could not get bitrate even with temp file: \(error)")
+                                try? FileManager.default.removeItem(at: tempDir)
+                            }
+                        }
+                    }
+                    
+                    // Calculate target bitrate (preserve original if lower)
+                    let targetBitrateKbps = min(originalBitrateKbps ?? 1000, 1000)
+                    
+                    // Get original resolution
+                    var originalWidth: Int? = nil
+                    var originalHeight: Int? = nil
+                    if let info = videoInfo {
+                        originalWidth = info.displayWidth
+                        originalHeight = info.displayHeight
+                    }
+                    
+                    // Determine if we need to scale
+                    let needsScaling: Bool
+                    let scaleFilter: String
+                    
+                    if let width = originalWidth, let height = originalHeight {
+                        let maxDimension = max(width, height)
+                        needsScaling = maxDimension > 720
+                        
+                        if needsScaling {
+                            // Calculate aspect ratio
+                            let aspectRatio = Float(width) / Float(height)
+                            if aspectRatio < 1.0 {
+                                // Portrait: scale to target width
+                                scaleFilter = "scale=720:-2"
+                            } else {
+                                // Landscape: scale to target height
+                                scaleFilter = "scale=-2:720"
+                            }
+                        } else {
+                            // Keep original resolution
+                            scaleFilter = ""
+                        }
+                    } else {
+                        // Fallback: assume scaling needed
+                        needsScaling = true
+                        scaleFilter = "scale=-2:720"
+                    }
+                    
+                    print("Normalizing video: original=\(originalWidth ?? 0)x\(originalHeight ?? 0), bitrate=\(originalBitrateKbps ?? 0)k, target=\(targetBitrateKbps)k, scaling=\(needsScaling)")
+                    
+                    // Build FFmpeg command
+                    var command: String
+                    if needsScaling && !scaleFilter.isEmpty {
+                        command = """
+                            -i "\(inputURL.path)" \
+                            -c:v libx264 \
+                            -profile:v main \
+                            -level 4.0 \
+                            -pix_fmt yuv420p \
+                            -vf "\(scaleFilter)" \
+                            -preset veryfast \
+                            -b:v \(targetBitrateKbps)k \
+                            -maxrate \(targetBitrateKbps)k \
+                            -bufsize \(targetBitrateKbps)k \
+                            -c:a aac \
+                            -ar 44100 \
+                            -b:a 128k \
+                            -movflags +faststart \
+                            -metadata:s:v:0 rotate=0 \
+                            "\(outputURL.path)"
+                            """
+                    } else {
+                        // Keep original resolution but encode with target bitrate
+                        command = """
+                            -i "\(inputURL.path)" \
+                            -c:v libx264 \
+                            -profile:v main \
+                            -level 4.0 \
+                            -pix_fmt yuv420p \
+                            -preset veryfast \
+                            -b:v \(targetBitrateKbps)k \
+                            -maxrate \(targetBitrateKbps)k \
+                            -bufsize \(targetBitrateKbps)k \
+                            -c:a aac \
+                            -ar 44100 \
+                            -b:a 128k \
+                            -movflags +faststart \
+                            -metadata:s:v:0 rotate=0 \
+                            "\(outputURL.path)"
+                            """
+                    }
+                    
+                    FFmpegKit.executeAsync(command) { session in
+                        guard let session = session else {
+                            print("ERROR: Failed to create FFmpeg session for normalization")
+                            continuation.resume(returning: false)
+                            return
+                        }
+                        
+                        let returnCode = session.getReturnCode()
+                        let success = ReturnCode.isSuccess(returnCode)
+                        
+                        if success {
+                            if FileManager.default.fileExists(atPath: outputURL.path) {
+                                let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+                                print("✅ Normalized to 720p/\(targetBitrateKbps)k MP4 (\(fileSize / 1024)KB)")
+                                continuation.resume(returning: true)
+                            } else {
+                                print("ERROR: Normalized output file missing")
+                                continuation.resume(returning: false)
+                            }
+                        } else {
+                            print("ERROR: FFmpeg normalization failed (code: \(String(describing: returnCode)))")
+                            continuation.resume(returning: false)
+                        }
+                    }
+                }
+            }
+        }
+        
         /// Compress HLS directory into a zip file (memory-optimized streaming approach)
         private func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: ((String, Int) -> Void)? = nil) async throws -> URL {
             let zipFileName = "\(originalFileName)_hls.zip"
@@ -3916,89 +4182,213 @@ final class HproseInstance: ObservableObject {
 
             print("DEBUG: [UPLOAD] Preparing to upload zip file, size: \(fileSize / 1024)KB")
 
-            // For very large files (>50MB), add memory warning
+            // For very large files (>50MB), use file-based streaming to avoid memory issues
             let maxMemoryEfficientSize = Int64(50 * 1024 * 1024) // 50MB
             if fileSize > maxMemoryEfficientSize {
-                print("WARNING: [UPLOAD] Large zip file (\(fileSize / (1024 * 1024))MB) may cause memory pressure")
+                print("DEBUG: [UPLOAD] Large zip file (\(fileSize / (1024 * 1024))MB) - using file-based streaming upload")
                 VideoConversionService.shared.logMemoryUsage("before large file upload")
             }
 
-            // Read compressed file data - for very large files, this is unavoidable with URLSession
-            // but we log memory usage to track the impact
-            let compressedData = try Data(contentsOf: compressedURL)
-
-            guard compressedData.count > 0 else {
-                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to read zip file data"])
-            }
-
-            if fileSize > maxMemoryEfficientSize {
-                VideoConversionService.shared.logMemoryUsage("after loading large file")
-                print("DEBUG: [UPLOAD] Large file loaded into memory, size: \(compressedData.count / (1024 * 1024))MB")
-            }
-
-            print("DEBUG: [UPLOAD] Successfully read \(compressedData.count) bytes of zip data")
-            
             // Create multipart form data with a simple boundary
             let boundary = "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            
+            // For large files, create multipart form data as a file on disk to avoid loading into memory
+            let tempMultipartFile: URL
+            let shouldUseFileBasedUpload = fileSize > maxMemoryEfficientSize
+            
+            if shouldUseFileBasedUpload {
+                // Create temporary file for multipart form data
+                let tempDir = FileManager.default.temporaryDirectory
+                tempMultipartFile = tempDir.appendingPathComponent("multipart_\(UUID().uuidString).tmp")
+                
+                // Create file handle for writing
+                guard FileManager.default.createFile(atPath: tempMultipartFile.path, contents: nil, attributes: nil) else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create temporary multipart file"])
+                }
+                
+                guard let multipartFileHandle = FileHandle(forWritingAtPath: tempMultipartFile.path) else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to open temporary multipart file for writing"])
+                }
+                
+                // Write multipart form data to file by streaming
+                // Add the compressed HLS file FIRST (some servers expect the file field first)
+                multipartFileHandle.write("--\(boundary)\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("Content-Type: application/zip\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                
+                // Stream the ZIP file content directly to the multipart file
+                let zipFileHandle = try FileHandle(forReadingFrom: compressedURL)
+                
+                // Read and write in chunks to minimize memory usage
+                let chunkSize = 1024 * 1024 // 1MB chunks
+                var bytesWritten = 0
+                var shouldContinue = true
+                while shouldContinue {
+                    autoreleasepool {
+                        let chunk = zipFileHandle.readData(ofLength: chunkSize)
+                        if chunk.isEmpty {
+                            shouldContinue = false
+                        } else {
+                            multipartFileHandle.write(chunk)
+                            bytesWritten += chunk.count
+                        }
+                    }
+                }
+                zipFileHandle.closeFile()
+                
+                multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                
+                // Add filename
+                multipartFileHandle.write("--\(boundary)\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("Content-Disposition: form-data; name=\"filename\"\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("\(fileName)\r\n".data(using: .utf8)!)
+                
+                // Add reference ID if provided
+                if let referenceId = referenceId {
+                    multipartFileHandle.write("--\(boundary)\r\n".data(using: .utf8)!)
+                    multipartFileHandle.write("Content-Disposition: form-data; name=\"referenceId\"\r\n".data(using: .utf8)!)
+                    multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                    multipartFileHandle.write("\(referenceId)\r\n".data(using: .utf8)!)
+                }
+                
+                // End boundary
+                multipartFileHandle.write("--\(boundary)--\r\n".data(using: .utf8)!)
+                
+                // CRITICAL: Flush and synchronize file before closing
+                multipartFileHandle.synchronizeFile()
+                multipartFileHandle.closeFile()
+                
+                // Get final file size after flushing and closing
+                let multipartFileSize = (try? FileManager.default.attributesOfItem(atPath: tempMultipartFile.path))?[.size] as? Int64 ?? 0
+                print("DEBUG: [UPLOAD] Multipart form file created, size: \(multipartFileSize / (1024 * 1024))MB")
+                print("DEBUG: [UPLOAD] ZIP file streamed in chunks, total: \(bytesWritten / (1024 * 1024))MB")
+                print("DEBUG: [UPLOAD] Expected multipart size: ~\(fileSize + 500) bytes (ZIP + headers)")
+                
+                // Verify the multipart file is valid
+                guard multipartFileSize > fileSize else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Multipart file size (\(multipartFileSize)) is smaller than ZIP file size (\(fileSize))"])
+                }
+                
+                // Lightweight validation - only read small chunks to verify file integrity
+                // Wrapped in autoreleasepool to minimize memory footprint
+                autoreleasepool {
+                    do {
+                        // Verify multipart file starts with boundary (small read: ~50 bytes)
+                        let verifyHandle = try FileHandle(forReadingFrom: tempMultipartFile)
+                        let firstBytes = verifyHandle.readData(ofLength: min(boundary.count + 4, 100))
+                        verifyHandle.closeFile()
+                        
+                        if let firstString = String(data: firstBytes, encoding: .utf8), firstString.hasPrefix("--\(boundary)") {
+                            print("DEBUG: [UPLOAD] Multipart file header verified")
+                        } else {
+                            print("DEBUG: [UPLOAD] WARNING: Multipart file header doesn't match expected boundary")
+                        }
+                        
+                        // Verify ZIP signature is present (read only first 10KB to find ZIP start, then 4 bytes for signature)
+                        let verifyHandle2 = try FileHandle(forReadingFrom: tempMultipartFile)
+                        let searchData = verifyHandle2.readData(ofLength: min(Int(multipartFileSize), 10000))
+                        verifyHandle2.closeFile()
+                        
+                        if let searchString = String(data: searchData, encoding: .utf8),
+                           let zipStartRange = searchString.range(of: "\r\n\r\n", options: []),
+                           let zipStartIndex = searchString.index(zipStartRange.upperBound, offsetBy: 0, limitedBy: searchString.endIndex) {
+                            let zipStartOffset = searchString.distance(from: searchString.startIndex, to: zipStartIndex)
+                            let verifyHandle3 = try FileHandle(forReadingFrom: tempMultipartFile)
+                            verifyHandle3.seek(toFileOffset: UInt64(zipStartOffset))
+                            let zipHeader = verifyHandle3.readData(ofLength: 4)
+                            verifyHandle3.closeFile()
+                            
+                            let zipSignatures = [
+                                Data([0x50, 0x4B, 0x03, 0x04]), // PK\x03\x04
+                                Data([0x50, 0x4B, 0x05, 0x06]), // PK\x05\x06
+                                Data([0x50, 0x4B, 0x07, 0x08])  // PK\x07\x08
+                            ]
+                            let isValidZipInMultipart = zipSignatures.contains { signature in
+                                zipHeader.starts(with: signature)
+                            }
+                            if isValidZipInMultipart {
+                                print("DEBUG: [UPLOAD] ZIP file signature verified within multipart form at offset \(zipStartOffset)")
+                            } else {
+                                print("DEBUG: [UPLOAD] ERROR: ZIP file signature NOT found in multipart form at offset \(zipStartOffset)")
+                                print("DEBUG: [UPLOAD] First 4 bytes at ZIP start: \(zipHeader.map { String(format: "%02x", $0) }.joined())")
+                            }
+                        }
+                    } catch {
+                        print("DEBUG: [UPLOAD] Validation error (non-critical): \(error)")
+                        // Don't fail upload if validation has issues - file might still be valid
+                    }
+                }
+                
+                if fileSize > maxMemoryEfficientSize {
+                    VideoConversionService.shared.logMemoryUsage("after creating multipart file (streaming)")
+                }
+            } else {
+                // For smaller files, use in-memory approach (more efficient for small files)
+                let compressedData = try Data(contentsOf: compressedURL)
+                guard compressedData.count > 0 else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to read zip file data"])
+                }
+                
+                var body = Data()
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+                body.append("Content-Type: application/zip\r\n".data(using: .utf8)!)
+                body.append("\r\n".data(using: .utf8)!)
+                body.append(compressedData)
+                body.append("\r\n".data(using: .utf8)!)
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"filename\"\r\n".data(using: .utf8)!)
+                body.append("\r\n".data(using: .utf8)!)
+                body.append("\(fileName)\r\n".data(using: .utf8)!)
+                
+                if let referenceId = referenceId {
+                    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                    body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n".data(using: .utf8)!)
+                    body.append("\r\n".data(using: .utf8)!)
+                    body.append("\(referenceId)\r\n".data(using: .utf8)!)
+                }
+                
+                body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+                
+                // Write to temporary file for consistent upload path
+                let tempDir = FileManager.default.temporaryDirectory
+                tempMultipartFile = tempDir.appendingPathComponent("multipart_\(UUID().uuidString).tmp")
+                try body.write(to: tempMultipartFile)
+            }
+            
+            // Clean up temporary file after upload
+            defer {
+                try? FileManager.default.removeItem(at: tempMultipartFile)
+            }
+            
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-
-            var body = Data()
-
-            // Add the compressed HLS file FIRST (some servers expect the file field first)
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-            body.append("Content-Type: application/zip\r\n".data(using: .utf8)!)
-            body.append("\r\n".data(using: .utf8)!)
-            body.append(compressedData)
-            body.append("\r\n".data(using: .utf8)!)
-
-            // Add filename
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"filename\"\r\n".data(using: .utf8)!)
-            body.append("\r\n".data(using: .utf8)!)
-            body.append("\(fileName)\r\n".data(using: .utf8)!)
-
-            // Add reference ID if provided
-            if let referenceId = referenceId {
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n".data(using: .utf8)!)
-                body.append("\r\n".data(using: .utf8)!)
-                body.append("\(referenceId)\r\n".data(using: .utf8)!)
-            }
-
-            // End boundary
-            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-
-            print("DEBUG: [UPLOAD] Multipart form constructed with boundary: \(boundary)")
-            print("DEBUG: [UPLOAD] Body size: \(body.count) bytes")
-
-            // Debug: Show the beginning of the multipart data
-            if let debugData = String(data: body.prefix(500), encoding: .utf8) {
-                print("DEBUG: [UPLOAD] Multipart data prefix: \(debugData)")
-            }
-
-            // Verify the zipFile field is present in the body
-            if let bodyString = String(data: body, encoding: .utf8) {
-                let hasZipFileField = bodyString.contains("name=\"zipFile\"")
-                let hasBoundary = bodyString.contains(boundary)
-                print("DEBUG: [UPLOAD] Body contains 'zipFile' field: \(hasZipFileField)")
-                print("DEBUG: [UPLOAD] Body contains boundary: \(hasBoundary)")
-            }
             
-            request.httpBody = body
-            request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+            // Get multipart file size
+            let multipartFileSize = (try? FileManager.default.attributesOfItem(atPath: tempMultipartFile.path))?[.size] as? Int64 ?? 0
+            request.setValue("\(multipartFileSize)", forHTTPHeaderField: "Content-Length")
             
             // Set timeout for large video uploads (10 minutes)
             request.timeoutInterval = 600
             
-            // Upload the file
             print("DEBUG: [UPLOAD] Sending request to: \(url)")
             print("DEBUG: [UPLOAD] Content-Type: \(request.value(forHTTPHeaderField: "Content-Type") ?? "nil")")
             print("DEBUG: [UPLOAD] Content-Length: \(request.value(forHTTPHeaderField: "Content-Length") ?? "nil")")
+            print("DEBUG: [UPLOAD] Using file-based upload: \(shouldUseFileBasedUpload)")
 
-            let (responseData, response) = try await URLSession.shared.data(for: request)
+            // Upload from file using uploadTask to avoid loading entire file into memory
+            if fileSize > maxMemoryEfficientSize {
+                VideoConversionService.shared.logMemoryUsage("before file-based upload")
+            }
+            
+            let (responseData, response) = try await URLSession.shared.upload(for: request, fromFile: tempMultipartFile)
+
+            if fileSize > maxMemoryEfficientSize {
+                VideoConversionService.shared.logMemoryUsage("after file-based upload")
+            }
 
             print("DEBUG: [UPLOAD] Received response with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
 

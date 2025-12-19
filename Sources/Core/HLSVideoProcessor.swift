@@ -132,6 +132,23 @@ public class HLSVideoProcessor {
         }
     }
     
+    /// Get source video bitrate in kbps
+    public func getSourceVideoBitrate(filePath: String) async throws -> Int? {
+        let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        guard let track = tracks.first else { return nil }
+        
+        do {
+            let bitRate = try await track.load(.estimatedDataRate)
+            // Convert from bps to kbps
+            let bitRateKbps = Int(bitRate / 1000)
+            return bitRateKbps
+        } catch {
+            print("❌ Error getting source video bitrate: \(error)")
+            return nil
+        }
+    }
+    
     /// Check if video format is supported based on file extension
     public func isSupportedVideoFormat(_ fileName: String) -> Bool {
         let supportedExtensions = [

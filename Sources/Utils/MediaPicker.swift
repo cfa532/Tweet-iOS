@@ -393,21 +393,41 @@ struct MediaUploadHelper {
     }
     
     private static func getFileExtension(for typeIdentifier: String) -> String {
-        if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+        let lowercased = typeIdentifier.lowercased()
+        
+        // Images
+        if lowercased.contains("jpeg") || lowercased.contains("jpg") {
             return "jpg"
-        } else if typeIdentifier.contains("png") {
+        } else if lowercased.contains("png") {
             return "png"
-        } else if typeIdentifier.contains("gif") {
+        } else if lowercased.contains("gif") {
             return "gif"
-        } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+        } else if lowercased.contains("heic") || lowercased.contains("heif") {
             return "heic"
-        } else if typeIdentifier.contains("mp4") {
+        }
+        // Videos - check for specific video formats first (before generic "movie"/"video")
+        else if lowercased.contains("mpeg-4") || lowercased.contains("mpeg4") || lowercased.contains("mp4") {
             return "mp4"
-        } else if typeIdentifier.contains("mov") {
+        } else if lowercased.contains("quicktime") || lowercased.contains("mov") {
             return "mov"
-        } else if typeIdentifier.contains("m4v") {
+        } else if lowercased.contains("m4v") {
             return "m4v"
-        } else if typeIdentifier.contains("mkv") {
+        } else if lowercased.contains("mkv") {
+            return "mkv"
+        } else if lowercased.contains("avi") {
+            return "avi"
+        } else if lowercased.contains("webm") {
+            return "webm"
+        }
+        // Videos - check for generic video/movie typeIdentifiers
+        else if lowercased.contains("movie") || lowercased.contains("video") {
+            // Default to mp4 for generic video formats
+            return "mp4"
+        } else if lowercased.contains("mov") {
+            return "mov"
+        } else if lowercased.contains("m4v") {
+            return "m4v"
+        } else if lowercased.contains("mkv") {
             return "mkv"
         } else {
             return "file"

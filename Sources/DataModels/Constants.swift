@@ -21,8 +21,12 @@ enum Constants {
     static let MAX_VIDEO_FILE_CACHE_SIZE: Int64 = 50 * 1024 * 1024 // 50MB per video file
     
     // File Upload Limits
-    static let MAX_FILE_SIZE = 240 * 1024 * 1024 // 240MB in bytes - applies to all file types
+    static let MAX_FILE_SIZE = 512 * 1024 * 1024 // 512MB in bytes - applies to all file types
     static let MAX_VIDEO_FILE_SIZE = MAX_FILE_SIZE // Keep for backward compatibility
+    
+    // Video Processing Thresholds
+    static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 32 * 1024 * 1024  // 32MB
+    static let HLS_ROUTE_2_THRESHOLD_BYTES: Int64 = 128 * 1024 * 1024  // 128MB
 }
 
 enum UserContentType: String {

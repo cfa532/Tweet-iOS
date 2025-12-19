@@ -342,27 +342,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         initializePlayerEarly()
 
         prewarmTask?.cancel()
-        prewarmTask = Task.detached(priority: .utility) { [url, mediaID, mediaType] in
-            do {
-                // CRITICAL FIX: Just create the asset/item to warm up the cache
-                // DON'T attach it to singletonPlayer - that causes the prewarmed video
-                // to flash on screen when first opening fullscreen
-                let item = try await SharedAssetCache.shared.getOrCreatePlayerItem(
-                    for: url,
-                    mediaID: mediaID,
-                    mediaType: mediaType
-                )
-                
-                // Just accessing the item warms up the asset cache
-                // The item will be cached and ready for quick loading later
-                await MainActor.run {
-                    // Don't attach to player - just warm up the cache
-                    NSLog("✅ [FullScreenVideoManager] Prewarmed asset cache for \(mediaID) without attaching to player")
-                }
-            } catch {
-                await MainActor.run {
-                    NSLog("⚠️ [FullScreenVideoManager] Failed to prewarm first item for \(mediaID): \(error)")
-                }
+        prewarmTask = Task.detached(priority: .utility) { [mediaID] in
+            // Just accessing the item warms up the asset cache
+            // The item will be cached and ready for quick loading later
+            await MainActor.run {
+                // Don't attach to player - just warm up the cache
+                NSLog("✅ [FullScreenVideoManager] Prewarmed asset cache for \(mediaID) without attaching to player")
             }
         }
     }
