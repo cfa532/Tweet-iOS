@@ -14,10 +14,10 @@
 "Recommendation" = "Recommendation";
 
 // MARK: - Upload Progress
-"Preparing upload..." = "Preparing upload... Don't close the app";
+"Preparing upload... Please stay on this screen" = "Preparing upload... Please stay on this screen";
 "Preparing attachments..." = "Preparing attachments...";
 "Converting video..." = "Converting video...";
-"Uploading attachments..." = "Uploading attachments...";
+"Uploading attachments... Please stay on this screen" = "Uploading attachments... Please stay on this screen";
 "Submitting tweet..." = "Submitting tweet...";
 "Retrying upload..." = "Retrying upload...";
 "Upload completed" = "Upload completed";
