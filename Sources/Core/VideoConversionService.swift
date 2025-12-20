@@ -720,7 +720,7 @@ class VideoConversionService {
         
         commandParts.append(contentsOf: [
             "-f hls",
-            "-hls_time 4",
+            "-hls_time 10",
             "-hls_list_size 0",
             "-hls_segment_filename \"\(outputURL.deletingLastPathComponent().path)/segment%03d.ts\"",
             "-hls_playlist_type vod",
@@ -743,7 +743,7 @@ class VideoConversionService {
             "-c:a aac",
             "-b:a 128k",
             "-f hls",
-            "-hls_time 4",
+            "-hls_time 10",
             "-hls_list_size 0",
             "-hls_segment_filename \"\(outputURL.deletingLastPathComponent().path)/segment%03d.ts\"",
             "-hls_playlist_type vod",
