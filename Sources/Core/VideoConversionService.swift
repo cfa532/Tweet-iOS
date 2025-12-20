@@ -36,6 +36,7 @@ class VideoConversionService {
         fileSizeBytes: Int64,
         aspectRatio: Float? = nil,
         singleVariant480p: Bool = false,
+        sourceVideoResolution: Int,
         isNormalized: Bool = false,
         progressCallback: @escaping (ConversionProgress) -> Void,
         completion: @escaping (HLSConversionResult) -> Void
@@ -50,23 +51,33 @@ class VideoConversionService {
 
         // HLS conversion configuration:
         // Single variant: 480p (600kb) only
-        // Dual variant: 720p (1000kb) + 480p (600kb)
+        // Dual variant: high-quality (proportional bitrate) + 480p (600kb)
+        // High-quality variant uses actual source resolution (capped at 720p)
         let lowerResolution = 480
+        let highQualityResolution = min(sourceVideoResolution, 720) // Cap at 720p
         
         // Create HLS directory structure
+        // Single variant: playlist.m3u8 at root (hls/playlist.m3u8)
+        // Dual variant: master.m3u8 at root with subdirectories (hls/master.m3u8, hls/720p/, hls/480p/)
         let hlsDirectory = outputDirectory.appendingPathComponent("hls")
         let hls720pDir = hlsDirectory.appendingPathComponent("720p")
         let lowerResDir = hlsDirectory.appendingPathComponent("\(lowerResolution)p")
         
         // Create directories based on variant mode
-        if !singleVariant480p {
+        if singleVariant480p {
+            // Single variant: no subdirectories needed, playlist goes at root
+            try? FileManager.default.createDirectory(at: hlsDirectory, withIntermediateDirectories: true)
+        } else {
+            // Dual variant: create subdirectories for variants
             try? FileManager.default.createDirectory(at: hls720pDir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(at: lowerResDir, withIntermediateDirectories: true)
         }
-        try? FileManager.default.createDirectory(at: lowerResDir, withIntermediateDirectories: true)
         
         // Create output URLs
+        // For single variant: playlist at root
+        // For dual variant: playlists in subdirectories + master at root
         let hls720pURL = hls720pDir.appendingPathComponent("playlist.m3u8")
-        let lowerResURL = lowerResDir.appendingPathComponent("playlist.m3u8")
+        let lowerResURL = singleVariant480p ? hlsDirectory.appendingPathComponent("playlist.m3u8") : lowerResDir.appendingPathComponent("playlist.m3u8")
         let masterPlaylistURL = hlsDirectory.appendingPathComponent("master.m3u8")
         
         // Log initial memory usage
@@ -77,14 +88,20 @@ class VideoConversionService {
             // Get source video info for resolution detection
             let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
             
-            // Calculate target bitrates (always use calculated values - bitrate detection is unreliable)
-            let target720pKbps = 1000
+            // Calculate target bitrates based on actual resolution
+            // High-quality variant: proportional bitrate (1000k for 720p, scaled down for lower resolutions)
+            // Lower variant: always 600k for 480p
+            let targetHighQualityKbps = Int(1000.0 * Double(highQualityResolution) / 720.0)
             let targetLowerKbps = 600  // Always use 600k for 480p
             
-            let resolution720pBitrate = "\(target720pKbps)k"
+            let highQualityBitrate = "\(targetHighQualityKbps)k"
             let lowerResolutionBitrate = "\(targetLowerKbps)k"
             
-            print("📊 Using calculated bitrates: 720p=\(resolution720pBitrate), 480p=\(lowerResolutionBitrate)")
+            if !singleVariant480p {
+                print("📊 Using calculated bitrates: \(highQualityResolution)p=\(highQualityBitrate), 480p=\(lowerResolutionBitrate)")
+            } else {
+                print("📊 Using calculated bitrate: 480p=\(lowerResolutionBitrate)")
+            }
             
             await self?.performConversion(
                 inputURL: inputURL,
@@ -93,7 +110,8 @@ class VideoConversionService {
                 masterPlaylistURL: masterPlaylistURL,
                 hlsDirectory: hlsDirectory,
                 aspectRatio: aspectRatio,
-                resolution720pBitrate: resolution720pBitrate,
+                highQualityResolution: highQualityResolution,
+                highQualityBitrate: highQualityBitrate,
                 lowerResolution: lowerResolution,
                 lowerResolutionBitrate: lowerResolutionBitrate,
                 videoInfo: videoInfo,
@@ -182,7 +200,8 @@ class VideoConversionService {
         masterPlaylistURL: URL,
         hlsDirectory: URL,
         aspectRatio: Float?,
-        resolution720pBitrate: String,
+        highQualityResolution: Int,
+        highQualityBitrate: String,
         lowerResolution: Int,
         lowerResolutionBitrate: String,
         videoInfo: (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)?,
@@ -192,8 +211,8 @@ class VideoConversionService {
     ) async {
         // Calculate actual resolutions based on source video and aspect ratio
         // If source resolution is lower than target, preserve it
-        var finalWidth720: Int
-        var finalHeight720: Int
+        var finalWidthHighQuality: Int
+        var finalHeightHighQuality: Int
         var finalWidthLower: Int
         var finalHeightLower: Int
         
@@ -202,18 +221,18 @@ class VideoConversionService {
             let sourceHeight = videoInfo.displayHeight
             let sourceMaxDimension = max(sourceWidth, sourceHeight)
             
-            // For 720p stream
-            if sourceMaxDimension < 720 {
+            // For high-quality stream (actual resolution, capped at 720p)
+            if sourceMaxDimension < highQualityResolution {
                 // Preserve original resolution
-                finalWidth720 = sourceWidth
-                finalHeight720 = sourceHeight
-                print("DEBUG: [MASTER PLAYLIST] Preserving original resolution for 720p stream: \(finalWidth720)x\(finalHeight720)")
+                finalWidthHighQuality = sourceWidth
+                finalHeightHighQuality = sourceHeight
+                print("DEBUG: [MASTER PLAYLIST] Preserving original resolution for \(highQualityResolution)p stream: \(finalWidthHighQuality)x\(finalHeightHighQuality)")
             } else {
                 // Calculate scaled resolution
-                let calculated = calculateActualResolution(targetResolution: 720, aspectRatio: aspectRatio)
+                let calculated = calculateActualResolution(targetResolution: highQualityResolution, aspectRatio: aspectRatio)
                 let components = calculated.components(separatedBy: "x")
-                finalWidth720 = Int(components[0]) ?? 1280
-                finalHeight720 = Int(components[1]) ?? 720
+                finalWidthHighQuality = Int(components[0]) ?? (highQualityResolution == 720 ? 1280 : Int(Double(highQualityResolution) * 16.0 / 9.0))
+                finalHeightHighQuality = Int(components[1]) ?? highQualityResolution
             }
             
             // For lower resolution stream
@@ -231,52 +250,52 @@ class VideoConversionService {
             }
         } else {
             // Fallback to calculated resolutions
-            let actual720pResolution = calculateActualResolution(targetResolution: 720, aspectRatio: aspectRatio)
+            let actualHighQualityResolution = calculateActualResolution(targetResolution: highQualityResolution, aspectRatio: aspectRatio)
             let actualLowerResResolution = calculateActualResolution(targetResolution: lowerResolution, aspectRatio: aspectRatio)
-            let components720 = actual720pResolution.components(separatedBy: "x")
+            let componentsHighQuality = actualHighQualityResolution.components(separatedBy: "x")
             let componentsLower = actualLowerResResolution.components(separatedBy: "x")
-            finalWidth720 = Int(components720[0]) ?? 1280
-            finalHeight720 = Int(components720[1]) ?? 720
+            finalWidthHighQuality = Int(componentsHighQuality[0]) ?? (highQualityResolution == 720 ? 1280 : Int(Double(highQualityResolution) * 16.0 / 9.0))
+            finalHeightHighQuality = Int(componentsHighQuality[1]) ?? highQualityResolution
             finalWidthLower = Int(componentsLower[0]) ?? (lowerResolution == 480 ? 854 : 640)
             finalHeightLower = Int(componentsLower[1]) ?? lowerResolution
         }
         
-        let actual720pResolution = "\(finalWidth720)x\(finalHeight720)"
+        let actualHighQualityResolution = "\(finalWidthHighQuality)x\(finalHeightHighQuality)"
         let actualLowerResResolution = "\(finalWidthLower)x\(finalHeightLower)"
         
         if !singleVariant480p {
-            print("DEBUG: [MASTER PLAYLIST] Final 720p resolution: \(actual720pResolution)")
+            print("DEBUG: [MASTER PLAYLIST] Final \(highQualityResolution)p resolution: \(actualHighQualityResolution)")
         }
         print("DEBUG: [MASTER PLAYLIST] Final \(lowerResolution)p resolution: \(actualLowerResResolution)")
         
-        var result720p = true
+        var resultHighQuality = true
         
-        // Step 1: Convert to 720p HLS (if dual variant mode)
+        // Step 1: Convert to high-quality HLS (if dual variant mode)
         if !singleVariant480p {
-            await updateProgress(stage: "Converting to 720p HLS...", progress: 10)
-            logMemoryUsage("before 720p conversion")
+            await updateProgress(stage: "Converting to \(highQualityResolution)p HLS...", progress: 10)
+            logMemoryUsage("before \(highQualityResolution)p conversion")
             
-            result720p = await convertToHLSAsync(
+            resultHighQuality = await convertToHLSAsync(
                 inputURL: inputURL,
                 outputURL: hls720pURL,
-                resolution: "720",
-                bitrate: resolution720pBitrate,
+                resolution: "\(highQualityResolution)",
+                bitrate: highQualityBitrate,
                 aspectRatio: aspectRatio,
                 cachedVideoInfo: videoInfo,
                 isNormalized: isNormalized
             )
             
-            logMemoryUsage("after 720p conversion")
+            logMemoryUsage("after \(highQualityResolution)p conversion")
             
             // Force memory cleanup between conversions
             forceMemoryCleanup()
             
-            guard result720p else {
+            guard resultHighQuality else {
                 await MainActor.run {
                     completion(HLSConversionResult(
                         success: false,
                         hlsDirectoryURL: nil,
-                        errorMessage: "Failed to convert to 720p HLS"
+                        errorMessage: "Failed to convert to \(highQualityResolution)p HLS"
                     ))
                 }
                 return
@@ -314,23 +333,41 @@ class VideoConversionService {
             return
         }
         
-        // Step 3: Create master playlist
-        await updateProgress(stage: "Creating master playlist...", progress: 90)
-        logMemoryUsage("before master playlist creation")
-        
-        let masterPlaylistCreated = await createMasterPlaylist(
-            masterPlaylistURL: masterPlaylistURL,
-            hls720pURL: hls720pURL,
-            lowerResURL: lowerResURL,
-            actual720pResolution: actual720pResolution,
-            actualLowerResResolution: actualLowerResResolution,
-            resolution720pBitrate: resolution720pBitrate,
-            lowerResolution: lowerResolution,
-            lowerResolutionBitrate: lowerResolutionBitrate,
-            singleVariant480p: singleVariant480p
-        )
-        
-        logMemoryUsage("after master playlist creation")
+        // Step 3: Create master playlist (dual variant) or use root playlist (single variant)
+        if singleVariant480p {
+            // Single variant: playlist.m3u8 is already created at root, no master needed
+            await updateProgress(stage: "Conversion completed!", progress: 100)
+            logMemoryUsage("after conversion")
+        } else {
+            // Dual variant: create master playlist
+            await updateProgress(stage: "Creating master playlist...", progress: 90)
+            logMemoryUsage("before master playlist creation")
+            
+            let masterPlaylistCreated = await createMasterPlaylist(
+                masterPlaylistURL: masterPlaylistURL,
+                hls720pURL: hls720pURL,
+                lowerResURL: lowerResURL,
+                actualHighQualityResolution: actualHighQualityResolution,
+                actualLowerResResolution: actualLowerResResolution,
+                highQualityBitrate: highQualityBitrate,
+                lowerResolution: lowerResolution,
+                lowerResolutionBitrate: lowerResolutionBitrate,
+                singleVariant480p: singleVariant480p
+            )
+            
+            logMemoryUsage("after master playlist creation")
+            
+            guard masterPlaylistCreated else {
+                await MainActor.run {
+                    completion(HLSConversionResult(
+                        success: false,
+                        hlsDirectoryURL: nil,
+                        errorMessage: "Failed to create master playlist"
+                    ))
+                }
+                return
+            }
+        }
         
         await updateProgress(stage: "Conversion completed!", progress: 100)
         
@@ -340,9 +377,9 @@ class VideoConversionService {
         
         await MainActor.run {
             completion(HLSConversionResult(
-                success: resultLowerRes && masterPlaylistCreated,
-                hlsDirectoryURL: resultLowerRes && masterPlaylistCreated ? hlsDirectory : nil,
-                errorMessage: resultLowerRes ? (masterPlaylistCreated ? nil : "Failed to create master playlist") : "Failed to convert to \(lowerResolution)p HLS"
+                success: resultLowerRes,
+                hlsDirectoryURL: resultLowerRes ? hlsDirectory : nil,
+                errorMessage: resultLowerRes ? nil : "Failed to convert to \(lowerResolution)p HLS"
             ))
         }
     }
@@ -361,15 +398,15 @@ class VideoConversionService {
         masterPlaylistURL: URL,
         hls720pURL: URL,
         lowerResURL: URL,
-        actual720pResolution: String,
+        actualHighQualityResolution: String,
         actualLowerResResolution: String,
-        resolution720pBitrate: String,
+        highQualityBitrate: String,
         lowerResolution: Int,
         lowerResolutionBitrate: String,
         singleVariant480p: Bool
     ) async -> Bool {
         // Convert bitrate strings (e.g., "3000k") to bandwidth integers (e.g., 3000000)
-        let bandwidth720p = Int(resolution720pBitrate.replacingOccurrences(of: "k", with: "")) ?? 2000
+        let bandwidthHighQuality = Int(highQualityBitrate.replacingOccurrences(of: "k", with: "")) ?? 2000
         let bandwidthLowerRes = Int(lowerResolutionBitrate.replacingOccurrences(of: "k", with: "")) ?? 1000
         
         let masterPlaylistContent: String
@@ -382,11 +419,12 @@ class VideoConversionService {
             \(lowerResolution)p/playlist.m3u8
             """
         } else {
-            // Dual variant: 720p + 480p
+            // Dual variant: high-quality + 480p
+            // Note: Directory name is "720p" for compatibility, but actual resolution may be lower
             masterPlaylistContent = """
             #EXTM3U
             #EXT-X-VERSION:3
-            #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidth720p * 1000),RESOLUTION=\(actual720pResolution)
+            #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidthHighQuality * 1000),RESOLUTION=\(actualHighQualityResolution)
             720p/playlist.m3u8
             #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidthLowerRes * 1000),RESOLUTION=\(actualLowerResResolution)
             \(lowerResolution)p/playlist.m3u8

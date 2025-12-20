@@ -3262,8 +3262,9 @@ final class HproseInstance: ObservableObject {
                 
                 // Route based on video resolution
                 if videoResolution > 480 {
-                    // Resolution > 480p: HLS with 720p + 480p variants
-                    print("Video resolution > 480p, using HLS with 720p + 480p variants")
+                    // Resolution > 480p: HLS with high-quality + 480p variants
+                    // High-quality variant uses actual resolution (capped at 720p)
+                    print("Video resolution > 480p (\(videoResolution)p), using HLS with \(min(videoResolution, 720))p + 480p variants")
                     return try await uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
@@ -3271,12 +3272,13 @@ final class HproseInstance: ObservableObject {
                         noResample: noResample,
                         appUser: appUser,
                         singleVariant480p: false,
+                        sourceVideoResolution: videoResolution,
                         isNormalized: wasNormalized,
                         progressCallback: progressCallback
                     )
                 } else {
                     // Resolution ≤ 480p: HLS with 480p variant only
-                    print("Video resolution ≤ 480p, using HLS with 480p variant only")
+                    print("Video resolution ≤ 480p (\(videoResolution)p), using HLS with 480p variant only")
                     return try await uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
@@ -3284,6 +3286,7 @@ final class HproseInstance: ObservableObject {
                         noResample: noResample,
                         appUser: appUser,
                         singleVariant480p: true,
+                        sourceVideoResolution: videoResolution,
                         isNormalized: wasNormalized,
                         progressCallback: progressCallback
                     )
@@ -3383,7 +3386,8 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Upload video with local FFmpeg HLS conversion
-        /// - Parameter singleVariant480p: If true, creates only 480p variant. If false, creates 720p + 480p variants.
+        /// - Parameter singleVariant480p: If true, creates only 480p variant. If false, creates high-quality + 480p variants.
+        /// - Parameter sourceVideoResolution: Actual video resolution (used to determine high-quality variant resolution, capped at 720p)
         private func uploadVideoWithLocalHLSConversion(
             data: Data,
             fileName: String?,
@@ -3391,6 +3395,7 @@ final class HproseInstance: ObservableObject {
             noResample: Bool,
             appUser: User,
             singleVariant480p: Bool = false,
+            sourceVideoResolution: Int,
             isNormalized: Bool = false,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
@@ -3447,6 +3452,7 @@ final class HproseInstance: ObservableObject {
                     fileSizeBytes: Int64(data.count),
                     aspectRatio: videoAspectRatio,
                     singleVariant480p: singleVariant480p,
+                    sourceVideoResolution: sourceVideoResolution,
                     isNormalized: isNormalized,
                     progressCallback: { progress in
                         DispatchQueue.main.async {

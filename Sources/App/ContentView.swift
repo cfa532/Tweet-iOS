@@ -399,14 +399,25 @@ struct ContentView: View {
                 
                 // Check if the pending upload is not too old (e.g., within 24 hours)
                 let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
-                if Date().timeIntervalSince(upload.timestamp) < maxAge {
+                guard Date().timeIntervalSince(upload.timestamp) < maxAge else {
+                    // Too old, remove it
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
+                
+                // Auto-resume if there are still retries left (maxRetries = 2)
+                let maxRetries = 2
+                if upload.retryCount < maxRetries {
+                    print("DEBUG: [Auto-resume] Pending upload found with retryCount=\(upload.retryCount), auto-resuming without user confirmation")
+                    // Automatically retry without showing dialog
+                    retryPendingUpload(upload)
+                } else {
+                    // Max retries reached, show dialog for user to decide
+                    print("DEBUG: [Auto-resume] Pending upload found with retryCount=\(upload.retryCount) (max reached), showing dialog")
                     await MainActor.run {
                         self.pendingUpload = upload
                         self.showPendingUploadDialog = true
                     }
-                } else {
-                    // Too old, remove it
-                    try? FileManager.default.removeItem(at: fileURL)
                 }
             } catch {
                 print("DEBUG: Failed to load pending upload: \(error)")
