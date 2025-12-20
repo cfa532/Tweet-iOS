@@ -1159,6 +1159,18 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func handleMemoryWarning() {
+        // CRITICAL: Check if video upload is in progress
+        // During FFmpeg video conversion, memory spikes are expected
+        // Clearing video player caches during upload breaks existing players
+        if UploadProgressManager.shared.isProcessingVideo {
+            print("⚠️ [SharedAssetCache] Video upload in progress - SKIPPING video cache cleanup to prevent player breakage")
+            print("ℹ️ [SharedAssetCache] Memory spike during FFmpeg conversion is temporary and expected")
+            
+            // Don't cancel downloads or clear caches during upload
+            // The memory spike will subside after FFmpeg completes
+            return
+        }
+        
         // Check if memory usage exceeds 1.4GB before taking action
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)

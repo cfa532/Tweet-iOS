@@ -35,6 +35,10 @@ class UploadProgressManager: ObservableObject {
     private var wasBackgrounded: Bool = false
     private var userInteractionDisabled: Bool = false
     
+    // CRITICAL: Track if upload involves video conversion (FFmpeg)
+    // This prevents video player cache clearing during intensive processing
+    var isProcessingVideo: Bool = false
+    
     private init() {
         setupBackgroundObserver()
     }
@@ -86,6 +90,9 @@ class UploadProgressManager: ObservableObject {
         detailedProgress = ""
         uploadStartTime = Date()
         wasBackgrounded = false
+        
+        // CRITICAL: Mark video processing state to prevent cache clearing
+        isProcessingVideo = hasVideos
 
         // Prevent screen from auto-locking during upload
         UIApplication.shared.isIdleTimerDisabled = true
@@ -93,7 +100,7 @@ class UploadProgressManager: ObservableObject {
         // Note: User interaction blocking is handled by the overlay's background
         // The dialog itself remains interactive for the close button
 
-        print("📤 [UploadProgress] Started \(type) upload (idle timer disabled, videos: \(hasVideos))")
+        print("📤 [UploadProgress] Started \(type) upload (idle timer disabled, videos: \(hasVideos), processing video: \(hasVideos))")
     }
     
     func updateProgress(stage: UploadStage, message: String, progress: Double = 0.0, detail: String = "") {
@@ -115,6 +122,9 @@ class UploadProgressManager: ObservableObject {
 
         // Restore user interaction
         unblockUserInteraction()
+        
+        // CRITICAL: Clear video processing flag
+        isProcessingVideo = false
 
         if let startTime = uploadStartTime {
             let duration = Date().timeIntervalSince(startTime)
@@ -141,6 +151,9 @@ class UploadProgressManager: ObservableObject {
 
         // Restore user interaction
         unblockUserInteraction()
+        
+        // CRITICAL: Clear video processing flag
+        isProcessingVideo = false
 
         print("❌ [UploadProgress] Upload failed: \(message) (idle timer re-enabled, user interaction restored)")
 
@@ -173,6 +186,9 @@ class UploadProgressManager: ObservableObject {
         
         // Restore user interaction
         unblockUserInteraction()
+        
+        // CRITICAL: Clear video processing flag
+        isProcessingVideo = false
         
         // Reset upload state
         currentStage = .failed

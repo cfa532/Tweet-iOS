@@ -48,6 +48,12 @@ class VideoConversionService {
         
         // Store progress callback
         self.progressCallback = progressCallback
+        
+        // OPTIMIZATION: Force memory cleanup before starting conversion
+        // This ensures we have maximum available memory for FFmpeg
+        logMemoryUsage("before pre-conversion cleanup")
+        forceMemoryCleanup()
+        logMemoryUsage("after pre-conversion cleanup")
 
         // HLS conversion configuration:
         // Single variant: 480p (600kb) only
@@ -83,8 +89,10 @@ class VideoConversionService {
         // Log initial memory usage
         logMemoryUsage("before conversion")
         
-        // Run conversion in foreground task with high priority
-        currentConversion = Task(priority: .high) { [weak self] in
+        // OPTIMIZATION: Use lower priority to reduce CPU/memory contention
+        // High priority was causing excessive memory pressure and breaking video players
+        // Using .userInitiated instead of .high reduces resource competition
+        currentConversion = Task(priority: .userInitiated) { [weak self] in
             // Get source video info for resolution detection
             let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
             
@@ -287,8 +295,14 @@ class VideoConversionService {
             
             logMemoryUsage("after \(highQualityResolution)p conversion")
             
-            // Force memory cleanup between conversions
+            // OPTIMIZATION: Force memory cleanup between conversions
+            // This is critical to prevent memory accumulation during dual-variant encoding
             forceMemoryCleanup()
+            
+            // OPTIMIZATION: Yield to allow system to reclaim memory
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second pause
+            logMemoryUsage("after cleanup pause")
             
             guard resultHighQuality else {
                 await MainActor.run {
@@ -319,8 +333,13 @@ class VideoConversionService {
         
         logMemoryUsage("after \(lowerResolution)p conversion")
         
-        // Force memory cleanup after lower resolution conversion
+        // OPTIMIZATION: Force memory cleanup after lower resolution conversion
         forceMemoryCleanup()
+        
+        // OPTIMIZATION: Yield to allow system to reclaim memory
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second pause
+        logMemoryUsage("after final cleanup pause")
         
         guard resultLowerRes else {
             await MainActor.run {
@@ -694,6 +713,14 @@ class VideoConversionService {
             videoFilter = "-vf \"\(scaleFilter)\""
         }
         
+        // OPTIMIZATION: Reduce memory usage during encoding
+        // - Use "veryfast" preset (already set) for speed and lower memory
+        // - Limit threads to 4 instead of auto (0) to reduce memory footprint
+        // - Use smaller bufsize to reduce memory buffer requirements
+        let threadCount = min(4, ProcessInfo.processInfo.activeProcessorCount)
+        let bufferSize = Int(bitrate.replacingOccurrences(of: "k", with: "")) ?? 2000
+        let optimizedBufferSize = "\(bufferSize / 2)k" // Half the bitrate for buffer
+        
         // Build command as a single line to avoid multiline string issues
         var commandParts: [String] = [
             "-i \"\(inputURL.path)\"",
@@ -705,13 +732,13 @@ class VideoConversionService {
             "-ar 44100",
             "-b:v \(bitrate)",
             "-maxrate \(bitrate)",
-            "-bufsize \(bitrate)",
+            "-bufsize \(optimizedBufferSize)", // OPTIMIZED: Smaller buffer
             "-b:a 128k",
             "-preset veryfast",
             "-g 48",
             "-keyint_min 48",
             "-sc_threshold 0",
-            "-threads 0"
+            "-threads \(threadCount)" // OPTIMIZED: Limited threads
         ]
         
         if !videoFilter.isEmpty {
