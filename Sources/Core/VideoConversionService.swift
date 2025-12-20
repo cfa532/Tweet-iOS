@@ -525,8 +525,8 @@ class VideoConversionService {
     
     // MARK: - Convert to HLS with specific resolution
     
-    /// Legacy function - no longer used since we always use libx264 encoding for compatibility
-    /// Never upscales - previously used COPY if source resolution is <= target
+    /// Legacy function - kept for reference, no longer used in main conversion logic
+    /// Previously used COPY if source resolution is <= target
     private func shouldUseCopyPreset(
         inputURL: URL,
         aspectRatio: Float?,
@@ -586,78 +586,96 @@ class VideoConversionService {
         Task {
             let targetResolution = Int(resolution) ?? 720
             
-            // Always use libx264 encoding for HLS compatibility and proper resolution normalization
-            // This ensures consistent encoding and avoids potential compatibility issues with COPY codec
-            let shouldUseCopy = false
-            print("DEBUG: [VIDEO CONVERSION] Using libx264 encoding for resolution: \(resolution) (always encoding for compatibility)")
-            
-            // Determine scaling based on orientation and source resolution
-            // Never upscale - if source resolution is lower than target, keep original
-            let scaleFilter: String
-            if let videoInfo = cachedVideoInfo {
-                let displayWidth = videoInfo.displayWidth
-                let displayHeight = videoInfo.displayHeight
-                
-                // Calculate source video resolution (height for landscape, width for portrait)
-                let sourceResolution: Int
-                if let aspectRatio = aspectRatio {
-                    if aspectRatio < 1.0 {
-                        // Portrait: resolution is width
-                        sourceResolution = displayWidth
-                    } else {
-                        // Landscape: resolution is height
-                        sourceResolution = displayHeight
-                    }
-                } else {
-                    // Fallback: use height
-                    sourceResolution = displayHeight
+            // Determine if COPY can be used: normalized videos that are exactly 720p targeting 720p
+            let shouldUseCopy = isNormalized && targetResolution == 720 && {
+                if let videoInfo = cachedVideoInfo {
+                    let maxDimension = max(videoInfo.displayWidth, videoInfo.displayHeight)
+                    return maxDimension == 720
                 }
-                
-                // If source resolution is lower than target, don't scale (keep original)
-                if sourceResolution < targetResolution {
-                    print("DEBUG: [VIDEO CONVERSION] Source resolution (\(displayWidth)x\(displayHeight), \(sourceResolution)p) is lower than target (\(targetResolution)p), keeping original resolution")
-                    scaleFilter = ""  // No scaling - will keep original dimensions
-                } else {
-                    // Scale down to target resolution
+                return false
+            }()
+
+            if shouldUseCopy {
+                print("DEBUG: [VIDEO CONVERSION] Using COPY codec for normalized 720p video: \(resolution)")
+
+                // COPY codec - no re-encoding needed for already normalized 720p video
+                let copyCommand = buildCopyCommand(
+                    inputURL: inputURL,
+                    outputURL: outputURL
+                )
+
+                await MainActor.run {
+                    self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
+                }
+            } else {
+                // Use libx264 for all other cases (compatibility and proper normalization)
+                print("DEBUG: [VIDEO CONVERSION] Using libx264 codec for resolution: \(resolution) (compatibility and normalization)")
+
+                // Determine scaling based on orientation and source resolution
+                // Never upscale - if source resolution is lower than target, keep original
+                let scaleFilter: String
+                if let videoInfo = cachedVideoInfo {
+                    let displayWidth = videoInfo.displayWidth
+                    let displayHeight = videoInfo.displayHeight
+
+                    // Calculate source video resolution (height for landscape, width for portrait)
+                    let sourceResolution: Int
                     if let aspectRatio = aspectRatio {
                         if aspectRatio < 1.0 {
-                            // Portrait: scale to target width
+                            // Portrait: resolution is width
+                            sourceResolution = displayWidth
+                        } else {
+                            // Landscape: resolution is height
+                            sourceResolution = displayHeight
+                        }
+                    } else {
+                        // Fallback: use height
+                        sourceResolution = displayHeight
+                    }
+
+                    // If source resolution is lower than target, don't scale (keep original)
+                    if sourceResolution < targetResolution {
+                        print("DEBUG: [VIDEO CONVERSION] Source resolution (\(displayWidth)x\(displayHeight), \(sourceResolution)p) is lower than target (\(targetResolution)p), keeping original resolution")
+                        scaleFilter = ""  // No scaling - will keep original dimensions
+                    } else {
+                        // Scale down to target resolution
+                        if let aspectRatio = aspectRatio {
+                            if aspectRatio < 1.0 {
+                                // Portrait: scale to target width
+                                scaleFilter = "scale=\(resolution):-2"
+                            } else {
+                                // Landscape: scale to target height
+                                scaleFilter = "scale=-2:\(resolution)"
+                            }
+                        } else {
+                            scaleFilter = "scale=-2:\(resolution)"
+                        }
+                        print("DEBUG: [VIDEO CONVERSION] Scaling \(displayWidth)x\(displayHeight) (\(sourceResolution)p) down to \(targetResolution)p")
+                    }
+                } else {
+                    // Fallback: use standard scaling
+                    if let aspectRatio = aspectRatio {
+                        if aspectRatio < 1.0 {
                             scaleFilter = "scale=\(resolution):-2"
                         } else {
-                            // Landscape: scale to target height
                             scaleFilter = "scale=-2:\(resolution)"
                         }
                     } else {
                         scaleFilter = "scale=-2:\(resolution)"
                     }
-                    print("DEBUG: [VIDEO CONVERSION] Scaling \(displayWidth)x\(displayHeight) (\(sourceResolution)p) down to \(targetResolution)p")
                 }
-            } else {
-                // Fallback: use standard scaling
-                if let aspectRatio = aspectRatio {
-                    if aspectRatio < 1.0 {
-                        scaleFilter = "scale=\(resolution):-2"
-                    } else {
-                        scaleFilter = "scale=-2:\(resolution)"
-                    }
-                } else {
-                    scaleFilter = "scale=-2:\(resolution)"
+
+                let libx264Command = buildLibx264Command(
+                    inputURL: inputURL,
+                    outputURL: outputURL,
+                    resolution: resolution,
+                    bitrate: bitrate,
+                    scaleFilter: scaleFilter
+                )
+
+                await MainActor.run {
+                    self.executeFFmpegCommand(command: libx264Command, outputURL: outputURL, resolution: resolution, completion: completion)
                 }
-            }
-
-            // Always use libx264 encoding for consistent HLS segments and compatibility
-            let libx264Command = buildLibx264Command(
-                inputURL: inputURL,
-                outputURL: outputURL,
-                resolution: resolution,
-                bitrate: bitrate,
-                scaleFilter: scaleFilter
-            )
-
-            print("DEBUG: [VIDEO CONVERSION] Using libx264 codec for resolution: \(resolution), bitrate: \(bitrate)")
-
-            await MainActor.run {
-                self.executeFFmpegCommand(command: libx264Command, outputURL: outputURL, resolution: resolution, completion: completion)
             }
         }
     }
@@ -712,7 +730,30 @@ class VideoConversionService {
         
         return commandParts.joined(separator: " ")
     }
-    
+
+    /// Builds FFmpeg command for COPY codec - fast HLS conversion for already normalized videos
+    private func buildCopyCommand(
+        inputURL: URL,
+        outputURL: URL
+    ) -> String {
+        // Build command for COPY codec - no re-encoding, just remux to HLS
+        let commandParts: [String] = [
+            "-i \"\(inputURL.path)\"",
+            "-c:v copy",
+            "-c:a aac",
+            "-b:a 128k",
+            "-f hls",
+            "-hls_time 4",
+            "-hls_list_size 0",
+            "-hls_segment_filename \"\(outputURL.deletingLastPathComponent().path)/segment%03d.ts\"",
+            "-hls_playlist_type vod",
+            "-start_number 0",
+            "\"\(outputURL.path)\""
+        ]
+
+        return commandParts.joined(separator: " ")
+    }
+
     private func executeFFmpegCommand(
         command: String,
         outputURL: URL,
