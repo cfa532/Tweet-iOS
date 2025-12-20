@@ -525,8 +525,8 @@ class VideoConversionService {
     
     // MARK: - Convert to HLS with specific resolution
     
-    /// Determines if COPY codec should be used based on video resolution
-    /// Never upscales - only uses COPY if source resolution is <= target
+    /// Legacy function - no longer used since we always use libx264 encoding for compatibility
+    /// Never upscales - previously used COPY if source resolution is <= target
     private func shouldUseCopyPreset(
         inputURL: URL,
         aspectRatio: Float?,
@@ -586,27 +586,10 @@ class VideoConversionService {
         Task {
             let targetResolution = Int(resolution) ?? 720
             
-            // For normalized videos, check if we can use COPY codec
-            // Only use COPY if the normalized video is exactly at target resolution
-            let shouldUseCopy: Bool
-            if isNormalized && targetResolution == 720 {
-                // Check if normalized video is exactly 720p
-                if let videoInfo = cachedVideoInfo {
-                    let maxDimension = max(videoInfo.displayWidth, videoInfo.displayHeight)
-                    shouldUseCopy = maxDimension == 720
-                    print("DEBUG: [VIDEO CONVERSION] Normalized video max dimension: \(maxDimension), target: 720, should use COPY: \(shouldUseCopy)")
-                } else {
-                    shouldUseCopy = false
-                }
-            } else {
-                // For non-normalized or lower resolution, check if source is <= target
-                shouldUseCopy = await shouldUseCopyPreset(
-                    inputURL: inputURL,
-                    aspectRatio: aspectRatio,
-                    targetResolution: targetResolution,
-                    cachedVideoInfo: cachedVideoInfo
-                )
-            }
+            // Always use libx264 encoding for HLS compatibility and proper resolution normalization
+            // This ensures consistent encoding and avoids potential compatibility issues with COPY codec
+            let shouldUseCopy = false
+            print("DEBUG: [VIDEO CONVERSION] Using libx264 encoding for resolution: \(resolution) (always encoding for compatibility)")
             
             // Determine scaling based on orientation and source resolution
             // Never upscale - if source resolution is lower than target, keep original
@@ -662,43 +645,19 @@ class VideoConversionService {
                 }
             }
 
-            // Use COPY codec for videos that are already at target resolution
-            if shouldUseCopy {
-                print("DEBUG: [VIDEO CONVERSION] Using COPY codec for resolution: \(resolution)")
-                
-                // COPY codec - no re-encoding, just remux to HLS
-                let copyCommand = [
-                    "-i \"\(inputURL.path)\"",
-                    "-c:v copy",
-                    "-c:a aac",
-                    "-b:a 128k",
-                    "-f hls",
-                    "-hls_time 4",
-                    "-hls_list_size 0",
-                    "-hls_segment_filename \"\(outputURL.deletingLastPathComponent().path)/segment%03d.ts\"",
-                    "-hls_playlist_type vod",
-                    "-start_number 0",
-                    "\"\(outputURL.path)\""
-                ].joined(separator: " ")
-                
-                await MainActor.run {
-                    self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
-                }
-            } else {
-                // Use libx264 for videos that need scaling or encoding
-                let libx264Command = buildLibx264Command(
-                    inputURL: inputURL,
-                    outputURL: outputURL,
-                    resolution: resolution,
-                    bitrate: bitrate,
-                    scaleFilter: scaleFilter
-                )
-                
-                print("DEBUG: [VIDEO CONVERSION] Using libx264 codec for resolution: \(resolution), bitrate: \(bitrate)")
-                
-                await MainActor.run {
-                    self.executeFFmpegCommand(command: libx264Command, outputURL: outputURL, resolution: resolution, completion: completion)
-                }
+            // Always use libx264 encoding for consistent HLS segments and compatibility
+            let libx264Command = buildLibx264Command(
+                inputURL: inputURL,
+                outputURL: outputURL,
+                resolution: resolution,
+                bitrate: bitrate,
+                scaleFilter: scaleFilter
+            )
+
+            print("DEBUG: [VIDEO CONVERSION] Using libx264 codec for resolution: \(resolution), bitrate: \(bitrate)")
+
+            await MainActor.run {
+                self.executeFFmpegCommand(command: libx264Command, outputURL: outputURL, resolution: resolution, completion: completion)
             }
         }
     }
