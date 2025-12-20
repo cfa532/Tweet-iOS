@@ -3240,6 +3240,9 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 progressCallback?("Checking video service availability...", 10)
+                
+                // Resolve writableUrl once for all video HTTP operations
+                _ = try await appUser.resolveWritableUrl()
                 let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
                 
                 guard isCloudDriveAvailable else {
@@ -3565,8 +3568,7 @@ final class HproseInstance: ObservableObject {
             }
             
             do {
-                let writableUrl = try await appUser.resolveWritableUrl()
-                guard let writableUrl = writableUrl,
+                guard let writableUrl = appUser.writableUrl,
                       let host = writableUrl.host,
                       appUser.cloudDrivePort > 0,
                       let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
@@ -4199,9 +4201,7 @@ final class HproseInstance: ObservableObject {
             referenceId: String?,
             appUser: User
         ) async throws -> String {
-            // Always resolve writableUrl to ensure we have the correct IP address
-            let writableUrl = try await appUser.resolveWritableUrl()
-            guard let writableUrl = writableUrl else {
+            guard let writableUrl = appUser.writableUrl else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
@@ -4509,9 +4509,7 @@ final class HproseInstance: ObservableObject {
         private func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
             print("DEBUG: Polling process-zip status for job ID: \(jobId)")
             
-            // Always resolve writableUrl to ensure we have the correct IP address
-            let writableUrl = try await appUser.resolveWritableUrl()
-            guard let writableUrl = writableUrl else {
+            guard let writableUrl = appUser.writableUrl else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             

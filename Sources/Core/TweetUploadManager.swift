@@ -44,6 +44,8 @@ class TweetUploadManager {
     // MARK: - Public Upload Methods
     
     /// Upload data to IPFS with appropriate media processing
+    /// IPFS doesn't care about file types - they're all data blobs
+    /// resolveWritableUrl() is called where needed (uploadRegularFile, video HLS operations)
     func uploadToIPFS(
         data: Data,
         typeIdentifier: String,
@@ -56,7 +58,6 @@ class TweetUploadManager {
             throw NSError(domain: "TweetUploadManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "HproseInstance not available"])
         }
         
-        _ = try await hproseInstance.appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
         // Use MediaProcessor to determine media type and handle upload
