@@ -35,7 +35,7 @@ class VideoConversionService {
         outputDirectory: URL,
         fileSizeBytes: Int64,
         aspectRatio: Float? = nil,
-        useRoute2: Bool = false,
+        singleVariant480p: Bool = false,
         isNormalized: Bool = false,
         progressCallback: @escaping (ConversionProgress) -> Void,
         completion: @escaping (HLSConversionResult) -> Void
@@ -48,18 +48,20 @@ class VideoConversionService {
         // Store progress callback
         self.progressCallback = progressCallback
 
-        // HLS conversion configuration based on route
-        // Route 1: 720p (1000kb) + 480p (600kb)
-        // Route 2: 720p (1000kb) + 360p (400kb)
-        let lowerResolution = useRoute2 ? 360 : 480
+        // HLS conversion configuration:
+        // Single variant: 480p (600kb) only
+        // Dual variant: 720p (1000kb) + 480p (600kb)
+        let lowerResolution = 480
         
         // Create HLS directory structure
         let hlsDirectory = outputDirectory.appendingPathComponent("hls")
         let hls720pDir = hlsDirectory.appendingPathComponent("720p")
         let lowerResDir = hlsDirectory.appendingPathComponent("\(lowerResolution)p")
         
-        // Create directories
-        try? FileManager.default.createDirectory(at: hls720pDir, withIntermediateDirectories: true)
+        // Create directories based on variant mode
+        if !singleVariant480p {
+            try? FileManager.default.createDirectory(at: hls720pDir, withIntermediateDirectories: true)
+        }
         try? FileManager.default.createDirectory(at: lowerResDir, withIntermediateDirectories: true)
         
         // Create output URLs
@@ -72,34 +74,17 @@ class VideoConversionService {
         
         // Run conversion in foreground task with high priority
         currentConversion = Task(priority: .high) { [weak self] in
-            // Get source video info to preserve resolution/bitrate if lower
-            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: inputURL.path)
-            var sourceBitrateKbps: Int? = nil
-            do {
-                sourceBitrateKbps = try await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: inputURL.path)
-            } catch {
-                print("Could not get source bitrate: \(error)")
-            }
+            // Get source video info for resolution detection
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
             
-            // Calculate target bitrates (preserve original if lower)
+            // Calculate target bitrates (always use calculated values - bitrate detection is unreliable)
             let target720pKbps = 1000
-            let targetLowerKbps = useRoute2 ? 400 : 600
+            let targetLowerKbps = 600  // Always use 600k for 480p
             
-            var resolution720pBitrate = "\(target720pKbps)k"
-            var lowerResolutionBitrate = "\(targetLowerKbps)k"
+            let resolution720pBitrate = "\(target720pKbps)k"
+            let lowerResolutionBitrate = "\(targetLowerKbps)k"
             
-            if let sourceBitrate = sourceBitrateKbps {
-                // Preserve original bitrate if lower than target
-                if sourceBitrate < target720pKbps {
-                    resolution720pBitrate = "\(sourceBitrate)k"
-                    print("📊 Source bitrate (\(sourceBitrate)k) is lower than 720p target (\(target720pKbps)k), preserving original bitrate")
-                }
-                
-                if sourceBitrate < targetLowerKbps {
-                    lowerResolutionBitrate = "\(sourceBitrate)k"
-                    print("📊 Source bitrate (\(sourceBitrate)k) is lower than \(lowerResolution)p target (\(targetLowerKbps)k), preserving original bitrate")
-                }
-            }
+            print("📊 Using calculated bitrates: 720p=\(resolution720pBitrate), 480p=\(lowerResolutionBitrate)")
             
             await self?.performConversion(
                 inputURL: inputURL,
@@ -112,6 +97,7 @@ class VideoConversionService {
                 lowerResolution: lowerResolution,
                 lowerResolutionBitrate: lowerResolutionBitrate,
                 videoInfo: videoInfo,
+                singleVariant480p: singleVariant480p,
                 isNormalized: isNormalized,
                 completion: completion
             )
@@ -200,6 +186,7 @@ class VideoConversionService {
         lowerResolution: Int,
         lowerResolutionBitrate: String,
         videoInfo: (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)?,
+        singleVariant480p: Bool,
         isNormalized: Bool,
         completion: @escaping (HLSConversionResult) -> Void
     ) async {
@@ -257,41 +244,48 @@ class VideoConversionService {
         let actual720pResolution = "\(finalWidth720)x\(finalHeight720)"
         let actualLowerResResolution = "\(finalWidthLower)x\(finalHeightLower)"
         
-        print("DEBUG: [MASTER PLAYLIST] Final 720p resolution: \(actual720pResolution)")
+        if !singleVariant480p {
+            print("DEBUG: [MASTER PLAYLIST] Final 720p resolution: \(actual720pResolution)")
+        }
         print("DEBUG: [MASTER PLAYLIST] Final \(lowerResolution)p resolution: \(actualLowerResResolution)")
         
-        // Step 1: Convert to 720p HLS (50% of progress)
-        await updateProgress(stage: "Converting to 720p HLS...", progress: 10)
-        logMemoryUsage("before 720p conversion")
+        var result720p = true
         
-        let result720p = await convertToHLSAsync(
-            inputURL: inputURL,
-            outputURL: hls720pURL,
-            resolution: "720",
-            bitrate: resolution720pBitrate,
-            aspectRatio: aspectRatio,
-            cachedVideoInfo: videoInfo,
-            isNormalized: isNormalized
-        )
-        
-        logMemoryUsage("after 720p conversion")
-        
-        // Force memory cleanup between conversions
-        forceMemoryCleanup()
-        
-        guard result720p else {
-            await MainActor.run {
-                completion(HLSConversionResult(
-                    success: false,
-                    hlsDirectoryURL: nil,
-                    errorMessage: "Failed to convert to 720p HLS"
-                ))
+        // Step 1: Convert to 720p HLS (if dual variant mode)
+        if !singleVariant480p {
+            await updateProgress(stage: "Converting to 720p HLS...", progress: 10)
+            logMemoryUsage("before 720p conversion")
+            
+            result720p = await convertToHLSAsync(
+                inputURL: inputURL,
+                outputURL: hls720pURL,
+                resolution: "720",
+                bitrate: resolution720pBitrate,
+                aspectRatio: aspectRatio,
+                cachedVideoInfo: videoInfo,
+                isNormalized: isNormalized
+            )
+            
+            logMemoryUsage("after 720p conversion")
+            
+            // Force memory cleanup between conversions
+            forceMemoryCleanup()
+            
+            guard result720p else {
+                await MainActor.run {
+                    completion(HLSConversionResult(
+                        success: false,
+                        hlsDirectoryURL: nil,
+                        errorMessage: "Failed to convert to 720p HLS"
+                    ))
+                }
+                return
             }
-            return
         }
         
-        // Step 2: Convert to lower resolution HLS (remaining 50% of progress)
-        await updateProgress(stage: "Converting to \(lowerResolution)p HLS...", progress: 60)
+        // Step 2: Convert to lower resolution HLS
+        let progressStart = singleVariant480p ? 10 : 60
+        await updateProgress(stage: "Converting to \(lowerResolution)p HLS...", progress: progressStart)
         logMemoryUsage("before \(lowerResolution)p conversion")
         
         let resultLowerRes = await convertToHLSAsync(
@@ -332,7 +326,8 @@ class VideoConversionService {
             actualLowerResResolution: actualLowerResResolution,
             resolution720pBitrate: resolution720pBitrate,
             lowerResolution: lowerResolution,
-            lowerResolutionBitrate: lowerResolutionBitrate
+            lowerResolutionBitrate: lowerResolutionBitrate,
+            singleVariant480p: singleVariant480p
         )
         
         logMemoryUsage("after master playlist creation")
@@ -370,20 +365,33 @@ class VideoConversionService {
         actualLowerResResolution: String,
         resolution720pBitrate: String,
         lowerResolution: Int,
-        lowerResolutionBitrate: String
+        lowerResolutionBitrate: String,
+        singleVariant480p: Bool
     ) async -> Bool {
         // Convert bitrate strings (e.g., "3000k") to bandwidth integers (e.g., 3000000)
         let bandwidth720p = Int(resolution720pBitrate.replacingOccurrences(of: "k", with: "")) ?? 2000
         let bandwidthLowerRes = Int(lowerResolutionBitrate.replacingOccurrences(of: "k", with: "")) ?? 1000
         
-        let masterPlaylistContent = """
-        #EXTM3U
-        #EXT-X-VERSION:3
-        #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidth720p * 1000),RESOLUTION=\(actual720pResolution)
-        720p/playlist.m3u8
-        #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidthLowerRes * 1000),RESOLUTION=\(actualLowerResResolution)
-        \(lowerResolution)p/playlist.m3u8
-        """
+        let masterPlaylistContent: String
+        if singleVariant480p {
+            // Single variant: 480p only
+            masterPlaylistContent = """
+            #EXTM3U
+            #EXT-X-VERSION:3
+            #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidthLowerRes * 1000),RESOLUTION=\(actualLowerResResolution)
+            \(lowerResolution)p/playlist.m3u8
+            """
+        } else {
+            // Dual variant: 720p + 480p
+            masterPlaylistContent = """
+            #EXTM3U
+            #EXT-X-VERSION:3
+            #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidth720p * 1000),RESOLUTION=\(actual720pResolution)
+            720p/playlist.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=\(bandwidthLowerRes * 1000),RESOLUTION=\(actualLowerResResolution)
+            \(lowerResolution)p/playlist.m3u8
+            """
+        }
         
         do {
             try masterPlaylistContent.write(to: masterPlaylistURL, atomically: true, encoding: .utf8)
@@ -492,7 +500,7 @@ class VideoConversionService {
         if let cached = cachedVideoInfo {
             videoInfo = cached
         } else {
-            videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: inputURL.path)
+            videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
         }
         
         if let videoInfo = videoInfo {
@@ -568,11 +576,25 @@ class VideoConversionService {
             if let videoInfo = cachedVideoInfo {
                 let displayWidth = videoInfo.displayWidth
                 let displayHeight = videoInfo.displayHeight
-                let maxDimension = max(displayWidth, displayHeight)
+                
+                // Calculate source video resolution (height for landscape, width for portrait)
+                let sourceResolution: Int
+                if let aspectRatio = aspectRatio {
+                    if aspectRatio < 1.0 {
+                        // Portrait: resolution is width
+                        sourceResolution = displayWidth
+                    } else {
+                        // Landscape: resolution is height
+                        sourceResolution = displayHeight
+                    }
+                } else {
+                    // Fallback: use height
+                    sourceResolution = displayHeight
+                }
                 
                 // If source resolution is lower than target, don't scale (keep original)
-                if maxDimension < targetResolution {
-                    print("DEBUG: [VIDEO CONVERSION] Source resolution (\(maxDimension)) is lower than target (\(targetResolution)), keeping original resolution")
+                if sourceResolution < targetResolution {
+                    print("DEBUG: [VIDEO CONVERSION] Source resolution (\(displayWidth)x\(displayHeight), \(sourceResolution)p) is lower than target (\(targetResolution)p), keeping original resolution")
                     scaleFilter = ""  // No scaling - will keep original dimensions
                 } else {
                     // Scale down to target resolution
@@ -587,6 +609,7 @@ class VideoConversionService {
                     } else {
                         scaleFilter = "scale=-2:\(resolution)"
                     }
+                    print("DEBUG: [VIDEO CONVERSION] Scaling \(displayWidth)x\(displayHeight) (\(sourceResolution)p) down to \(targetResolution)p")
                 }
             } else {
                 // Fallback: use standard scaling

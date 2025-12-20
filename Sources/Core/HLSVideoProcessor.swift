@@ -299,86 +299,46 @@ public class HLSVideoProcessor {
         print("=== END VIDEO PARAMETERS ===")
     }
     
-    /// Get video info using FFmpeg (like the server does)
-    public func getVideoInfoWithFFmpeg(filePath: String) async -> (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)? {
-        return await withCheckedContinuation { continuation in
-            let command = "ffprobe -v quiet -print_format json -show_format -show_streams \"\(filePath)\""
-            print("DEBUG: [FFMPEG PROBE] Running command: \(command)")
-            
-            FFmpegKit.executeAsync(command) { session in
-                guard let session = session else {
-                    print("DEBUG: [FFMPEG PROBE] Failed to create session")
-                    continuation.resume(returning: nil)
-                    return
-                }
-                
-                let returnCode = session.getReturnCode()
-                print("DEBUG: [FFMPEG PROBE] Return code: \(String(describing: returnCode))")
-                
-                if ReturnCode.isSuccess(returnCode) {
-                    if let logs = session.getLogs() as? [Log] {
-                        var output = ""
-                        for log in logs {
-                            output += log.getMessage()
-                        }
-                        print("DEBUG: [FFMPEG PROBE] Raw output: \(output)")
-                        
-                        // Parse JSON output
-                        if let data = output.data(using: .utf8),
-                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let streams = json["streams"] as? [[String: Any]] {
-                            
-                            print("DEBUG: [FFMPEG PROBE] Found \(streams.count) streams")
-                            
-                            for stream in streams {
-                                if stream["codec_type"] as? String == "video" {
-                                    let width = stream["width"] as? Int ?? 0
-                                    let height = stream["height"] as? Int ?? 0
-                                    
-                                    var rotation = 0
-                                    if let sideDataList = stream["side_data_list"] as? [[String: Any]] {
-                                        print("DEBUG: [FFMPEG PROBE] Found side_data_list with \(sideDataList.count) items")
-                                        for sideData in sideDataList {
-                                            if sideData["side_data_type"] as? String == "Display Matrix" {
-                                                if let matrix = sideData["rotation"] as? Int {
-                                                    rotation = matrix
-                                                }
-                                                break
-                                            }
-                                        }
-                                    } else {
-                                        print("DEBUG: [FFMPEG PROBE] No side_data_list found")
-                                    }
-                                    
-                                    var displayWidth = width
-                                    var displayHeight = height
-                                    
-                                    if rotation == 90 || rotation == -90 {
-                                        displayWidth = height
-                                        displayHeight = width
-                                    }
-                                    
-                                    print("DEBUG: [FFMPEG PROBE] Video dimensions: \(width)x\(height)")
-                                    print("DEBUG: [FFMPEG PROBE] Display dimensions (after rotation): \(displayWidth)x\(displayHeight)")
-                                    print("DEBUG: [FFMPEG PROBE] Rotation: \(rotation) degrees")
-                                    
-                                    continuation.resume(returning: (width, height, displayWidth, displayHeight, rotation))
-                                    return
-                                }
-                            }
-                            print("DEBUG: [FFMPEG PROBE] No video stream found")
-                        } else {
-                            print("DEBUG: [FFMPEG PROBE] Failed to parse JSON")
-                        }
-                    } else {
-                        print("DEBUG: [FFMPEG PROBE] No logs found")
-                    }
-                    continuation.resume(returning: nil)
-                } else {
-                    print("DEBUG: [FFMPEG PROBE] Command failed with return code: \(String(describing: returnCode))")
-                    continuation.resume(returning: nil)
-                }
+    /// Get video info using AVFoundation (replaces unreliable ffprobe on iOS)
+    public func getVideoInfo(filePath: String) async -> (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)? {
+        print("DEBUG: [AVFoundation] Getting video info for: \(filePath)")
+        
+        let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
+        
+        do {
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let videoTrack = tracks.first else {
+                print("DEBUG: [AVFoundation] No video track found")
+                return nil
             }
+            
+            // Get natural dimensions
+            let size = try await videoTrack.load(.naturalSize)
+            let width = Int(size.width)
+            let height = Int(size.height)
+            
+            // Get rotation from preferred transform
+            let preferredTransform = try await videoTrack.load(.preferredTransform)
+            let angle = atan2(preferredTransform.b, preferredTransform.a) * 180 / .pi
+            let rotation = Int(round(angle))
+            
+            // Calculate display dimensions (accounting for rotation)
+            var displayWidth = width
+            var displayHeight = height
+            
+            if rotation == 90 || rotation == -90 || rotation == 270 || rotation == -270 {
+                displayWidth = height
+                displayHeight = width
+            }
+            
+            print("DEBUG: [AVFoundation] Video dimensions: \(width)x\(height)")
+            print("DEBUG: [AVFoundation] Display dimensions (after rotation): \(displayWidth)x\(displayHeight)")
+            print("DEBUG: [AVFoundation] Rotation: \(rotation)°")
+            
+            return (width, height, displayWidth, displayHeight, rotation)
+        } catch {
+            print("DEBUG: [AVFoundation] Error getting video info: \(error)")
+            return nil
         }
     }
 } 

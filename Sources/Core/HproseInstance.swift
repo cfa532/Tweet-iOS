@@ -3069,11 +3069,12 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Process and upload video files with new routing logic:
-        /// 1. Normalize to 720p/1000k (preserving original if lower)
-        /// 2. Route based on normalized size:
-        ///    - < 32MB: Progressive video route
-        ///    - 32MB-128MB: HLS Route 1 (720p + 480p)
-        ///    - >= 128MB: HLS Route 2 (720p + 360p)
+        /// 1. Normalize to 720p/1000k (preserving original if lower resolution)
+        /// 2. Route based on normalized size and resolution:
+        ///    - ≤ 32MB: Progressive video route
+        ///    - > 32MB: HLS conversion based on resolution
+        ///      * resolution > 480p: HLS with 720p + 480p variants
+        ///      * resolution ≤ 480p: HLS with 480p variant only
         func processVideo(
             data: Data,
             typeIdentifier: String,
@@ -3084,7 +3085,7 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Starting video processing with routing logic")
+            print("Starting video processing with resolution-based routing logic")
             
             // Step 1: Normalize video to 720p/1000k (preserving original if lower)
             progressCallback?("Normalizing video...", 5)
@@ -3114,6 +3115,20 @@ final class HproseInstance: ObservableObject {
             let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
             let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
             
+            // Get original video info before normalization to preserve resolution
+            let originalVideoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: originalVideoURL.path)
+            var originalVideoResolution: Int? = nil
+            if let info = originalVideoInfo {
+                let aspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                // Video resolution is defined by height for landscape, width for portrait
+                if aspectRatio < 1.0 {
+                    originalVideoResolution = info.displayWidth
+                } else {
+                    originalVideoResolution = info.displayHeight
+                }
+                print("Original video resolution: \(info.displayWidth)x\(info.displayHeight) (\(originalVideoResolution ?? 0)p)")
+            }
+            
             let normalizationSuccess = await normalizeTo720p1000k(
                 inputURL: originalVideoURL,
                 outputURL: normalizedVideoURL,
@@ -3135,17 +3150,45 @@ final class HproseInstance: ObservableObject {
                 return (result, nil)
             }
             
-            // Step 2: Check normalized video size
+            // Step 2: Check normalized video size and resolution
             let normalizedData = try Data(contentsOf: normalizedVideoURL)
             let normalizedSize = Int64(normalizedData.count)
             let normalizedSizeMB = Double(normalizedSize) / (1024 * 1024)
             
             print("Normalized video size: \(String(format: "%.1f", normalizedSizeMB))MB (\(normalizedSize) bytes)")
             
+            // Determine normalized video resolution
+            // If original was ≤ 720p, normalized will have same resolution
+            // If original was > 720p, normalized will be 720p
+            let videoResolution: Int
+            if let origRes = originalVideoResolution {
+                if origRes <= 720 {
+                    // Original was ≤ 720p, so normalized has same resolution
+                    videoResolution = origRes
+                    print("Normalized video resolution: \(origRes)p (same as original)")
+                } else {
+                    // Original was > 720p, so normalized is 720p
+                    videoResolution = 720
+                    print("Normalized video resolution: 720p (scaled from \(origRes)p)")
+                }
+            } else {
+                // Fallback: try to detect from normalized video
+                let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: normalizedVideoURL.path)
+                if let info = videoInfo {
+                    let aspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                    videoResolution = aspectRatio < 1.0 ? info.displayWidth : info.displayHeight
+                    print("Normalized video resolution: \(info.displayWidth)x\(info.displayHeight) (\(videoResolution)p)")
+                } else {
+                    // Final fallback: assume 720p
+                    videoResolution = 720
+                    print("Could not detect resolution, assuming 720p")
+                }
+            }
+            
             // Step 3: Route based on normalized size
-            if normalizedSize < Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
-                // < 32MB: progressive video route
-                print("Normalized video < 32MB, using progressive video route")
+            if normalizedSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
+                // ≤ 32MB: progressive video route
+                print("Normalized video ≤ 32MB, using progressive video route")
                 progressCallback?("Uploading video...", 50)
                 let result = try await uploadRegularFile(
                     data: normalizedData,
@@ -3159,7 +3202,7 @@ final class HproseInstance: ObservableObject {
                 print("Progressive video uploaded: \(result.mid)")
                 return (result, nil)
             } else {
-                // >= 32MB: Need HLS conversion - check if cloud drive is available
+                // > 32MB: Need HLS conversion - check if cloud drive is available
                 let cloudPort = appUser.cloudDrivePort
                 guard cloudPort > 0 else {
                     print("Video upload: No cloud drive configured, falling back to progressive video")
@@ -3194,29 +3237,30 @@ final class HproseInstance: ObservableObject {
                     return (result, nil)
                 }
                 
-                if normalizedSize < Constants.HLS_ROUTE_2_THRESHOLD_BYTES {
-                    // < 128MB: HLS route 1 (720p + 480p)
-                    print("Normalized video < 128MB, using HLS route 1 (720p + 480p)")
+                // Route based on video resolution
+                if videoResolution > 480 {
+                    // Resolution > 480p: HLS with 720p + 480p variants
+                    print("Video resolution > 480p, using HLS with 720p + 480p variants")
                     return try await uploadVideoWithLocalHLSConversion(
                         data: normalizedData,
                         fileName: fileName,
                         referenceId: referenceId,
                         noResample: noResample,
                         appUser: appUser,
-                        useRoute2: false,
+                        singleVariant480p: false,
                         isNormalized: true,
                         progressCallback: progressCallback
                     )
                 } else {
-                    // >= 128MB: HLS route 2 (720p + 360p)
-                    print("Normalized video >= 128MB, using HLS route 2 (720p + 360p)")
+                    // Resolution ≤ 480p: HLS with 480p variant only
+                    print("Video resolution ≤ 480p, using HLS with 480p variant only")
                     return try await uploadVideoWithLocalHLSConversion(
                         data: normalizedData,
                         fileName: fileName,
                         referenceId: referenceId,
                         noResample: noResample,
                         appUser: appUser,
-                        useRoute2: true,
+                        singleVariant480p: true,
                         isNormalized: true,
                         progressCallback: progressCallback
                     )
@@ -3316,17 +3360,18 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Upload video with local FFmpeg HLS conversion
+        /// - Parameter singleVariant480p: If true, creates only 480p variant. If false, creates 720p + 480p variants.
         private func uploadVideoWithLocalHLSConversion(
             data: Data,
             fileName: String?,
             referenceId: String?,
             noResample: Bool,
             appUser: User,
-            useRoute2: Bool = false,
+            singleVariant480p: Bool = false,
             isNormalized: Bool = false,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Starting local HLS conversion with FFmpeg")
+            print("Starting local HLS conversion with FFmpeg (single 480p variant: \(singleVariant480p))")
             progressCallback?("Converting video to HLS...", 10)
 
             // Log initial memory state
@@ -3359,8 +3404,8 @@ final class HproseInstance: ObservableObject {
             // Log memory after writing temp file (this is where memory usage spikes)
             VideoConversionService.shared.logMemoryUsage("after writing temp video file")
             
-            // Get video info using FFmpeg (like the server does)
-            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
+            // Get video info using AVFoundation
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: originalVideoURL.path)
             let videoAspectRatio: Float?
             if let info = videoInfo {
                 // Calculate aspect ratio from display dimensions (after rotation correction)
@@ -3378,7 +3423,7 @@ final class HproseInstance: ObservableObject {
                     outputDirectory: tempDir,
                     fileSizeBytes: Int64(data.count),
                     aspectRatio: videoAspectRatio,
-                    useRoute2: useRoute2,
+                    singleVariant480p: singleVariant480p,
                     isNormalized: isNormalized,
                     progressCallback: { progress in
                         DispatchQueue.main.async {
@@ -3551,8 +3596,8 @@ final class HproseInstance: ObservableObject {
             let tempFileName = (originalFileName as NSString).deletingPathExtension + ".mp4"
             let originalVideoURL = tempDir.appendingPathComponent(tempFileName)
             try data.write(to: originalVideoURL)
-            
-            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
+
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: originalVideoURL.path)
             let videoAspectRatio: Float?
             let targetResolution: Int
             
@@ -3633,20 +3678,16 @@ final class HproseInstance: ObservableObject {
                     scaleFilter = "scale=-2:\(targetResolution)"
                 }
                 
-                // Calculate bitrate based on target resolution (720p = 1500k, proportional for others)
+                // Calculate proportional bitrate based on target resolution (720p = 1000k base)
+                // Always use calculated bitrate (bitrate detection is unreliable)
                 let bitrateKbps: Int
                 if targetResolution >= 720 {
-                    bitrateKbps = 1500
-                } else if targetResolution >= 480 {
-                    // 480p = 1500 * (480/720) = 1000k
                     bitrateKbps = 1000
-                } else if targetResolution >= 360 {
-                    // 360p = 1500 * (360/720) = 750k
-                    bitrateKbps = 750
                 } else {
-                    // Lower resolutions = 1500 * (resolution/720)
-                    bitrateKbps = Int(1500.0 * Double(targetResolution) / 720.0)
+                    // Proportional bitrate: 1000k * (resolution/720)
+                    bitrateKbps = Int(1000.0 * Double(targetResolution) / 720.0)
                 }
+                print("📊 Using calculated bitrate for \(targetResolution)p: \(bitrateKbps)k")
                 
                 let command = """
                     -i "\(inputURL.path)" \
@@ -3697,13 +3738,13 @@ final class HproseInstance: ObservableObject {
         ) async -> Bool {
             return await withCheckedContinuation { continuation in
                 // Get video info to check original resolution and bitrate
-                Task {
-                    // Try to get video info with FFmpeg first
-                    var videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: inputURL.path)
+                Task(priority: .high) {
+                    // Try to get video info with AVFoundation first
+                    var videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
                     
-                    // If FFmpeg fails, try AVFoundation with a temporary file with proper extension
+                    // If AVFoundation fails, try with a temporary file with proper extension
                     if videoInfo == nil {
-                        print("FFmpeg probe failed, trying AVFoundation with temporary file...")
+                        print("AVFoundation probe failed, trying with temporary file...")
                         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
                         let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
@@ -3749,32 +3790,7 @@ final class HproseInstance: ObservableObject {
                         }
                     }
                     
-                    // Get original bitrate
-                    var originalBitrateKbps: Int? = nil
-                    do {
-                        originalBitrateKbps = try await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: inputURL.path)
-                    } catch {
-                        print("Could not get original bitrate: \(error)")
-                        // Try with temporary file if original failed
-                        if originalBitrateKbps == nil {
-                            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                            try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-                            let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
-                            
-                            do {
-                                let fileData = try Data(contentsOf: inputURL)
-                                try fileData.write(to: tempVideoURL)
-                                originalBitrateKbps = try await HLSVideoProcessor.shared.getSourceVideoBitrate(filePath: tempVideoURL.path)
-                                try? FileManager.default.removeItem(at: tempDir)
-                            } catch {
-                                print("Could not get bitrate even with temp file: \(error)")
-                                try? FileManager.default.removeItem(at: tempDir)
-                            }
-                        }
-                    }
-                    
-                    // Calculate target bitrate (preserve original if lower)
-                    let targetBitrateKbps = min(originalBitrateKbps ?? 1000, 1000)
+                    // Note: Bitrate detection is unreliable, so we always use calculated bitrate
                     
                     // Get original resolution
                     var originalWidth: Int? = nil
@@ -3784,17 +3800,30 @@ final class HproseInstance: ObservableObject {
                         originalHeight = info.displayHeight
                     }
                     
-                    // Determine if we need to scale
+                    // Determine if we need to scale and calculate target bitrate
                     let needsScaling: Bool
                     let scaleFilter: String
+                    let targetBitrateKbps: Int
+                    var videoResolution: Int = 720 // Default to 720p
                     
                     if let width = originalWidth, let height = originalHeight {
-                        let maxDimension = max(width, height)
-                        needsScaling = maxDimension > 720
+                        let aspectRatio = Float(width) / Float(height)
+                        
+                        // Video resolution is defined by:
+                        // - Landscape (aspect >= 1.0): HEIGHT (e.g., 1280x720 is 720p)
+                        // - Portrait (aspect < 1.0): WIDTH (e.g., 720x1280 is 720p)
+                        if aspectRatio < 1.0 {
+                            // Portrait: resolution is width
+                            videoResolution = width
+                        } else {
+                            // Landscape: resolution is height
+                            videoResolution = height
+                        }
+                        
+                        needsScaling = videoResolution > 720
                         
                         if needsScaling {
-                            // Calculate aspect ratio
-                            let aspectRatio = Float(width) / Float(height)
+                            // Resolution > 720p: scale to 720p with 1000k bitrate
                             if aspectRatio < 1.0 {
                                 // Portrait: scale to target width
                                 scaleFilter = "scale=720:-2"
@@ -3802,17 +3831,27 @@ final class HproseInstance: ObservableObject {
                                 // Landscape: scale to target height
                                 scaleFilter = "scale=-2:720"
                             }
+                            // Always use 1000k bitrate for 720p (bitrate detection is unreliable)
+                            targetBitrateKbps = 1000
+                            print("📊 Scaling to 720p with 1000k bitrate")
                         } else {
-                            // Keep original resolution
+                            // Resolution ≤ 720p: keep original resolution with proportional bitrate
                             scaleFilter = ""
+                            // Calculate proportional bitrate based on resolution
+                            // Formula: bitrate = 1000k * (resolution / 720)
+                            // Always use calculated bitrate (bitrate detection is unreliable)
+                            targetBitrateKbps = Int(1000.0 * Double(videoResolution) / 720.0)
+                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), using calculated proportional bitrate: \(targetBitrateKbps)k")
                         }
                     } else {
                         // Fallback: assume scaling needed
                         needsScaling = true
                         scaleFilter = "scale=-2:720"
+                        targetBitrateKbps = 1000
+                        print("📊 Could not detect resolution, defaulting to 720p with 1000k bitrate")
                     }
                     
-                    print("Normalizing video: original=\(originalWidth ?? 0)x\(originalHeight ?? 0), bitrate=\(originalBitrateKbps ?? 0)k, target=\(targetBitrateKbps)k, scaling=\(needsScaling)")
+                    print("Normalizing video: original=\(originalWidth ?? 0)x\(originalHeight ?? 0), target=\(targetBitrateKbps)k, scaling=\(needsScaling)")
                     
                     // Build FFmpeg command
                     var command: String
@@ -3869,7 +3908,16 @@ final class HproseInstance: ObservableObject {
                         if success {
                             if FileManager.default.fileExists(atPath: outputURL.path) {
                                 let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
-                                print("✅ Normalized to 720p/\(targetBitrateKbps)k MP4 (\(fileSize / 1024)KB)")
+                                // Determine output resolution for logging
+                                let outputResolution: String
+                                if needsScaling {
+                                    outputResolution = "720p"
+                                } else if let width = originalWidth, let height = originalHeight {
+                                    outputResolution = "\(width)x\(height) (\(videoResolution)p)"
+                                } else {
+                                    outputResolution = "unknown"
+                                }
+                                print("✅ Normalized to \(outputResolution) with \(targetBitrateKbps)k bitrate - \(fileSize / 1024)KB")
                                 continuation.resume(returning: true)
                             } else {
                                 print("ERROR: Normalized output file missing")
