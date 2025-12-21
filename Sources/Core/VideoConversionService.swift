@@ -605,19 +605,39 @@ class VideoConversionService {
         Task {
             let targetResolution = Int(resolution) ?? 720
             
-            // Determine if COPY can be used: normalized videos that are exactly 720p targeting 720p
-            let shouldUseCopy = isNormalized && targetResolution == 720 && {
+            // Determine if COPY can be used: normalized videos where source resolution matches target resolution
+            // This works for any resolution ≤ 720p (576p, 480p, 360p, etc.)
+            let shouldUseCopy = isNormalized && {
                 if let videoInfo = cachedVideoInfo {
-                    let maxDimension = max(videoInfo.displayWidth, videoInfo.displayHeight)
-                    return maxDimension == 720
+                    // Calculate source resolution based on orientation
+                    // For landscape: resolution is height, for portrait: resolution is width
+                    let sourceResolution: Int
+                    if let aspectRatio = aspectRatio {
+                        if aspectRatio < 1.0 {
+                            // Portrait: resolution is width
+                            sourceResolution = videoInfo.displayWidth
+                        } else {
+                            // Landscape: resolution is height
+                            sourceResolution = videoInfo.displayHeight
+                        }
+                    } else {
+                        // Fallback: use height for landscape
+                        sourceResolution = videoInfo.displayHeight
+                    }
+                    // Use COPY if source resolution matches target (no scaling needed)
+                    let matches = sourceResolution == targetResolution
+                    if matches {
+                        print("DEBUG: [VIDEO CONVERSION] Resolution match found: source=\(sourceResolution)p, target=\(targetResolution)p")
+                    }
+                    return matches
                 }
                 return false
             }()
 
             if shouldUseCopy {
-                print("DEBUG: [VIDEO CONVERSION] Using COPY codec for normalized 720p video: \(resolution)")
+                print("✅ [VIDEO CONVERSION] Using COPY codec for normalized \(targetResolution)p video (no re-encoding needed)")
 
-                // COPY codec - no re-encoding needed for already normalized 720p video
+                // COPY codec - no re-encoding needed for already normalized video with matching resolution
                 let copyCommand = buildCopyCommand(
                     inputURL: inputURL,
                     outputURL: outputURL
