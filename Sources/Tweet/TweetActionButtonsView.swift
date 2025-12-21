@@ -474,7 +474,26 @@ struct TweetActionButtonsView: View {
                     // Show spinner immediately when button is tapped (synchronous on main thread)
                     isPreparingShare = true
                     
+                    // CRITICAL FIX: Register overlay BEFORE presenting sheet to ensure proper timing
+                    // This ensures videos know they're covered before willResignActiveNotification fires
+                    OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+                    
                     Task {
+                        // Ensure overlay is cleaned up if sheet never presents (error handling)
+                        var sheetPresented = false
+                        defer {
+                            if !sheetPresented {
+                                // If sheet was never presented, clean up overlay
+                                Task { @MainActor in
+                                    if self.shareSheetItems == nil {
+                                        OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+                                        self.isPreparingShare = false
+                                        print("DEBUG: [SHARE] Share cancelled/failed, cleaned up overlay")
+                                    }
+                                }
+                            }
+                        }
+                        
                         print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
                         
                         // If we don't have a preloaded preview, generate it now
@@ -497,6 +516,7 @@ struct TweetActionButtonsView: View {
                             let items = shareActivityItems()
                             print("DEBUG: [SHARE] Opening sheet with items, count: \(items.count)")
                             shareSheetItems = ShareSheetData(items: items)
+                            sheetPresented = true // Mark that sheet will be presented
                             // Don't hide spinner here - wait for sheet to actually appear
                         }
                     }
@@ -567,10 +587,7 @@ struct TweetActionButtonsView: View {
                 // Hide spinner only when share sheet actually appears
                 isPreparingShare = false
                 print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
-                OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
-            }
-            .onDisappear {
-                OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+                // REMOVED: beginOverlay - now called before sheet presents for proper timing
             }
         }
         .sheet(isPresented: $showLoginSheet) {

@@ -56,8 +56,8 @@ class VideoConversionService {
         logMemoryUsage("after pre-conversion cleanup")
 
         // HLS conversion configuration:
-        // Single variant: 480p (600kb) only
-        // Dual variant: high-quality (proportional bitrate) + 480p (600kb)
+        // Single variant: 480p (proportional bitrate) only
+        // Dual variant: high-quality (proportional bitrate) + 480p (proportional bitrate)
         // High-quality variant uses actual source resolution (capped at 720p)
         let lowerResolution = 480
         let highQualityResolution = min(sourceVideoResolution, 720) // Cap at 720p
@@ -98,9 +98,9 @@ class VideoConversionService {
             
             // Calculate target bitrates based on actual resolution
             // High-quality variant: proportional bitrate (1000k for 720p, scaled down for lower resolutions)
-            // Lower variant: always 600k for 480p
+            // Lower variant: proportional bitrate (1000k * 480 / 720 = 667k for 480p)
             let targetHighQualityKbps = Int(1000.0 * Double(highQualityResolution) / 720.0)
-            let targetLowerKbps = 600  // Always use 600k for 480p
+            let targetLowerKbps = Int(1000.0 * Double(lowerResolution) / 720.0)  // Proportional to 720p's 1000k
             
             let highQualityBitrate = "\(targetHighQualityKbps)k"
             let lowerResolutionBitrate = "\(targetLowerKbps)k"
