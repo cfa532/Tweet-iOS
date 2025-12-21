@@ -3038,91 +3038,77 @@ final class HproseInstance: ObservableObject {
                 print("Original video resolution: \(info.displayWidth)x\(info.displayHeight) (\(originalVideoResolution ?? 0)p)")
             }
             
-            // Step 2: Optimize - only normalize if resolution > 720p
-            let videoData: Data
-            let videoSize: Int64
-            let videoResolution: Int
-            let videoFileName: String
-            
-            if let origRes = originalVideoResolution, origRes <= 720 {
-                // Skip normalization for videos ≤ 720p - use original file
-                print("Video resolution ≤ 720p, skipping normalization and using original file")
-                videoData = data
-                videoSize = Int64(data.count)
-                videoResolution = origRes
-                videoFileName = properFileName
-            } else if originalVideoResolution == nil {
-                // Could not detect resolution - assume it might be > 720p, normalize to be safe
-                print("Could not detect video resolution, normalizing to 720p to ensure compatibility")
-                progressCallback?("Normalizing video to 720p...", 10)
-                let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
-                let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
-                
-                let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
-                    inputURL: originalVideoURL,
-                    outputURL: normalizedVideoURL,
-                    progressCallback: progressCallback
-                )
-                
-                guard normalizationSuccess else {
-                    print("Video normalization failed, falling back to original video")
-                    progressCallback?("Uploading original video...", 10)
-                    let result = try await uploadRegularFile(
-                        data: data,
-                        typeIdentifier: typeIdentifier,
-                        fileName: fileName,
-                        referenceId: referenceId,
-                        mediaType: .video,
-                        appUser: appUser,
-                        appId: appId
-                    )
-                    return (result, nil)
+            // Step 2: Always normalize videos (≤720p keeps original resolution with proportional bitrate, >720p scales to 720p)
+            print("📹 [VIDEO UPLOAD] Starting video normalization")
+            if let origRes = originalVideoResolution {
+                if origRes <= 720 {
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution and proportional bitrate")
+                } else {
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with 1000k bitrate")
                 }
-                
-                videoData = try Data(contentsOf: normalizedVideoURL)
-                videoSize = Int64(videoData.count)
-                videoResolution = 720 // Assume normalized to 720p
-                videoFileName = normalizedFileName
             } else {
-                // Normalize videos > 720p to 720p
-                progressCallback?("Normalizing video to 720p...", 10)
-                let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
-                let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
-                
-                let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
-                    inputURL: originalVideoURL,
-                    outputURL: normalizedVideoURL,
-                    progressCallback: progressCallback
-                )
-                
-                guard normalizationSuccess else {
-                    print("Video normalization failed, falling back to original video")
-                    progressCallback?("Uploading original video...", 10)
-                    let result = try await uploadRegularFile(
-                        data: data,
-                        typeIdentifier: typeIdentifier,
-                        fileName: fileName,
-                        referenceId: referenceId,
-                        mediaType: .video,
-                        appUser: appUser,
-                        appId: appId
-                    )
-                    return (result, nil)
-                }
-                
-                videoData = try Data(contentsOf: normalizedVideoURL)
-                videoSize = Int64(videoData.count)
-                videoResolution = 720
-                videoFileName = normalizedFileName
+                print("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
             }
+            
+            progressCallback?("Normalizing video...", 10)
+            let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
+            let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
+            
+            print("📹 [VIDEO UPLOAD] Normalization input: \(originalVideoURL.path)")
+            print("📹 [VIDEO UPLOAD] Normalization output: \(normalizedVideoURL.path)")
+            
+            let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
+                inputURL: originalVideoURL,
+                outputURL: normalizedVideoURL,
+                progressCallback: progressCallback
+            )
+            
+            guard normalizationSuccess else {
+                print("❌ [VIDEO UPLOAD] Video normalization failed, falling back to original video")
+                progressCallback?("Uploading original video...", 10)
+                let result = try await MediaProcessor.uploadRegularFile(
+                    data: data,
+                    typeIdentifier: typeIdentifier,
+                    fileName: fileName,
+                    referenceId: referenceId,
+                    mediaType: .video,
+                    appUser: appUser,
+                    appId: appId
+                )
+                return (result, nil)
+            }
+            
+            print("✅ [VIDEO UPLOAD] Video normalization completed successfully")
+            let videoData = try Data(contentsOf: normalizedVideoURL)
+            let videoSize = Int64(videoData.count)
+            
+            // Get actual resolution from normalized video
+            let normalizedVideoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: normalizedVideoURL.path)
+            let videoResolution: Int
+            if let info = normalizedVideoInfo {
+                let aspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                if aspectRatio < 1.0 {
+                    videoResolution = info.displayWidth
+                } else {
+                    videoResolution = info.displayHeight
+                }
+                print("📹 [VIDEO UPLOAD] Normalized video resolution: \(info.displayWidth)x\(info.displayHeight) (\(videoResolution)p)")
+            } else {
+                // Fallback to original resolution if detection fails
+                videoResolution = originalVideoResolution ?? 720
+                print("📹 [VIDEO UPLOAD] Could not detect normalized video resolution, using original: \(videoResolution)p")
+            }
+            
+            let videoFileName = normalizedFileName
+            print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", Double(videoSize) / (1024 * 1024)))MB")
             
             // Step 3: Route based on video size
             let videoSizeMB = Double(videoSize) / (1024 * 1024)
-            print("Video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
+            print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
             
             if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
                 // ≤ 32MB: progressive video route
-                print("Video ≤ 32MB, using progressive video route")
+                print("📹 [VIDEO UPLOAD] Size ≤ 32MB: using progressive video route (direct MP4 upload)")
                 progressCallback?("Uploading video...", 50)
                 let result = try await uploadRegularFile(
                     data: videoData,
@@ -3133,13 +3119,14 @@ final class HproseInstance: ObservableObject {
                     appUser: appUser,
                     appId: appId
                 )
-                print("Progressive video uploaded: \(result.mid)")
+                print("✅ [VIDEO UPLOAD] Progressive video uploaded successfully, CID: \(result.mid)")
                 return (result, nil)
             } else {
                 // > 32MB: Need HLS conversion - check if cloud drive is available
+                print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
                 let cloudPort = appUser.cloudDrivePort
                 guard cloudPort > 0 else {
-                    print("Video upload: No cloud drive configured, falling back to progressive video")
+                    print("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")
                     progressCallback?("Uploading video...", 50)
                     let result = try await uploadRegularFile(
                         data: videoData,
@@ -3154,13 +3141,14 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 progressCallback?("Checking video service availability...", 10)
+                print("📹 [VIDEO UPLOAD] Checking cloud drive service availability (port: \(cloudPort))...")
                 
                 // Resolve writableUrl once for all video HTTP operations
                 _ = try await appUser.resolveWritableUrl()
                 let isCloudDriveAvailable = await MediaProcessor.checkCloudDriveServiceAvailability(appUser: appUser)
                 
                 guard isCloudDriveAvailable else {
-                    print("Video upload: Cloud drive not available, falling back to progressive video")
+                    print("⚠️ [VIDEO UPLOAD] Cloud drive service not available, falling back to progressive video")
                     progressCallback?("Uploading video...", 50)
                     let result = try await uploadRegularFile(
                         data: videoData,
@@ -3174,14 +3162,14 @@ final class HproseInstance: ObservableObject {
                     return (result, nil)
                 }
                 
-                // Determine if video was normalized (only >720p videos are normalized)
-                let wasNormalized = (originalVideoResolution ?? 721) > 720
+                // All videos are normalized now
+                let wasNormalized = true
                 
                 // Route based on video resolution
                 if videoResolution > 480 {
                     // Resolution > 480p: HLS with high-quality + 480p variants
                     // High-quality variant uses actual resolution (capped at 720p)
-                    print("Video resolution > 480p (\(videoResolution)p), using HLS with \(min(videoResolution, 720))p + 480p variants")
+                    print("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p > 480p: using HLS with \(min(videoResolution, 720))p + 480p variants")
                     return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
@@ -3195,7 +3183,7 @@ final class HproseInstance: ObservableObject {
                     )
                 } else {
                     // Resolution ≤ 480p: HLS with 480p variant only
-                    print("Video resolution ≤ 480p (\(videoResolution)p), using HLS with 480p variant only")
+                    print("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p ≤ 480p: using HLS with 480p variant only")
                     return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
@@ -3637,6 +3625,10 @@ final class HproseInstance: ObservableObject {
             outputURL: URL,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async -> Bool {
+            print("📹 [NORMALIZE] Starting video normalization process")
+            print("📹 [NORMALIZE] Input: \(inputURL.path)")
+            print("📹 [NORMALIZE] Output: \(outputURL.path)")
+            
             return await withCheckedContinuation { continuation in
                 // Get video info to check original resolution and bitrate
                 Task(priority: .high) {
@@ -3752,7 +3744,7 @@ final class HproseInstance: ObservableObject {
                         print("📊 Could not detect resolution, defaulting to 720p with 1000k bitrate")
                     }
                     
-                    print("Normalizing video: original=\(originalWidth ?? 0)x\(originalHeight ?? 0), target=\(targetBitrateKbps)k, scaling=\(needsScaling)")
+                    print("📹 [NORMALIZE] Original: \(originalWidth ?? 0)x\(originalHeight ?? 0), target bitrate: \(targetBitrateKbps)k, scaling: \(needsScaling ? "YES (to 720p)" : "NO (keep original resolution)")")
                     
                     // Build FFmpeg command
                     var command: String
@@ -4764,12 +4756,11 @@ final class HproseInstance: ObservableObject {
                 }
             }
             
-            print("Uploaded \(chunkCount) chunks, finalizing...")
-            
             request["finished"] = "true"
             if let referenceId = referenceId {
                 request["referenceid"] = referenceId
             }
+            print("Uploaded \(chunkCount) chunks, finalizing...")
             
             let rawFinalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
             let finalResponse = try? HproseInstance.unwrapV2Response(rawFinalResponse)

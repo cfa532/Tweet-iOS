@@ -36,51 +36,5 @@
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
-            uuid = "D655A7E2-61B7-4C4D-BA1B-49BE8F05BD26"
-            shouldBeEnabled = "Yes"
-            ignoreCount = "0"
-            continueAfterRunningActions = "No"
-            filePath = "Sources/Core/HproseInstance.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "4774"
-            endingLineNumber = "4774"
-            landmarkName = "uploadRegularFile(data:typeIdentifier:fileName:referenceId:mediaType:appUser:appId:)"
-            landmarkType = "7">
-            <Locations>
-               <Location
-                  uuid = "D655A7E2-61B7-4C4D-BA1B-49BE8F05BD26 - 3e2d82ee78e4f46b"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(3) suspend resume partial function for static Tweet.HproseInstance.MediaProcessor.uploadRegularFile(data: Foundation.Data, typeIdentifier: Swift.String, fileName: Swift.Optional&lt;Swift.String&gt;, referenceId: Swift.Optional&lt;Swift.String&gt;, mediaType: Tweet.MediaType, appUser: Tweet.User, appId: Swift.String) async throws -&gt; Tweet.MimeiFileType"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "4774"
-                  endingLineNumber = "4774">
-               </Location>
-               <Location
-                  uuid = "D655A7E2-61B7-4C4D-BA1B-49BE8F05BD26 - f0d073cdd5db06d"
-                  shouldBeEnabled = "Yes"
-                  ignoreCount = "0"
-                  continueAfterRunningActions = "No"
-                  symbolName = "(5) suspend resume partial function for static Tweet.HproseInstance.MediaProcessor.uploadRegularFile(data: Foundation.Data, typeIdentifier: Swift.String, fileName: Swift.Optional&lt;Swift.String&gt;, referenceId: Swift.Optional&lt;Swift.String&gt;, mediaType: Tweet.MediaType, appUser: Tweet.User, appId: Swift.String) async throws -&gt; Tweet.MimeiFileType"
-                  moduleName = "Tweet.debug.dylib"
-                  usesParentBreakpointCondition = "Yes"
-                  urlString = "file:///Users/cfa532/Documents/GitHub/Tweet-iOS/Sources/Core/HproseInstance.swift"
-                  startingColumnNumber = "9223372036854775807"
-                  endingColumnNumber = "9223372036854775807"
-                  startingLineNumber = "4774"
-                  endingLineNumber = "4774">
-               </Location>
-            </Locations>
-         </BreakpointContent>
-      </BreakpointProxy>
    </Breakpoints>
 </Bucket>
