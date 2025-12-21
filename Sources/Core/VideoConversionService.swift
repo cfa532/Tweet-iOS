@@ -605,8 +605,10 @@ class VideoConversionService {
         Task {
             let targetResolution = Int(resolution) ?? 720
             
-            // Determine if COPY can be used: normalized videos where source resolution matches target resolution
-            // This works for any resolution ≤ 720p (576p, 480p, 360p, etc.)
+            // Determine if COPY can be used for normalized videos
+            // Matches Node.js server logic:
+            // - 720p variant: use COPY if normalized resolution is between 480p and 720p (avoids upscaling)
+            // - 480p variant: use COPY if normalized resolution is ≤480p (avoids upscaling)
             let shouldUseCopy = isNormalized && {
                 if let videoInfo = cachedVideoInfo {
                     // Calculate source resolution based on orientation
@@ -624,20 +626,36 @@ class VideoConversionService {
                         // Fallback: use height for landscape
                         sourceResolution = videoInfo.displayHeight
                     }
-                    // Use COPY if source resolution matches target (no scaling needed)
-                    let matches = sourceResolution == targetResolution
-                    if matches {
-                        print("DEBUG: [VIDEO CONVERSION] Resolution match found: source=\(sourceResolution)p, target=\(targetResolution)p")
+                    
+                    // Use COPY for 720p variant if normalized resolution is between 480p and 720p
+                    // This avoids upscaling (e.g., 576p content stays 576p but labeled as 720p)
+                    if targetResolution == 720 && sourceResolution > 480 && sourceResolution <= 720 {
+                        if sourceResolution < 720 {
+                            print("✅ [VIDEO CONVERSION] Using COPY for 720p variant (actual content: \(sourceResolution)p, labeled as 720p, no upscaling)")
+                        } else {
+                            print("✅ [VIDEO CONVERSION] Using COPY for 720p variant (normalized resolution \(sourceResolution)p matches variant)")
+                        }
+                        return true
                     }
-                    return matches
+                    
+                    // Use COPY for 480p variant if normalized resolution is ≤480p
+                    // This avoids upscaling (e.g., 360p content stays 360p but labeled as 480p)
+                    if targetResolution == 480 && sourceResolution <= 480 {
+                        if sourceResolution < 480 {
+                            print("✅ [VIDEO CONVERSION] Using COPY for 480p variant (actual content: \(sourceResolution)p, labeled as 480p, no upscaling)")
+                        } else {
+                            print("✅ [VIDEO CONVERSION] Using COPY for 480p variant (normalized resolution \(sourceResolution)p matches variant)")
+                        }
+                        return true
+                    }
+                    
+                    return false
                 }
                 return false
             }()
 
             if shouldUseCopy {
-                print("✅ [VIDEO CONVERSION] Using COPY codec for normalized \(targetResolution)p video (no re-encoding needed)")
-
-                // COPY codec - no re-encoding needed for already normalized video with matching resolution
+                // COPY codec - no re-encoding needed for already normalized video
                 let copyCommand = buildCopyCommand(
                     inputURL: inputURL,
                     outputURL: outputURL

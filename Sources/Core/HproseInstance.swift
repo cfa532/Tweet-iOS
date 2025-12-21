@@ -3716,7 +3716,7 @@ final class HproseInstance: ObservableObject {
                         needsScaling = videoResolution > 720
                         
                         if needsScaling {
-                            // Resolution > 720p: scale to 720p with 1000k bitrate
+                            // Resolution > 720p: scale to 720p with 1500k bitrate
                             if aspectRatio < 1.0 {
                                 // Portrait: scale to target width
                                 scaleFilter = "scale=720:-2"
@@ -3724,9 +3724,9 @@ final class HproseInstance: ObservableObject {
                                 // Landscape: scale to target height
                                 scaleFilter = "scale=-2:720"
                             }
-                            // Always use 1000k bitrate for 720p (bitrate detection is unreliable)
-                            targetBitrateKbps = 1000
-                            print("📊 Scaling to 720p with 1000k bitrate")
+                            // Always use 1500k bitrate for 720p normalization (bitrate detection is unreliable)
+                            targetBitrateKbps = 1500
+                            print("📊 Scaling to 720p with 1500k bitrate")
                         } else {
                             // Resolution ≤ 720p: keep original resolution with proportional bitrate
                             scaleFilter = ""
