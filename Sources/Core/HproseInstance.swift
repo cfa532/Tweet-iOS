@@ -2982,92 +2982,6 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Process and upload media files (images, videos, audio, documents)
-        func processAndUpload(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            noResample: Bool,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            
-            let mediaType = await detectMediaType(from: typeIdentifier, fileName: fileName, data: data)
-            
-            switch mediaType {
-            case .video:
-                return try await processVideo(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    noResample: noResample,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            case .image:
-                return try await processImage(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    noResample: noResample,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            case .audio:
-                return try await processAudio(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            default:
-                return try await processDocument(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    mediaType: mediaType,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            }
-        }
-        
-        // MARK: - Media Type Specific Methods
-        
-        /// Process and upload image files
-        func processImage(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            noResample: Bool,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            let result = try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                mediaType: .image,
-                appUser: appUser,
-                appId: appId
-            )
-            return (result, nil)
-        }
-        
         /// Process and upload video files with new routing logic:
         /// 1. Normalize to 720p/1000k (preserving original if lower resolution)
         /// 2. Route based on normalized size and resolution:
@@ -3075,7 +2989,7 @@ final class HproseInstance: ObservableObject {
         ///    - > 32MB: HLS conversion based on resolution
         ///      * resolution > 480p: HLS with 720p + 480p variants
         ///      * resolution ≤ 480p: HLS with 480p variant only
-        func processVideo(
+        static func processVideo(
             data: Data,
             typeIdentifier: String,
             fileName: String?,
@@ -3144,7 +3058,7 @@ final class HproseInstance: ObservableObject {
                 let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
                 let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
                 
-                let normalizationSuccess = await normalizeTo720p1000k(
+                let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
                     inputURL: originalVideoURL,
                     outputURL: normalizedVideoURL,
                     progressCallback: progressCallback
@@ -3175,7 +3089,7 @@ final class HproseInstance: ObservableObject {
                 let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
                 let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
                 
-                let normalizationSuccess = await normalizeTo720p1000k(
+                let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
                     inputURL: originalVideoURL,
                     outputURL: normalizedVideoURL,
                     progressCallback: progressCallback
@@ -3243,7 +3157,7 @@ final class HproseInstance: ObservableObject {
                 
                 // Resolve writableUrl once for all video HTTP operations
                 _ = try await appUser.resolveWritableUrl()
-                let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
+                let isCloudDriveAvailable = await MediaProcessor.checkCloudDriveServiceAvailability(appUser: appUser)
                 
                 guard isCloudDriveAvailable else {
                     print("Video upload: Cloud drive not available, falling back to progressive video")
@@ -3268,7 +3182,7 @@ final class HproseInstance: ObservableObject {
                     // Resolution > 480p: HLS with high-quality + 480p variants
                     // High-quality variant uses actual resolution (capped at 720p)
                     print("Video resolution > 480p (\(videoResolution)p), using HLS with \(min(videoResolution, 720))p + 480p variants")
-                    return try await uploadVideoWithLocalHLSConversion(
+                    return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
                         referenceId: referenceId,
@@ -3282,7 +3196,7 @@ final class HproseInstance: ObservableObject {
                 } else {
                     // Resolution ≤ 480p: HLS with 480p variant only
                     print("Video resolution ≤ 480p (\(videoResolution)p), using HLS with 480p variant only")
-                    return try await uploadVideoWithLocalHLSConversion(
+                    return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
                         data: videoData,
                         fileName: fileName,
                         referenceId: referenceId,
@@ -3297,53 +3211,9 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Process and upload audio files
-        func processAudio(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            let result = try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                mediaType: .audio,
-                appUser: appUser,
-                appId: appId
-            )
-            return (result, nil)
-        }
-        
-        /// Process and upload document files (PDF, Word, Excel, etc.)
-        func processDocument(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            mediaType: MediaType,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            let result = try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                mediaType: mediaType,
-                appUser: appUser,
-                appId: appId
-            )
-            return (result, nil)
-        }
         
         /// Detect media type from type identifier, filename, and file header
-        func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
+        static func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
             // Check type identifier first
             if typeIdentifier.hasPrefix("public.image") {
                 return .image
@@ -3391,7 +3261,7 @@ final class HproseInstance: ObservableObject {
         /// Upload video with local FFmpeg HLS conversion
         /// - Parameter singleVariant480p: If true, creates only 480p variant. If false, creates high-quality + 480p variants.
         /// - Parameter sourceVideoResolution: Actual video resolution (used to determine high-quality variant resolution, capped at 720p)
-        private func uploadVideoWithLocalHLSConversion(
+        private static func uploadVideoWithLocalHLSConversion(
             data: Data,
             fileName: String?,
             referenceId: String?,
@@ -3443,7 +3313,7 @@ final class HproseInstance: ObservableObject {
                 videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
                 print("DEBUG: [HLS CONVERSION] FFmpeg detected: \(info.width)x\(info.height), display: \(info.displayWidth)x\(info.displayHeight), rotation: \(info.rotation)°, aspect ratio: \(videoAspectRatio!)")
             } else {
-                videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
+                videoAspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
                 print("DEBUG: [HLS CONVERSION] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0)")
             }
             
@@ -3491,7 +3361,7 @@ final class HproseInstance: ObservableObject {
             }
 
             // Compress the HLS directory
-            let compressedURL = try await compressHLSDirectory(
+            let compressedURL = try await MediaProcessor.compressHLSDirectory(
                 hlsDirectory: hlsDirectory,
                 originalFileName: originalFileName,
                 progressCallback: progressCallback
@@ -3509,7 +3379,7 @@ final class HproseInstance: ObservableObject {
             VideoConversionService.shared.logMemoryUsage("before HLS upload")
 
             // Upload compressed HLS to server
-            let jobId = try await uploadCompressedHLS(
+            let jobId = try await MediaProcessor.uploadCompressedHLS(
                 compressedURL: compressedURL,
                 fileName: "\(originalFileName)_hls.zip",
                 referenceId: referenceId,
@@ -3561,7 +3431,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Check if cloud drive service is available at clouddriveport
-        private func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
+        private static func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
             guard !appUser.isGuest else {
                 print("Cloud drive check skipped for guest user - using fallback")
                 return false
@@ -3638,7 +3508,7 @@ final class HproseInstance: ObservableObject {
                 targetResolution = minDimension > 720 ? 720 : minDimension
                 print("Converting \(info.displayWidth)x\(info.displayHeight) → \(targetResolution)p (aspect: \(String(format: "%.2f", videoAspectRatio ?? 0)))")
             } else {
-                videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
+                videoAspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
                 targetResolution = 720
                 print("Using fallback settings: \(targetResolution)p")
             }
@@ -3649,7 +3519,7 @@ final class HproseInstance: ObservableObject {
             let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
             let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
             
-            let conversionSuccess = await convertVideoToMp4(
+            let conversionSuccess = await MediaProcessor.convertVideoToMp4(
                 inputURL: originalVideoURL,
                 outputURL: outputVideoURL,
                 targetResolution: targetResolution,
@@ -3669,7 +3539,7 @@ final class HproseInstance: ObservableObject {
             let outputFileName = outputVideoName
             print("Converted: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB → uploading to IPFS...")
             
-            let result = try await uploadRegularFile(
+            let result = try await MediaProcessor.uploadRegularFile(
                 data: convertedData,
                 typeIdentifier: "public.mpeg-4",
                 fileName: outputFileName,
@@ -3686,7 +3556,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Convert video to MP4 with target resolution
-        private func convertVideoToMp4(
+        private static func convertVideoToMp4(
             inputURL: URL,
             outputURL: URL,
             targetResolution: Int,
@@ -3762,7 +3632,7 @@ final class HproseInstance: ObservableObject {
         
         
         /// Normalize video to 720p/1000k bitrate, preserving original resolution/bitrate if lower
-        private func normalizeTo720p1000k(
+        private static func normalizeTo720p1000k(
             inputURL: URL,
             outputURL: URL,
             progressCallback: ((String, Int) -> Void)? = nil
@@ -3964,7 +3834,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Compress HLS directory into a zip file (memory-optimized streaming approach)
-        private func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: ((String, Int) -> Void)? = nil) async throws -> URL {
+        private static func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: ((String, Int) -> Void)? = nil) async throws -> URL {
             let zipFileName = "\(originalFileName)_hls.zip"
             let tempDir = hlsDirectory.deletingLastPathComponent()
             let zipURL = tempDir.appendingPathComponent(zipFileName)
@@ -4018,7 +3888,7 @@ final class HproseInstance: ObservableObject {
                         let baseDirectory = hlsDirectory.deletingLastPathComponent()
                         print("DEBUG: [ZIP CREATION] Base directory: \(baseDirectory.path)")
                         print("DEBUG: [ZIP CREATION] HLS directory name: \(hlsDirectory.lastPathComponent)")
-                        try self.createZipFile(from: fileURLs, relativeTo: baseDirectory, to: zipURL, progressCallback: progressCallback)
+                        try MediaProcessor.createZipFile(from: fileURLs, relativeTo: baseDirectory, to: zipURL, progressCallback: progressCallback)
 
                         // Verify zip file was created and get its size
                         if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
@@ -4043,7 +3913,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Create ZIP file from array of file URLs using system ZIP functionality (memory efficient)
-        private func createZipFile(from fileURLs: [URL], relativeTo baseURL: URL, to zipURL: URL, progressCallback: ((String, Int) -> Void)? = nil) throws {
+        private static func createZipFile(from fileURLs: [URL], relativeTo baseURL: URL, to zipURL: URL, progressCallback: ((String, Int) -> Void)? = nil) throws {
             let fileManager = FileManager.default
             var processedCount = 0
             let totalFiles = fileURLs.count
@@ -4195,7 +4065,7 @@ final class HproseInstance: ObservableObject {
         }
 
         /// Upload compressed HLS to server via process-zip route
-        private func uploadCompressedHLS(
+        private static func uploadCompressedHLS(
             compressedURL: URL,
             fileName: String,
             referenceId: String?,
@@ -4506,7 +4376,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Poll process-zip status to get CID when processing is complete
-        private func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
+        private static func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
             print("DEBUG: Polling process-zip status for job ID: \(jobId)")
             
             guard let writableUrl = appUser.writableUrl else {
@@ -4755,7 +4625,7 @@ final class HproseInstance: ObservableObject {
             request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
             
             // Get aspect ratio from original video for metadata (with fallback)
-            let aspectRatio = await getVideoAspectRatioWithFallback(from: data)
+            let aspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
             
             // Upload with retry mechanism
             return try await uploadWithRetry(request: request, data: data, fileName: fileName, aspectRatio: aspectRatio, progressCallback: progressCallback)
@@ -4802,7 +4672,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Get video aspect ratio with fallback to default values
-        private func getVideoAspectRatioWithFallback(from data: Data) async -> Float? {
+        private static func getVideoAspectRatioWithFallback(from data: Data) async -> Float? {
             do {
                 let aspectRatio = try await getVideoAspectRatio(from: data)
                 if let ratio = aspectRatio, ratio > 0 {
@@ -4815,8 +4685,9 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Upload regular (non-video) files
-        private func uploadRegularFile(
+        /// Upload regular (non-video) files via hproseClient
+        /// IPFS doesn't care about file types - they're all data blobs
+        static func uploadRegularFile(
             data: Data,
             typeIdentifier: String,
             fileName: String?,
@@ -4857,7 +4728,7 @@ final class HproseInstance: ObservableObject {
                 
                 let nsData = chunkData as NSData
                 do {
-                    let response = try await uploadChunk(
+                    let response = try await MediaProcessor.uploadChunk(
                         uploadClient: uploadClient,
                         request: request,
                         data: nsData,
@@ -4923,9 +4794,9 @@ final class HproseInstance: ObservableObject {
             // Get aspect ratio for videos and images
             var aspectRatio: Float?
             if mediaType == .video {
-                aspectRatio = try await getVideoAspectRatio(from: data)
+                aspectRatio = try await MediaProcessor.getVideoAspectRatio(from: data)
             } else if mediaType == .image {
-                aspectRatio = try await getImageAspectRatio(from: data)
+                aspectRatio = try await MediaProcessor.getImageAspectRatio(from: data)
             }
             
             return MimeiFileType(
@@ -4940,7 +4811,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Get video aspect ratio from data
-        private func getVideoAspectRatio(from data: Data) async throws -> Float? {
+        private static func getVideoAspectRatio(from data: Data) async throws -> Float? {
             do {
                 // Create a temporary file with a proper extension to help AVFoundation identify the format
                 let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
@@ -4979,7 +4850,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Get image aspect ratio from data
-        private func getImageAspectRatio(from data: Data) async throws -> Float? {
+        private static func getImageAspectRatio(from data: Data) async throws -> Float? {
             guard let image = UIImage(data: data) else {
                 print("Warning: Could not create UIImage from data")
                 return nil
@@ -5025,7 +4896,7 @@ final class HproseInstance: ObservableObject {
                     progressCallback?("Video uploaded, starting conversion...", 20)
                     
                     // Poll for job completion
-                    let result = try await pollVideoConversionStatus(
+                    let result = try await MediaProcessor.pollVideoConversionStatus(
                         jobId: jobId,
                         baseURL: request.url?.deletingLastPathComponent(),
                         data: data,
@@ -5085,7 +4956,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Poll video conversion status until completion
-        func pollVideoConversionStatus(
+        static func pollVideoConversionStatus(
             jobId: String,
             baseURL: URL?,
             data: Data,
@@ -5131,7 +5002,7 @@ final class HproseInstance: ObservableObject {
                     
                     if let httpResponse = response as? HTTPURLResponse {
                         if httpResponse.statusCode == 200 {
-                            let statusResult = try parseVideoStatusResponse(responseData: responseData)
+                            let statusResult = try MediaProcessor.parseVideoStatusResponse(responseData: responseData)
                             
                             switch statusResult.status {
                             case "completed":
@@ -5187,7 +5058,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Parse video status response
-        private func parseVideoStatusResponse(responseData: Data) throws -> VideoConversionStatus {
+        private static func parseVideoStatusResponse(responseData: Data) throws -> VideoConversionStatus {
             guard let responseString = String(data: responseData, encoding: .utf8) else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid status response encoding"])
             }
@@ -5271,7 +5142,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Upload chunk for regular files (no retry)
-        private func uploadChunk(
+        private static func uploadChunk(
             uploadClient: HproseClient,
             request: [String: Any],
             data: NSData,
@@ -6075,8 +5946,7 @@ final class HproseInstance: ObservableObject {
         
         // Resume polling with the stored job ID
         do {
-            let mediaProcessor = HproseInstance.MediaProcessor()
-            let result = try await mediaProcessor.pollVideoConversionStatus(
+            let result = try await HproseInstance.MediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
                 data: videoItem.data,

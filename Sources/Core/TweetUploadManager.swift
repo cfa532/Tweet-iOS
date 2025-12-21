@@ -60,18 +60,38 @@ class TweetUploadManager {
         
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
-        // Use MediaProcessor to determine media type and handle upload
-        let mediaProcessor = HproseInstance.MediaProcessor()
-        return try await mediaProcessor.processAndUpload(
+        // Detect media type
+        let mediaType = await HproseInstance.MediaProcessor.detectMediaType(
+            from: typeIdentifier,
+            fileName: fileName,
+            data: data
+        )
+        
+        // Video needs special processing (normalization, HLS conversion)
+        if mediaType == .video {
+            return try await HproseInstance.MediaProcessor.processVideo(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                noResample: noResample,
+                appUser: hproseInstance.appUser,
+                appId: hproseInstance.appId,
+                progressCallback: progressCallback
+            )
+        }
+        
+        // All non-video files: just upload as-is (images, audio, documents)
+        let result = try await HproseInstance.MediaProcessor.uploadRegularFile(
             data: data,
             typeIdentifier: typeIdentifier,
             fileName: fileName,
             referenceId: referenceId,
-            noResample: noResample,
+            mediaType: mediaType,
             appUser: hproseInstance.appUser,
-            appId: hproseInstance.appId,
-            progressCallback: progressCallback
+            appId: hproseInstance.appId
         )
+        return (result, nil)
     }
     
     /// Schedule a tweet upload with persistence and retry
@@ -1765,8 +1785,7 @@ extension TweetUploadManager {
         }
         
         do {
-            let mediaProcessor = HproseInstance.MediaProcessor()
-            let result = try await mediaProcessor.pollVideoConversionStatus(
+            let result = try await HproseInstance.MediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
                 data: videoItem.data,
