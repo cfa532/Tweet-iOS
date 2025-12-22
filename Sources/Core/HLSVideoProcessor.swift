@@ -301,7 +301,6 @@ public class HLSVideoProcessor {
     
     /// Get video info using AVFoundation (replaces unreliable ffprobe on iOS)
     public func getVideoInfo(filePath: String) async -> (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)? {
-        print("DEBUG: [AVFoundation] Getting video info for: \(filePath)")
         
         let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
         

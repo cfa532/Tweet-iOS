@@ -3054,8 +3054,6 @@ final class HproseInstance: ObservableObject {
             let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
             let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
             
-            print("📹 [VIDEO UPLOAD] Normalization input: \(originalVideoURL.path)")
-            print("📹 [VIDEO UPLOAD] Normalization output: \(normalizedVideoURL.path)")
             
             let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
                 inputURL: originalVideoURL,
@@ -3590,11 +3588,13 @@ final class HproseInstance: ObservableObject {
 
                 if targetResolution >= 720 {
                     // Videos scaled to 720p: use 720p pixel count for bitrate calculation
-                    bitrateKbps = 1000
+                    bitrateKbps = Int(VideoConversionService.reference720pBitrate)
                 } else {
-                    // Videos keeping original resolution: use actual pixel count for bitrate calculation
+                    // Videos keeping original resolution: use actual pixel count for bitrate calculation (min 500k for quality)
                     let pixelCount = width * height
-                    bitrateKbps = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * 1000.0)
+                    let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
+                    bitrateKbps = max(500, calculatedBitrate)
+                    print("📊 Pixel-based calculation: \(width)×\(height) (\(pixelCount) pixels) = \(calculatedBitrate)k → \(bitrateKbps)k (with 500k min)")
                 }
                 print("📊 Using calculated bitrate for \(targetResolution)p: \(bitrateKbps)k")
                 
@@ -3645,9 +3645,6 @@ final class HproseInstance: ObservableObject {
             outputURL: URL,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async -> Bool {
-            print("📹 [NORMALIZE] Starting video normalization process")
-            print("📹 [NORMALIZE] Input: \(inputURL.path)")
-            print("📹 [NORMALIZE] Output: \(outputURL.path)")
             
             return await withCheckedContinuation { continuation in
                 // Get video info to check original resolution and bitrate
@@ -3748,22 +3745,23 @@ final class HproseInstance: ObservableObject {
                             targetBitrateKbps = 1500
                             print("📊 Scaling to 720p with 1500k bitrate")
                         } else {
-                            // Resolution ≤ 720p: keep original resolution with proportional bitrate
+                            // Resolution ≤ 720p: keep original resolution with proportional bitrate (min 500k for quality)
                             scaleFilter = ""
                             // Calculate proportional bitrate based on pixel count
-                            // Formula: bitrate = (pixel_count / REFERENCE_720P_PIXELS) * 1000k
+                            // Formula: bitrate = max(500, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
                             // REFERENCE_720P_PIXELS = 1280 × 720 = 921,600
                             let pixelCount = width * height
                             let REFERENCE_720P_PIXELS = 921600
-                            targetBitrateKbps = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * 1000.0)
-                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), using calculated proportional bitrate: \(targetBitrateKbps)k")
+                            let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
+                            targetBitrateKbps = max(500, calculatedBitrate)
+                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), pixel-based: \(calculatedBitrate)k → \(targetBitrateKbps)k (with 500k min)")
                         }
                     } else {
                         // Fallback: assume scaling needed
                         needsScaling = true
                         scaleFilter = "scale=-2:720"
-                        targetBitrateKbps = 1000
-                        print("📊 Could not detect resolution, defaulting to 720p with 1000k bitrate")
+                        targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
+                        print("📊 Could not detect resolution, defaulting to 720p with \(targetBitrateKbps)k bitrate")
                     }
                     
                     print("📹 [NORMALIZE] Original: \(originalWidth ?? 0)x\(originalHeight ?? 0), target bitrate: \(targetBitrateKbps)k, scaling: \(needsScaling ? "YES (to 720p)" : "NO (keep original resolution)")")

@@ -24,7 +24,7 @@ class VideoConversionService {
     static let shared = VideoConversionService()
     
     // Base bitrate for 720p video (in kbps)
-    private static let reference720pBitrate = 1000.0
+    static let reference720pBitrate = 1000.0
     
     private var currentConversion: Task<Void, Never>?
     private var progressCallback: ((ConversionProgress) -> Void)?
