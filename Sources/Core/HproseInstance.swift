@@ -3044,7 +3044,7 @@ final class HproseInstance: ObservableObject {
                 if origRes <= 720 {
                     print("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution and proportional bitrate")
                 } else {
-                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with 1000k bitrate")
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with 1500k bitrate")
                 }
             } else {
                 print("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
