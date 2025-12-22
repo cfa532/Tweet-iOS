@@ -398,7 +398,7 @@ class VideoConversionService {
             bitrate: lowerResolutionBitrate,
             aspectRatio: aspectRatio,
             cachedVideoInfo: videoInfo,
-            isNormalized: false  // Lower resolution is never normalized
+            isNormalized: isNormalized  // Pass through normalization flag to enable COPY codec for ≤480p videos
         )
         
         logMemoryUsage("after \(lowerResolution)p conversion")
@@ -720,6 +720,13 @@ class VideoConversionService {
             }()
 
             if shouldUseCopy {
+                print("========== \(targetResolution)p VARIANT: COPY CODEC (No Re-encoding) ==========")
+                print("  Video already normalized")
+                print("  Target: \(targetResolution)p (no scaling needed)")
+                print("  Method: COPY codec - preserves standardized quality")
+                print("  No second normalization - just segmenting for HLS")
+                print("==============================================================")
+                
                 // COPY codec - no re-encoding needed for already normalized video
                 let copyCommand = buildCopyCommand(
                     inputURL: inputURL,
@@ -730,6 +737,11 @@ class VideoConversionService {
                     self.executeFFmpegCommand(command: copyCommand, outputURL: outputURL, resolution: resolution, completion: completion)
                 }
             } else {
+                print("========== \(targetResolution)p VARIANT: RE-ENCODING (libx264) ==========")
+                print("  Method: libx264 re-encoding")
+                print("  Reason: Scaling or format conversion needed")
+                print("==========================================================")
+                
                 // Use libx264 for all other cases (compatibility and proper normalization)
                 print("DEBUG: [VIDEO CONVERSION] Using libx264 codec for resolution: \(resolution) (compatibility and normalization)")
 

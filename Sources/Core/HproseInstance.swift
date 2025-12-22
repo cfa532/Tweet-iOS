@@ -3050,6 +3050,10 @@ final class HproseInstance: ObservableObject {
                 print("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
             }
             
+            print("========== FIRST NORMALIZATION (Standardization) ==========")
+            print("📹 [VIDEO UPLOAD] Original video: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
+            print("📹 [VIDEO UPLOAD] Purpose: Unified format for 32MB routing decision")
+            
             progressCallback?("Normalizing video...", 10)
             let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
             let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
@@ -3060,6 +3064,7 @@ final class HproseInstance: ObservableObject {
                 outputURL: normalizedVideoURL,
                 progressCallback: progressCallback
             )
+            print("==========================================================")
             
             guard normalizationSuccess else {
                 print("❌ [VIDEO UPLOAD] Video normalization failed, falling back to original video")
