@@ -28,6 +28,7 @@
 ### Algorithms & Performance
 | Document | Description | Status |
 |----------|-------------|--------|
+| [**HLS_CONVERSION_ALGORITHM.md**](./HLS_CONVERSION_ALGORITHM.md) | Complete HLS video conversion pipeline: normalization, routing, variant creation | ✅ Production |
 | [**IMAGE_ZOOM_ALGORITHM.md**](./IMAGE_ZOOM_ALGORITHM.md) | Image zoom and pan gestures | ✅ Production |
 | [**TWEET_MEMORY_CACHE_ALGORITHM.md**](./TWEET_MEMORY_CACHE_ALGORITHM.md) | Tweet caching and memory management | ✅ Production |
 | [**VideoPlaybackAlgorithm.md**](./VideoPlaybackAlgorithm.md) | Video autoplay and visibility detection | ✅ Production |
@@ -99,6 +100,8 @@ Historical documentation preserved for reference.
 ### For Feature Development
 - **Upload Features:** [UPLOAD_SYSTEM.md](UPLOAD_SYSTEM.md)
 - **Video Features:** [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md)
+- **HLS Conversion:** [HLS_CONVERSION_ALGORITHM.md](HLS_CONVERSION_ALGORITHM.md)
+- **HLS Playback:** [HLS_VIDEO_IMPLEMENTATION.md](HLS_VIDEO_IMPLEMENTATION.md)
 - **Chat Features:** [CHAT_AND_SEARCH_FEATURES.md](CHAT_AND_SEARCH_FEATURES.md)
 - **Comment Features:** [CommentSystemREADME.md](CommentSystemREADME.md)
 
@@ -137,6 +140,14 @@ All main documents should include:
 ## 🔄 Recent Updates
 
 ### December 2025
+- ✅ **HLS Conversion Algorithm Documentation**: Complete documentation of video conversion pipeline
+  - **Normalization**: Resolution detection, bitrate calculation, scaling logic
+  - **Routing**: Size-based (≤32MB progressive, >32MB HLS) and resolution-based (single/dual variant)
+  - **Conversion**: Variant creation, codec selection (COPY vs libx264), master playlist generation
+  - **Memory Optimization**: Cleanup strategies, thread limits, buffer optimization
+  - **Examples**: Complete flows for 1080p, 720p, 360p, and portrait videos
+  - 📄 Added [HLS_CONVERSION_ALGORITHM.md](./HLS_CONVERSION_ALGORITHM.md) - Comprehensive algorithm documentation
+  - 📄 Updated [HLS_VIDEO_IMPLEMENTATION.md](./HLS_VIDEO_IMPLEMENTATION.md) - Added reference to conversion algorithm
 - ✅ **Layout Stability Improvements**: Comprehensive stability mechanisms
   - **Retweet/Quoted Tweet Stability**: Fixed-height placeholders (280pt) prevent layout shifts when embedded tweets load
   - **Scroll Debouncing**: Queue server updates during active scrolling, apply after scroll stops

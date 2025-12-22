@@ -3507,10 +3507,24 @@ final class HproseInstance: ObservableObject {
             let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
             let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
             
+            // Get width and height for bitrate calculation
+            let videoWidth: Int
+            let videoHeight: Int
+            if let info = videoInfo {
+                videoWidth = info.displayWidth
+                videoHeight = info.displayHeight
+            } else {
+                // Fallback: assume square resolution based on targetResolution
+                videoWidth = targetResolution
+                videoHeight = targetResolution
+            }
+
             let conversionSuccess = await MediaProcessor.convertVideoToMp4(
                 inputURL: originalVideoURL,
                 outputURL: outputVideoURL,
                 targetResolution: targetResolution,
+                width: videoWidth,
+                height: videoHeight,
                 aspectRatio: videoAspectRatio,
                 progressCallback: progressCallback
             )
@@ -3548,6 +3562,8 @@ final class HproseInstance: ObservableObject {
             inputURL: URL,
             outputURL: URL,
             targetResolution: Int,
+            width: Int,
+            height: Int,
             aspectRatio: Float?,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async -> Bool {
@@ -3566,15 +3582,19 @@ final class HproseInstance: ObservableObject {
                     // Fallback to height-based scaling
                     scaleFilter = "scale=-2:\(targetResolution)"
                 }
-                
-                // Calculate proportional bitrate based on target resolution (720p = 1000k base)
+
+                // Calculate proportional bitrate based on pixel count (720p = 921,600 pixels = 1000k base)
                 // Always use calculated bitrate (bitrate detection is unreliable)
                 let bitrateKbps: Int
+                let REFERENCE_720P_PIXELS = 921600
+
                 if targetResolution >= 720 {
+                    // Videos scaled to 720p: use 720p pixel count for bitrate calculation
                     bitrateKbps = 1000
                 } else {
-                    // Proportional bitrate: 1000k * (resolution/720)
-                    bitrateKbps = Int(1000.0 * Double(targetResolution) / 720.0)
+                    // Videos keeping original resolution: use actual pixel count for bitrate calculation
+                    let pixelCount = width * height
+                    bitrateKbps = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * 1000.0)
                 }
                 print("📊 Using calculated bitrate for \(targetResolution)p: \(bitrateKbps)k")
                 
@@ -3730,10 +3750,12 @@ final class HproseInstance: ObservableObject {
                         } else {
                             // Resolution ≤ 720p: keep original resolution with proportional bitrate
                             scaleFilter = ""
-                            // Calculate proportional bitrate based on resolution
-                            // Formula: bitrate = 1000k * (resolution / 720)
-                            // Always use calculated bitrate (bitrate detection is unreliable)
-                            targetBitrateKbps = Int(1000.0 * Double(videoResolution) / 720.0)
+                            // Calculate proportional bitrate based on pixel count
+                            // Formula: bitrate = (pixel_count / REFERENCE_720P_PIXELS) * 1000k
+                            // REFERENCE_720P_PIXELS = 1280 × 720 = 921,600
+                            let pixelCount = width * height
+                            let REFERENCE_720P_PIXELS = 921600
+                            targetBitrateKbps = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * 1000.0)
                             print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), using calculated proportional bitrate: \(targetBitrateKbps)k")
                         }
                     } else {
