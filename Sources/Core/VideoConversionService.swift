@@ -904,7 +904,7 @@ class VideoConversionService {
         completion: @escaping (Bool) -> Void
     ) {
         print("🎬 [FFMPEG] Starting conversion to \(resolution)")
-        print("  Command: \(command.prefix(150))...")
+        print("  Full command: \(command)")
         
         FFmpegKit.executeAsync(command) { session in
             guard let session = session else {
@@ -918,14 +918,15 @@ class VideoConversionService {
             
             print("🎬 [FFMPEG] Conversion to \(resolution) completed with return code: \(String(describing: returnCode))")
             
-            // Log FFmpeg output for debugging (show last 10 log entries)
+            // Log FFmpeg output for debugging (show last 10 log entries, excluding verbose HLS segment messages)
             if let logs = logs, logs.count > 0 {
                 print("🎬 [FFMPEG] Showing last \(min(10, logs.count)) log entries:")
                 let lastLogs = logs.suffix(10)
                 for log in lastLogs {
                     if let logObj = log as? Log, let message = logObj.getMessage() {
                         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
+                        // Skip verbose HLS segment opening messages
+                        if !trimmed.isEmpty && !trimmed.contains("Opening") && !trimmed.contains("for writing") {
                             print("  \(trimmed)")
                         }
                     }
