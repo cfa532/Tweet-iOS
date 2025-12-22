@@ -3595,11 +3595,11 @@ final class HproseInstance: ObservableObject {
                     // Videos scaled to 720p: use 720p pixel count for bitrate calculation
                     bitrateKbps = Int(VideoConversionService.reference720pBitrate)
                 } else {
-                    // Videos keeping original resolution: use actual pixel count for bitrate calculation (min 500k for quality)
+                    // Videos keeping original resolution: use actual pixel count for bitrate calculation (min minBitrate to avoid inflating low-bitrate videos)
                     let pixelCount = width * height
                     let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
-                    bitrateKbps = max(500, calculatedBitrate)
-                    print("📊 Pixel-based calculation: \(width)×\(height) (\(pixelCount) pixels) = \(calculatedBitrate)k → \(bitrateKbps)k (with 500k min)")
+                    bitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
+                    print("📊 Pixel-based calculation: \(width)×\(height) (\(pixelCount) pixels) = \(calculatedBitrate)k → \(bitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
                 }
                 print("📊 Using calculated bitrate for \(targetResolution)p: \(bitrateKbps)k")
                 
@@ -3750,16 +3750,16 @@ final class HproseInstance: ObservableObject {
                             targetBitrateKbps = 1500
                             print("📊 Scaling to 720p with 1500k bitrate")
                         } else {
-                            // Resolution ≤ 720p: keep original resolution with proportional bitrate (min 500k for quality)
+                            // Resolution ≤ 720p: keep original resolution with proportional bitrate (min minBitrate to avoid inflating low-bitrate videos)
                             scaleFilter = ""
                             // Calculate proportional bitrate based on pixel count
-                            // Formula: bitrate = max(500, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
+                            // Formula: bitrate = max(minBitrate, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
                             // REFERENCE_720P_PIXELS = 1280 × 720 = 921,600
                             let pixelCount = width * height
                             let REFERENCE_720P_PIXELS = 921600
                             let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
-                            targetBitrateKbps = max(500, calculatedBitrate)
-                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), pixel-based: \(calculatedBitrate)k → \(targetBitrateKbps)k (with 500k min)")
+                            targetBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
+                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), pixel-based: \(calculatedBitrate)k → \(targetBitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
                         }
                     } else {
                         // Fallback: assume scaling needed

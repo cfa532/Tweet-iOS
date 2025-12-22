@@ -23,8 +23,9 @@ struct ConversionProgress {
 class VideoConversionService {
     static let shared = VideoConversionService()
     
-    // Base bitrate for 720p video (in kbps)
-    static let reference720pBitrate = 1000.0
+    // Bitrate constants
+    static let reference720pBitrate = 1000.0  // Base bitrate for 720p video (in kbps)
+    static let minBitrate = 300  // Minimum bitrate in kbps (reduced from 500k to avoid inflating low-bitrate videos)
     
     private var currentConversion: Task<Void, Never>?
     private var progressCallback: ((ConversionProgress) -> Void)?
@@ -118,8 +119,8 @@ class VideoConversionService {
             // High-quality variant: 
             //   - >720p (downscaled to 720p): 1500k
             //   - =720p: 1000k
-            //   - <720p: pixel-based proportional bitrate (min 500k)
-            // Lower variant: pixel-based proportional bitrate (min 500k)
+            //   - <720p: pixel-based proportional bitrate (min minBitrate)
+            // Lower variant: pixel-based proportional bitrate (min minBitrate)
             let targetHighQualityKbps: Int
             if sourceVideoResolution > 720 {
                 // Resolution >720p: normalize to 720p @ 1500k
@@ -128,19 +129,19 @@ class VideoConversionService {
                 // Resolution =720p: use reference bitrate
                 targetHighQualityKbps = Int(Self.reference720pBitrate)
             } else {
-                // Resolution <720p: pixel-based proportional bitrate (min 500k for quality)
+                // Resolution <720p: pixel-based proportional bitrate (min minBitrate to avoid inflating low-bitrate videos)
                 if let info = videoInfo {
                     let pixelCount = info.displayWidth * info.displayHeight
                     let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * Self.reference720pBitrate)
-                    targetHighQualityKbps = max(500, calculatedBitrate)
+                    targetHighQualityKbps = max(Self.minBitrate, calculatedBitrate)
                     print("📊 High-quality variant: \(info.displayWidth)×\(info.displayHeight) (\(pixelCount) pixels) = \(calculatedBitrate)k → \(targetHighQualityKbps)k (with min)")
                 } else {
                     // Fallback to linear if video info unavailable
-                    targetHighQualityKbps = max(500, Int(Self.reference720pBitrate * Double(highQualityResolution) / 720.0))
+                    targetHighQualityKbps = max(Self.minBitrate, Int(Self.reference720pBitrate * Double(highQualityResolution) / 720.0))
                 }
             }
             
-            // Lower variant bitrate: pixel-based proportional (min 500k for quality)
+            // Lower variant bitrate: pixel-based proportional (min minBitrate to avoid inflating low-bitrate videos)
             // Calculate 480p equivalent pixels based on aspect ratio
             let targetLowerKbps: Int
             if let info = videoInfo {
@@ -160,11 +161,11 @@ class VideoConversionService {
                 
                 let lowerPixelCount = lowerWidth * lowerHeight
                 let calculatedBitrate = Int((Double(lowerPixelCount) / Double(REFERENCE_720P_PIXELS)) * Self.reference720pBitrate)
-                targetLowerKbps = max(500, calculatedBitrate)
+                targetLowerKbps = max(Self.minBitrate, calculatedBitrate)
                 print("📊 Lower variant: \(lowerWidth)×\(lowerHeight) (\(lowerPixelCount) pixels) = \(calculatedBitrate)k → \(targetLowerKbps)k (with min)")
             } else {
                 // Fallback to linear if video info unavailable
-                targetLowerKbps = max(500, Int(Self.reference720pBitrate * Double(lowerResolution) / 720.0))
+                targetLowerKbps = max(Self.minBitrate, Int(Self.reference720pBitrate * Double(lowerResolution) / 720.0))
             }
             
             let highQualityBitrate = "\(targetHighQualityKbps)k"
