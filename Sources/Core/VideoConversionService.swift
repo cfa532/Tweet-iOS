@@ -58,12 +58,21 @@ class VideoConversionService {
         forceMemoryCleanup()
         logMemoryUsage("after pre-conversion cleanup")
 
+        print("📹 [HLS CONVERSION] Configuration:")
+        print("  - Source resolution: \(sourceVideoResolution)p")
+        print("  - Mode: \(singleVariant480p ? "Single variant (480p only)" : "Dual variant (high-quality + 480p)")")
+        print("  - Is normalized: \(isNormalized)")
+        print("  - Input file: \(inputURL.lastPathComponent)")
+        print("  - File size: \(String(format: "%.1f", Double(fileSizeBytes) / 1024 / 1024))MB")
+        
         // HLS conversion configuration:
         // Single variant: 480p (proportional bitrate) only
         // Dual variant: high-quality (proportional bitrate) + 480p (proportional bitrate)
         // High-quality variant uses actual source resolution (capped at 720p)
         let lowerResolution = 480
         let highQualityResolution = min(sourceVideoResolution, 720) // Cap at 720p
+        
+        print("📹 [HLS CONVERSION] Target resolutions: high-quality=\(highQualityResolution)p, lower=\(lowerResolution)p")
         
         // Create HLS directory structure
         // Single variant: master.m3u8 and playlist.m3u8 at root (hls/master.m3u8, hls/playlist.m3u8)
@@ -73,13 +82,16 @@ class VideoConversionService {
         let lowerResDir = hlsDirectory.appendingPathComponent("\(lowerResolution)p")
         
         // Create directories based on variant mode
+        print("📹 [HLS CONVERSION] Creating directory structure at: \(hlsDirectory.path)")
         if singleVariant480p {
             // Single variant: no subdirectories needed, playlist goes at root
             try? FileManager.default.createDirectory(at: hlsDirectory, withIntermediateDirectories: true)
+            print("  ✓ Created single variant directory")
         } else {
             // Dual variant: create subdirectories for variants
             try? FileManager.default.createDirectory(at: hls720pDir, withIntermediateDirectories: true)
             try? FileManager.default.createDirectory(at: lowerResDir, withIntermediateDirectories: true)
+            print("  ✓ Created dual variant directories (720p/ and 480p/)")
         }
         
         // Create output URLs
@@ -158,10 +170,12 @@ class VideoConversionService {
             let highQualityBitrate = "\(targetHighQualityKbps)k"
             let lowerResolutionBitrate = "\(targetLowerKbps)k"
             
+            print("📊 [HLS CONVERSION] Calculated bitrates:")
             if !singleVariant480p {
-                print("📊 Using calculated bitrates: \(highQualityResolution)p=\(highQualityBitrate), 480p=\(lowerResolutionBitrate)")
+                print("  - High-quality (\(highQualityResolution)p): \(highQualityBitrate)")
+                print("  - Lower (480p): \(lowerResolutionBitrate)")
             } else {
-                print("📊 Using calculated bitrate: 480p=\(lowerResolutionBitrate)")
+                print("  - Single variant (480p): \(lowerResolutionBitrate)")
             }
             
             await self?.performConversion(
@@ -333,6 +347,7 @@ class VideoConversionService {
         
         // Step 1: Convert to high-quality HLS (if dual variant mode)
         if !singleVariant480p {
+            print("📹 [HLS CONVERSION] Step 1/3: Converting high-quality variant (\(highQualityResolution)p)")
             await updateProgress(stage: "Converting to \(highQualityResolution)p HLS...", progress: 10)
             logMemoryUsage("before \(highQualityResolution)p conversion")
             
@@ -371,6 +386,8 @@ class VideoConversionService {
         
         // Step 2: Convert to lower resolution HLS
         let progressStart = singleVariant480p ? 10 : 60
+        let stepNumber = singleVariant480p ? "1/2" : "2/3"
+        print("📹 [HLS CONVERSION] Step \(stepNumber): Converting lower variant (480p)")
         await updateProgress(stage: "Converting to \(lowerResolution)p HLS...", progress: progressStart)
         logMemoryUsage("before \(lowerResolution)p conversion")
         
@@ -406,6 +423,8 @@ class VideoConversionService {
         }
         
         // Step 3: Create master playlist (both single and dual variant)
+        let finalStepNumber = singleVariant480p ? "2/2" : "3/3"
+        print("📹 [HLS CONVERSION] Step \(finalStepNumber): Creating master playlist")
         await updateProgress(stage: "Creating master playlist...", progress: 90)
         logMemoryUsage("before master playlist creation")
         
@@ -871,9 +890,12 @@ class VideoConversionService {
         resolution: String,
         completion: @escaping (Bool) -> Void
     ) {
+        print("🎬 [FFMPEG] Starting conversion to \(resolution)")
+        print("  Command: \(command.prefix(150))...")
+        
         FFmpegKit.executeAsync(command) { session in
             guard let session = session else {
-                print("DEBUG: [VIDEO CONVERSION] Failed to create FFmpeg session")
+                print("❌ [FFMPEG] Failed to create FFmpeg session for \(resolution)")
                 completion(false)
                 return
             }
@@ -881,13 +903,18 @@ class VideoConversionService {
             let returnCode = session.getReturnCode()
             let logs = session.getLogs()
             
-            print("DEBUG: [VIDEO CONVERSION] Conversion completed with return code: \(String(describing: returnCode))")
+            print("🎬 [FFMPEG] Conversion to \(resolution) completed with return code: \(String(describing: returnCode))")
             
-            // Log FFmpeg output for debugging
-            if let logs = logs {
-                for log in logs {
+            // Log FFmpeg output for debugging (show last 10 log entries)
+            if let logs = logs, logs.count > 0 {
+                print("🎬 [FFMPEG] Showing last \(min(10, logs.count)) log entries:")
+                let lastLogs = logs.suffix(10)
+                for log in lastLogs {
                     if let logObj = log as? Log, let message = logObj.getMessage() {
-                        print("DEBUG: [FFMPEG LOG] \(message)")
+                        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            print("  \(trimmed)")
+                        }
                     }
                 }
             }
@@ -898,15 +925,26 @@ class VideoConversionService {
                 // Verify output file exists
                 if FileManager.default.fileExists(atPath: outputURL.path) {
                     let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
-                    print("DEBUG: [VIDEO CONVERSION] Successfully converted to \(resolution)")
-                    print("DEBUG: [VIDEO CONVERSION] Output file exists: \(outputURL.lastPathComponent), size: \(fileSize) bytes")
+                    let fileSizeMB = Double(fileSize) / 1024 / 1024
+                    print("✅ [FFMPEG] Successfully converted to \(resolution)")
+                    print("  - Output: \(outputURL.lastPathComponent)")
+                    print("  - Size: \(String(format: "%.2f", fileSizeMB))MB (\(fileSize) bytes)")
+                    
+                    // Count segments if it's an HLS directory
+                    let directory = outputURL.deletingLastPathComponent()
+                    if let files = try? FileManager.default.contentsOfDirectory(atPath: directory.path) {
+                        let segmentCount = files.filter { $0.hasSuffix(".ts") }.count
+                        if segmentCount > 0 {
+                            print("  - Segments: \(segmentCount) .ts files")
+                        }
+                    }
                     completion(true)
                 } else {
-                    print("DEBUG: [VIDEO CONVERSION] Output file does not exist: \(outputURL.path)")
+                    print("❌ [FFMPEG] Output file does not exist: \(outputURL.path)")
                     completion(false)
                 }
             } else {
-                print("DEBUG: [VIDEO CONVERSION] Conversion failed for \(resolution)")
+                print("❌ [FFMPEG] Conversion failed for \(resolution)")
                 completion(false)
             }
         }
