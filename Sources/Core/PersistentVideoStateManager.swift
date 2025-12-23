@@ -41,6 +41,23 @@ class PersistentVideoStateManager: ObservableObject {
         wasPlaying: Bool,
         context: VideoPlaybackState.VideoContext
     ) {
+        // CRITICAL: Validate time before saving - prevent NaN or invalid times from crashing later
+        guard currentTime.isValid && currentTime.seconds.isFinite else {
+            print("⚠️ [VIDEO STATE] Rejected invalid time for \(videoMid): \(currentTime.seconds)s - using .zero instead")
+            let validState = VideoPlaybackState(
+                videoMid: videoMid,
+                currentTime: .zero,
+                wasPlaying: wasPlaying,
+                timestamp: Date(),
+                context: context
+            )
+            var bucket = videoStates[context] ?? [:]
+            bucket[videoMid] = validState
+            videoStates[context] = bucket
+            print("📝 [VIDEO STATE] Saved state for \(videoMid): time=0.0s (corrected from invalid), wasPlaying=\(wasPlaying), context=\(context.rawValue)")
+            return
+        }
+        
         let state = VideoPlaybackState(
             videoMid: videoMid,
             currentTime: currentTime,

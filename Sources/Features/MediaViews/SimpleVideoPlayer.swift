@@ -1414,6 +1414,18 @@ struct SimpleVideoPlayer: View {
                     // CRITICAL: Check for saved position from fullscreen exit before resuming
                     if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .mediaCell),
                        let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .mediaCell) {
+                        // CRITICAL: Validate saved time before seeking to prevent crash
+                        guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
+                            print("⚠️ [ACTUAL VISIBILITY] Invalid saved time (\(savedState.currentTime.seconds)s) for \(mid) - clearing and resuming normally")
+                            PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .mediaCell)
+                            if player.rate == 0 {
+                                player.isMuted = MuteState.shared.isMuted
+                                player.play()
+                                playbackState = .playing
+                            }
+                            return
+                        }
+                        
                         print("🔄 [ACTUAL VISIBILITY] Restoring video \(mid) to fullscreen exit position: \(savedState.currentTime.seconds)s (was at \(player.currentTime().seconds)s)")
                         
                         player.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
