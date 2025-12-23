@@ -2882,8 +2882,35 @@ struct SimpleVideoPlayer: View {
             // Different video or no singleton - create an INDEPENDENT player and store in singleton.
             // IMPORTANT: Do NOT reuse SharedAssetCache's cached AVPlayer here, otherwise MediaCell's
             // onDisappear() will pause the same player instance and TweetDetail will "play briefly then stop".
+            
+            // CRITICAL: Check for cached player and reuse its asset to avoid network timeout
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
+               let cachedPlayerItem = cachedPlayer.currentItem {
+                NSLog("DEBUG: [VIDEO SETUP] Found cached player for \(mid), creating new playerItem from cached asset")
+                let asset = cachedPlayerItem.asset
+                let playerItem = AVPlayerItem(asset: asset)
+                let newPlayer = AVPlayer(playerItem: playerItem)
+                newPlayer.isMuted = false
+                
+                NSLog("DEBUG: [VIDEO SETUP] Created independent AVPlayer for TweetDetail from cached asset, now storing in singleton...")
+                
+                // Stop old singleton player if exists
+                DetailVideoManager.shared.currentPlayer?.pause()
+                
+                // Store new player in singleton
+                DetailVideoManager.shared.currentPlayer = newPlayer
+                DetailVideoManager.shared.currentVideoMid = mid
+                
+                self.player = newPlayer
+                self.loadingState = .loaded
+                self.configurePlayer(newPlayer)
+                NSLog("DEBUG: [VIDEO SETUP] ✅ Stored new player in singleton for \(mid) (from cached asset)")
+                return
+            }
+            
+            // No cached player - load fresh
             Task.detached(priority: .userInitiated) {
-                NSLog("DEBUG: [VIDEO SETUP] Task started for \(mid)")
+                NSLog("DEBUG: [VIDEO SETUP] Task started for \(mid) (no cached player)")
                 do {
                     NSLog("DEBUG: [VIDEO SETUP] Creating fresh playerItem for TweetDetail...")
                     let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
@@ -2922,8 +2949,23 @@ struct SimpleVideoPlayer: View {
         // SPECIAL CASE: Embedded/quoted tweet video inside TweetDetailView.
         // Use an independent AVPlayer instance (fresh AVPlayerItem) so it does not share the feed MediaCell player.
         if mode == .embeddedDetail {
+            // CRITICAL: Check for cached player and reuse its asset to avoid network timeout
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
+               let cachedPlayerItem = cachedPlayer.currentItem {
+                NSLog("DEBUG: [VIDEO SETUP] Found cached player for embeddedDetail \(mid), creating new playerItem from cached asset")
+                let asset = cachedPlayerItem.asset
+                let playerItem = AVPlayerItem(asset: asset)
+                let newPlayer = AVPlayer(playerItem: playerItem)
+                // Respect global mute state for embedded previews
+                newPlayer.isMuted = MuteState.shared.isMuted
+                self.configurePlayer(newPlayer)
+                NSLog("DEBUG: [VIDEO SETUP] ✅ Created embeddedDetail player from cached asset for \(mid)")
+                return
+            }
+            
+            // No cached player - load fresh
             Task.detached(priority: .userInitiated) {
-                NSLog("DEBUG: [VIDEO SETUP] Task started for embeddedDetail \(mid)")
+                NSLog("DEBUG: [VIDEO SETUP] Task started for embeddedDetail \(mid) (no cached player)")
                 do {
                     let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
                         for: uniquePlayerURL,
