@@ -22,7 +22,7 @@ struct CommentItemView: View {
     var body: some View {
         Group {
             if linkToComment {
-                NavigationLink(value: comment) {
+                NavigationLink(value: CommentNavigation(comment: comment, parentTweet: parentTweet)) {
                     commentContent
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -63,7 +63,7 @@ struct CommentItemView: View {
                 
                 TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
                 
-                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
+                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM, parentTweet: parentTweet)
                     .padding(.top, 8)
             }
         }

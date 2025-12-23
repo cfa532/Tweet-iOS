@@ -93,7 +93,10 @@ struct HomeView: View {
                 onReturnToHome?()
             }, navigationPath: $navigationPath)
         }
-            .navigationDestination(for: Tweet.self) { tweet in
+        .navigationDestination(for: CommentNavigation.self) { commentNav in
+            CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
+        }
+        .navigationDestination(for: Tweet.self) { tweet in
             // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
             if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
                 // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher

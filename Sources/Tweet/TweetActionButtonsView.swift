@@ -110,6 +110,7 @@ func composeAttachmentTypeText(for tweet: Tweet) -> String {
 struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
     var commentsVM: CommentsViewModel? = nil
+    var parentTweet: Tweet? = nil  // For comments: the parent tweet this is a comment on
     var onCommentTap: (() -> Void)? = nil
     var isInDetailView: Bool = false  // NEW: Track if we're in TweetDetailView
     var isFullScreen: Bool = false    // NEW: Track if we're in fullscreen player
@@ -1278,9 +1279,19 @@ struct TweetActionButtonsView: View {
             shareText += "\n\n"
         }
         
-        // Add URL - use different format based on context
+        // Add URL - for comments, use traditional format with query params
         let urlText: String
-        if isInDetailView {
+        let effectiveParentTweet = parentTweet ?? commentsVM?.parentTweet
+        
+        if let parent = effectiveParentTweet {
+            // This is a comment - use traditional format with query parameters
+            // Ensure domainToShare has http:// protocol prefix if it doesn't already have a protocol
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
+        } else if isInDetailView {
             // In detail view: use author's baseUrl with entry format
             let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
             urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"

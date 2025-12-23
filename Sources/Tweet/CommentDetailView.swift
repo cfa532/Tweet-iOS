@@ -8,6 +8,21 @@
 import SwiftUI
 import AVKit
 
+// Navigation wrapper to pass both comment and parent tweet
+struct CommentNavigation: Hashable {
+    let comment: Tweet
+    let parentTweet: Tweet
+    
+    static func == (lhs: CommentNavigation, rhs: CommentNavigation) -> Bool {
+        lhs.comment.mid == rhs.comment.mid && lhs.parentTweet.mid == rhs.parentTweet.mid
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(comment.mid)
+        hasher.combine(parentTweet.mid)
+    }
+}
+
 @MainActor
 @available(iOS 16.0, *)
 struct CommentDetailViewWithParent: View {
@@ -192,7 +207,7 @@ struct CommentDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(tweet: comment, isInDetailView: true)
+        TweetActionButtonsView(tweet: comment, parentTweet: parentTweet, isInDetailView: true)
             .padding(.leading, 48)
             .padding(.top, 8)
             .padding(.bottom, 4)

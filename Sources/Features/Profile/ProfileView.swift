@@ -365,6 +365,9 @@ struct ProfileView: View {
             print("🔵 [ProfileView] navigationDestination(showTweetList) TRIGGERED - type: \(tweetListType), user: \(user.username ?? "nil")")
             return bookmarksOrFavoritesListView()
         }
+        .navigationDestination(for: CommentNavigation.self) { commentNav in
+            CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
+        }
         .navigationDestination(item: $selectedTweetForNavigation) { tweet in
             // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
             if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
