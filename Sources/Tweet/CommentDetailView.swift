@@ -184,10 +184,11 @@ struct CommentDetailView: View {
             if let user = comment.author {
                 Avatar(user: user)
             }
+            Spacer(minLength: 4)
             TweetItemHeaderView(tweet: comment)
             Spacer(minLength: 0)
             CommentMenu(comment: comment, parentTweet: parentTweet)
-                .padding(.trailing, -20)
+                .padding(.trailing, -16)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
@@ -208,7 +209,7 @@ struct CommentDetailView: View {
     
     private var actionButtons: some View {
         TweetActionButtonsView(tweet: comment, parentTweet: parentTweet, isInDetailView: true)
-            .padding(.leading, 48)
+            .padding(.horizontal)
             .padding(.top, 8)
             .padding(.bottom, 4)
     }
@@ -282,7 +283,8 @@ struct CommentDetailView: View {
                 )
             }
         )
-        .padding(.leading, -4)
+        .padding(.leading, -8)
+        .padding(.trailing, 4)
     }
     
     private func refreshComment() async {

@@ -57,7 +57,7 @@ struct CommentItemView: View {
                     TweetItemHeaderView(tweet: comment)
                     Spacer(minLength: 0)
                     CommentMenu(comment: comment, parentTweet: parentTweet)
-                        .padding(.trailing, -20)
+                        .padding(.trailing, -8)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
