@@ -227,7 +227,6 @@ struct DetailMediaCell: View {
             }
         }
     }
-    
 }
 
 @MainActor
