@@ -315,13 +315,16 @@ struct TweetDetailView: View {
                 VStack(spacing: 0) {
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            mediaSection
-                            tweetHeader
-                            tweetContent
-                            actionButtons
-                            Divider()
-                                .padding(.top, 8)
-                                .padding(.bottom, 4)
+                            // Main tweet section with deeper background
+                            VStack(spacing: 0) {
+                                mediaSection
+                                tweetHeader
+                                tweetContent
+                                actionButtons
+                            }
+                            .padding(.bottom, 8)
+                            .background(Color(UIColor.secondarySystemBackground))
+                            
                             commentsListView
                                 .padding(.leading, -4)
                         }

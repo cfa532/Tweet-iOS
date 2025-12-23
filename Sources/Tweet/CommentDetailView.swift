@@ -115,13 +115,16 @@ struct CommentDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                mediaSection
-                commentHeader
-                commentContent
-                actionButtons
-                Divider()
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
+                // Main comment section with deeper background
+                VStack(alignment: .leading, spacing: 0) {
+                    mediaSection
+                    commentHeader
+                    commentContent
+                    actionButtons
+                }
+                .padding(.bottom, 8)
+                .background(Color(UIColor.secondarySystemBackground))
+                
                 repliesListView
             }
         }
