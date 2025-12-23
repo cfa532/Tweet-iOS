@@ -258,6 +258,7 @@ struct MediaBrowserView: View {
                                     tweet: currentTweet,
                                     isInDetailView: true,
                                     isFullScreen: true,
+                                    currentMediaIndex: currentIndex,
                                     onShareVisibilityChange: { isVisible in
                                         // Forward share visibility changes to outer view
                                         onShareVisibilityChange(isVisible)

@@ -114,6 +114,7 @@ struct TweetActionButtonsView: View {
     var onCommentTap: (() -> Void)? = nil
     var isInDetailView: Bool = false  // NEW: Track if we're in TweetDetailView
     var isFullScreen: Bool = false    // NEW: Track if we're in fullscreen player
+    var currentMediaIndex: Int? = nil  // NEW: Track current media index in fullscreen mode
     var onShareVisibilityChange: ((Bool) -> Void)? = nil
     @State private var showCommentCompose = false
     @State private var showLoginSheet = false
@@ -661,6 +662,7 @@ struct TweetActionButtonsView: View {
         print("DEBUG: [SHARE] loadAttachmentPreviewImage called for tweet: \(tweet.mid)")
         print("DEBUG: [SHARE] Tweet has attachments: \(tweet.attachments?.count ?? 0)")
         print("DEBUG: [SHARE] Tweet originalTweetId: \(tweet.originalTweetId ?? "nil")")
+        print("DEBUG: [SHARE] isFullScreen: \(isFullScreen), currentMediaIndex: \(currentMediaIndex?.description ?? "nil")")
         
         guard let sourceTweet = await resolveSourceTweetWithAttachments() else {
             print("DEBUG: [SHARE] No source tweet with attachments found")
@@ -669,12 +671,21 @@ struct TweetActionButtonsView: View {
         
         print("DEBUG: [SHARE] Source tweet found: \(sourceTweet.mid), attachments: \(sourceTweet.attachments?.count ?? 0)")
         
-        guard let attachment = sourceTweet.attachments?.first else {
-            print("DEBUG: [SHARE] No first attachment found")
-            return nil
+        // In fullscreen mode, use the current media index if provided
+        let attachment: MimeiFileType
+        if isFullScreen, let mediaIndex = currentMediaIndex, let attachments = sourceTweet.attachments, mediaIndex < attachments.count {
+            attachment = attachments[mediaIndex]
+            print("DEBUG: [SHARE] Using attachment at index \(mediaIndex): type=\(attachment.type), mid=\(attachment.mid)")
+        } else {
+            guard let firstAttachment = sourceTweet.attachments?.first else {
+                print("DEBUG: [SHARE] No first attachment found")
+                return nil
+            }
+            attachment = firstAttachment
+            print("DEBUG: [SHARE] Using first attachment: type=\(attachment.type), mid=\(attachment.mid)")
         }
         
-        print("DEBUG: [SHARE] First attachment type: \(attachment.type), mid: \(attachment.mid)")
+        print("DEBUG: [SHARE] Selected attachment type: \(attachment.type), mid: \(attachment.mid)")
         
         let baseURL = await resolveAttachmentBaseURL(for: sourceTweet)
         print("DEBUG: [SHARE] Resolved baseURL: \(baseURL?.absoluteString ?? "nil")")
