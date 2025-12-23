@@ -93,6 +93,10 @@ struct CommentDetailView: View {
     @State private var showLoginSheet = false
     @State private var replies: [Tweet] = []
     
+    // Reply editor states
+    @State private var showReplyEditor = true
+    @State private var shouldShowExpandedReply = false
+    
     // Toast states
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -113,22 +117,40 @@ struct CommentDetailView: View {
     }
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                // Main comment section with deeper background
+        VStack(spacing: 0) {
+            ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    mediaSection
-                    commentHeader
-                    commentContent
-                    actionButtons
+                    // Main comment section with deeper background
+                    VStack(alignment: .leading, spacing: 0) {
+                        mediaSection
+                        commentHeader
+                        commentContent
+                        actionButtons
+                    }
+                    .padding(.bottom, 8)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    
+                    repliesListView
                 }
-                .padding(.bottom, 8)
-                .background(Color(UIColor.secondarySystemBackground))
-                
-                repliesListView
+            }
+            .background(Color(.systemBackground))
+            
+            // ReplyEditor as a component at the bottom
+            if showReplyEditor {
+                ReplyEditorView(
+                    parentTweet: comment,
+                    isQuoting: false,
+                    onClose: {
+                        showReplyEditor = false
+                    },
+                    onExpandedClose: {
+                        shouldShowExpandedReply = false
+                    },
+                    initialExpanded: shouldShowExpandedReply
+                )
+                .padding(.bottom, 48) // Add padding to avoid navigation bar
             }
         }
-        .background(Color(.systemBackground))
         .navigationTitle(NSLocalizedString("Reply", comment: "Reply screen title"))
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
@@ -211,10 +233,17 @@ struct CommentDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(tweet: comment, parentTweet: parentTweet, isInDetailView: true)
-            .padding(.horizontal)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+        TweetActionButtonsView(
+            tweet: comment,
+            parentTweet: parentTweet,
+            onCommentTap: {
+                shouldShowExpandedReply = true
+            },
+            isInDetailView: true
+        )
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
     
     private var toastOverlay: some View {
