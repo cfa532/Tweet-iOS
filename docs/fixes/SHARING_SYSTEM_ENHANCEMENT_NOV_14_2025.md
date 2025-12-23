@@ -17,9 +17,9 @@ When sharing videos from TweetDetailView:
 ## Root Cause
 
 1. **Screenshot Mismatch:**
-   - SimpleVideoPlayer in TweetDetailView cached players with key: `"tweetDetail_\{mediaID}"`
-   - MediaCell cached players with key: `\{mediaID}`
-   - TweetActionButtonsView only looked for `\{mediaID}` key, couldn't find detail view player
+   - SimpleVideoPlayer ALWAYS cached players with key: `\{mediaID}` regardless of mode
+   - TweetActionButtonsView incorrectly tried to look for `"tweetDetail_\{mediaID}"` key in detail view
+   - This mismatch caused screenshot capture to fail in TweetDetailView (player lookup returned nil)
 
 2. **URL Format:**
    - All shares used the same URL format regardless of context
@@ -32,19 +32,16 @@ When sharing videos from TweetDetailView:
 
 ### 1. Context-Aware Screenshot Capture
 
-Added `isInDetailView` parameter to `TweetActionButtonsView`:
+Fixed cache key lookup in `TweetActionButtonsView`:
 
 ```swift
 struct TweetActionButtonsView: View {
     var isInDetailView: Bool = false
     
     private func generateVideoPreviewImage(for url: URL, isHLS: Bool = false) async -> UIImage? {
-        let cacheKey: String
-        if isInDetailView {
-            cacheKey = "tweetDetail_\(mediaID)"  // Detail view player
-        } else {
-            cacheKey = mediaID  // Grid view player
-        }
+        // SimpleVideoPlayer always caches with just the mediaID (mid), regardless of mode
+        // So we always use mediaID as the cache key
+        let cacheKey: String = mediaID
         
         // Look up player with correct cache key
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: cacheKey) {
@@ -53,6 +50,11 @@ struct TweetActionButtonsView: View {
     }
 }
 ```
+
+**Fix Details:**
+- Removed incorrect conditional cache key logic
+- Now always uses `mediaID` to match how `SimpleVideoPlayer` actually caches players
+- This allows screenshot capture to successfully find and use the cached player in TweetDetailView
 
 ### 2. IP-Based Entry URLs for Detail View
 

@@ -19,6 +19,7 @@
 "Converting video..." = "Converting video...";
 "Uploading attachments... Please stay on this screen" = "Uploading attachments... Please stay on this screen";
 "Submitting tweet..." = "Submitting tweet...";
+"Submitting comment..." = "Submitting comment...";
 "Retrying upload..." = "Retrying upload...";
 "Upload completed" = "Upload completed";
 "Upload cancelled" = "Upload cancelled";
@@ -34,6 +35,7 @@
 "Checking video status..." = "Checking video status...";
 "Processing on server..." = "Processing on server...";
 "Your tweet will be posted when ready" = "Your tweet will be posted when ready";
+"Your comment will be posted when ready" = "Your comment will be posted when ready";
 "Your message will be sent when ready" = "Your message will be sent when ready";
 "Uploading %@ %d/%d..." = "Uploading %@ %d/%d...";
 "Processing video %d/%d" = "Processing video %d/%d";
@@ -46,6 +48,7 @@
 "Video processing timed out" = "Video processing timed out";
 "Failed to prepare attachments" = "Failed to prepare attachments";
 "Failed to post tweet" = "Failed to post tweet";
+"Failed to post comment after retries" = "Failed to post comment after retries";
 "Unknown video status" = "Unknown video status";
 
 // MARK: - Pending Upload Dialog

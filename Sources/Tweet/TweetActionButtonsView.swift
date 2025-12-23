@@ -802,13 +802,12 @@ struct TweetActionButtonsView: View {
         }
         
         // Determine the cache key to use based on context
-        // When in TweetDetailView, the player is cached with "tweetDetail_\(mid)" key
-        let cacheKey: String
+        // SimpleVideoPlayer always caches with just the mediaID (mid), regardless of mode
+        // So we always use mediaID as the cache key
+        let cacheKey: String = mediaID
         if isInDetailView {
-            cacheKey = "tweetDetail_\(mediaID)"
             print("DEBUG: [SHARE] In TweetDetailView context, using cache key: \(cacheKey)")
         } else {
-            cacheKey = mediaID
             print("DEBUG: [SHARE] In feed/grid context, using cache key: \(cacheKey)")
         }
         
