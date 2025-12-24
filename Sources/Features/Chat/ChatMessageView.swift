@@ -8,6 +8,7 @@
 import SwiftUI
 import AVKit
 import SDWebImageSwiftUI
+import QuickLook
 
 // MARK: - Chat Message View
 
@@ -611,9 +612,9 @@ struct ChatAttachmentLoader: View {
     
     @State private var isLoading = true
     @State private var loadError = false
-    @State private var showPDFViewer = false
-    @State private var pdfURL: URL?
+    @State private var documentURLItem: DocumentURLItem?
     @State private var isDownloading = false
+    @State private var isDownloadingForShare = false
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -659,7 +660,9 @@ struct ChatAttachmentLoader: View {
                 // Loaded state - show file info
                 HStack {
                     Image(systemName: getAttachmentIcon(for: attachment.type))
-                        .foregroundColor(attachment.type == .pdf ? .red : .blue)
+                        .foregroundColor(getIconColor(for: attachment.type))
+                        .font(.system(size: 20))
+                        .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(attachment.fileName ?? getDefaultFileName())
                             .font(.caption)
@@ -672,15 +675,19 @@ struct ChatAttachmentLoader: View {
                         }
                     }
                     Spacer()
-                    if attachment.type == .pdf {
-                        if isDownloading {
+                    // Download/share button for all document types
+                    Button(action: {
+                        downloadAndShare()
+                    }) {
+                        if isDownloadingForShare {
                             ProgressView()
                                 .scaleEffect(0.8)
                         } else {
                             Image(systemName: "arrow.down.circle")
-                                .foregroundColor(.red)
+                                .foregroundColor(getIconColor(for: attachment.type))
                         }
                     }
+                    .buttonStyle(PlainButtonStyle())
                 }
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .padding(.horizontal, 12)
@@ -689,16 +696,15 @@ struct ChatAttachmentLoader: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .contentShape(RoundedRectangle(cornerRadius: 8))
                 .onTapGesture {
-                    if attachment.type == .pdf && !isDownloading {
-                        downloadAndShowPDF()
+                    // Tap on document row - open preview
+                    if !isDownloading && !isDownloadingForShare {
+                        downloadAndShowDocument()
                     }
                 }
             }
         }
-        .sheet(isPresented: $showPDFViewer) {
-            if let pdfURL = pdfURL {
-                PDFQuickLookView(url: pdfURL)
-            }
+        .sheet(item: $documentURLItem) { item in
+            PDFQuickLookView(url: item.url)
         }
     }
     
@@ -711,21 +717,57 @@ struct ChatAttachmentLoader: View {
         }
     }
     
-    private func downloadAndShowPDF() {
-        guard let url = attachment.getUrl(baseUrl) else {
-            print("ERROR: [ChatAttachmentLoader] Invalid PDF URL")
+    private func downloadAndShowDocument() {
+        // Prevent duplicate taps while downloading
+        guard !isDownloading else {
+            print("DEBUG: [ChatAttachmentLoader] Already downloading, ignoring tap")
             return
         }
         
+        guard let url = attachment.getUrl(baseUrl) else {
+            print("ERROR: [ChatAttachmentLoader] Invalid document URL")
+            return
+        }
+        
+        // Create consistent filename based on document CID
+        let tempDirectory = FileManager.default.temporaryDirectory
+        let originalFileName = attachment.fileName ?? getDefaultFileName()
+        let fileExtension = (originalFileName as NSString).pathExtension
+        let baseName = (originalFileName as NSString).deletingPathExtension
+        let ext = fileExtension.isEmpty ? "pdf" : fileExtension
+        
+        // Use document ID for unique but consistent filename
+        let uniqueFileName = "\(baseName)_\(attachment.mid.prefix(8)).\(ext)"
+        let cachedURL = tempDirectory.appendingPathComponent(uniqueFileName)
+        
+        // Check if file already exists in cache
+        if FileManager.default.fileExists(atPath: cachedURL.path),
+           let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
+           let fileSize = attributes[.size] as? Int64,
+           fileSize > 0,
+           FileManager.default.isReadableFile(atPath: cachedURL.path) {
+            
+            // File exists and is valid - use cached version
+            print("DEBUG: [ChatAttachmentLoader] Using cached file: \(uniqueFileName) (\(fileSize) bytes)")
+            
+            // Present sheet with URL item
+            self.documentURLItem = DocumentURLItem(url: cachedURL)
+            print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (cached) with URL: \(cachedURL.lastPathComponent)")
+            return
+        }
+        
+        // File doesn't exist or is invalid - need to download
+        documentURLItem = nil
+        
+        print("DEBUG: [ChatAttachmentLoader] Downloading file from server...")
         isDownloading = true
         
-        // Download PDF to temporary location
         let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
             DispatchQueue.main.async {
-                isDownloading = false
+                self.isDownloading = false
                 
                 if let error = error {
-                    print("ERROR: [ChatAttachmentLoader] Failed to download PDF: \(error)")
+                    print("ERROR: [ChatAttachmentLoader] Failed to download: \(error)")
                     return
                 }
                 
@@ -734,41 +776,145 @@ struct ChatAttachmentLoader: View {
                     return
                 }
                 
-                // Move to a more permanent temporary location
-                let tempDirectory = FileManager.default.temporaryDirectory
-                // Make filename unique by incrementing suffix if needed
-                let originalFileName = attachment.fileName ?? "Document.pdf"
-                let fileExtension = (originalFileName as NSString).pathExtension
-                let baseName = (originalFileName as NSString).deletingPathExtension
-                let ext = fileExtension.isEmpty ? "pdf" : fileExtension
-                
-                // Find unique filename
-                var destinationURL = tempDirectory.appendingPathComponent("\(baseName).\(ext)")
-                var counter = 1
-                while FileManager.default.fileExists(atPath: destinationURL.path) {
-                    let uniqueName = "\(baseName)_\(counter).\(ext)"
-                    destinationURL = tempDirectory.appendingPathComponent(uniqueName)
-                    counter += 1
-                }
-                
                 do {
                     // Remove existing file if present
-                    try? FileManager.default.removeItem(at: destinationURL)
+                    if FileManager.default.fileExists(atPath: cachedURL.path) {
+                        try FileManager.default.removeItem(at: cachedURL)
+                        print("DEBUG: [ChatAttachmentLoader] Removed existing cached file")
+                    }
                     
-                    // Move downloaded file
-                    try FileManager.default.moveItem(at: localURL, to: destinationURL)
+                    // Copy downloaded file to cache
+                    try FileManager.default.copyItem(at: localURL, to: cachedURL)
+                    print("DEBUG: [ChatAttachmentLoader] File copied to cache: \(uniqueFileName)")
                     
-                    self.pdfURL = destinationURL
-                    self.showPDFViewer = true
+                    // Wait briefly for file system to commit
+                    Thread.sleep(forTimeInterval: 0.05)
                     
-                    print("DEBUG: [ChatAttachmentLoader] Successfully downloaded PDF to: \(destinationURL)")
+                    // Verify file is valid and readable
+                    guard FileManager.default.fileExists(atPath: cachedURL.path),
+                          let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
+                          let fileSize = attributes[.size] as? Int64,
+                          fileSize > 0,
+                          FileManager.default.isReadableFile(atPath: cachedURL.path) else {
+                        print("ERROR: [ChatAttachmentLoader] Downloaded file is empty, invalid, or not readable")
+                        try? FileManager.default.removeItem(at: cachedURL)
+                        return
+                    }
+                    
+                    print("DEBUG: [ChatAttachmentLoader] File verified and readable: \(fileSize) bytes)")
+                    
+                    // Present sheet with URL item
+                    self.documentURLItem = DocumentURLItem(url: cachedURL)
+                    print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (downloaded) with URL: \(cachedURL.lastPathComponent)")
                 } catch {
-                    print("ERROR: [ChatAttachmentLoader] Failed to move PDF: \(error)")
+                    print("ERROR: [ChatAttachmentLoader] Failed to cache file: \(error.localizedDescription)")
+                    // Clean up partial file
+                    try? FileManager.default.removeItem(at: cachedURL)
                 }
             }
         }
         
         task.resume()
+    }
+    
+    private func downloadAndShare() {
+        guard let url = attachment.getUrl(baseUrl) else {
+            print("ERROR: [ChatAttachmentLoader] Invalid document URL")
+            return
+        }
+        
+        isDownloadingForShare = true
+        
+        // Download and present share sheet with original filename
+        let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
+            guard let localURL = localURL else {
+                DispatchQueue.main.async {
+                    self.isDownloadingForShare = false
+                    print("ERROR: [ChatAttachmentLoader] No local URL for download")
+                }
+                return
+            }
+            
+            do {
+                // Copy to temp directory with original filename
+                // IMPORTANT: Do this immediately in the completion handler, not in DispatchQueue.main.async
+                // The temporary file from URLSession may be cleaned up if we wait
+                let tempDirectory = FileManager.default.temporaryDirectory
+                let originalFileName = attachment.fileName ?? getDefaultFileName()
+                let destinationURL = tempDirectory.appendingPathComponent(originalFileName)
+                
+                // Remove existing file if present
+                try? FileManager.default.removeItem(at: destinationURL)
+                
+                // Copy file with original name
+                try FileManager.default.copyItem(at: localURL, to: destinationURL)
+                
+                DispatchQueue.main.async {
+                    self.isDownloadingForShare = false
+                    
+                    // Present share sheet with properly named file
+                    let activityVC = UIActivityViewController(
+                        activityItems: [destinationURL],
+                        applicationActivities: nil
+                    )
+                    
+                    // Exclude some activities that don't make sense for documents
+                    activityVC.excludedActivityTypes = [
+                        .assignToContact,
+                        .addToReadingList,
+                        .postToFacebook,
+                        .postToTwitter,
+                        .postToWeibo,
+                        .postToVimeo,
+                        .postToFlickr
+                    ]
+                    
+                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                       let rootViewController = windowScene.windows.first?.rootViewController {
+                        var topController = rootViewController
+                        while let presented = topController.presentedViewController {
+                            topController = presented
+                        }
+                        
+                        // For iPad, need to set source view
+                        if let popover = activityVC.popoverPresentationController {
+                            popover.sourceView = topController.view
+                            popover.sourceRect = CGRect(x: topController.view.bounds.midX,
+                                                       y: topController.view.bounds.midY,
+                                                       width: 0, height: 0)
+                            popover.permittedArrowDirections = []
+                        }
+                        
+                        topController.present(activityVC, animated: true)
+                        print("DEBUG: [ChatAttachmentLoader] Share sheet presented with file: \(originalFileName)")
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isDownloadingForShare = false
+                    print("ERROR: [ChatAttachmentLoader] Failed to prepare file for sharing: \(error)")
+                }
+            }
+        }
+        
+        task.resume()
+    }
+    
+    private func getIconColor(for type: MediaType) -> Color {
+        switch type {
+        case .pdf:
+            return .red
+        case .word:
+            return .blue
+        case .excel:
+            return .green
+        case .ppt:
+            return .orange
+        case .zip:
+            return .purple
+        default:
+            return .gray
+        }
     }
     
     private func getDefaultFileName() -> String {
@@ -873,3 +1019,4 @@ struct ChatMultipleAttachmentsLoader: View {
         }
     }
 }
+
