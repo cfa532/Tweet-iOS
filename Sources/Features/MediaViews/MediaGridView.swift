@@ -374,13 +374,17 @@ struct MediaGridView: View, Equatable {
                     }
                     
                 case 4:
+                    // Calculate aspect ratio for each cell to ensure consistent rendering
+                    // This matches Android's MediaGrid algorithm for 4 items
+                    let cellAspectRatio = Float((actualWidth / 2 - 1) / (gridHeight / 2 - 1))
+                    
                     VStack(spacing: 2) {
                         HStack(spacing: 2) {
                             ForEach(0..<2) { idx in
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: idx,
-                                    
+                                    aspectRatio: cellAspectRatio,
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
@@ -396,7 +400,7 @@ struct MediaGridView: View, Equatable {
                                     MediaCell(
                                         parentTweet: parentTweet,
                                         attachmentIndex: idx,
-                                        
+                                        aspectRatio: cellAspectRatio,
                                         shouldLoadVideo: shouldLoadVideo,
                                         onVideoFinished: onVideoFinished,
                                         videoManager: videoManager,
@@ -771,7 +775,30 @@ struct MediaGridViewModel {
                 return 1.0
             }
         default:
-            return 1.0
+            // For 5+ attachments, only show first 4 in grid
+            // Use first 4 to determine grid aspect ratio (matches Android behavior)
+            guard attachments.count >= 4 else {
+                // Case 3 - handled by MediaGridView body separately
+                return 1.0
+            }
+            
+            // Get aspect ratios of first 4 items
+            let ar0 = getAspectRatio(for: attachments[0])
+            let ar1 = getAspectRatio(for: attachments[1])
+            let ar2 = getAspectRatio(for: attachments[2])
+            let ar3 = getAspectRatio(for: attachments[3])
+            
+            // Check orientation of first 4: portrait < 1.0, landscape > 1.0
+            let allPortrait = ar0 < 1.0 && ar1 < 1.0 && ar2 < 1.0 && ar3 < 1.0
+            let allLandscape = ar0 > 1.0 && ar1 > 1.0 && ar2 > 1.0 && ar3 > 1.0
+            
+            if allLandscape {
+                return 1.618  // Golden ratio for all landscape
+            } else if allPortrait {
+                return 0.8    // Tall for all portrait
+            } else {
+                return 1.0    // Square for mixed orientations
+            }
         }
     }
 }
