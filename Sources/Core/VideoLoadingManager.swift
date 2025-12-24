@@ -280,19 +280,11 @@ class VideoLoadingManager: ObservableObject {
         }
 
         for tweetId in tweetIds {
-            // Check if tweet has cached content before cancelling
-            let hasCachedContent = await MainActor.run {
-                SharedAssetCache.shared.hasCachedContent(for: tweetId)
-            }
-            
-            if hasCachedContent {
-                print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content, skipping cancellation")
-                continue
-            }
-            
-            // Cancel loading tasks in SharedAssetCache (only if no cache)
+            // CRITICAL FIX: Cancel loading tasks for out-of-sight videos even if cached content exists
+            // This stops active buffering/downloading that continues even after videos scroll out of view
+            // The cached content will remain, but active loading tasks will be cancelled
             await MainActor.run {
-                SharedAssetCache.shared.cancelLoadingForTweet(tweetId)
+                SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(tweetId)
             }
             
             // Post notification for MediaGridView to handle (on main actor)

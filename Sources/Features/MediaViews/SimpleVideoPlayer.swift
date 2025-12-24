@@ -1014,6 +1014,26 @@ struct SimpleVideoPlayer: View {
                 player.isMuted = MuteState.shared.isMuted
                 NSLog("🔇 [PLAYER MUTE] handleOnDisappear - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
             }
+            
+            // CRITICAL FIX: Stop buffering when video goes out of sight to prevent performance degradation
+            // This stops CachingPlayerItem from continuing to download segments in the background
+            if let playerItem = player?.currentItem {
+                // Reduce buffer duration to stop aggressive buffering
+                playerItem.preferredForwardBufferDuration = 0.0
+                // Ensure network resources are not used while paused
+                if let cachingPlayerItem = playerItem as? CachingPlayerItem {
+                    cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                }
+                NSLog("DEBUG: [SimpleVideoPlayer] Stopped buffering for out-of-sight video: \(mid)")
+            }
+            
+            // Also cancel loading tasks in SharedAssetCache for this video
+            Task { @MainActor in
+                if let parentTweetId = parentTweetId {
+                    // Cancel loading tasks even if cached content exists (video is out of sight)
+                    SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweetId)
+                }
+            }
         } else if mode == .mediaBrowser {
             // Exiting fullscreen - ALWAYS pause and restore mute state for MediaCell reuse
             player?.pause()
@@ -1257,6 +1277,21 @@ struct SimpleVideoPlayer: View {
             guard shouldLoadVideo else {
                 print("DEBUG: [VIDEO VISIBILITY] Video became visible but loading is disabled for \(mid)")
                 return
+            }
+            
+            // CRITICAL FIX: Restore buffering settings when video becomes visible again
+            // This allows videos to buffer properly when they come back into view
+            if mode == .mediaCell, let playerItem = player?.currentItem {
+                // Restore buffer duration for proper buffering
+                if let cachingPlayerItem = playerItem as? CachingPlayerItem {
+                    cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Restore normal buffering
+                    cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Keep this false
+                    print("DEBUG: [SimpleVideoPlayer] Restored buffering settings for visible video: \(mid)")
+                } else {
+                    // For progressive videos, restore buffer duration
+                    playerItem.preferredForwardBufferDuration = 30.0
+                    print("DEBUG: [SimpleVideoPlayer] Restored buffering settings for visible progressive video: \(mid)")
+                }
             }
             
             // Check if video is in failed state and needs retry

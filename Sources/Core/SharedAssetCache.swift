@@ -266,6 +266,40 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
+    /// Cancel loading tasks for out-of-sight videos (even if cached content exists)
+    /// This is used when videos scroll out of view to stop active buffering/downloading
+    @MainActor func cancelLoadingForOutOfSightTweet(_ tweetId: String) {
+        print("DEBUG: [SharedAssetCache] Cancelling loading for out-of-sight tweet \(tweetId)")
+        
+        // Find all mediaIDs associated with this tweet and cancel their loading
+        // This cancels active loading tasks even if cached content exists
+        let tweetMediaIDs = getMediaIDsForTweet(tweetId)
+        for mediaID in tweetMediaIDs {
+            // Cancel loading tasks regardless of cache status
+            if let loadingTask = loadingTasks[mediaID] {
+                loadingTask.cancel()
+                loadingTasks.removeValue(forKey: mediaID)
+                print("DEBUG: [SharedAssetCache] Cancelled loading task for out-of-sight mediaID: \(mediaID)")
+            }
+            
+            // Cancel preload tasks
+            if let preloadTask = preloadTasks[mediaID] {
+                preloadTask.cancel()
+                preloadTasks.removeValue(forKey: mediaID)
+                print("DEBUG: [SharedAssetCache] Cancelled preload task for out-of-sight mediaID: \(mediaID)")
+            }
+            
+            // Stop buffering for CachingPlayerItem if it exists
+            if let cachingPlayerItem = cachingPlayerItems[mediaID] {
+                // Reduce buffer duration to stop aggressive buffering
+                cachingPlayerItem.preferredForwardBufferDuration = 0.0
+                // Ensure network resources are not used while paused
+                cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                print("DEBUG: [SharedAssetCache] Stopped buffering for out-of-sight CachingPlayerItem: \(mediaID)")
+            }
+        }
+    }
+    
     /// Trigger video preloading for a tweet
     /// This works by posting a notification that MediaGridView listens to
     /// MediaGridView will then set shouldLoadVideo=true, causing MediaCell to load the video
