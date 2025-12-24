@@ -814,6 +814,8 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Resolve HLS URL with specific fallback strategy
+    /// Sequential approach: tries master.m3u8 first, then playlist.m3u8 only if master fails
+    /// Does NOT try them simultaneously
     private func resolveHLSURL(_ url: URL) async -> URL {
         let urlString = url.absoluteString
         
@@ -827,38 +829,28 @@ class SharedAssetCache: ObservableObject {
             return url
         }
         
-        // HLS fallback strategy: master.m3u8 -> playlist.m3u8 -> retry once -> fail
+        // HLS fallback strategy: master.m3u8 -> playlist.m3u8 (sequential, not simultaneous)
         let masterURL = url.appendingPathComponent("master.m3u8")
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
         
         print("DEBUG: [SharedAssetCache] Resolving HLS URL: \(url.absoluteString)")
         
-        // First attempt: try master.m3u8, then playlist.m3u8
+        // Step 1: Try master.m3u8 first (wait for completion before proceeding)
+        print("DEBUG: [SharedAssetCache] Checking master.m3u8...")
         if await urlExists(masterURL, timeout: 15.0) {
             print("DEBUG: [SharedAssetCache] Found master.m3u8 at: \(masterURL.absoluteString)")
             return masterURL
         }
         
+        // Step 2: Only if master.m3u8 failed, try playlist.m3u8 (sequential, not simultaneous)
+        print("DEBUG: [SharedAssetCache] master.m3u8 not found, trying playlist.m3u8...")
         if await urlExists(playlistURL, timeout: 15.0) {
             print("DEBUG: [SharedAssetCache] Found playlist.m3u8 at: \(playlistURL.absoluteString)")
             return playlistURL
         }
         
-        // Second attempt: retry the combo once more
-        print("DEBUG: [SharedAssetCache] First attempt failed, retrying HLS URLs...")
-        
-        if await urlExists(masterURL, timeout: 15.0) {
-            print("DEBUG: [SharedAssetCache] Retry successful - found master.m3u8 at: \(masterURL.absoluteString)")
-            return masterURL
-        }
-        
-        if await urlExists(playlistURL, timeout: 15.0) {
-            print("DEBUG: [SharedAssetCache] Retry successful - found playlist.m3u8 at: \(playlistURL.absoluteString)")
-            return playlistURL
-        }
-        
-        // If both attempts fail, return original URL and let it fail
-        print("DEBUG: [SharedAssetCache] HLS resolution failed for: \(url.absoluteString)")
+        // If both fail, return original URL and let it fail
+        print("DEBUG: [SharedAssetCache] HLS resolution failed - neither master.m3u8 nor playlist.m3u8 found for: \(url.absoluteString)")
         return url
     }
     
