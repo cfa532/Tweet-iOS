@@ -8,6 +8,12 @@
 import SwiftUI
 import QuickLook
 
+/// Identifiable wrapper for document URL to use with .sheet(item:)
+struct DocumentURLItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 /// View that displays document attachments vertically below media grid
 struct DocumentAttachmentsView: View {
     let parentTweet: Tweet
@@ -15,8 +21,7 @@ struct DocumentAttachmentsView: View {
     let maxDocuments: Int? // If set, limits number of documents shown and adds ellipsis
     
     @State private var selectedDocument: MimeiFileType?
-    @State private var showPDFViewer = false
-    @State private var pdfURL: URL?
+    @State private var documentURLItem: DocumentURLItem? // Use item-based sheet
     @State private var isDownloading = false
     @State private var showDownloadSheet = false
     @State private var documentToDownload: MimeiFileType?
@@ -79,39 +84,16 @@ struct DocumentAttachmentsView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color(.systemGray4), lineWidth: 1)
         )
-        .sheet(isPresented: $showPDFViewer, onDismiss: {
-            // Clean up state when sheet is dismissed
+        .sheet(item: $documentURLItem, onDismiss: {
             print("DEBUG: [DocumentAttachmentsView] Sheet dismissed")
-        }) {
-            Group {
-                if let pdfURL = pdfURL {
-                    PDFQuickLookView(url: pdfURL)
-                        .onAppear {
-                            print("DEBUG: [DocumentAttachmentsView] Sheet presenting with URL: \(pdfURL.lastPathComponent)")
-                        }
-                        .onDisappear {
-                            print("DEBUG: [DocumentAttachmentsView] PDFQuickLookView disappeared")
-                        }
-                } else {
-                    VStack(spacing: 16) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 48))
-                            .foregroundColor(.orange)
-                        Text("Failed to load document")
-                            .font(.headline)
-                        Text("Please try again")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Button("Close") {
-                            showPDFViewer = false
-                        }
-                        .padding()
-                    }
-                    .onAppear {
-                        print("ERROR: [DocumentAttachmentsView] Sheet presented but pdfURL is nil!")
-                    }
+        }) { item in
+            PDFQuickLookView(url: item.url)
+                .onAppear {
+                    print("DEBUG: [DocumentAttachmentsView] Sheet presenting with URL: \(item.url.lastPathComponent)")
                 }
-            }
+                .onDisappear {
+                    print("DEBUG: [DocumentAttachmentsView] PDFQuickLookView disappeared")
+                }
         }
         .confirmationDialog(
             "Document Options",
@@ -144,10 +126,6 @@ struct DocumentAttachmentsView: View {
             return
         }
         
-        // Reset state before loading
-        showPDFViewer = false
-        pdfURL = nil
-        
         // Create consistent filename based on document CID
         let tempDirectory = FileManager.default.temporaryDirectory
         let originalFileName = document.fileName ?? "Document.pdf"
@@ -169,16 +147,15 @@ struct DocumentAttachmentsView: View {
             // File exists and is valid - use cached version
             print("DEBUG: [DocumentAttachmentsView] Using cached file: \(uniqueFileName) (\(fileSize) bytes)")
             
-            // Set URL and present immediately on main thread
-            DispatchQueue.main.async {
-                self.pdfURL = cachedURL
-                // Wait one runloop cycle to ensure URL is set
-                DispatchQueue.main.async {
-                    self.showPDFViewer = true
-                }
-            }
+            // Present sheet with URL item - this guarantees the URL is available
+            self.documentURLItem = DocumentURLItem(url: cachedURL)
+            print("DEBUG: [DocumentAttachmentsView] Presenting PDF viewer (cached) with URL: \(cachedURL.lastPathComponent)")
             return
         }
+        
+        // File doesn't exist or is invalid - need to download
+        // Reset state only when starting a new download
+        documentURLItem = nil
         
         // File doesn't exist or is invalid - download it
         print("DEBUG: [DocumentAttachmentsView] Downloading file from server...")
@@ -207,25 +184,33 @@ struct DocumentAttachmentsView: View {
                     
                     // Copy downloaded file to cache
                     try FileManager.default.copyItem(at: localURL, to: cachedURL)
-                    print("DEBUG: [DocumentAttachmentsView] Cached file: \(uniqueFileName)")
+                    print("DEBUG: [DocumentAttachmentsView] File copied to cache: \(uniqueFileName)")
                     
-                    // Verify file is valid
-                    guard let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
+                    // Wait briefly for file system to commit
+                    Thread.sleep(forTimeInterval: 0.05)
+                    
+                    // Verify file is valid and readable
+                    guard FileManager.default.fileExists(atPath: cachedURL.path),
+                          let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
                           let fileSize = attributes[.size] as? Int64,
-                          fileSize > 0 else {
-                        print("ERROR: [DocumentAttachmentsView] Downloaded file is empty or invalid")
+                          fileSize > 0,
+                          FileManager.default.isReadableFile(atPath: cachedURL.path) else {
+                        print("ERROR: [DocumentAttachmentsView] Downloaded file is empty, invalid, or not readable")
+                        print("ERROR: [DocumentAttachmentsView] Exists: \(FileManager.default.fileExists(atPath: cachedURL.path))")
+                        if let attrs = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
+                           let size = attrs[.size] as? Int64 {
+                            print("ERROR: [DocumentAttachmentsView] Size: \(size) bytes")
+                        }
+                        print("ERROR: [DocumentAttachmentsView] Readable: \(FileManager.default.isReadableFile(atPath: cachedURL.path))")
                         try? FileManager.default.removeItem(at: cachedURL)
                         return
                     }
                     
-                    print("DEBUG: [DocumentAttachmentsView] File verified: \(fileSize) bytes")
+                    print("DEBUG: [DocumentAttachmentsView] File verified and readable: \(fileSize) bytes)")
                     
-                    // Set URL first, then present
-                    self.pdfURL = cachedURL
-                    // Wait one runloop cycle to ensure URL is set
-                    DispatchQueue.main.async {
-                        self.showPDFViewer = true
-                    }
+                    // Present sheet with URL item - this guarantees the URL is available
+                    self.documentURLItem = DocumentURLItem(url: cachedURL)
+                    print("DEBUG: [DocumentAttachmentsView] Presenting PDF viewer (downloaded) with URL: \(cachedURL.lastPathComponent)")
                 } catch {
                     print("ERROR: [DocumentAttachmentsView] Failed to cache file: \(error.localizedDescription)")
                     // Clean up partial file
