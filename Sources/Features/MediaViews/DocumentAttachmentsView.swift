@@ -63,7 +63,7 @@ struct DocumentAttachmentsView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             // Vertical list of documents
             ForEach(displayedDocuments, id: \.mid) { document in
                 DocumentRowView(
@@ -416,7 +416,7 @@ struct DocumentRowView: View {
                 .buttonStyle(PlainButtonStyle())
                 .disabled(isDownloadingForShare)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Color(.systemGray6))
             .cornerRadius(8)

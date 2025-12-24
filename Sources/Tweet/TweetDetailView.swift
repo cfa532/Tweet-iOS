@@ -524,7 +524,8 @@ struct TweetDetailView: View {
                         documents: documentAttachments,
                         maxDocuments: nil // Show all documents in detail view
                     )
-                    .padding(.leading, 48) // Left alignment with 8pt padding
+                    .padding(.leading, 48) // Left alignment with 48pt padding
+                    .padding(.trailing, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .onAppear {
                         print("DEBUG: [TweetDetailView] Total attachments: \(attachments.count), Documents: \(documentAttachments.count)")
