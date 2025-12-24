@@ -85,16 +85,12 @@ struct TweetItemBodyView: View {
             }
             // Separate media and documents
             if let attachments = tweet.attachments, !attachments.isEmpty {
-                let mediaAttachments = attachments.filter { attachment in
-                    attachment.type == .image || attachment.type == .video || attachment.type == .hls_video || attachment.type == .audio
-                }
-                let documentAttachments = attachments.filter { attachment in
-                    attachment.type == .pdf || attachment.type == .word || attachment.type == .excel || 
-                    attachment.type == .ppt || attachment.type == .zip || attachment.type == .txt || attachment.type == .html
-                }
+                // Filter attachments into media (visual) and documents
+                let mediaAttachments = attachments.filter { isMediaType($0.type) }
+                let documentAttachments = attachments.filter { isDocumentType($0.type) }
                 
                 VStack(alignment: .leading, spacing: 0) {
-                    // MediaGrid for images, videos, and audio
+                    // MediaGrid for images, videos, and audio (visual content)
                     if !mediaAttachments.isEmpty {
                         MediaGridView(
                             parentTweet: tweet,
@@ -119,19 +115,41 @@ struct TweetItemBodyView: View {
                         }
                     }
                     
-                    // Document attachments in wrappable rows
+                    // Document attachments in wrappable rows (below media)
                     if !documentAttachments.isEmpty {
                         DocumentAttachmentsView(
                             parentTweet: tweet,
                             documents: documentAttachments
                         )
-                        .padding(.top, mediaAttachments.isEmpty ? 4 : 0)
+                        .padding(.top, mediaAttachments.isEmpty ? 4 : 8)
                     }
                 }
             }
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+    }
+    
+    // MARK: - Helper Functions
+    
+    /// Determines if a media type is visual content (should be in MediaGrid)
+    private func isMediaType(_ type: MediaType) -> Bool {
+        switch type {
+        case .image, .video, .hls_video, .audio:
+            return true
+        default:
+            return false
+        }
+    }
+    
+    /// Determines if a media type is a document (should be in DocumentAttachmentsView)
+    private func isDocumentType(_ type: MediaType) -> Bool {
+        switch type {
+        case .pdf, .word, .excel, .ppt, .zip, .txt, .html:
+            return true
+        default:
+            return false
         }
     }
 }
