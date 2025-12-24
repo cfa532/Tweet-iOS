@@ -658,43 +658,57 @@ struct ChatAttachmentLoader: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
                 // Loaded state - show file info
-                HStack {
-                    Image(systemName: getAttachmentIcon(for: attachment.type))
-                        .foregroundColor(getIconColor(for: attachment.type))
-                        .font(.system(size: 20))
-                        .frame(width: 24)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(attachment.fileName ?? getDefaultFileName())
-                            .font(.caption)
-                            .foregroundColor(.primary)
-                            .lineLimit(1)
-                        if let size = attachment.size {
-                            Text(formatFileSize(size))
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                ZStack {
+                    HStack {
+                        Image(systemName: getAttachmentIcon(for: attachment.type))
+                            .foregroundColor(getIconColor(for: attachment.type))
+                            .font(.system(size: 20))
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(truncateFileName(attachment.fileName ?? getDefaultFileName()))
+                                .font(.caption)
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                            if let size = attachment.size {
+                                Text(formatFileSize(size))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
-                    }
-                    Spacer()
-                    // Download/share button for all document types
-                    Button(action: {
-                        downloadAndShare()
-                    }) {
-                        if isDownloadingForShare {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                        } else {
-                            Image(systemName: "arrow.down.circle")
-                                .foregroundColor(getIconColor(for: attachment.type))
+                        Spacer()
+                        // Download/share button for all document types
+                        Button(action: {
+                            downloadAndShare()
+                        }) {
+                            if isDownloadingForShare {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "arrow.down.circle")
+                                    .foregroundColor(getIconColor(for: attachment.type))
+                            }
                         }
+                        .buttonStyle(PlainButtonStyle())
+                        .disabled(isDownloadingForShare)
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
+                    .opacity(isDownloading ? 0.5 : 1.0)
+                    .disabled(isDownloading || isDownloadingForShare)
+                    
+                    // Spinner overlay when downloading for preview
+                    if isDownloading {
+                        ProgressView()
+                            .scaleEffect(1.2)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color(.systemGray6).opacity(0.8))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
                 }
-                .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .contentShape(RoundedRectangle(cornerRadius: 8))
                 .onTapGesture {
                     // Tap on document row - open preview
                     if !isDownloading && !isDownloadingForShare {
@@ -750,9 +764,17 @@ struct ChatAttachmentLoader: View {
             // File exists and is valid - use cached version
             print("DEBUG: [ChatAttachmentLoader] Using cached file: \(uniqueFileName) (\(fileSize) bytes)")
             
+            // Show spinner briefly while presenting
+            isDownloading = true
+            
             // Present sheet with URL item
             self.documentURLItem = DocumentURLItem(url: cachedURL)
             print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (cached) with URL: \(cachedURL.lastPathComponent)")
+            
+            // Hide spinner after a brief delay to ensure sheet is presented
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.isDownloading = false
+            }
             return
         }
         
@@ -767,11 +789,17 @@ struct ChatAttachmentLoader: View {
                 self.isDownloading = false
                 
                 if let error = error {
+                    DispatchQueue.main.async {
+                        self.isDownloading = false
+                    }
                     print("ERROR: [ChatAttachmentLoader] Failed to download: \(error)")
                     return
                 }
                 
                 guard let localURL = localURL else {
+                    DispatchQueue.main.async {
+                        self.isDownloading = false
+                    }
                     print("ERROR: [ChatAttachmentLoader] No local URL")
                     return
                 }
@@ -796,6 +824,9 @@ struct ChatAttachmentLoader: View {
                           let fileSize = attributes[.size] as? Int64,
                           fileSize > 0,
                           FileManager.default.isReadableFile(atPath: cachedURL.path) else {
+                        DispatchQueue.main.async {
+                            self.isDownloading = false
+                        }
                         print("ERROR: [ChatAttachmentLoader] Downloaded file is empty, invalid, or not readable")
                         try? FileManager.default.removeItem(at: cachedURL)
                         return
@@ -804,9 +835,18 @@ struct ChatAttachmentLoader: View {
                     print("DEBUG: [ChatAttachmentLoader] File verified and readable: \(fileSize) bytes)")
                     
                     // Present sheet with URL item
+                    // The spinner will be hidden when the sheet appears
                     self.documentURLItem = DocumentURLItem(url: cachedURL)
                     print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (downloaded) with URL: \(cachedURL.lastPathComponent)")
+                    
+                    // Hide spinner after a brief delay to ensure sheet is presented
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        self.isDownloading = false
+                    }
                 } catch {
+                    DispatchQueue.main.async {
+                        self.isDownloading = false
+                    }
                     print("ERROR: [ChatAttachmentLoader] Failed to cache file: \(error.localizedDescription)")
                     // Clean up partial file
                     try? FileManager.default.removeItem(at: cachedURL)
@@ -849,46 +889,50 @@ struct ChatAttachmentLoader: View {
                 // Copy file with original name
                 try FileManager.default.copyItem(at: localURL, to: destinationURL)
                 
-                DispatchQueue.main.async {
-                    self.isDownloadingForShare = false
-                    
-                    // Present share sheet with properly named file
-                    let activityVC = UIActivityViewController(
-                        activityItems: [destinationURL],
-                        applicationActivities: nil
-                    )
-                    
-                    // Exclude some activities that don't make sense for documents
-                    activityVC.excludedActivityTypes = [
-                        .assignToContact,
-                        .addToReadingList,
-                        .postToFacebook,
-                        .postToTwitter,
-                        .postToWeibo,
-                        .postToVimeo,
-                        .postToFlickr
-                    ]
-                    
-                    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                       let rootViewController = windowScene.windows.first?.rootViewController {
-                        var topController = rootViewController
-                        while let presented = topController.presentedViewController {
-                            topController = presented
-                        }
+                    DispatchQueue.main.async {
+                        // Present share sheet with properly named file
+                        let activityVC = UIActivityViewController(
+                            activityItems: [destinationURL],
+                            applicationActivities: nil
+                        )
                         
-                        // For iPad, need to set source view
-                        if let popover = activityVC.popoverPresentationController {
-                            popover.sourceView = topController.view
-                            popover.sourceRect = CGRect(x: topController.view.bounds.midX,
-                                                       y: topController.view.bounds.midY,
-                                                       width: 0, height: 0)
-                            popover.permittedArrowDirections = []
-                        }
+                        // Exclude some activities that don't make sense for documents
+                        activityVC.excludedActivityTypes = [
+                            .assignToContact,
+                            .addToReadingList,
+                            .postToFacebook,
+                            .postToTwitter,
+                            .postToWeibo,
+                            .postToVimeo,
+                            .postToFlickr
+                        ]
                         
-                        topController.present(activityVC, animated: true)
-                        print("DEBUG: [ChatAttachmentLoader] Share sheet presented with file: \(originalFileName)")
+                        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                           let rootViewController = windowScene.windows.first?.rootViewController {
+                            var topController = rootViewController
+                            while let presented = topController.presentedViewController {
+                                topController = presented
+                            }
+                            
+                            // For iPad, need to set source view
+                            if let popover = activityVC.popoverPresentationController {
+                                popover.sourceView = topController.view
+                                popover.sourceRect = CGRect(x: topController.view.bounds.midX,
+                                                           y: topController.view.bounds.midY,
+                                                           width: 0, height: 0)
+                                popover.permittedArrowDirections = []
+                            }
+                            
+                            topController.present(activityVC, animated: true) {
+                                // Only hide spinner after share sheet is presented
+                                self.isDownloadingForShare = false
+                                print("DEBUG: [ChatAttachmentLoader] Share sheet presented with file: \(originalFileName)")
+                            }
+                        } else {
+                            // Fallback: hide spinner if we can't present
+                            self.isDownloadingForShare = false
+                        }
                     }
-                }
             } catch {
                 DispatchQueue.main.async {
                     self.isDownloadingForShare = false
@@ -915,6 +959,20 @@ struct ChatAttachmentLoader: View {
         default:
             return .gray
         }
+    }
+    
+    private func truncateFileName(_ fileName: String, maxLength: Int = 30) -> String {
+        guard fileName.count > maxLength else {
+            return fileName
+        }
+        
+        let ellipsis = "..."
+        let halfLength = (maxLength - ellipsis.count) / 2
+        
+        let start = String(fileName.prefix(halfLength))
+        let end = String(fileName.suffix(halfLength))
+        
+        return "\(start)\(ellipsis)\(end)"
     }
     
     private func getDefaultFileName() -> String {
