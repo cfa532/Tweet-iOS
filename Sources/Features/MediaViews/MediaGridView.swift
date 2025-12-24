@@ -374,13 +374,6 @@ struct MediaGridView: View, Equatable {
                     }
                     
                 case 4:
-                    let ar0 = attachments[0].aspectRatio ?? 1
-                    let ar1 = attachments[1].aspectRatio ?? 1
-                    let ar2 = attachments[2].aspectRatio ?? 1
-                    let ar3 = attachments[3].aspectRatio ?? 1
-                    let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1 && ar3 < 1
-                    let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1 && ar3 > 1
-                    let _: CGFloat = allPortrait ? 3.0/2.0 : (allLandscape ? 4.0/5.0 : 1.0)
                     VStack(spacing: 2) {
                         HStack(spacing: 2) {
                             ForEach(0..<2) { idx in
@@ -717,10 +710,26 @@ struct ZoomableView<Content: View>: View {
 
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {
+    /// Get aspect ratio for an attachment, detecting from cached image if nil
+    private static func getAspectRatio(for attachment: MimeiFileType) -> Float {
+        // For images, try to detect from cached image if aspectRatio is nil
+        if attachment.type == .image, attachment.aspectRatio == nil {
+            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+                let size = cachedImage.size
+                guard size.height > 0 else { return 1.0 }
+                return Float(size.width / size.height)
+            }
+        }
+        
+        // Use stored aspect ratio if available, otherwise default to 1.0
+        return attachment.aspectRatio ?? 1.0
+    }
+    
     static func aspectRatio(for attachments: [MimeiFileType]) -> CGFloat {
         switch attachments.count {
         case 1:
-            if let ar = attachments[0].aspectRatio, ar > 0 {
+            let ar = getAspectRatio(for: attachments[0])
+            if ar > 0 {
                 if ar < 0.9 {
                     return 0.9 // Portrait aspect ratio
                 } else {
@@ -730,8 +739,8 @@ struct MediaGridViewModel {
                 return 1.618 // Square when no aspect ratio is available
             }
         case 2:
-            let ar0 = attachments[0].aspectRatio ?? 1
-            let ar1 = attachments[1].aspectRatio ?? 1
+            let ar0 = getAspectRatio(for: attachments[0])
+            let ar1 = getAspectRatio(for: attachments[1])
             let isPortrait0 = ar0 < 1
             let isPortrait1 = ar1 < 1
             let isLandscape0 = ar0 > 1
@@ -742,6 +751,24 @@ struct MediaGridViewModel {
                 return 4.0/5.0  // Both landscape: vertical, aspect 4:5
             } else {
                 return 2.0      // One portrait, one landscape: horizontal, aspect 2:1
+            }
+        case 4:
+            // Get aspect ratios - detect from cached images if nil
+            let ar0 = getAspectRatio(for: attachments[0])
+            let ar1 = getAspectRatio(for: attachments[1])
+            let ar2 = getAspectRatio(for: attachments[2])
+            let ar3 = getAspectRatio(for: attachments[3])
+            
+            // Check orientation: portrait < 1.0, landscape > 1.0
+            let allPortrait = ar0 < 1.0 && ar1 < 1.0 && ar2 < 1.0 && ar3 < 1.0
+            let allLandscape = ar0 > 1.0 && ar1 > 1.0 && ar2 > 1.0 && ar3 > 1.0
+            
+            if allLandscape {
+                return 1.618
+            } else if allPortrait {
+                return 0.8
+            } else {
+                return 1.0
             }
         default:
             return 1.0
