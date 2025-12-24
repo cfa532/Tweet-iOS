@@ -83,29 +83,49 @@ struct TweetItemBodyView: View {
                     }
                 }
             }
-            // MediaGrid to show attachment previews.
+            // Separate media and documents
             if let attachments = tweet.attachments, !attachments.isEmpty {
+                let mediaAttachments = attachments.filter { attachment in
+                    attachment.type == .image || attachment.type == .video || attachment.type == .hls_video || attachment.type == .audio
+                }
+                let documentAttachments = attachments.filter { attachment in
+                    attachment.type == .pdf || attachment.type == .word || attachment.type == .excel || 
+                    attachment.type == .ppt || attachment.type == .zip || attachment.type == .txt || attachment.type == .html
+                }
+                
                 VStack(alignment: .leading, spacing: 0) {
-                    MediaGridView(
-                        parentTweet: tweet,
-                        attachments: attachments,
-                        isEmbedded: isEmbedded
-                    )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .clipped()
-                        .cornerRadius(8)
-                        .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
-                        .padding(.top, 4)
-                    
-                    if let caption = singleVideoCaption(for: attachments) {
-                        Text(caption)
-                            .font(.system(size: 14, weight: .regular)) // Use explicit size to control spacing
-                            .foregroundColor(.primary.opacity(0.6))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                    // MediaGrid for images, videos, and audio
+                    if !mediaAttachments.isEmpty {
+                        MediaGridView(
+                            parentTweet: tweet,
+                            attachments: mediaAttachments,
+                            isEmbedded: isEmbedded
+                        )
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true) // Prevent extra vertical expansion
-                            .padding(.top, 2)
+                            .clipped()
+                            .cornerRadius(8)
+                            .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
+                            .padding(.top, 4)
+                        
+                        if let caption = singleVideoCaption(for: mediaAttachments) {
+                            Text(caption)
+                                .font(.system(size: 14, weight: .regular))
+                                .foregroundColor(.primary.opacity(0.6))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 2)
+                        }
+                    }
+                    
+                    // Document attachments in wrappable rows
+                    if !documentAttachments.isEmpty {
+                        DocumentAttachmentsView(
+                            parentTweet: tweet,
+                            documents: documentAttachments
+                        )
+                        .padding(.top, mediaAttachments.isEmpty ? 4 : 0)
                     }
                 }
             }

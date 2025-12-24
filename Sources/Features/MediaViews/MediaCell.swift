@@ -173,15 +173,8 @@ struct MediaCell: View, Equatable {
                             handleTap()
                         }
                     }
-                case .pdf:
-                    PDFPreviewView(attachment: attachment, baseUrl: baseUrl)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .onTapGesture {
-                            if !isEmbedded {
-                                handleTap()
-                            }
-                        }
                 default:
+                    // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
                     EmptyView()
                 }
             } else {
@@ -364,11 +357,8 @@ struct MediaCell: View, Equatable {
         case .image:
             // Open full-screen for images
             showFullScreen = true
-        case .pdf:
-            // Open full-screen for PDFs
-            showFullScreen = true
         default:
-            // Open full-screen for other types
+            // Documents are handled by DocumentAttachmentsView
             return
         }
     }

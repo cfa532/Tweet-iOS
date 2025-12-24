@@ -346,13 +346,25 @@ struct PDFQuickLookView: UIViewControllerRepresentable {
     let url: URL
     
     func makeUIViewController(context: Context) -> QLPreviewController {
+        print("DEBUG: [PDFQuickLookView] Creating QLPreviewController for: \(url.lastPathComponent)")
+        print("DEBUG: [PDFQuickLookView] File path: \(url.path)")
+        print("DEBUG: [PDFQuickLookView] File exists: \(FileManager.default.fileExists(atPath: url.path))")
+        
         let controller = QLPreviewController()
         controller.dataSource = context.coordinator
+        
+        // Force reload to ensure data source is queried
+        DispatchQueue.main.async {
+            controller.reloadData()
+        }
+        
         return controller
     }
     
     func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {
-        // No updates needed
+        // Reload data when URL changes
+        context.coordinator.url = url
+        uiViewController.reloadData()
     }
     
     func makeCoordinator() -> Coordinator {
@@ -360,18 +372,46 @@ struct PDFQuickLookView: UIViewControllerRepresentable {
     }
     
     class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let url: URL
+        var url: URL
         
         init(url: URL) {
             self.url = url
+            super.init()
         }
         
         func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
+            print("DEBUG: [PDFQuickLookView] numberOfPreviewItems called, returning 1")
             return 1
         }
         
         func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-            return url as QLPreviewItem
+            print("DEBUG: [PDFQuickLookView] previewItemAt \(index) called")
+            print("DEBUG: [PDFQuickLookView] Returning URL: \(url.path)")
+            
+            // Create a proper preview item wrapper
+            let item = PreviewItem(url: url, title: url.lastPathComponent)
+            return item
+        }
+    }
+    
+    // Wrapper class that properly conforms to QLPreviewItem
+    private class PreviewItem: NSObject, QLPreviewItem {
+        let url: URL
+        let title: String
+        
+        var previewItemURL: URL? {
+            print("DEBUG: [PreviewItem] previewItemURL accessed: \(url.path)")
+            return url
+        }
+        
+        var previewItemTitle: String? {
+            return title
+        }
+        
+        init(url: URL, title: String) {
+            self.url = url
+            self.title = title
+            super.init()
         }
     }
 }

@@ -148,10 +148,8 @@ struct DetailMediaCell: View {
                             }
                         }
                     }
-                case .pdf:
-                    // Show PDF preview
-                    PDFPreviewView(attachment: attachment, baseUrl: baseUrl)
                 default:
+                    // Documents are shown in DocumentAttachmentsView, not in detail media viewer
                     Color.gray.opacity(0.2)
                 }
             } else {
