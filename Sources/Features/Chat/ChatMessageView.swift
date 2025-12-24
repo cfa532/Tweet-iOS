@@ -86,8 +86,16 @@ struct ChatMessageView: View {
                                     senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
                                 )
                             } else {
-                                // Other file types
-                                ChatAttachmentLoader(attachment: attachment, isFromCurrentUser: isFromCurrentUser)
+                                // Document attachments - use DocumentAttachmentsView
+                                let documentAttachments = [attachment]
+                                let baseUrl = isFromCurrentUser 
+                                    ? (HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl)
+                                    : (receiptUser?.baseUrl ?? HproseInstance.baseUrl)
+                                DocumentAttachmentsView(
+                                    documents: documentAttachments,
+                                    baseUrl: baseUrl,
+                                    maxDocuments: nil
+                                )
                             }
                         } else {
                             // Multiple attachments

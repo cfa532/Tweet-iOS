@@ -2,7 +2,7 @@
 //  DocumentAttachmentsView.swift
 //  Tweet
 //
-//  View for displaying document attachments (PDF, Word, etc.) in wrappable rows
+//  View for displaying document attachments (PDF, Word, etc.) with improved UI
 //
 
 import SwiftUI
@@ -16,18 +16,36 @@ struct DocumentURLItem: Identifiable {
 
 /// View that displays document attachments vertically below media grid
 struct DocumentAttachmentsView: View {
-    let parentTweet: Tweet
+    let parentTweet: Tweet?
     let documents: [MimeiFileType]
     let maxDocuments: Int? // If set, limits number of documents shown and adds ellipsis
+    let baseUrl: URL? // Optional baseUrl override (for chat messages)
     
-    @State private var selectedDocument: MimeiFileType?
     @State private var documentURLItem: DocumentURLItem? // Use item-based sheet
-    @State private var isDownloading = false
+    @State private var downloadingDocuments: Set<String> = [] // Track which documents are downloading
+    @State private var downloadingForShare: Set<String> = [] // Track which documents are downloading for share
     
-    private var baseUrl: URL {
-        return parentTweet.author?.baseUrl 
+    private var resolvedBaseUrl: URL {
+        return baseUrl 
+            ?? parentTweet?.author?.baseUrl 
             ?? HproseInstance.shared.appUser.baseUrl 
             ?? HproseInstance.baseUrl
+    }
+    
+    // Convenience initializer for Tweet context
+    init(parentTweet: Tweet, documents: [MimeiFileType], maxDocuments: Int? = nil) {
+        self.parentTweet = parentTweet
+        self.documents = documents
+        self.maxDocuments = maxDocuments
+        self.baseUrl = nil
+    }
+    
+    // Convenience initializer for Chat context
+    init(documents: [MimeiFileType], baseUrl: URL, maxDocuments: Int? = nil) {
+        self.parentTweet = nil
+        self.documents = documents
+        self.maxDocuments = maxDocuments
+        self.baseUrl = baseUrl
     }
     
     private var displayedDocuments: [MimeiFileType] {
@@ -50,11 +68,13 @@ struct DocumentAttachmentsView: View {
             ForEach(displayedDocuments, id: \.mid) { document in
                 DocumentRowView(
                     document: document,
+                    isDownloading: downloadingDocuments.contains(document.mid),
+                    isDownloadingForShare: downloadingForShare.contains(document.mid),
                     onTap: {
                         downloadAndShowDocument(document)
                     },
-                    onLongPress: {
-                        downloadToFiles(document)
+                    onDownloadTap: {
+                        downloadAndShare(document)
                     }
                 )
             }
@@ -67,10 +87,8 @@ struct DocumentAttachmentsView: View {
                 HStack(spacing: 4) {
                     Text("···")
                         .font(.system(size: 20, weight: .bold))
-//                        .foregroundColor(.secondary)
                     Text("+\(documents.count - displayedDocuments.count) more")
                         .font(.system(size: 13))
-//                        .foregroundColor(.secondary)
                 }
                 .padding(.leading, 12)
                 .padding(.top, 0)
@@ -96,12 +114,12 @@ struct DocumentAttachmentsView: View {
     
     private func downloadAndShowDocument(_ document: MimeiFileType) {
         // Prevent duplicate taps while downloading
-        guard !isDownloading else {
+        guard !downloadingDocuments.contains(document.mid) else {
             print("DEBUG: [DocumentAttachmentsView] Already downloading, ignoring tap")
             return
         }
         
-        guard let url = document.getUrl(baseUrl) else {
+        guard let url = document.getUrl(resolvedBaseUrl) else {
             print("ERROR: [DocumentAttachmentsView] Invalid document URL")
             return
         }
@@ -127,23 +145,29 @@ struct DocumentAttachmentsView: View {
             // File exists and is valid - use cached version
             print("DEBUG: [DocumentAttachmentsView] Using cached file: \(uniqueFileName) (\(fileSize) bytes)")
             
-            // Present sheet with URL item - this guarantees the URL is available
+            // Show spinner briefly while presenting
+            downloadingDocuments.insert(document.mid)
+            
+            // Present sheet with URL item
             self.documentURLItem = DocumentURLItem(url: cachedURL)
             print("DEBUG: [DocumentAttachmentsView] Presenting PDF viewer (cached) with URL: \(cachedURL.lastPathComponent)")
+            
+            // Hide spinner after a brief delay to ensure sheet is presented
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                downloadingDocuments.remove(document.mid)
+            }
             return
         }
         
         // File doesn't exist or is invalid - need to download
-        // Reset state only when starting a new download
         documentURLItem = nil
         
-        // File doesn't exist or is invalid - download it
         print("DEBUG: [DocumentAttachmentsView] Downloading file from server...")
-        isDownloading = true
+        downloadingDocuments.insert(document.mid)
         
         let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
             DispatchQueue.main.async {
-                self.isDownloading = false
+                downloadingDocuments.remove(document.mid)
                 
                 if let error = error {
                     print("ERROR: [DocumentAttachmentsView] Failed to download: \(error)")
@@ -176,19 +200,13 @@ struct DocumentAttachmentsView: View {
                           fileSize > 0,
                           FileManager.default.isReadableFile(atPath: cachedURL.path) else {
                         print("ERROR: [DocumentAttachmentsView] Downloaded file is empty, invalid, or not readable")
-                        print("ERROR: [DocumentAttachmentsView] Exists: \(FileManager.default.fileExists(atPath: cachedURL.path))")
-                        if let attrs = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
-                           let size = attrs[.size] as? Int64 {
-                            print("ERROR: [DocumentAttachmentsView] Size: \(size) bytes")
-                        }
-                        print("ERROR: [DocumentAttachmentsView] Readable: \(FileManager.default.isReadableFile(atPath: cachedURL.path))")
                         try? FileManager.default.removeItem(at: cachedURL)
                         return
                     }
                     
-                    print("DEBUG: [DocumentAttachmentsView] File verified and readable: \(fileSize) bytes)")
+                    print("DEBUG: [DocumentAttachmentsView] File verified and readable: \(fileSize) bytes")
                     
-                    // Present sheet with URL item - this guarantees the URL is available
+                    // Present sheet with URL item
                     self.documentURLItem = DocumentURLItem(url: cachedURL)
                     print("DEBUG: [DocumentAttachmentsView] Presenting PDF viewer (downloaded) with URL: \(cachedURL.lastPathComponent)")
                 } catch {
@@ -202,23 +220,30 @@ struct DocumentAttachmentsView: View {
         task.resume()
     }
     
-    private func downloadToFiles(_ document: MimeiFileType) {
-        guard let url = document.getUrl(baseUrl) else {
+    private func downloadAndShare(_ document: MimeiFileType) {
+        guard let url = document.getUrl(resolvedBaseUrl) else {
             print("ERROR: [DocumentAttachmentsView] Invalid document URL")
             return
         }
         
+        downloadingForShare.insert(document.mid)
+        
         // Download and present share sheet with original filename
         let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
             guard let localURL = localURL else {
-                print("ERROR: [DocumentAttachmentsView] No local URL for download")
+                DispatchQueue.main.async {
+                    downloadingForShare.remove(document.mid)
+                    print("ERROR: [DocumentAttachmentsView] No local URL for download")
+                }
                 return
             }
             
             do {
                 // Copy to temp directory with original filename
+                // IMPORTANT: Do this immediately in the completion handler, not in DispatchQueue.main.async
+                // The temporary file from URLSession may be cleaned up if we wait
                 let tempDirectory = FileManager.default.temporaryDirectory
-                let originalFileName = document.fileName ?? "Document.pdf"
+                let originalFileName = document.fileName ?? getDefaultFileName(for: document.type)
                 let destinationURL = tempDirectory.appendingPathComponent(originalFileName)
                 
                 // Remove existing file if present
@@ -261,24 +286,56 @@ struct DocumentAttachmentsView: View {
                             popover.permittedArrowDirections = []
                         }
                         
-                        topController.present(activityVC, animated: true)
-                        print("DEBUG: [DocumentAttachmentsView] Share sheet presented with file: \(originalFileName)")
+                        topController.present(activityVC, animated: true) {
+                            // Only hide spinner after share sheet is presented
+                            downloadingForShare.remove(document.mid)
+                            print("DEBUG: [DocumentAttachmentsView] Share sheet presented with file: \(originalFileName)")
+                        }
+                    } else {
+                        // Fallback: hide spinner if we can't present
+                        downloadingForShare.remove(document.mid)
                     }
                 }
             } catch {
-                print("ERROR: [DocumentAttachmentsView] Failed to prepare file for sharing: \(error)")
+                DispatchQueue.main.async {
+                    downloadingForShare.remove(document.mid)
+                    print("ERROR: [DocumentAttachmentsView] Failed to prepare file for sharing: \(error)")
+                }
             }
         }
         
         task.resume()
     }
+    
+    private func getDefaultFileName(for type: MediaType) -> String {
+        switch type {
+        case .pdf:
+            return "Document.pdf"
+        case .word:
+            return "Document.docx"
+        case .excel:
+            return "Spreadsheet.xlsx"
+        case .ppt:
+            return "Presentation.pptx"
+        case .zip:
+            return "Archive.zip"
+        case .txt:
+            return "Text.txt"
+        case .html:
+            return "Page.html"
+        default:
+            return "Attachment"
+        }
+    }
 }
 
-/// Individual document row view
+/// Individual document row view with improved UI
 struct DocumentRowView: View {
     let document: MimeiFileType
+    let isDownloading: Bool
+    let isDownloadingForShare: Bool
     let onTap: () -> Void
-    let onLongPress: () -> Void
+    let onDownloadTap: () -> Void
     
     private var iconName: String {
         switch document.type {
@@ -319,95 +376,88 @@ struct DocumentRowView: View {
     }
     
     private var displayFileName: String {
-        document.fileName ?? "Document"
+        truncateFileName(document.fileName ?? "Document")
     }
     
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: iconName)
-                .foregroundColor(iconColor)
-                .font(.system(size: 16))
-                .frame(width: 24)
-            
-            Text(displayFileName)
-                .font(.system(size: 14))
-                .foregroundColor(.primary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap()
-        }
-        .onLongPressGesture(minimumDuration: 0.5) {
-            onLongPress()
-        }
-    }
-}
-
-/// Flow layout for wrappable rows
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-    
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = FlowResult(
-            in: proposal.replacingUnspecifiedDimensions().width,
-            subviews: subviews,
-            spacing: spacing
-        )
-        return result.size
-    }
-    
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = FlowResult(
-            in: bounds.width,
-            subviews: subviews,
-            spacing: spacing
-        )
-        for (index, subview) in subviews.enumerated() {
-            let position = result.positions[index]
-            subview.place(
-                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
-                proposal: ProposedViewSize(result.sizes[index])
-            )
-        }
-    }
-    
-    struct FlowResult {
-        var size: CGSize = .zero
-        var positions: [CGPoint] = []
-        var sizes: [CGSize] = []
-        
-        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
-            var x: CGFloat = 0
-            var y: CGFloat = 0
-            var lineHeight: CGFloat = 0
-            
-            for subview in subviews {
-                let size = subview.sizeThatFits(.unspecified)
+        ZStack {
+            HStack(spacing: 8) {
+                Image(systemName: iconName)
+                    .foregroundColor(iconColor)
+                    .font(.system(size: 16))
+                    .frame(width: 24)
                 
-                if x + size.width > maxWidth && x > 0 {
-                    // New line
-                    x = 0
-                    y += lineHeight + spacing
-                    lineHeight = 0
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayFileName)
+                        .font(.system(size: 14))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    if let size = document.size {
+                        Text(formatFileSize(size))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
-                positions.append(CGPoint(x: x, y: y))
-                sizes.append(size)
+                Spacer()
                 
-                lineHeight = max(lineHeight, size.height)
-                x += size.width + spacing
+                // Download/share button
+                Button(action: {
+                    onDownloadTap()
+                }) {
+                    if isDownloadingForShare {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "arrow.down.circle")
+                            .foregroundColor(iconColor)
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(isDownloadingForShare)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .background(Color(.systemGray6))
+            .cornerRadius(8)
+            .contentShape(Rectangle())
+            .opacity(isDownloading ? 0.5 : 1.0)
+            .disabled(isDownloading || isDownloadingForShare)
             
-            self.size = CGSize(
-                width: maxWidth,
-                height: y + lineHeight
-            )
+            // Spinner overlay when downloading for preview
+            if isDownloading {
+                ProgressView()
+                    .scaleEffect(1.2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemGray6).opacity(0.8))
+                    .cornerRadius(8)
+            }
+        }
+        .onTapGesture {
+            if !isDownloading && !isDownloadingForShare {
+                onTap()
+            }
         }
     }
+    
+    private func truncateFileName(_ fileName: String, maxLength: Int = 30) -> String {
+        guard fileName.count > maxLength else {
+            return fileName
+        }
+        
+        let ellipsis = "..."
+        let halfLength = (maxLength - ellipsis.count) / 2
+        
+        let start = String(fileName.prefix(halfLength))
+        let end = String(fileName.suffix(halfLength))
+        
+        return "\(start)\(ellipsis)\(end)"
+    }
+    
+    private func formatFileSize(_ size: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: size)
+    }
 }
-
