@@ -97,6 +97,8 @@ struct ProfileView: View {
                                 },
                                 onAvatarTap: { showAvatarFullScreen = true }
                             )
+                            .padding(.horizontal, -8)
+
                             ProfileStatsView(
                                 user: user,
                                 onFollowersTap: {
@@ -120,12 +122,11 @@ struct ProfileView: View {
                                     showTweetList = true
                                 }
                             )
+                            .padding(.horizontal, -16)
                         }
-                        .padding(.top, 2)
                     }
                 )
                 .id(user.mid)
-                .padding(.leading, -4)
             }
             .allowsHitTesting(!isUploadingAvatar && !isSubmittingProfile)
             

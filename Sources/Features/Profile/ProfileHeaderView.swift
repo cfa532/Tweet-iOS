@@ -79,7 +79,6 @@ struct ProfileHeaderView: View {
                     .truncationMode(.tail)
             }
         }
-        .padding(.horizontal)
         .padding(.top)
         .padding(.bottom, 4)
     }
