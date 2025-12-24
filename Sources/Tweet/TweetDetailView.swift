@@ -320,6 +320,7 @@ struct TweetDetailView: View {
                             VStack(spacing: 0) {
                                 mediaSection
                                 tweetHeader
+                                documentsSection
                                 tweetContent
                                 actionButtons
                             }
@@ -478,27 +479,59 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                // Use a fixed height based on all attachments to prevent jumping
-                let fixedAspect = calculateFixedAspectRatio(for: attachments)
-                TabView(selection: $selectedMediaIndex) {
-                    ForEach(attachments.indices, id: \.self) { index in
-                        DetailMediaCell(
-                            parentTweet: displayTweet,
-                            attachmentIndex: index,
-                            aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
-                            shouldLoadVideo: index == selectedMediaIndex,
-                            showMuteButton: false
-                        )
-                        .tag(index)
+                // Filter to only show media types (images, videos, audio)
+                let mediaAttachments = attachments.filter { isMediaType($0.type) }
+                
+                if !mediaAttachments.isEmpty {
+                    // Use a fixed height based on media attachments only
+                    let fixedAspect = calculateFixedAspectRatio(for: mediaAttachments)
+                    TabView(selection: $selectedMediaIndex) {
+                        ForEach(mediaAttachments.indices, id: \.self) { index in
+                            let attachment = mediaAttachments[index]
+                            DetailMediaCell(
+                                parentTweet: displayTweet,
+                                attachmentIndex: attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? index,
+                                aspectRatio: Float(aspectRatio(for: attachment, at: index)),
+                                shouldLoadVideo: index == selectedMediaIndex,
+                                showMuteButton: false
+                            )
+                            .tag(index)
+                        }
+                    }
+                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: UIScreen.main.bounds.width / fixedAspect)
+                    .background(Color.black)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showBrowser = true
                     }
                 }
-                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.width / fixedAspect)
-                .background(Color.black)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showBrowser = true
+            }
+        }
+    }
+    
+    private var documentsSection: some View {
+        Group {
+            if let attachments = displayTweet.attachments,
+               !attachments.isEmpty {
+                // Filter to only show documents
+                let documentAttachments = attachments.filter { isDocumentType($0.type) }
+                
+                if !documentAttachments.isEmpty {
+                    DocumentAttachmentsView(
+                        parentTweet: displayTweet,
+                        documents: documentAttachments,
+                        maxDocuments: nil // Show all documents in detail view
+                    )
+                    .padding(.leading, 48) // Left alignment with 8pt padding
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onAppear {
+                        print("DEBUG: [TweetDetailView] Total attachments: \(attachments.count), Documents: \(documentAttachments.count)")
+                        for (index, attachment) in attachments.enumerated() {
+                            print("DEBUG: [TweetDetailView] Attachment \(index): type=\(attachment.type), fileName=\(attachment.fileName ?? "nil")")
+                        }
+                    }
                 }
             }
         }
@@ -753,6 +786,26 @@ struct TweetDetailView: View {
         
         // Clamp to reasonable bounds
         return max(0.5, min(2.0, minAspectRatio))
+    }
+    
+    // Helper to check if attachment is media type (image, video, audio)
+    private func isMediaType(_ type: MediaType) -> Bool {
+        switch type {
+        case .image, .video, .hls_video, .audio:
+            return true
+        default:
+            return false
+        }
+    }
+    
+    // Helper to check if attachment is document type (pdf, word, excel, etc)
+    private func isDocumentType(_ type: MediaType) -> Bool {
+        switch type {
+        case .pdf, .word, .excel, .ppt, .zip, .txt, .html, .unknown:
+            return true
+        default:
+            return false
+        }
     }
     
     @State private var scrollUpdateTask: Task<Void, Never>?

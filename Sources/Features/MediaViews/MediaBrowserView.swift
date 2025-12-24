@@ -33,7 +33,16 @@ struct MediaBrowserView: View {
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     private var attachments: [MimeiFileType] {
-        return currentTweet.attachments ?? []
+        // Filter to only show media types (images, videos, audio) - no documents
+        let allAttachments = currentTweet.attachments ?? []
+        return allAttachments.filter { attachment in
+            switch attachment.type {
+            case .image, .video, .hls_video, .audio:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private var baseUrl: URL {

@@ -8,10 +8,11 @@
 import SwiftUI
 import QuickLook
 
-/// View that displays document attachments in wrappable rows below media grid
+/// View that displays document attachments vertically below media grid
 struct DocumentAttachmentsView: View {
     let parentTweet: Tweet
     let documents: [MimeiFileType]
+    let maxDocuments: Int? // If set, limits number of documents shown and adds ellipsis
     
     @State private var selectedDocument: MimeiFileType?
     @State private var showPDFViewer = false
@@ -26,25 +27,58 @@ struct DocumentAttachmentsView: View {
             ?? HproseInstance.baseUrl
     }
     
+    private var displayedDocuments: [MimeiFileType] {
+        if let maxDocuments = maxDocuments, documents.count > maxDocuments {
+            return Array(documents.prefix(maxDocuments))
+        }
+        return documents
+    }
+    
+    private var hasMoreDocuments: Bool {
+        if let maxDocuments = maxDocuments {
+            return documents.count > maxDocuments
+        }
+        return false
+    }
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Wrappable rows of documents
-            FlowLayout(spacing: 8) {
-                ForEach(documents, id: \.mid) { document in
-                    DocumentRowView(
-                        document: document,
-                        onTap: {
-                            downloadAndShowDocument(document)
-                        },
-                        onLongPress: {
-                            documentToDownload = document
-                            showDownloadSheet = true
-                        }
-                    )
+        VStack(alignment: .leading, spacing: 4) {
+            // Vertical list of documents
+            ForEach(displayedDocuments, id: \.mid) { document in
+                DocumentRowView(
+                    document: document,
+                    onTap: {
+                        downloadAndShowDocument(document)
+                    },
+                    onLongPress: {
+                        documentToDownload = document
+                        showDownloadSheet = true
+                    }
+                )
+            }
+            .onAppear {
+                print("DEBUG: [DocumentAttachmentsView] Showing \(displayedDocuments.count) of \(documents.count) documents, maxDocuments: \(maxDocuments?.description ?? "nil")")
+            }
+            
+            // Show ellipsis if there are more documents
+            if hasMoreDocuments {
+                HStack(spacing: 4) {
+                    Text("···")
+                        .font(.system(size: 20, weight: .bold))
+//                        .foregroundColor(.secondary)
+                    Text("+\(documents.count - displayedDocuments.count) more")
+                        .font(.system(size: 13))
+//                        .foregroundColor(.secondary)
                 }
+                .padding(.leading, 12)
+                .padding(.top, 0)
             }
         }
-        .padding(.top, 8)
+        .padding(4)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(.systemGray4), lineWidth: 1)
+        )
         .sheet(isPresented: $showPDFViewer) {
             Group {
                 if let pdfURL = pdfURL {
@@ -307,7 +341,7 @@ struct DocumentRowView: View {
                 .lineLimit(1)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
         .background(Color(.systemGray6))
         .cornerRadius(8)
         .contentShape(Rectangle())

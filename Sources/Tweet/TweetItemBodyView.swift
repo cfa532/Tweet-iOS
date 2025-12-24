@@ -115,11 +115,12 @@ struct TweetItemBodyView: View {
                         }
                     }
                     
-                    // Document attachments in wrappable rows (below media)
+                    // Document attachments vertically (below media) - limit to 2 in list
                     if !documentAttachments.isEmpty {
                         DocumentAttachmentsView(
                             parentTweet: tweet,
-                            documents: documentAttachments
+                            documents: documentAttachments,
+                            maxDocuments: 2 // Show at most 2 documents in tweet list
                         )
                         .padding(.top, mediaAttachments.isEmpty ? 4 : 8)
                     }
@@ -146,7 +147,7 @@ struct TweetItemBodyView: View {
     /// Determines if a media type is a document (should be in DocumentAttachmentsView)
     private func isDocumentType(_ type: MediaType) -> Bool {
         switch type {
-        case .pdf, .word, .excel, .ppt, .zip, .txt, .html:
+        case .pdf, .word, .excel, .ppt, .zip, .txt, .html, .unknown:
             return true
         default:
             return false
