@@ -320,7 +320,8 @@ struct MediaUploadHelper {
     static func prepareItemData(
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage],
-        selectedVideos: [URL] = []
+        selectedVideos: [URL] = [],
+        selectedDocuments: [DocumentFile] = []
     ) async throws -> [HproseInstance.PendingTweetUpload.ItemData] {
         var itemData: [HproseInstance.PendingTweetUpload.ItemData] = []
         
@@ -389,7 +390,44 @@ struct MediaUploadHelper {
             }
         }
         
+        // Process document files (PDF, Word, Excel, etc.)
+        for document in selectedDocuments {
+            print("DEBUG: Processing document: \(document.fileName), size: \(document.fileSize) bytes")
+            
+            // Determine type identifier based on media type
+            let typeIdentifier = getTypeIdentifier(for: document.mediaType)
+            
+            itemData.append(HproseInstance.PendingTweetUpload.ItemData(
+                identifier: document.id.uuidString,
+                typeIdentifier: typeIdentifier,
+                data: document.data,
+                fileName: document.fileName,
+                noResample: true  // Don't resample document files
+            ))
+        }
+        
         return itemData
+    }
+    
+    private static func getTypeIdentifier(for mediaType: MediaType) -> String {
+        switch mediaType {
+        case .pdf:
+            return "application/pdf"
+        case .word:
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case .excel:
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case .ppt:
+            return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        case .zip:
+            return "application/zip"
+        case .txt:
+            return "text/plain"
+        case .html:
+            return "text/html"
+        default:
+            return "application/octet-stream"
+        }
     }
     
     private static func getFileExtension(for typeIdentifier: String) -> String {
@@ -438,10 +476,11 @@ struct MediaUploadHelper {
         content: String,
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage],
-        selectedVideos: [URL] = []
+        selectedVideos: [URL] = [],
+        selectedDocuments: [DocumentFile] = []
     ) -> Bool {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedContent.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
+        return !trimmedContent.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty || !selectedDocuments.isEmpty
     }
     
     private static func getFileTypeDescription(from typeIdentifier: String) -> String {

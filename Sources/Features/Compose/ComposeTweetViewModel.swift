@@ -34,6 +34,7 @@ class ComposeTweetViewModel: ObservableObject {
     @Published var selectedItems: [PhotosPickerItem] = []
     @Published var selectedImages: [UIImage] = []
     @Published var selectedVideos: [URL] = []
+    @Published var selectedDocuments: [DocumentFile] = []
     @Published var selectedMedia: [MimeiFileType] = []
     @Published var uploadProgress = 0.0
     @Published var showToast = false
@@ -54,7 +55,8 @@ class ComposeTweetViewModel: ObservableObject {
             content: tweetContent,
             selectedItems: selectedItems,
             selectedImages: selectedImages,
-            selectedVideos: selectedVideos
+            selectedVideos: selectedVideos,
+            selectedDocuments: selectedDocuments
         )
     }
     
@@ -66,7 +68,8 @@ class ComposeTweetViewModel: ObservableObject {
             content: tweetContent,
             selectedItems: selectedItems,
             selectedImages: selectedImages,
-            selectedVideos: selectedVideos
+            selectedVideos: selectedVideos,
+            selectedDocuments: selectedDocuments
         ) else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
             toastMessage = NSLocalizedString("Tweet cannot be empty.", comment: "Empty tweet error")
@@ -96,7 +99,8 @@ class ComposeTweetViewModel: ObservableObject {
             itemData = try await MediaUploadHelper.prepareItemData(
                 selectedItems: selectedItems,
                 selectedImages: selectedImages,
-                selectedVideos: selectedVideos
+                selectedVideos: selectedVideos,
+                selectedDocuments: selectedDocuments
             )
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
@@ -118,6 +122,7 @@ class ComposeTweetViewModel: ObservableObject {
         selectedItems = []
         selectedImages = []
         selectedVideos = []
+        selectedDocuments = []
         isPrivate = false
     }
 }

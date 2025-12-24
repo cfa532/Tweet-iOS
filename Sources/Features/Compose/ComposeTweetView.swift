@@ -22,7 +22,7 @@ struct ComposeTweetView: View {
     
     // Check if there's content or attachments that would be lost
     private var hasContentOrAttachments: Bool {
-        !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty || !viewModel.selectedImages.isEmpty || !viewModel.selectedVideos.isEmpty
+        !viewModel.tweetContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !viewModel.selectedItems.isEmpty || !viewModel.selectedImages.isEmpty || !viewModel.selectedVideos.isEmpty || !viewModel.selectedDocuments.isEmpty
     }
 
     init() {
@@ -64,6 +64,7 @@ struct ComposeTweetView: View {
                         let selectedItems = viewModel.selectedItems
                         let selectedImages = viewModel.selectedImages
                         let selectedVideos = viewModel.selectedVideos
+                        let selectedDocuments = viewModel.selectedDocuments
                         let isPrivate = viewModel.isPrivate
                         
                         // Show upload dialog IMMEDIATELY before any heavy work
@@ -79,6 +80,7 @@ struct ComposeTweetView: View {
                                 selectedItems: selectedItems,
                                 selectedImages: selectedImages,
                                 selectedVideos: selectedVideos,
+                                selectedDocuments: selectedDocuments,
                                 isPrivate: isPrivate
                             )
                         }
@@ -187,24 +189,40 @@ struct ComposeTweetView: View {
     }
     
     private var mediaPreview: some View {
-        MediaPreviewGrid(
-            selectedItems: viewModel.selectedItems,
-            selectedImages: viewModel.selectedImages,
-            selectedVideos: viewModel.selectedVideos,
-            onRemoveItem: { index in
-                guard index < viewModel.selectedItems.count else { return }
-                viewModel.selectedItems.remove(at: index)
-            },
-            onRemoveImage: { index in
-                guard index < viewModel.selectedImages.count else { return }
-                viewModel.selectedImages.remove(at: index)
-            },
-            onRemoveVideo: { index in
-                guard index < viewModel.selectedVideos.count else { return }
-                viewModel.selectedVideos.remove(at: index)
+        VStack(spacing: 0) {
+            // Media preview (photos/videos)
+            MediaPreviewGrid(
+                selectedItems: viewModel.selectedItems,
+                selectedImages: viewModel.selectedImages,
+                selectedVideos: viewModel.selectedVideos,
+                onRemoveItem: { index in
+                    guard index < viewModel.selectedItems.count else { return }
+                    viewModel.selectedItems.remove(at: index)
+                },
+                onRemoveImage: { index in
+                    guard index < viewModel.selectedImages.count else { return }
+                    viewModel.selectedImages.remove(at: index)
+                },
+                onRemoveVideo: { index in
+                    guard index < viewModel.selectedVideos.count else { return }
+                    viewModel.selectedVideos.remove(at: index)
+                }
+            )
+            .frame(height: (viewModel.selectedItems.isEmpty && viewModel.selectedImages.isEmpty && viewModel.selectedVideos.isEmpty) ? 0 : 120)
+            
+            // Document preview (PDFs, etc.)
+            if !viewModel.selectedDocuments.isEmpty {
+                DocumentPreviewGrid(
+                    documents: viewModel.selectedDocuments,
+                    onRemove: { index in
+                        guard index < viewModel.selectedDocuments.count else { return }
+                        viewModel.selectedDocuments.remove(at: index)
+                    }
+                )
+                .frame(height: 120)
+                .padding(.top, viewModel.selectedItems.isEmpty && viewModel.selectedImages.isEmpty && viewModel.selectedVideos.isEmpty ? 0 : 8)
             }
-        )
-        .frame(height: (viewModel.selectedItems.isEmpty && viewModel.selectedImages.isEmpty && viewModel.selectedVideos.isEmpty) ? 0 : 120)
+        }
         .background(Color(.systemBackground))
     }
     
@@ -213,6 +231,7 @@ struct ComposeTweetView: View {
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage],
         selectedVideos: [URL],
+        selectedDocuments: [DocumentFile],
         isPrivate: Bool
     ) async {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -222,7 +241,8 @@ struct ComposeTweetView: View {
             content: content,
             selectedItems: selectedItems,
             selectedImages: selectedImages,
-            selectedVideos: selectedVideos
+            selectedVideos: selectedVideos,
+            selectedDocuments: selectedDocuments
         ) else {
             print("DEBUG: Tweet validation failed - empty content and no attachments")
             return
@@ -256,7 +276,8 @@ struct ComposeTweetView: View {
             itemData = try await MediaUploadHelper.prepareItemData(
                 selectedItems: selectedItems,
                 selectedImages: selectedImages,
-                selectedVideos: selectedVideos
+                selectedVideos: selectedVideos,
+                selectedDocuments: selectedDocuments
             )
         } catch {
             print("DEBUG: Error preparing item data: \(error)")
@@ -282,6 +303,14 @@ struct ComposeTweetView: View {
                 error: $viewModel.error,
                 maxSelectionCount: 20,
                 supportedTypes: [.image, .movie]
+            )
+            
+            // Document picker button
+            DocumentPickerButton(
+                selectedDocuments: $viewModel.selectedDocuments,
+                allowedTypes: [.pdf, .text, .zip],
+                icon: "doc.fill",
+                color: .blue
             )
             
             Spacer()
