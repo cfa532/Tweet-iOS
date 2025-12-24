@@ -23,8 +23,6 @@ struct DocumentAttachmentsView: View {
     @State private var selectedDocument: MimeiFileType?
     @State private var documentURLItem: DocumentURLItem? // Use item-based sheet
     @State private var isDownloading = false
-    @State private var showDownloadSheet = false
-    @State private var documentToDownload: MimeiFileType?
     
     private var baseUrl: URL {
         return parentTweet.author?.baseUrl 
@@ -56,8 +54,7 @@ struct DocumentAttachmentsView: View {
                         downloadAndShowDocument(document)
                     },
                     onLongPress: {
-                        documentToDownload = document
-                        showDownloadSheet = true
+                        downloadToFiles(document)
                     }
                 )
             }
@@ -94,23 +91,6 @@ struct DocumentAttachmentsView: View {
                 .onDisappear {
                     print("DEBUG: [DocumentAttachmentsView] PDFQuickLookView disappeared")
                 }
-        }
-        .confirmationDialog(
-            "Document Options",
-            isPresented: $showDownloadSheet,
-            titleVisibility: .visible
-        ) {
-            Button("Preview") {
-                if let document = documentToDownload {
-                    downloadAndShowDocument(document)
-                }
-            }
-            Button("Download to Files") {
-                if let document = documentToDownload {
-                    downloadToFiles(document)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
         }
     }
     
