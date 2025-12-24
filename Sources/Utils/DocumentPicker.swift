@@ -118,13 +118,17 @@ struct DocumentPicker: UIViewControllerRepresentable {
 }
 
 /// Represents a selected document file
-struct DocumentFile: Identifiable {
+struct DocumentFile: Identifiable, Equatable {
     let id = UUID()
     let url: URL
     let data: Data
     let fileName: String
     let fileSize: Int64
     let mediaType: MediaType
+    
+    static func == (lhs: DocumentFile, rhs: DocumentFile) -> Bool {
+        return lhs.id == rhs.id
+    }
 }
 
 /// Button view that triggers document picker

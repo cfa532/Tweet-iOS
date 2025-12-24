@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 struct ChatScreen: View {
     let receiptId: MimeiId
@@ -13,6 +14,9 @@ struct ChatScreen: View {
     @State private var user: User?
     @State private var selectedAttachment: MimeiFileType?
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var selectedDocuments: [DocumentFile] = []
+    @State private var showDocumentPicker = false
+    @State private var isLongPressingAttachment = false
     @State private var attachmentItemData: HproseInstance.PendingTweetUpload.ItemData?
     @State private var isProcessingAttachment = false
     @State private var keyboardHeight: CGFloat = 0
@@ -54,12 +58,71 @@ struct ChatScreen: View {
     }
     
     var body: some View {
+        mainContentView
+            .onTapGesture {
+                hideKeyboard()
+            }
+            .toolbar(.hidden, for: .tabBar)
+            .navigationDestination(for: User.self) { user in
+                ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
+            }
+            .overlay(toastOverlay)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+                if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                    keyboardHeight = keyboardFrame.height
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardHeight = 0
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .chatMessageSent)) { notification in
+                handleMessageSent(notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
+                handleMessageSendFailed(notification)
+            }
+            .task {
+                print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
+                chatSessionManager.markSessionAsRead(receiptId: receiptId)
+                await loadUser()
+                await loadMessages()
+                startPeriodicMessageRefresh()
+                print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
+            }
+            .onDisappear {
+                stopPeriodicMessageRefresh()
+            }
+            .sheet(isPresented: $showDocumentPicker) {
+                DocumentPicker(
+                    selectedDocuments: $selectedDocuments,
+                    allowedTypes: [
+                        .pdf,
+                        .text,
+                        .plainText,
+                        .rtf,
+                        .zip,
+                        .data,
+                        .content,
+                        .item  // Allow any file type (DocumentPicker will determine type from extension)
+                    ],
+                    allowsMultipleSelection: false
+                )
+            }
+            .onChange(of: selectedDocuments) { oldDocuments, newDocuments in
+                guard !newDocuments.isEmpty, !isProcessingAttachment else {
+                    return
+                }
+                Task {
+                    await handleDocumentSelection(newDocuments)
+                }
+            }
+    }
+    
+    private var mainContentView: some View {
         VStack(spacing: 0) {
-            // Debug info
             if messages.isEmpty && user == nil {
                 ChatLoadingView(receiptId: receiptId)
             }
-            // Header
             ChatHeaderView(
                 user: user,
                 dismiss: dismiss,
@@ -70,290 +133,249 @@ struct ChatScreen: View {
                     }
                 }
             )
-            
-            // Messages - Take remaining space
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        // Load more indicator at top
-                        if hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
-                            if isLoadingMore {
-                                HStack {
-                                    Spacer()
-                                    ProgressView()
-                                        .padding()
-                                    Spacer()
-                                }
-                            } else {
-                                Color.clear
-                                    .frame(height: 1)
-                                    .onAppear {
-                                        loadMoreMessages()
-                                    }
-                            }
-                        }
-                        
-                        ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
-                            // Add time divider if there's a 5+ minute gap
-                            if index > 0 {
-                                let timeDiff = message.timestamp - messages[index - 1].timestamp
-                                if timeDiff > 3600 { // 1 hour
-                                    TimeDividerView(timestamp: message.timestamp)
-                                }
-                            }
-                            
-                            ChatMessageView(
-                                message: message, 
-                                isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
-                                isLastMessage: index == messages.count - 1,
-                                isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
-                                showTimestamp: isLastMessageFromSender(index: index, messages: messages) // Show timestamp for last message from each party
-                            )
-                            .id(message.id)
-                        }
-                    }
-                    .padding()
-                }
-                .onChange(of: shouldScrollToBottom) { _, newValue in
-                    guard newValue, let lastMessage = messages.last else { return }
-                    
-                    if shouldAnimateScroll {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
-                    } else {
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                    }
-                    
-                    shouldScrollToBottom = false
-                    shouldAnimateScroll = true
-                }
-                .onChange(of: keyboardHeight) { _, newHeight in
-                    // Scroll to bottom when keyboard appears/disappears
-                    if let lastMessage = messages.last {
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
-                    }
-                }
-                .navigationBarHidden(true)
-                .onAppear {
-                    // Scroll to bottom when messages are loaded
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        if let lastMessage = messages.last {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
-                    }
-                    
-                    // Clear badge count when chat is opened
-                    DispatchQueue.main.async {
-                        UNUserNotificationCenter.current().setBadgeCount(0) { error in
-                            if let error = error {
-                                print("[ChatScreen] Error clearing badge count: \(error)")
-                            }
-                        }
-                    }
-                }
-            }
-            .background(Color(.systemBackground))
-            
-            // Message Input - Fixed at bottom
-            VStack(spacing: 0) {
-                // Attachment preview or loading indicator
-                if isProcessingAttachment {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text(NSLocalizedString("Preparing attachment...", comment: "Chat attachment loading"))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
-                } else if let attachment = selectedAttachment {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
+            messagesScrollView
+            messageInputView
+        }
+    }
+    
+    private var messagesScrollView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    if hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
+                        if isLoadingMore {
                             HStack {
-                                Image(systemName: getAttachmentIcon(for: attachment.type))
-                                    .foregroundColor(.blue)
-                                Text(attachment.fileName ?? "Attachment")
-                                    .font(.caption)
-                                    .foregroundColor(.primary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                                Spacer()
+                                ProgressView()
+                                    .padding()
                                 Spacer()
                             }
-                            
-                            if let size = attachment.size {
-                                Text(formatFileSize(size))
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
+                        } else {
+                            Color.clear
+                                .frame(height: 1)
+                                .onAppear {
+                                    loadMoreMessages()
+                                }
+                        }
+                    }
+                    
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        if index > 0 {
+                            let timeDiff = message.timestamp - messages[index - 1].timestamp
+                            if timeDiff > 3600 {
+                                TimeDividerView(timestamp: message.timestamp)
                             }
                         }
                         
-                        Button(action: {
-                            selectedAttachment = nil
-                            attachmentItemData = nil
-                            selectedPhotos = []
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.red)
-                        }
+                        ChatMessageView(
+                            message: message,
+                            isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
+                            isLastMessage: index == messages.count - 1,
+                            isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
+                            showTimestamp: isLastMessageFromSender(index: index, messages: messages)
+                        )
+                        .id(message.id)
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
-                }
-                
-                // Message input bar
-                HStack(spacing: 12) {
-                    // Attachment button
-                    PhotosPicker(
-                        selection: $selectedPhotos,
-                        maxSelectionCount: 1,
-                        matching: .any(of: [.images, .videos])
-                    ) {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 20))
-                            .foregroundColor(.blue)
-                    }
-                    .onChange(of: selectedPhotos) { oldItems, newItems in
-                        // Ignore if clearing selection or already processing
-                        guard !newItems.isEmpty, !isProcessingAttachment else {
-                            return
-                        }
-                        Task {
-                            await handlePhotoSelection(newItems)
-                        }
-                    }
-                    
-                    // Text input
-                    TextField(NSLocalizedString("Type a message...", comment: "Chat message input placeholder"), text: $messageText, axis: .vertical)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12) // Increased vertical padding for taller touchable area
-                        .background(Color(.systemGray6))
-                        .cornerRadius(12)
-                        .lineLimit(1...5)
-                        .focused($isTextFieldFocused)
-                        .foregroundColor(.primary)
-                        .onTapGesture {
-                            // Focus the text field when tapped anywhere in its area
-                            isTextFieldFocused = true
-                        }
-                        .onSubmit {
-                            // Hide keyboard when user submits
-                            hideKeyboard()
-                        }
-                    
-                    // Send button
-                    DebounceButton(
-                        cooldownDuration: 0.3,
-                        enableAnimation: true,
-                        enableVibration: false
-                    ) {
-                        sendMessage()
-                    } label: {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(.white)
-                    }
-                    .frame(width: 32, height: 32)
-                    .background(canSendMessage ? Color.blue : Color.gray)
-                    .clipShape(Circle())
-                    .disabled(!canSendMessage)
                 }
                 .padding()
-                .background(Color(.systemBackground))
-                .overlay(
-                    Rectangle()
-                        .frame(height: 0.5)
-                        .foregroundColor(Color(.separator)),
-                    alignment: .top
-                )
             }
-            .background(Color(.systemBackground))
-        }
-        .onTapGesture {
-            // Hide keyboard when tapping outside input area
-            hideKeyboard()
-        }
-        .toolbar(.hidden, for: .tabBar)
-        .navigationDestination(for: User.self) { user in
-            ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
-        }
-        .overlay(
-            // Toast message overlay
-            VStack {
-                Spacer()
-                if showToast {
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 100)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onChange(of: shouldScrollToBottom) { _, newValue in
+                guard newValue, let lastMessage = messages.last else { return }
+                if shouldAnimateScroll {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    }
+                } else {
+                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                }
+                shouldScrollToBottom = false
+                shouldAnimateScroll = true
+            }
+            .onChange(of: keyboardHeight) { _, newHeight in
+                if let lastMessage = messages.last {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    }
                 }
             }
-                .animation(.easeInOut(duration: 0.3), value: showToast)
-        )
-        
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
-            if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
-                keyboardHeight = keyboardFrame.height
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardHeight = 0
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .chatMessageSent)) { notification in
-            // Handle successfully sent message
-            if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
-                print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
-                // Add message to UI and cache if not already there
-                if !messages.contains(where: { $0.id == sentMessage.id }) {
-                    messages.append(sentMessage)
-                    allCachedMessages.append(sentMessage)
-                    chatRepository.addMessagesToCoreData([sentMessage])
-                    
-                    // Scroll to bottom for sent message
-                    shouldAnimateScroll = true
-                    shouldScrollToBottom = true
-                    
-                    // Update chat session
-                    Task {
-                        await chatSessionManager.updateOrCreateChatSession(
-                            senderId: receiptId,
-                            message: sentMessage,
-                            hasNews: false
-                        )
+            .navigationBarHidden(true)
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    if let lastMessage = messages.last {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    }
+                }
+                DispatchQueue.main.async {
+                    UNUserNotificationCenter.current().setBadgeCount(0) { error in
+                        if let error = error {
+                            print("[ChatScreen] Error clearing badge count: \(error)")
+                        }
                     }
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
-            if let error = notification.userInfo?["error"] as? Error {
-                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
-            } else {
-                showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
+        .background(Color(.systemBackground))
+    }
+    
+    private var messageInputView: some View {
+        VStack(spacing: 0) {
+            attachmentPreviewView
+            messageInputBar
+        }
+        .background(Color(.systemBackground))
+    }
+    
+    @ViewBuilder
+    private var attachmentPreviewView: some View {
+        if isProcessingAttachment {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text(NSLocalizedString("Preparing attachment...", comment: "Chat attachment loading"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray6))
+        } else if let attachment = selectedAttachment {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: getAttachmentIcon(for: attachment.type))
+                            .foregroundColor(.blue)
+                        Text(attachment.fileName ?? "Attachment")
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                    }
+                    if let size = attachment.size {
+                        Text(formatFileSize(size))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Button(action: {
+                    selectedAttachment = nil
+                    attachmentItemData = nil
+                    selectedPhotos = []
+                    selectedDocuments = []
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.red)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray6))
+        }
+    }
+    
+    private var messageInputBar: some View {
+        HStack(spacing: 12) {
+            attachmentButton
+            textInputField
+            sendButton
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundColor(Color(.separator)),
+            alignment: .top
+        )
+    }
+    
+    private var attachmentButton: some View {
+        AttachmentButtonView(
+            selectedPhotos: $selectedPhotos,
+            showDocumentPicker: $showDocumentPicker,
+            isLongPressing: $isLongPressingAttachment,
+            onPhotoSelected: { items in
+                guard !items.isEmpty, !isProcessingAttachment else { return }
+                Task {
+                    await handlePhotoSelection(items)
+                }
+            }
+        )
+    }
+    
+    private var textInputField: some View {
+        TextField(NSLocalizedString("Type a message...", comment: "Chat message input placeholder"), text: $messageText, axis: .vertical)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .background(Color(.systemGray6))
+            .cornerRadius(12)
+            .lineLimit(1...5)
+            .focused($isTextFieldFocused)
+            .foregroundColor(.primary)
+            .onTapGesture {
+                isTextFieldFocused = true
+            }
+            .onSubmit {
+                hideKeyboard()
+            }
+    }
+    
+    private var sendButton: some View {
+        DebounceButton(
+            cooldownDuration: 0.3,
+            enableAnimation: true,
+            enableVibration: false
+        ) {
+            sendMessage()
+        } label: {
+            Image(systemName: "paperplane.fill")
+                .font(.system(size: 18))
+                .foregroundColor(.white)
+        }
+        .frame(width: 32, height: 32)
+        .background(canSendMessage ? Color.blue : Color.gray)
+        .clipShape(Circle())
+        .disabled(!canSendMessage)
+    }
+    
+    private var toastOverlay: some View {
+        VStack {
+            Spacer()
+            if showToast {
+                ToastView(message: toastMessage, type: toastType)
+                    .padding(.bottom, 100)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        
-        .task {
-            print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
-            
-            // Mark session as read when opened
-            chatSessionManager.markSessionAsRead(receiptId: receiptId)
-            
-            await loadUser()
-            await loadMessages()
-            
-            // Start periodic message refresh after initial load
-            startPeriodicMessageRefresh()
-            
-            print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
+        .animation(.easeInOut(duration: 0.3), value: showToast)
+    }
+    
+    private func handleMessageSent(_ notification: Notification) {
+        if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
+            print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
+            if !messages.contains(where: { $0.id == sentMessage.id }) {
+                messages.append(sentMessage)
+                allCachedMessages.append(sentMessage)
+                chatRepository.addMessagesToCoreData([sentMessage])
+                shouldAnimateScroll = true
+                shouldScrollToBottom = true
+                Task {
+                    await chatSessionManager.updateOrCreateChatSession(
+                        senderId: receiptId,
+                        message: sentMessage,
+                        hasNews: false
+                    )
+                }
+            }
         }
-        .onDisappear {
-            // Stop the periodic message refresh timer when leaving the screen
-            stopPeriodicMessageRefresh()
+    }
+    
+    private func handleMessageSendFailed(_ notification: Notification) {
+        if let error = notification.userInfo?["error"] as? Error {
+            showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+        } else {
+            showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
         }
     }
     
@@ -490,6 +512,7 @@ struct ChatScreen: View {
         selectedAttachment = nil
         attachmentItemData = nil
         selectedPhotos = []
+        selectedDocuments = []
         
         // Create message to send
         let message = ChatMessage(
@@ -804,6 +827,70 @@ struct ChatScreen: View {
         }
     }
     
+    private func handleDocumentSelection(_ documents: [DocumentFile]) async {
+        guard let document = documents.first else { return }
+        
+        // Set processing flag to prevent concurrent selections
+        await MainActor.run {
+            isProcessingAttachment = true
+        }
+        
+        do {
+            print("[ChatScreen] Starting to prepare document attachment data...")
+            
+            // Use MediaUploadHelper to properly prepare the item data (same as tweet attachments)
+            let itemDataArray = try await MediaUploadHelper.prepareItemData(
+                selectedItems: [],
+                selectedImages: [],
+                selectedVideos: [],
+                selectedDocuments: [document]
+            )
+            
+            guard let itemData = itemDataArray.first else {
+                print("[ChatScreen] Failed to prepare document item data")
+                await MainActor.run {
+                    isProcessingAttachment = false
+                }
+                return
+            }
+            
+            print("[ChatScreen] Document prepared: \(document.fileName), size: \(itemData.data.count) bytes, type: \(itemData.typeIdentifier)")
+            
+            // Create a temporary MimeiFileType for the selected document
+            let tempAttachment = MimeiFileType(
+                mid: UUID().uuidString,
+                mediaType: document.mediaType,
+                size: Int64(itemData.data.count),
+                fileName: document.fileName,
+                url: nil
+            )
+            
+            // Set attachment and itemData atomically on main thread
+            await MainActor.run {
+                selectedAttachment = tempAttachment
+                attachmentItemData = itemData // Store the prepared item data - CRITICAL: set this before clearing documents
+                print("[ChatScreen] Document attachment data prepared successfully. attachmentItemData is now set.")
+                
+                // Clear processing flag AFTER everything is set
+                isProcessingAttachment = false
+                
+                // Clear selection AFTER a small delay to ensure state is fully set
+                // This prevents onChange from being triggered while attachmentItemData is still nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    selectedDocuments = []
+                }
+            }
+            
+            print("[ChatScreen] Document selection completed successfully")
+        } catch {
+            print("[ChatScreen] Error loading document: \(error)")
+            await MainActor.run {
+                isProcessingAttachment = false
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+            }
+        }
+    }
+    
     
     
     private func refreshMessagesFromBackend() async {
@@ -854,6 +941,58 @@ struct ChatScreen: View {
             }
         } catch {
             print("[ChatScreen] Error refreshing messages from backend: \(error)")
+        }
+    }
+}
+
+/// Custom attachment button that handles both tap (photo picker) and long press (document picker)
+struct AttachmentButtonView: View {
+    @Binding var selectedPhotos: [PhotosPickerItem]
+    @Binding var showDocumentPicker: Bool
+    @Binding var isLongPressing: Bool
+    let onPhotoSelected: ([PhotosPickerItem]) -> Void
+    
+    @State private var hasLongPressed = false
+    
+    var body: some View {
+        PhotosPicker(
+            selection: $selectedPhotos,
+            maxSelectionCount: 1,
+            matching: .any(of: [.images, .videos])
+        ) {
+            Image(systemName: "paperclip")
+                .font(.system(size: 20))
+                .foregroundColor(.blue)
+        }
+        .disabled(hasLongPressed)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.5, maximumDistance: 50)
+                .onEnded { _ in
+                    hasLongPressed = true
+                    isLongPressing = true
+                    showDocumentPicker = true
+                }
+        )
+        .onChange(of: selectedPhotos) { oldItems, newItems in
+            guard !newItems.isEmpty, !hasLongPressed else {
+                // Clear selection if it was triggered after long press
+                if hasLongPressed {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        selectedPhotos = []
+                    }
+                }
+                return
+            }
+            onPhotoSelected(newItems)
+        }
+        .onChange(of: showDocumentPicker) { _, newValue in
+            if !newValue {
+                // Reset states when document picker is dismissed
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isLongPressing = false
+                    hasLongPressed = false
+                }
+            }
         }
     }
 }
