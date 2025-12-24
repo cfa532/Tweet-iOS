@@ -14,6 +14,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */; };
 		326BBBB32DFA4E70BEDBF1CD /* GlobalImageLoadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */; };
+		3E4D4013E11E9E4BED23680D /* PDFPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D26DB960D62FB2EB1C7843 /* PDFPreviewView.swift */; };
 		460680EA2E16303100D9D15A /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680E92E16302C00D9D15A /* Constants.swift */; };
 		460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460680EB2E165F8300D9D15A /* LocalizationHelper.swift */; };
 		460680F62E1660C700D9D15A /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 460680F32E1660C700D9D15A /* Localizable.strings */; };
@@ -136,6 +137,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		12D26DB960D62FB2EB1C7843 /* PDFPreviewView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PDFPreviewView.swift; sourceTree = "<group>"; };
 		16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Tweet.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1A1A1A1A1A1A1A1A1A1A01 /* Tweet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tweet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TweetApp.swift; path = Sources/App/TweetApp.swift; sourceTree = SOURCE_ROOT; };
@@ -550,6 +552,7 @@
 				46E5B34A2DDC155200AEF31F /* MediaCell.swift */,
 				46E5B3482DDC0F5B00AEF31F /* MediaGridView.swift */,
 				46E5B3462DDC0CF500AEF31F /* Avatar.swift */,
+				12D26DB960D62FB2EB1C7843 /* PDFPreviewView.swift */,
 			);
 			path = MediaViews;
 			sourceTree = "<group>";
@@ -874,6 +877,7 @@
 				46E5B3532DDD6A7A00AEF31F /* TweetDetailView.swift in Sources */,
 				46B03D852E486D3B000E08DF /* MuteState.swift in Sources */,
 				4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */,
+				3E4D4013E11E9E4BED23680D /* PDFPreviewView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1055,7 +1059,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 66;
+				CURRENT_PROJECT_VERSION = 67;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1108,7 +1112,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 66;
+				CURRENT_PROJECT_VERSION = 67;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;

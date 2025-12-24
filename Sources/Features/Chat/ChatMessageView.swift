@@ -611,8 +611,17 @@ struct ChatAttachmentLoader: View {
     
     @State private var isLoading = true
     @State private var loadError = false
+    @State private var showPDFViewer = false
+    @State private var pdfURL: URL?
+    @State private var isDownloading = false
     
-    //private let baseUrl = HproseInstance.baseUrl
+    private var baseUrl: URL {
+        if isFromCurrentUser {
+            return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+        } else {
+            return HproseInstance.baseUrl
+        }
+    }
     
     var body: some View {
         Group {
@@ -650,9 +659,9 @@ struct ChatAttachmentLoader: View {
                 // Loaded state - show file info
                 HStack {
                     Image(systemName: getAttachmentIcon(for: attachment.type))
-                        .foregroundColor(.blue)
+                        .foregroundColor(attachment.type == .pdf ? .red : .blue)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(attachment.fileName ?? "Attachment")
+                        Text(attachment.fileName ?? getDefaultFileName())
                             .font(.caption)
                             .foregroundColor(.primary)
                             .lineLimit(1)
@@ -663,12 +672,32 @@ struct ChatAttachmentLoader: View {
                         }
                     }
                     Spacer()
+                    if attachment.type == .pdf {
+                        if isDownloading {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "arrow.down.circle")
+                                .foregroundColor(.red)
+                        }
+                    }
                 }
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.7)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+                .onTapGesture {
+                    if attachment.type == .pdf && !isDownloading {
+                        downloadAndShowPDF()
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showPDFViewer) {
+            if let pdfURL = pdfURL {
+                PDFQuickLookView(url: pdfURL)
             }
         }
     }
@@ -682,6 +711,87 @@ struct ChatAttachmentLoader: View {
         }
     }
     
+    private func downloadAndShowPDF() {
+        guard let url = attachment.getUrl(baseUrl) else {
+            print("ERROR: [ChatAttachmentLoader] Invalid PDF URL")
+            return
+        }
+        
+        isDownloading = true
+        
+        // Download PDF to temporary location
+        let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
+            DispatchQueue.main.async {
+                isDownloading = false
+                
+                if let error = error {
+                    print("ERROR: [ChatAttachmentLoader] Failed to download PDF: \(error)")
+                    return
+                }
+                
+                guard let localURL = localURL else {
+                    print("ERROR: [ChatAttachmentLoader] No local URL")
+                    return
+                }
+                
+                // Move to a more permanent temporary location
+                let tempDirectory = FileManager.default.temporaryDirectory
+                // Make filename unique by incrementing suffix if needed
+                let originalFileName = attachment.fileName ?? "Document.pdf"
+                let fileExtension = (originalFileName as NSString).pathExtension
+                let baseName = (originalFileName as NSString).deletingPathExtension
+                let ext = fileExtension.isEmpty ? "pdf" : fileExtension
+                
+                // Find unique filename
+                var destinationURL = tempDirectory.appendingPathComponent("\(baseName).\(ext)")
+                var counter = 1
+                while FileManager.default.fileExists(atPath: destinationURL.path) {
+                    let uniqueName = "\(baseName)_\(counter).\(ext)"
+                    destinationURL = tempDirectory.appendingPathComponent(uniqueName)
+                    counter += 1
+                }
+                
+                do {
+                    // Remove existing file if present
+                    try? FileManager.default.removeItem(at: destinationURL)
+                    
+                    // Move downloaded file
+                    try FileManager.default.moveItem(at: localURL, to: destinationURL)
+                    
+                    self.pdfURL = destinationURL
+                    self.showPDFViewer = true
+                    
+                    print("DEBUG: [ChatAttachmentLoader] Successfully downloaded PDF to: \(destinationURL)")
+                } catch {
+                    print("ERROR: [ChatAttachmentLoader] Failed to move PDF: \(error)")
+                }
+            }
+        }
+        
+        task.resume()
+    }
+    
+    private func getDefaultFileName() -> String {
+        switch attachment.type {
+        case .pdf:
+            return "Document.pdf"
+        case .word:
+            return "Document.docx"
+        case .excel:
+            return "Spreadsheet.xlsx"
+        case .ppt:
+            return "Presentation.pptx"
+        case .zip:
+            return "Archive.zip"
+        case .txt:
+            return "Text.txt"
+        case .html:
+            return "Page.html"
+        default:
+            return "Attachment"
+        }
+    }
+    
     private func getAttachmentIcon(for type: MediaType) -> String {
         switch type {
         case .image:
@@ -690,7 +800,9 @@ struct ChatAttachmentLoader: View {
             return "video"
         case .audio:
             return "music.note"
-        case .pdf, .word, .excel, .ppt:
+        case .pdf:
+            return "doc.fill"
+        case .word, .excel, .ppt:
             return "doc.text"
         case .zip, .txt, .html:
             return "paperclip"

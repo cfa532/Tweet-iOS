@@ -173,6 +173,14 @@ struct MediaCell: View, Equatable {
                             handleTap()
                         }
                     }
+                case .pdf:
+                    PDFPreviewView(attachment: attachment, baseUrl: baseUrl)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .onTapGesture {
+                            if !isEmbedded {
+                                handleTap()
+                            }
+                        }
                 default:
                     EmptyView()
                 }
@@ -355,6 +363,9 @@ struct MediaCell: View, Equatable {
             break
         case .image:
             // Open full-screen for images
+            showFullScreen = true
+        case .pdf:
+            // Open full-screen for PDFs
             showFullScreen = true
         default:
             // Open full-screen for other types

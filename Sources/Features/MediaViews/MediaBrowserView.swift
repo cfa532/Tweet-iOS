@@ -221,6 +221,8 @@ struct MediaBrowserView: View {
                                     audioView(for: attachment, url: url, index: index)
                                 } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
                                     imageView(for: attachment, url: url, index: index)
+                                } else if isPDFAttachment(attachment) {
+                                    pdfView(for: attachment, index: index)
                                 }
                             }
                             .background(Color.black)
@@ -371,6 +373,10 @@ struct MediaBrowserView: View {
             attachment.type == .image
         }
         
+        private func isPDFAttachment(_ attachment: MimeiFileType) -> Bool {
+            attachment.type == .pdf
+        }
+        
         private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             ImageViewWithPlaceholder(
                 attachment: attachment,
@@ -443,6 +449,13 @@ struct MediaBrowserView: View {
             .environmentObject(MuteState.shared)
         }
         
+        private func pdfView(for attachment: MimeiFileType, index: Int) -> some View {
+            PDFPreviewViewFullScreen(
+                attachment: attachment,
+                baseUrl: baseUrl
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
 
     }
 
