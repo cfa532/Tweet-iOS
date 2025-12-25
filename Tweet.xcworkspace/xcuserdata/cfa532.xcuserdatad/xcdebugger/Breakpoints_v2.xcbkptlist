@@ -32,8 +32,8 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4833"
             endingLineNumber = "4833"
-            landmarkName = "MediaProcessor"
-            landmarkType = "3">
+            landmarkName = "uploadRegularFile(data:typeIdentifier:fileName:referenceId:mediaType:appUser:appId:)"
+            landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy

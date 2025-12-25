@@ -101,7 +101,7 @@ extension ChatCacheManager {
     }
     
     private func convertToChatSession(_ cdSession: CDChatSession) -> ChatSession? {
-        guard let id = cdSession.id,
+        guard let _ = cdSession.id,
               let userId = cdSession.userId,
               let receiptId = cdSession.receiptId,
               let timestamp = cdSession.timestamp else {

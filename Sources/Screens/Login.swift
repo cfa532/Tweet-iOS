@@ -173,23 +173,34 @@ struct LoginView: View {
         isLoading = true
         errorMessage = nil
         
+        print("DEBUG: [Login] Starting login for username: \(username)")
+        
         do {
             if username.isEmpty || password.isEmpty {
                 errorMessage = NSLocalizedString("Username & password are required.", comment: "Login error message")
+                isLoading = false
                 return
             }
+            
             // Use entry URL when calling getUserId during login
+            print("DEBUG: [Login] Calling getUserId for username: \(username)")
             if let userId = try await hproseInstance.getUserId(username) {
+                print("DEBUG: [Login] Got userId: \(userId), now fetching user data")
                 // Force fetch from server with empty baseUrl to ensure fresh data
                 // This prevents the issue where cached user with nil username is returned
+                print("DEBUG: [Login] Calling fetchUser with empty baseUrl to force IP resolution")
                 if let user = try await hproseInstance.fetchUser(userId, baseUrl: "") {
+                    print("DEBUG: [Login] fetchUser returned successfully, user.baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
                     if (user.username == nil) {
                         print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
                         errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
                     } else {
                         user.password = password
+                        print("DEBUG: [Login] Calling login API for user: \(user.username ?? "unknown")")
                         let result = try await hproseInstance.login(user)
+                        print("DEBUG: [Login] Login API returned: \(result)")
                         if result["status"] as? String == "success" {
+                            print("DEBUG: [Login] Login successful, dismissing login screen")
                             // Post notification for successful login
                             NotificationCenter.default.post(name: .userDidLogin, object: nil)
                             dismiss()
@@ -199,15 +210,16 @@ struct LoginView: View {
                         }
                     }
                 } else {
-                    print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")
+                    print("DEBUG: [Login] fetchUser returned nil for userId: \(userId)")
                     errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
                 }
             } else {
-                print("DEBUG: [Login] Cannot find userId - username: \(username)")
+                print("DEBUG: [Login] getUserId returned nil for username: \(username)")
                 errorMessage = NSLocalizedString("Login failed. Please try again.", comment: "Generic login failure message")
             }
         } catch {
-            print("DEBUG: [Login] Login error - username: \(username), error: \(error.localizedDescription)")
+            print("ERROR: [Login] Login exception - username: \(username), error: \(error)")
+            print("ERROR: [Login] Error description: \(error.localizedDescription)")
             let lowercasedDescription = error.localizedDescription.lowercased()
             if lowercasedDescription.contains("base url") ||
                 lowercasedDescription.contains("provider ip") ||
@@ -219,6 +231,7 @@ struct LoginView: View {
             }
         }
         
+        print("DEBUG: [Login] Login flow completed, setting isLoading = false")
         isLoading = false
     }
 }

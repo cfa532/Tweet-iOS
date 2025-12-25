@@ -1111,26 +1111,34 @@ final class HproseInstance: ObservableObject {
                 if !hasExpired && !baseUrl.isEmpty {
                     return cachedUser
                 } else if hasExpired {
-                    // User data has expired, but we can return stale data while refreshing in the background
-                    // Check if a background refresh is already in progress using thread-safe queue
-                    let shouldStartBackgroundRefresh = userUpdateQueue.sync {
-                        if !ongoingUserUpdates.contains(userId) {
-                            // Mark this user as being updated to prevent duplicate refreshes
-                            ongoingUserUpdates.insert(userId)
-                            return true
+                    // User data has expired
+                    // If baseUrl is empty (forcing fresh IP resolution), don't return stale data
+                    // This is critical during login to ensure we get a healthy IP
+                    if baseUrl.isEmpty {
+                        print("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
+                        // Fall through to fetch fresh data with IP resolution below
+                    } else {
+                        // For normal fetches, return stale data while refreshing in background for better UX
+                        let shouldStartBackgroundRefresh = userUpdateQueue.sync {
+                            if !ongoingUserUpdates.contains(userId) {
+                                // Mark this user as being updated to prevent duplicate refreshes
+                                ongoingUserUpdates.insert(userId)
+                                return true
+                            }
+                            return false
                         }
-                        return false
-                    }
-                    
-                    // Kick off background refresh if we're the first to notice expiration
-                    if shouldStartBackgroundRefresh {
-                        Task {
-                            await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
+                        
+                        // Kick off background refresh if we're the first to notice expiration
+                        if shouldStartBackgroundRefresh {
+                            Task {
+                                await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
+                            }
                         }
+                        
+                        // Return the stale cached user immediately for better UX (non-login flows)
+                        print("DEBUG: [fetchUser] Returning stale cached user while refreshing in background")
+                        return cachedUser
                     }
-                    
-                    // Return the stale cached user immediately for better UX
-                    return cachedUser
                 }
             }
         }
@@ -1584,26 +1592,56 @@ final class HproseInstance: ObservableObject {
             let ipAddresses = ipList
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            // Check each IP for health and return the first healthy one
-            for (index, ip) in ipAddresses.enumerated() {
-                print("DEBUG: [_getProviderIP] Testing IP \(index + 1)/\(ipAddresses.count): \(ip)")
+            
+            print("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
+            
+            // Test IPs in pairs (batches of 2) with 10-second timeout
+            let batchSize = 2
+            for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, ipAddresses.count)
+                let batch = Array(ipAddresses[batchStart..<batchEnd])
                 
-                let client = clientPool.getClientByIP(for: ip)
+                print("DEBUG: [_getProviderIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
                 
-                let isHealthy = await isServerHealthy(client)
+                // Test this batch in parallel with 10s timeout
+                let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
+                    for (index, ip) in batch.enumerated() {
+                        let absoluteIndex = batchStart + index + 1
+                        group.addTask {
+                            print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
+                            
+                            let client = self.clientPool.getClientByIP(for: ip)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
+                            self.clientPool.releaseClient(client, for: ip)
+                            
+                            if isHealthy {
+                                print("DEBUG: [_getProviderIP] ✅ IP test PASSED: \(ip)")
+                            } else {
+                                print("DEBUG: [_getProviderIP] ❌ IP test FAILED: \(ip)")
+                            }
+                            
+                            return (ip, isHealthy)
+                        }
+                    }
+                    
+                    // Check results and return first healthy IP
+                    for await result in group {
+                        if let (ip, isHealthy) = result, isHealthy {
+                            print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip)")
+                            group.cancelAll()  // Cancel remaining checks in this batch
+                            return ip as String?
+                        }
+                    }
+                    return nil as String?
+                }
                 
-                // Release client back to pool
-                clientPool.releaseClient(client, for: ip)
-                
-                if isHealthy {
-                    print("DEBUG: [_getProviderIP] ✅ IP test PASSED - Found healthy provider IP: \(ip)")
+                // If we found a healthy IP in this batch, return it
+                if let ip = healthyIP {
                     return ip
-                } else {
-                    print("DEBUG: [_getProviderIP] ❌ IP test FAILED - IP is unhealthy: \(ip)")
                 }
             }
             
-            // If no healthy IP found, throw error
+            // If no healthy IP found in any batch
             print("DEBUG: [_getProviderIP] No healthy provider IP found in list: \(ipList)")
             return nil
         }
@@ -1628,6 +1666,31 @@ final class HproseInstance: ObservableObject {
             }
             return false
         }.value
+    }
+    
+    /// Checks if a server is healthy with a timeout
+    /// - Parameters:
+    ///   - hproseClient: The client to check
+    ///   - timeout: Timeout in seconds (default: 10)
+    /// - Returns: true if healthy within timeout, false otherwise
+    private func isServerHealthyWithTimeout(_ hproseClient: HproseClient, timeout: TimeInterval = 10.0) async -> Bool {
+        return await withTaskGroup(of: Bool.self) { group in
+            // Task 1: Perform health check
+            group.addTask {
+                return await self.isServerHealthy(hproseClient)
+            }
+            
+            // Task 2: Timeout task
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false  // Return false on timeout
+            }
+            
+            // Return first result (either health check or timeout)
+            let result = await group.next() ?? false
+            group.cancelAll()  // Cancel the other task
+            return result
+        }
     }
     
 
@@ -1790,13 +1853,16 @@ final class HproseInstance: ObservableObject {
         ]
         
         guard let baseUrl = loginUser.baseUrl else {
-            print("[login] Nil user baseUrl")
+            print("ERROR: [login] Nil user baseUrl")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
         
+        print("DEBUG: [login] Starting login API call to baseUrl: \(baseUrl.absoluteString)")
+        
         return try await retryOperation(maxRetries: 3) {
+            print("DEBUG: [login] Creating client for baseUrl: \(baseUrl.absoluteString)")
             let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            newClient.timeout = 30000  // 30s
+            newClient.timeout = 30.0  // 30 seconds (NSTimeInterval is in seconds, not milliseconds!)
             
             // Release client back to pool when done (no need to close)
             defer { 
@@ -1804,22 +1870,29 @@ final class HproseInstance: ObservableObject {
                 // Let the pool manage lifecycle naturally
             }
             
+            print("DEBUG: [login] Invoking login API...")
             let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            print("DEBUG: [login] Got raw response, unwrapping...")
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             guard let response = unwrappedResponse as? [String: Any] else {
+                print("ERROR: [login] Invalid response format from server")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
+            
+            print("DEBUG: [login] Response received: \(response)")
             
             // Handle v2 format: check success field first, then status field for backward compatibility
             if let success = response["success"] as? Bool {
                 if !success {
                     let message = response["message"] as? String ?? NSLocalizedString("Login failed", comment: "Generic login failure message")
                     let localizedReason = self.localizeLoginError(message)
+                    print("DEBUG: [login] Login failed with message: \(message)")
                     return ["reason": localizedReason, "status": "failure"]
                 }
                 // success is true, check for user data
                 if response["user"] != nil || response["data"] != nil {
+                    print("DEBUG: [login] Login successful, setting appUser")
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
@@ -1830,6 +1903,7 @@ final class HproseInstance: ObservableObject {
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
+            print("DEBUG: [login] Login failed - no success field or no user data")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
     }
