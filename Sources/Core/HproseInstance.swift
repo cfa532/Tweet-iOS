@@ -1585,7 +1585,9 @@ final class HproseInstance: ObservableObject {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             // Check each IP for health and return the first healthy one
-            for ip in ipAddresses {
+            for (index, ip) in ipAddresses.enumerated() {
+                print("DEBUG: [_getProviderIP] Testing IP \(index + 1)/\(ipAddresses.count): \(ip)")
+                
                 let client = clientPool.getClientByIP(for: ip)
                 
                 let isHealthy = await isServerHealthy(client)
@@ -1594,8 +1596,10 @@ final class HproseInstance: ObservableObject {
                 clientPool.releaseClient(client, for: ip)
                 
                 if isHealthy {
-                    print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip)")
+                    print("DEBUG: [_getProviderIP] ✅ IP test PASSED - Found healthy provider IP: \(ip)")
                     return ip
+                } else {
+                    print("DEBUG: [_getProviderIP] ❌ IP test FAILED - IP is unhealthy: \(ip)")
                 }
             }
             
