@@ -72,6 +72,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Listen for app initialization to check messages
         setupMessageCheckOnInitialization()
+        
+        // Listen for app initialization to fetch app URLs
+        setupAppUrlsFetch()
 
         // Schedule initial background message check
         print("[AppDelegate] 🚀 Scheduling initial background message check on app launch")
@@ -664,6 +667,22 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             }
         }
     }
+    
+    /// Setup app URLs fetching when app user is initialized
+    private func setupAppUrlsFetch() {
+        // Listen for app user ready notification
+        NotificationCenter.default.addObserver(
+            forName: .appUserReady,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Fetch and set app URLs after appUser is initialized
+            Task {
+                print("[AppDelegate] 🔧 AppUser initialized - fetching app URLs")
+                await self?.fetchAndSetAppUrls()
+            }
+        }
+    }
 
     /// Check for new messages and update badge only (no notifications)
     /// Used when app starts or returns to foreground
@@ -735,6 +754,146 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.loadingWindow?.isHidden = true
             self.loadingWindow = nil
         }
+    }
+    
+    // MARK: - App URLs Initialization
+    
+    /// Fetch app URLs from entry MimeiId provider and save to preferences
+    ///
+    /// This method runs after app initialization to:
+    /// 1. Resolve provider IP for `AppConfig.entryMimeiId` using `getProviderIP()`
+    /// 2. Fetch content from `http://ip/mm/entryMimeiId`
+    /// 3. Parse response and save URLs via `PreferenceHelper.setAppUrls()`
+    ///
+    /// **Process:**
+    /// - Uses `getProviderIP()` for intelligent IP resolution with health checks
+    /// - Makes HTTP GET request to retrieve app URLs configuration
+    /// - Parses response as comma-separated URLs or JSON array
+    /// - Saves to UserDefaults for app-wide access
+    ///
+    /// **Error Handling:**
+    /// - Logs errors but doesn't block app launch
+    /// - App continues with existing cached URLs if fetch fails
+    private func fetchAndSetAppUrls() async {
+        print("[AppDelegate] 🔧 Fetching app URLs from entry MimeiId provider...")
+        
+        do {
+            // Step 1: Get provider IP for entryMimeiId
+            let entryMimeiId = AppConfig.entryMimeiId
+            print("[AppDelegate] Resolving provider IP for entryMimeiId: \(entryMimeiId)")
+            
+            guard let providerIP = try await HproseInstance.shared.getProviderIP(entryMimeiId) else {
+                print("[AppDelegate] ⚠️ Failed to resolve provider IP for entryMimeiId")
+                return
+            }
+            
+            print("[AppDelegate] ✅ Resolved provider IP: \(providerIP)")
+            
+            // Step 2: Fetch content from http://ip/mm/entryMimeiId
+            let urlString = "http://\(providerIP)/mm/\(entryMimeiId)"
+            guard let url = URL(string: urlString) else {
+                print("[AppDelegate] ❌ Invalid URL: \(urlString)")
+                return
+            }
+            
+            print("[AppDelegate] Fetching app URLs from: \(urlString)")
+            
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 10.0
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            // Check HTTP response
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                print("[AppDelegate] ❌ Invalid HTTP response: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+                return
+            }
+            
+            print("[AppDelegate] ✅ Successfully fetched app URLs data (\(data.count) bytes)")
+            
+            // Step 3: Parse response and save URLs
+            let urls = try parseAppUrls(from: data)
+            
+            if urls.isEmpty {
+                print("[AppDelegate] ⚠️ No URLs found in response")
+                return
+            }
+            
+            print("[AppDelegate] Parsed \(urls.count) URL(s): \(urls)")
+            
+            // Step 4: Save to preferences
+            let preferenceHelper = PreferenceHelper()
+            preferenceHelper.setAppUrls(urls)
+            
+            print("[AppDelegate] ✅ Successfully saved app URLs to preferences")
+            
+        } catch {
+            print("[AppDelegate] ❌ Error fetching app URLs: \(error)")
+            // Non-fatal - app continues with existing URLs
+        }
+    }
+    
+    /// Parse app URLs from response data
+    ///
+    /// Supports multiple formats:
+    /// - JSON array: ["http://url1.com", "http://url2.com"]
+    /// - JSON object with "urls" or "data" key: {"urls": ["http://url1.com"]}
+    /// - Plain text comma-separated: "http://url1.com,http://url2.com"
+    /// - Plain text newline-separated: "http://url1.com\nhttp://url2.com"
+    private func parseAppUrls(from data: Data) throws -> Set<String> {
+        // Try parsing as JSON first
+        if let json = try? JSONSerialization.jsonObject(with: data) {
+            // Case 1: JSON array of strings
+            if let urlArray = json as? [String] {
+                return Set(urlArray.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+            }
+            
+            // Case 2: JSON object with "urls" or "data" key
+            if let jsonDict = json as? [String: Any] {
+                if let urlArray = jsonDict["urls"] as? [String] {
+                    return Set(urlArray.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+                }
+                if let urlArray = jsonDict["data"] as? [String] {
+                    return Set(urlArray.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+                }
+                
+                // Case 3: Single URL string in object
+                if let urlString = jsonDict["urls"] as? String {
+                    let urls = urlString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    return Set(urls.filter { !$0.isEmpty })
+                }
+                if let urlString = jsonDict["data"] as? String {
+                    let urls = urlString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    return Set(urls.filter { !$0.isEmpty })
+                }
+            }
+        }
+        
+        // Try parsing as plain text (comma or newline separated)
+        if let text = String(data: data, encoding: .utf8) {
+            let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Try comma-separated first
+            if trimmedText.contains(",") {
+                let urls = trimmedText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                return Set(urls.filter { !$0.isEmpty })
+            }
+            
+            // Try newline-separated
+            if trimmedText.contains("\n") {
+                let urls = trimmedText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                return Set(urls.filter { !$0.isEmpty })
+            }
+            
+            // Single URL
+            if !trimmedText.isEmpty {
+                return Set([trimmedText])
+            }
+        }
+        
+        return Set()
     }
     
     // MARK: - URL Handling (Deeplinks)

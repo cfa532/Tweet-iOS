@@ -17,7 +17,7 @@ struct AppConfig {
     static let baseUrl: String = {
         switch BuildConfiguration.current {
         case .debug:
-            return "http://d2.fireshare.us"
+            return "http://twbe.fireshare.us"
         case .release:
             return "http://tweet.fireshare.us"
         }
@@ -53,7 +53,7 @@ struct AppConfig {
     static let entryMimeiId: String = {
         switch BuildConfiguration.current {
         case .debug:
-            return "1x7Dh9mJfN5zSyPM5TRX3Sro_wQna"
+            return "VQ3xCeguhlAF1jY7zfn-HM_Vrad"
         case .release:
             return "dSXMdZNrpMw0xJQEbxPZn5nnLBK"
         }
