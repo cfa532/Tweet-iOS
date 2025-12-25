@@ -23,6 +23,7 @@ struct ChatScreen: View {
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var messageRefreshTimer: Timer?
+    @State private var isChatScreenVisible = true
     
     init(receiptId: MimeiId, navigationPath: Binding<NavigationPath> = .constant(NavigationPath()), onProfileNavigate: (() -> Void)? = nil) {
         self.receiptId = receiptId
@@ -83,6 +84,7 @@ struct ChatScreen: View {
             }
             .task {
                 print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
+                isChatScreenVisible = true
                 chatSessionManager.markSessionAsRead(receiptId: receiptId)
                 await loadUser()
                 await loadMessages()
@@ -90,6 +92,8 @@ struct ChatScreen: View {
                 print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
             }
             .onDisappear {
+                print("[ChatScreen] Screen disappearing - stopping all videos")
+                isChatScreenVisible = false
                 stopPeriodicMessageRefresh()
             }
             .sheet(isPresented: $showDocumentPicker) {
@@ -172,7 +176,8 @@ struct ChatScreen: View {
                             isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
                             isLastMessage: index == messages.count - 1,
                             isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
-                            showTimestamp: isLastMessageFromSender(index: index, messages: messages)
+                            showTimestamp: isLastMessageFromSender(index: index, messages: messages),
+                            isChatScreenVisible: isChatScreenVisible
                         )
                         .id(message.id)
                     }

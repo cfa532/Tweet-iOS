@@ -18,6 +18,7 @@ struct ChatMessageView: View {
     let isLastMessage: Bool
     let isLastFromSender: Bool
     let showTimestamp: Bool
+    let isChatScreenVisible: Bool
     @State private var receiptUser: User?
     
     var body: some View {
@@ -83,7 +84,8 @@ struct ChatMessageView: View {
                                 ChatVideoPlayer(
                                     attachment: attachment, 
                                     isFromCurrentUser: isFromCurrentUser,
-                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
+                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser,
+                                    isChatScreenVisible: isChatScreenVisible
                                 )
                             } else {
                                 // Document attachments - use DocumentAttachmentsView
@@ -461,6 +463,7 @@ struct ChatVideoPlayer: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     let senderUser: User?
+    let isChatScreenVisible: Bool
     
     @State private var showFullScreen = false
     @State private var isPlaying = true  // Start with autoplay enabled
@@ -496,9 +499,16 @@ struct ChatVideoPlayer: View {
                     maxWidth: maxWidth,
                     gridHeight: gridHeight,
                     showFullScreen: $showFullScreen,
-                    isPlaying: $isPlaying
+                    isPlaying: $isPlaying,
+                    isChatScreenVisible: isChatScreenVisible
                 )
                 .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
+                .onChange(of: isChatScreenVisible) { _, visible in
+                    if !visible {
+                        // Stop playing when chat screen becomes invisible
+                        isPlaying = false
+                    }
+                }
                 .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
                     // Resume playing when returning from fullscreen
                     isPlaying = true
@@ -544,13 +554,14 @@ private struct ChatVideoPlayerContent: View {
     let gridHeight: CGFloat
     @Binding var showFullScreen: Bool
     @Binding var isPlaying: Bool
+    let isChatScreenVisible: Bool
     
     var body: some View {
         ZStack {
             CachingVideoPlayer(
                 url: url,
                 mid: attachment.mid,
-                isVisible: !showFullScreen, // Hide when full-screen is open
+                isVisible: !showFullScreen && isChatScreenVisible, // Hide when full-screen is open or chat screen is not visible
                 mediaType: attachment.type,
                 autoPlay: isPlaying, // Control playback based on state
                 loopOnCompletion: false, // Don't auto-replay when video finishes

@@ -2314,6 +2314,23 @@ struct SimpleVideoPlayer: View {
             // Most intact players will work fine without view refresh.
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             
+            // CRITICAL FIX: After returning from fullscreen, explicitly restart playback if needed
+            // Sometimes checkPlaybackConditions doesn't restart paused videos (e.g. saved at 0.0s from stuck fullscreen)
+            if let player = self.player, player.rate == 0, currentAutoPlay {
+                // Check if video should be playing according to VideoManager
+                let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? true
+                let actuallyVisible = !self.isCoveredByOverlay
+                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                let isReady = player.currentItem?.status == .readyToPlay
+                
+                if approved && actuallyVisible && noDetailViewActive && isReady {
+                    print("🔄 [VIDEO RELOAD] Explicitly restarting paused video after fullscreen for \(self.mid)")
+                    player.isMuted = MuteState.shared.isMuted
+                    playWithResumeIfNeeded(player)
+                    playbackState = .playing
+                }
+            }
+            
             // Delayed check: only refresh if player appears to have stale layer
             // This prevents unnecessary flicker while still fixing actual black screen issues
             Task { @MainActor in
