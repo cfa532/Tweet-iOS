@@ -1399,7 +1399,14 @@ final class HproseInstance: ObservableObject {
         
         if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedRedirectIp) {
             print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected to same IP:port: \(providerIP) (current: \(user.baseUrl?.absoluteString ?? "nil"))")
-            throw HproseError.redirectLoop(ip: providerIP)
+            print("ERROR: [handleRedirectAndRetry] User is unavailable - adding to blacklist")
+            
+            // Add user to blacklist since they redirect to the same IP (unavailable)
+            if !skipRetryAndBlacklist {
+                blackList.recordFailure(user.mid)
+            }
+            
+            throw HproseError.userNotFound(userId: user.mid, reason: "The user is unavailable (redirect loop)")
         }
         
         // Update baseUrl and retry
@@ -1431,11 +1438,24 @@ final class HproseInstance: ObservableObject {
             
             if isRedirectLoop(currentIp: newNormalizedIp, newIp: normalizedRedirectIp) {
                 print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected server returned same IP:port: \(trimmedNewIp)")
-                throw HproseError.redirectLoop(ip: trimmedNewIp)
+                print("ERROR: [handleRedirectAndRetry] User is unavailable - adding to blacklist")
+                
+                // Add user to blacklist since they redirect to the same IP (unavailable)
+                if !skipRetryAndBlacklist {
+                    blackList.recordFailure(user.mid)
+                }
+                
+                throw HproseError.userNotFound(userId: user.mid, reason: "The user is unavailable (redirect loop)")
             }
             
             print("ERROR: [handleRedirectAndRetry] USER NOT FOUND AFTER REDIRECT: userId: \(user.mid), second IP returned: \(trimmedNewIp)")
-            throw HproseError.userNotFound(userId: user.mid, reason: "User not found after redirect - second IP returned: \(trimmedNewIp)")
+            
+            // Add user to blacklist since multiple redirects indicate unavailability
+            if !skipRetryAndBlacklist {
+                blackList.recordFailure(user.mid)
+            }
+            
+            throw HproseError.userNotFound(userId: user.mid, reason: "The user is unavailable (multiple redirects)")
         }
         
         if let userDict = retryResponse as? [String: Any] {
@@ -1603,16 +1623,26 @@ final class HproseInstance: ObservableObject {
                 
                 print("DEBUG: [_getProviderIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
                 
-                // Test this batch in parallel with 10s timeout
+                // Test this batch in parallel - return as soon as first IP responds successfully
                 let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
                     for (index, ip) in batch.enumerated() {
                         let absoluteIndex = batchStart + index + 1
                         group.addTask {
+                            // Check for cancellation before starting
+                            if Task.isCancelled {
+                                return nil
+                            }
+                            
                             print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let client = self.clientPool.getClientByIP(for: ip)
                             let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
                             self.clientPool.releaseClient(client, for: ip)
+                            
+                            // Check for cancellation after health check
+                            if Task.isCancelled {
+                                return nil
+                            }
                             
                             if isHealthy {
                                 print("DEBUG: [_getProviderIP] ✅ IP test PASSED: \(ip)")
@@ -1624,10 +1654,10 @@ final class HproseInstance: ObservableObject {
                         }
                     }
                     
-                    // Check results and return first healthy IP
+                    // Return IMMEDIATELY when first healthy IP is found
                     for await result in group {
                         if let (ip, isHealthy) = result, isHealthy {
-                            print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip)")
+                            print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip) - returning immediately")
                             group.cancelAll()  // Cancel remaining checks in this batch
                             return ip as String?
                         }
@@ -1674,9 +1704,17 @@ final class HproseInstance: ObservableObject {
     ///   - timeout: Timeout in seconds (default: 10)
     /// - Returns: true if healthy within timeout, false otherwise
     private func isServerHealthyWithTimeout(_ hproseClient: HproseClient, timeout: TimeInterval = 10.0) async -> Bool {
+        // Check if already cancelled before starting
+        if Task.isCancelled {
+            return false
+        }
+        
         return await withTaskGroup(of: Bool.self) { group in
             // Task 1: Perform health check
             group.addTask {
+                if Task.isCancelled {
+                    return false
+                }
                 return await self.isServerHealthy(hproseClient)
             }
             
