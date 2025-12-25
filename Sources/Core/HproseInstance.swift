@@ -1672,7 +1672,7 @@ final class HproseInstance: ObservableObject {
                             print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let client = self.clientPool.getClientByIP(for: ip)
-                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 30.0)
                             self.clientPool.releaseClient(client, for: ip)
                             
                             // Check for cancellation after health check

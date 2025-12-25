@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4833"
             endingLineNumber = "4833"
-            landmarkName = "uploadVideoForBackendConversion(data:fileName:referenceId:noResample:appUser:progressCallback:)"
+            landmarkName = "determineVideoContentType(fileName:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
@@ -48,7 +48,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "1597"
             endingLineNumber = "1597"
-            landmarkName = "resolveAndUpdateBaseUrl(user:attempt:maxRetries:forceFreshIP:userHasBaseUrl:hasExpired:originalBaseUrl:)"
+            landmarkName = "getProviderIP(_:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
