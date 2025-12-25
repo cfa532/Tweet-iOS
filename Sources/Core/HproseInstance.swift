@@ -702,21 +702,22 @@ final class HproseInstance: ObservableObject {
             if let dict = originalTweetDict {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
-                    // The singleton reference will see updates when fetch completes
-                    do {
-                        let author = try await fetchUser(originalTweet.authorId)
-                        await MainActor.run {
-                            originalTweet.author = author  // Set on main thread since author is @Published
-                        }
-                    } catch {
-                        print("⚠️ [fetchTweetFeed] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
-                            print("⚠️ [fetchTweetFeed] Server fetch failed, using skeleton for \(originalTweet.authorId) to indicate error")
+                    
+                    // Use skeleton author immediately - fetch in background to avoid blocking
+                    await MainActor.run {
+                        originalTweet.author = User.getInstance(mid: originalTweet.authorId)
+                    }
+                    
+                    // Fetch author in background - will update singleton when complete
+                    Task.detached(priority: .userInitiated) {
+                        do {
+                            _ = try await self.fetchUser(originalTweet.authorId)
+                            // Author singleton is already set, it will update automatically
+                        } catch {
+                            print("⚠️ [fetchTweetFeed] Background fetch failed for original author \(originalTweet.authorId): \(error)")
                         }
                     }
+                    
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
                     TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
@@ -733,17 +734,19 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    do {
-                        let author = try await fetchUser(tweet.authorId)
-                        await MainActor.run {
-                            tweet.author = author  // Set on main thread since author is @Published
-                        }
-                    } catch {
-                        print("⚠️ [fetchTweetFeed] Failed to fetch author \(tweet.authorId) for tweet \(tweet.mid): \(error)")
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            tweet.author = User.getInstance(mid: tweet.authorId)
-                            print("⚠️ [fetchTweetFeed] Server fetch failed, using skeleton for \(tweet.authorId) to indicate error")
+                    
+                    // Use skeleton author immediately - fetch in background to avoid blocking
+                    await MainActor.run {
+                        tweet.author = User.getInstance(mid: tweet.authorId)
+                    }
+                    
+                    // Fetch author in background - will update singleton when complete
+                    Task.detached(priority: .userInitiated) {
+                        do {
+                            _ = try await self.fetchUser(tweet.authorId)
+                            // Author singleton is already set, it will update automatically
+                        } catch {
+                            print("⚠️ [fetchTweetFeed] Background fetch failed for author \(tweet.authorId): \(error)")
                         }
                     }
                     
