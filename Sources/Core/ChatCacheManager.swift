@@ -112,7 +112,7 @@ extension ChatCacheManager {
         if let messageData = cdSession.lastMessageData,
            let lastMessage = try? JSONDecoder().decode(ChatMessage.self, from: messageData) {
             return ChatSession(
-                id: id,
+                id: receiptId,  // sessionId is the receiver's mid
                 userId: userId,
                 receiptId: receiptId,
                 lastMessage: lastMessage,
@@ -125,7 +125,7 @@ extension ChatCacheManager {
         if let lastMessageId = cdSession.lastMessageId {
             let lastMessage = fetchLastMessage(for: lastMessageId)
             return ChatSession(
-                id: id,
+                id: receiptId,  // sessionId is the receiver's mid
                 userId: userId,
                 receiptId: receiptId,
                 lastMessage: lastMessage,

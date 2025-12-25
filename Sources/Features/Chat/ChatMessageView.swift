@@ -767,7 +767,8 @@ struct ChatAttachmentLoader: View {
            let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
            let fileSize = attributes[.size] as? Int64,
            fileSize > 0,
-           FileManager.default.isReadableFile(atPath: cachedURL.path) {
+           FileManager.default.isReadableFile(atPath: cachedURL.path),
+           (try? FileHandle(forReadingFrom: cachedURL)) != nil {
             
             // File exists and is valid - use cached version
             print("DEBUG: [ChatAttachmentLoader] Using cached file: \(uniqueFileName) (\(fileSize) bytes)")
@@ -775,15 +776,32 @@ struct ChatAttachmentLoader: View {
             // Show spinner briefly while presenting
             isDownloading = true
             
-            // Present sheet with URL item
-            self.documentURLItem = DocumentURLItem(url: cachedURL)
-            print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (cached) with URL: \(cachedURL.lastPathComponent)")
-            
-            // Hide spinner after a brief delay to ensure sheet is presented
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self.isDownloading = false
+            // Present sheet with URL item after a small delay to ensure file system is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                // Double-check file is still accessible before presenting
+                guard FileManager.default.fileExists(atPath: cachedURL.path),
+                      FileManager.default.isReadableFile(atPath: cachedURL.path),
+                      (try? FileHandle(forReadingFrom: cachedURL)) != nil else {
+                    print("ERROR: [ChatAttachmentLoader] Cached file became inaccessible before presentation")
+                    self.isDownloading = false
+                    return
+                }
+                
+                self.documentURLItem = DocumentURLItem(id: self.attachment.mid, url: cachedURL)
+                print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (cached) with URL: \(cachedURL.lastPathComponent)")
+                
+                // Hide spinner after sheet is presented
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    self.isDownloading = false
+                }
             }
             return
+        }
+        
+        // If cached file exists but is invalid, remove it and download fresh
+        if FileManager.default.fileExists(atPath: cachedURL.path) {
+            print("DEBUG: [ChatAttachmentLoader] Cached file exists but is invalid, removing and re-downloading")
+            try? FileManager.default.removeItem(at: cachedURL)
         }
         
         // File doesn't exist or is invalid - need to download
@@ -793,40 +811,43 @@ struct ChatAttachmentLoader: View {
         isDownloading = true
         
         let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
-            DispatchQueue.main.async {
-                self.isDownloading = false
-                
-                if let error = error {
-                    DispatchQueue.main.async {
-                        self.isDownloading = false
-                    }
+            // CRITICAL: Copy file IMMEDIATELY before URLSession deletes the temp file
+            // Do NOT dispatch to main queue until after file is copied!
+            
+            if let error = error {
+                DispatchQueue.main.async {
+                    self.isDownloading = false
                     print("ERROR: [ChatAttachmentLoader] Failed to download: \(error)")
-                    return
                 }
-                
-                guard let localURL = localURL else {
-                    DispatchQueue.main.async {
-                        self.isDownloading = false
-                    }
+                return
+            }
+            
+            guard let localURL = localURL else {
+                DispatchQueue.main.async {
+                    self.isDownloading = false
                     print("ERROR: [ChatAttachmentLoader] No local URL")
-                    return
                 }
-                
-                do {
+                return
+            }
+            
+            // Copy file synchronously BEFORE URLSession cleans it up
+            do {
                     // Remove existing file if present
                     if FileManager.default.fileExists(atPath: cachedURL.path) {
                         try FileManager.default.removeItem(at: cachedURL)
                         print("DEBUG: [ChatAttachmentLoader] Removed existing cached file")
                     }
                     
-                    // Copy downloaded file to cache
+                    // Copy downloaded file to cache (MUST happen before returning from this handler)
                     try FileManager.default.copyItem(at: localURL, to: cachedURL)
                     print("DEBUG: [ChatAttachmentLoader] File copied to cache: \(uniqueFileName)")
                     
-                    // Wait briefly for file system to commit
-                    Thread.sleep(forTimeInterval: 0.05)
+                    // Ensure file is flushed to disk by opening and closing a file handle
+                    let fileHandle = try FileHandle(forWritingTo: cachedURL)
+                    try fileHandle.synchronize()
+                    try fileHandle.close()
                     
-                    // Verify file is valid and readable
+                    // Verify file is valid and readable with multiple checks
                     guard FileManager.default.fileExists(atPath: cachedURL.path),
                           let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
                           let fileSize = attributes[.size] as? Int64,
@@ -842,23 +863,32 @@ struct ChatAttachmentLoader: View {
                     
                     print("DEBUG: [ChatAttachmentLoader] File verified and readable: \(fileSize) bytes)")
                     
-                    // Present sheet with URL item
-                    // The spinner will be hidden when the sheet appears
-                    self.documentURLItem = DocumentURLItem(url: cachedURL)
-                    print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (downloaded) with URL: \(cachedURL.lastPathComponent)")
-                    
-                    // Hide spinner after a brief delay to ensure sheet is presented
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        self.isDownloading = false
+                    // Present sheet with URL item after a small async delay to ensure file system is ready
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        // Double-check file is still accessible before presenting
+                        guard FileManager.default.fileExists(atPath: cachedURL.path),
+                              FileManager.default.isReadableFile(atPath: cachedURL.path),
+                              (try? FileHandle(forReadingFrom: cachedURL)) != nil else {
+                            print("ERROR: [ChatAttachmentLoader] File became inaccessible before presentation")
+                            self.isDownloading = false
+                            return
+                        }
+                        
+                        self.documentURLItem = DocumentURLItem(id: self.attachment.mid, url: cachedURL)
+                        print("DEBUG: [ChatAttachmentLoader] Presenting document viewer (downloaded) with URL: \(cachedURL.lastPathComponent)")
+                        
+                        // Hide spinner after sheet is presented
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            self.isDownloading = false
+                        }
                     }
                 } catch {
-                    DispatchQueue.main.async {
-                        self.isDownloading = false
-                    }
-                    print("ERROR: [ChatAttachmentLoader] Failed to cache file: \(error.localizedDescription)")
-                    // Clean up partial file
-                    try? FileManager.default.removeItem(at: cachedURL)
+                DispatchQueue.main.async {
+                    self.isDownloading = false
                 }
+                print("ERROR: [ChatAttachmentLoader] Failed to cache file: \(error.localizedDescription)")
+                // Clean up partial file
+                try? FileManager.default.removeItem(at: cachedURL)
             }
         }
         

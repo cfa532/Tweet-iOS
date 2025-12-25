@@ -101,9 +101,9 @@ class ChatSessionManager: ObservableObject {
                         
                         if let existingSession = existingSession {
                             // Update session with the new last message (don't worry about duplicates)
-                            if let index = chatSessions.firstIndex(where: { $0.id == existingSession.id }) {
+                            if let index = chatSessions.firstIndex(where: { $0.receiptId == partnerId }) {
                                 let updatedSession = ChatSession(
-                                    id: existingSession.id,
+                                    id: partnerId,  // sessionId is the receiver's mid
                                     userId: existingSession.userId,
                                     receiptId: existingSession.receiptId,
                                     lastMessage: lastMessage,
@@ -197,7 +197,7 @@ class ChatSessionManager: ObservableObject {
                 // Always update the session with the new message
                 // Don't rely on timestamps as they are not trustworthy across devices
                 let updatedSession = ChatSession(
-                    id: existingSession.id,
+                    id: otherPartyId,  // sessionId is the receiver's mid
                     userId: hproseInstance.appUser.mid,
                     receiptId: otherPartyId,
                     lastMessage: displayMessage,
@@ -231,7 +231,7 @@ class ChatSessionManager: ObservableObject {
         if let index = chatSessions.firstIndex(where: { $0.receiptId == receiptId }) {
             let session = chatSessions[index]
             let updatedSession = ChatSession(
-                id: session.id,
+                id: receiptId,  // sessionId is the receiver's mid
                 userId: session.userId,
                 receiptId: session.receiptId,
                 lastMessage: session.lastMessage,

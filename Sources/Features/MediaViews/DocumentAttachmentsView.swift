@@ -10,7 +10,7 @@ import QuickLook
 
 /// Identifiable wrapper for document URL to use with .sheet(item:)
 struct DocumentURLItem: Identifiable {
-    let id = UUID()
+    let id: String // Use document's mid as identifier
     let url: URL
 }
 
@@ -140,7 +140,8 @@ struct DocumentAttachmentsView: View {
            let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
            let fileSize = attributes[.size] as? Int64,
            fileSize > 0,
-           FileManager.default.isReadableFile(atPath: cachedURL.path) {
+           FileManager.default.isReadableFile(atPath: cachedURL.path),
+           (try? FileHandle(forReadingFrom: cachedURL)) != nil {
             
             // File exists and is valid - use cached version
             print("DEBUG: [DocumentAttachmentsView] Using cached file: \(uniqueFileName) (\(fileSize) bytes)")
@@ -148,15 +149,32 @@ struct DocumentAttachmentsView: View {
             // Show spinner briefly while presenting
             downloadingDocuments.insert(document.mid)
             
-            // Present sheet with URL item
-            self.documentURLItem = DocumentURLItem(url: cachedURL)
-            print("DEBUG: [DocumentAttachmentsView] Presenting PDF viewer (cached) with URL: \(cachedURL.lastPathComponent)")
-            
-            // Hide spinner after a brief delay to ensure sheet is presented
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                downloadingDocuments.remove(document.mid)
+            // Present sheet with URL item after a small delay to ensure file system is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                // Double-check file is still accessible before presenting
+                guard FileManager.default.fileExists(atPath: cachedURL.path),
+                      FileManager.default.isReadableFile(atPath: cachedURL.path),
+                      (try? FileHandle(forReadingFrom: cachedURL)) != nil else {
+                    print("ERROR: [DocumentAttachmentsView] Cached file became inaccessible before presentation")
+                    downloadingDocuments.remove(document.mid)
+                    return
+                }
+                
+                self.documentURLItem = DocumentURLItem(id: document.mid, url: cachedURL)
+                print("DEBUG: [DocumentAttachmentsView] Presenting PDF viewer (cached) with URL: \(cachedURL.lastPathComponent)")
+                
+                // Hide spinner after sheet is presented
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    downloadingDocuments.remove(document.mid)
+                }
             }
             return
+        }
+        
+        // If cached file exists but is invalid, remove it and download fresh
+        if FileManager.default.fileExists(atPath: cachedURL.path) {
+            print("DEBUG: [DocumentAttachmentsView] Cached file exists but is invalid, removing and re-downloading")
+            try? FileManager.default.removeItem(at: cachedURL)
         }
         
         // File doesn't exist or is invalid - need to download
@@ -166,54 +184,94 @@ struct DocumentAttachmentsView: View {
         downloadingDocuments.insert(document.mid)
         
         let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
-            DispatchQueue.main.async {
-                downloadingDocuments.remove(document.mid)
-                
-                if let error = error {
+            // CRITICAL: Copy file IMMEDIATELY before URLSession deletes the temp file
+            // Do NOT dispatch to main queue until after file is copied!
+            
+            if let error = error {
+                DispatchQueue.main.async {
+                    downloadingDocuments.remove(document.mid)
                     print("ERROR: [DocumentAttachmentsView] Failed to download: \(error)")
-                    return
                 }
-                
-                guard let localURL = localURL else {
+                return
+            }
+            
+            guard let localURL = localURL else {
+                DispatchQueue.main.async {
+                    downloadingDocuments.remove(document.mid)
                     print("ERROR: [DocumentAttachmentsView] No local URL")
+                }
+                return
+            }
+            
+            // Copy file synchronously BEFORE URLSession cleans it up
+            do {
+                // Remove existing file if present
+                if FileManager.default.fileExists(atPath: cachedURL.path) {
+                    try FileManager.default.removeItem(at: cachedURL)
+                    print("DEBUG: [DocumentAttachmentsView] Removed existing cached file")
+                }
+                
+                // Copy downloaded file to cache (MUST happen before returning from this handler)
+                try FileManager.default.copyItem(at: localURL, to: cachedURL)
+                print("DEBUG: [DocumentAttachmentsView] File copied to cache: \(uniqueFileName)")
+                
+                // Ensure file is flushed to disk by opening and closing a file handle
+                let fileHandle = try FileHandle(forWritingTo: cachedURL)
+                try fileHandle.synchronize()
+                try fileHandle.close()
+                
+                // Verify file is valid and readable with multiple checks
+                guard FileManager.default.fileExists(atPath: cachedURL.path),
+                      let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
+                      let fileSize = attributes[.size] as? Int64,
+                      fileSize > 0,
+                      FileManager.default.isReadableFile(atPath: cachedURL.path) else {
+                    DispatchQueue.main.async {
+                        downloadingDocuments.remove(document.mid)
+                    }
+                    print("ERROR: [DocumentAttachmentsView] Downloaded file is empty, invalid, or not readable")
+                    try? FileManager.default.removeItem(at: cachedURL)
                     return
                 }
                 
-                do {
-                    // Remove existing file if present
-                    if FileManager.default.fileExists(atPath: cachedURL.path) {
-                        try FileManager.default.removeItem(at: cachedURL)
-                        print("DEBUG: [DocumentAttachmentsView] Removed existing cached file")
+                // Verify file can actually be opened (QuickLook requirement)
+                guard (try? FileHandle(forReadingFrom: cachedURL)) != nil else {
+                    DispatchQueue.main.async {
+                        downloadingDocuments.remove(document.mid)
                     }
-                    
-                    // Copy downloaded file to cache
-                    try FileManager.default.copyItem(at: localURL, to: cachedURL)
-                    print("DEBUG: [DocumentAttachmentsView] File copied to cache: \(uniqueFileName)")
-                    
-                    // Wait briefly for file system to commit
-                    Thread.sleep(forTimeInterval: 0.05)
-                    
-                    // Verify file is valid and readable
+                    print("ERROR: [DocumentAttachmentsView] Cannot open file for reading")
+                    try? FileManager.default.removeItem(at: cachedURL)
+                    return
+                }
+                
+                print("DEBUG: [DocumentAttachmentsView] File verified and readable: \(fileSize) bytes")
+                
+                // Now switch to main queue for UI updates
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    // Double-check file is still accessible before presenting
                     guard FileManager.default.fileExists(atPath: cachedURL.path),
-                          let attributes = try? FileManager.default.attributesOfItem(atPath: cachedURL.path),
-                          let fileSize = attributes[.size] as? Int64,
-                          fileSize > 0,
-                          FileManager.default.isReadableFile(atPath: cachedURL.path) else {
-                        print("ERROR: [DocumentAttachmentsView] Downloaded file is empty, invalid, or not readable")
-                        try? FileManager.default.removeItem(at: cachedURL)
+                          FileManager.default.isReadableFile(atPath: cachedURL.path),
+                          (try? FileHandle(forReadingFrom: cachedURL)) != nil else {
+                        print("ERROR: [DocumentAttachmentsView] File became inaccessible before presentation")
+                        downloadingDocuments.remove(document.mid)
                         return
                     }
                     
-                    print("DEBUG: [DocumentAttachmentsView] File verified and readable: \(fileSize) bytes")
-                    
-                    // Present sheet with URL item
-                    self.documentURLItem = DocumentURLItem(url: cachedURL)
+                    self.documentURLItem = DocumentURLItem(id: document.mid, url: cachedURL)
                     print("DEBUG: [DocumentAttachmentsView] Presenting PDF viewer (downloaded) with URL: \(cachedURL.lastPathComponent)")
-                } catch {
-                    print("ERROR: [DocumentAttachmentsView] Failed to cache file: \(error.localizedDescription)")
-                    // Clean up partial file
-                    try? FileManager.default.removeItem(at: cachedURL)
+                    
+                    // Hide spinner after sheet is presented
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        downloadingDocuments.remove(document.mid)
+                    }
                 }
+            } catch {
+                DispatchQueue.main.async {
+                    downloadingDocuments.remove(document.mid)
+                }
+                print("ERROR: [DocumentAttachmentsView] Failed to cache file: \(error.localizedDescription)")
+                // Clean up partial file
+                try? FileManager.default.removeItem(at: cachedURL)
             }
         }
         

@@ -152,8 +152,9 @@ class ChatSessionRepository: ObservableObject {
                 updatedSessions.append(newSession)
             } else if message.timestamp > existingSession!.lastMessage.timestamp {
                 // Existing session is updated with new message
-                if let index = updatedSessions.firstIndex(where: { $0.id == existingSession!.id }) {
+                if let index = updatedSessions.firstIndex(where: { $0.receiptId == existingSession!.receiptId }) {
                     updatedSessions[index] = existingSession!.copy(
+                        id: existingSession!.receiptId,  // Ensure id equals receiptId
                         lastMessage: message,
                         timestamp: message.timestamp,
                         hasNews: true
@@ -192,6 +193,7 @@ extension ChatMessageEntity {
 extension ChatSessionEntity {
     func toChatSession(_ lastMessage: ChatMessage) -> ChatSession {
         return ChatSession(
+            id: receiptId,  // sessionId is the receiver's mid
             userId: userId,
             receiptId: receiptId,
             lastMessage: lastMessage,
