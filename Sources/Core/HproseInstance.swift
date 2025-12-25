@@ -47,6 +47,12 @@ final class HproseInstance: ObservableObject {
     // This ensures appUser always returns the singleton instance
     @Published private var _appUserId: String = Constants.GUEST_ID
     
+    // Short-term failure cache to prevent immediate retries of failed users
+    // Key: userId, Value: timestamp of last failure
+    private var recentFailures: [String: TimeInterval] = [:]
+    private let recentFailuresLock = NSLock()
+    private let recentFailureCooldown: TimeInterval = 300 // 5 minutes
+    
     /// The current app user singleton instance
     ///
     /// This computed property provides access to the current user with automatic refresh capabilities:
@@ -1077,6 +1083,46 @@ final class HproseInstance: ObservableObject {
     ///   - forceRefresh: If true, bypasses cache and fetches fresh data
     ///   - skipRetryAndBlacklist: If true, skips retry logic and blacklist management (for internal use)
     /// - Returns: User object or nil if user cannot be fetched
+    /// Check if a user recently failed and is in cooldown period
+    private func isInRecentFailureCooldown(_ userId: String) -> Bool {
+        recentFailuresLock.lock()
+        defer { recentFailuresLock.unlock() }
+        
+        guard let lastFailure = recentFailures[userId] else {
+            return false
+        }
+        
+        let now = Date().timeIntervalSince1970
+        let timeSinceFailure = now - lastFailure
+        
+        if timeSinceFailure < recentFailureCooldown {
+            return true
+        } else {
+            // Cooldown expired, remove from cache
+            recentFailures.removeValue(forKey: userId)
+            return false
+        }
+    }
+    
+    /// Record a recent failure for a user
+    private func recordRecentFailure(_ userId: String) {
+        recentFailuresLock.lock()
+        defer { recentFailuresLock.unlock() }
+        
+        recentFailures[userId] = Date().timeIntervalSince1970
+        print("DEBUG: [HproseInstance] Recorded recent failure for user \(userId), cooldown for \(Int(recentFailureCooldown))s")
+    }
+    
+    /// Clear recent failure for a user (called on success)
+    private func clearRecentFailure(_ userId: String) {
+        recentFailuresLock.lock()
+        defer { recentFailuresLock.unlock() }
+        
+        if recentFailures.removeValue(forKey: userId) != nil {
+            print("DEBUG: [HproseInstance] Cleared recent failure for user \(userId)")
+        }
+    }
+    
     func fetchUser(
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? "",
@@ -1095,6 +1141,12 @@ final class HproseInstance: ObservableObject {
         // Skip this check if we're in internal retry logic to prevent double-checking
         if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
             print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning nil")
+            return nil
+        }
+        
+        // Check if this user recently failed (short-term cooldown to prevent retry storms)
+        if !skipRetryAndBlacklist && isInRecentFailureCooldown(userId) {
+            print("DEBUG: [fetchUser] User \(userId) in recent failure cooldown, skipping")
             return nil
         }
         
@@ -1268,9 +1320,12 @@ final class HproseInstance: ObservableObject {
         let originalBaseUrl = user.baseUrl?.absoluteString
         let hasExpired = await user.hasExpired()
         let userHasBaseUrl = user.baseUrl != nil && !(user.baseUrl?.absoluteString.isEmpty ?? true)
-        let forceFreshIP = originalBaseUrl == nil || originalBaseUrl?.isEmpty == true || hasExpired
+        // Only force fresh IP if we don't have a baseUrl at all
+        // Don't force fresh IP just because user data expired - that's why we're fetching it!
+        let forceFreshIP = originalBaseUrl == nil || originalBaseUrl?.isEmpty == true
         
         var lastError: Error?
+        var failedRedirectIP: String? = nil  // Track failed redirect IP to avoid retry loop
         
         for attempt in 1...maxRetries {
             do {
@@ -1316,7 +1371,7 @@ final class HproseInstance: ObservableObject {
                 let response = try Self.unwrapV2Response(rawResponse)
                 
                 // Process the response
-                let success = try await processUserDataResponse(user: user, response: response as Any, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params)
+                let success = try await processUserDataResponse(user: user, response: response as Any, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params, failedRedirectIP: failedRedirectIP)
                 
                 if success {
                     return user
@@ -1325,14 +1380,25 @@ final class HproseInstance: ObservableObject {
                 lastError = error
                 print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), error: \(error.localizedDescription)")
                 
-                // Check for redirect loop
-                if let errorMessage = (error as NSError?)?.localizedDescription,
-                   errorMessage.contains("Redirect loop detected") {
-                    print("ERROR: [\(logPrefix)] REDIRECT LOOP DETECTED, stopping retries for userId: \(user.mid)")
-                    if !skipRetryAndBlacklist {
-                        blackList.recordFailure(user.mid)
+                // Check if this is a redirect loop error - DON'T RETRY
+                if let hproseError = error as? HproseError {
+                    if case .redirectLoop = hproseError {
+                        print("ERROR: [\(logPrefix)] REDIRECT LOOP DETECTED, stopping retries immediately for userId: \(user.mid)")
+                        // Don't add to long-term blacklist, short-term cooldown is enough
+                        throw error
                     }
-                    throw error
+                }
+                
+                // Check if error mentions redirect to capture the failed redirect IP
+                if let errorMessage = (error as NSError?)?.localizedDescription,
+                   errorMessage.contains("redirectIP:") {
+                    // Extract failed redirect IP from error message if available
+                    // This helps prevent retrying the same failing redirect
+                    if let range = errorMessage.range(of: "redirectIP: "),
+                       let endRange = errorMessage[range.upperBound...].range(of: ",") {
+                        failedRedirectIP = String(errorMessage[range.upperBound..<endRange.lowerBound])
+                        print("DEBUG: [\(logPrefix)] Captured failed redirect IP: \(failedRedirectIP ?? "nil") to avoid retry loop")
+                    }
                 }
                 
                 if skipRetryAndBlacklist {
@@ -1357,16 +1423,17 @@ final class HproseInstance: ObservableObject {
     
     /// Processes user data response from server
     /// Returns true if successful, throws exception otherwise
-    private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool, entry: String, params: [String: Any]) async throws -> Bool {
+    private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool, entry: String, params: [String: Any], failedRedirectIP: String?) async throws -> Bool {
         // Handle string response (redirect)
         if let redirectIP = response as? String {
-            return try await handleRedirectAndRetry(user: user, providerIP: redirectIP.trimmingCharacters(in: .whitespacesAndNewlines), entry: entry, params: params, skipRetryAndBlacklist: skipRetryAndBlacklist)
+            return try await handleRedirectAndRetry(user: user, providerIP: redirectIP.trimmingCharacters(in: .whitespacesAndNewlines), entry: entry, params: params, skipRetryAndBlacklist: skipRetryAndBlacklist, failedRedirectIP: failedRedirectIP)
         }
         
         // Handle dictionary response (user data)
         if let userDict = response as? [String: Any] {
             if !skipRetryAndBlacklist {
                 blackList.recordSuccess(user.mid)
+                clearRecentFailure(user.mid)
             }
             
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false)
@@ -1391,22 +1458,39 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Handles redirect response and retries the request
-    private func handleRedirectAndRetry(user: User, providerIP: String, entry: String, params: [String: Any], skipRetryAndBlacklist: Bool) async throws -> Bool {
+    private func handleRedirectAndRetry(user: User, providerIP: String, entry: String, params: [String: Any], skipRetryAndBlacklist: Bool, failedRedirectIP: String?) async throws -> Bool {
         print("DEBUG: [handleRedirectAndRetry] PROVIDER IP RECEIVED: userId: \(user.mid), providerIP: \(providerIP)")
         
         let normalizedRedirectIp = normalizeIpFromUrl(providerIP)
         let normalizedCurrentIp = normalizeIpFromUrl(user.baseUrl?.absoluteString ?? "")
         
+        // Check if this redirect IP already failed in a previous attempt
+        if let failedIP = failedRedirectIP {
+            let normalizedFailedIp = normalizeIpFromUrl(failedIP)
+            if normalizedRedirectIp == normalizedFailedIp {
+                print("ERROR: [handleRedirectAndRetry] Refusing to follow redirect to IP that already failed: \(providerIP)")
+                print("ERROR: [handleRedirectAndRetry] User data unavailable - redirect loop detected")
+                
+                // Record recent failure to prevent immediate retries
+                if !skipRetryAndBlacklist {
+                    recordRecentFailure(user.mid)
+                }
+                
+                throw HproseError.redirectLoop(ip: providerIP)
+            }
+        }
+        
         if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedRedirectIp) {
             print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected to same IP:port: \(providerIP) (current: \(user.baseUrl?.absoluteString ?? "nil"))")
-            print("ERROR: [handleRedirectAndRetry] User is unavailable - adding to blacklist")
+            print("ERROR: [handleRedirectAndRetry] User is unavailable - recording recent failure")
             
-            // Add user to blacklist since they redirect to the same IP (unavailable)
+            // Record recent failure AND blacklist
             if !skipRetryAndBlacklist {
+                recordRecentFailure(user.mid)
                 blackList.recordFailure(user.mid)
             }
             
-            throw HproseError.userNotFound(userId: user.mid, reason: "The user is unavailable (redirect loop)")
+            throw HproseError.redirectLoop(ip: providerIP)
         }
         
         // Update baseUrl and retry
@@ -1425,8 +1509,16 @@ final class HproseInstance: ObservableObject {
         
         // Check if the response is an error object (network failure case)
         if let error = retryRawResponse as? Error {
-            print("ERROR: [handleRedirectAndRetry] Network error after redirect: userId: \(user.mid), error: \(error.localizedDescription)")
-            throw error
+            print("ERROR: [handleRedirectAndRetry] Network error after redirect: userId: \(user.mid), redirectIP: \(providerIP), error: \(error.localizedDescription)")
+            // Include redirectIP in error message so retry logic can capture and avoid it
+            let enrichedError = NSError(
+                domain: (error as NSError).domain,
+                code: (error as NSError).code,
+                userInfo: (error as NSError).userInfo.merging([
+                    NSLocalizedDescriptionKey: "\(error.localizedDescription) redirectIP: \(providerIP),"
+                ]) { _, new in new }
+            )
+            throw enrichedError
         }
         
         let retryResponse = try Self.unwrapV2Response(retryRawResponse)
@@ -1459,7 +1551,7 @@ final class HproseInstance: ObservableObject {
         }
         
         if let userDict = retryResponse as? [String: Any] {
-            return try await processUserDataResponse(user: user, response: userDict, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params)
+            return try await processUserDataResponse(user: user, response: userDict, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params, failedRedirectIP: nil)
         }
         
         if retryResponse is NSNull {
@@ -1941,6 +2033,28 @@ final class HproseInstance: ObservableObject {
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
+            
+            // Check for status field (alternate response format)
+            if let status = response["status"] as? String {
+                if status == "failure" {
+                    // Extract and localize the reason from server
+                    let serverReason = response["reason"] as? String ?? NSLocalizedString("Login failed", comment: "Generic login failure message")
+                    let localizedReason = self.localizeLoginError(serverReason)
+                    print("DEBUG: [login] Login failed with status: \(status), reason: \(serverReason)")
+                    return ["reason": localizedReason, "status": "failure"]
+                } else if status == "success" && response["user"] != nil {
+                    print("DEBUG: [login] Login successful (status field), setting appUser")
+                    await MainActor.run {
+                        self.preferenceHelper?.setUserId(loginUser.mid)
+                        self.appUser = loginUser
+                    }
+                    Task {
+                        await self.populateFellowLists(user: loginUser)
+                    }
+                    return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
+                }
+            }
+            
             print("DEBUG: [login] Login failed - no success field or no user data")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
