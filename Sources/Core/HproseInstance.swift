@@ -47,12 +47,6 @@ final class HproseInstance: ObservableObject {
     // This ensures appUser always returns the singleton instance
     @Published private var _appUserId: String = Constants.GUEST_ID
     
-    // Short-term failure cache to prevent immediate retries of failed users
-    // Key: userId, Value: timestamp of last failure
-    private var recentFailures: [String: TimeInterval] = [:]
-    private let recentFailuresLock = NSLock()
-    private let recentFailureCooldown: TimeInterval = 300 // 5 minutes
-    
     /// The current app user singleton instance
     ///
     /// This computed property provides access to the current user with automatic refresh capabilities:
@@ -1086,46 +1080,6 @@ final class HproseInstance: ObservableObject {
     ///   - forceRefresh: If true, bypasses cache and fetches fresh data
     ///   - skipRetryAndBlacklist: If true, skips retry logic and blacklist management (for internal use)
     /// - Returns: User object or nil if user cannot be fetched
-    /// Check if a user recently failed and is in cooldown period
-    private func isInRecentFailureCooldown(_ userId: String) -> Bool {
-        recentFailuresLock.lock()
-        defer { recentFailuresLock.unlock() }
-        
-        guard let lastFailure = recentFailures[userId] else {
-            return false
-        }
-        
-        let now = Date().timeIntervalSince1970
-        let timeSinceFailure = now - lastFailure
-        
-        if timeSinceFailure < recentFailureCooldown {
-            return true
-        } else {
-            // Cooldown expired, remove from cache
-            recentFailures.removeValue(forKey: userId)
-            return false
-        }
-    }
-    
-    /// Record a recent failure for a user
-    private func recordRecentFailure(_ userId: String) {
-        recentFailuresLock.lock()
-        defer { recentFailuresLock.unlock() }
-        
-        recentFailures[userId] = Date().timeIntervalSince1970
-        print("DEBUG: [HproseInstance] Recorded recent failure for user \(userId), cooldown for \(Int(recentFailureCooldown))s")
-    }
-    
-    /// Clear recent failure for a user (called on success)
-    private func clearRecentFailure(_ userId: String) {
-        recentFailuresLock.lock()
-        defer { recentFailuresLock.unlock() }
-        
-        if recentFailures.removeValue(forKey: userId) != nil {
-            print("DEBUG: [HproseInstance] Cleared recent failure for user \(userId)")
-        }
-    }
-    
     func fetchUser(
         _ userId: String,
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? "",
@@ -1144,12 +1098,6 @@ final class HproseInstance: ObservableObject {
         // Skip this check if we're in internal retry logic to prevent double-checking
         if !skipRetryAndBlacklist && blackList.isBlacklisted(userId) {
             print("DEBUG: [fetchUser] User \(userId) is blacklisted, returning nil")
-            return nil
-        }
-        
-        // Check if this user recently failed (short-term cooldown to prevent retry storms)
-        if !skipRetryAndBlacklist && isInRecentFailureCooldown(userId) {
-            print("DEBUG: [fetchUser] User \(userId) in recent failure cooldown, skipping")
             return nil
         }
         
@@ -1436,7 +1384,6 @@ final class HproseInstance: ObservableObject {
         if let userDict = response as? [String: Any] {
             if !skipRetryAndBlacklist {
                 blackList.recordSuccess(user.mid)
-                clearRecentFailure(user.mid)
             }
             
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false)
@@ -1474,22 +1421,16 @@ final class HproseInstance: ObservableObject {
                 print("ERROR: [handleRedirectAndRetry] Refusing to follow redirect to IP that already failed: \(providerIP)")
                 print("ERROR: [handleRedirectAndRetry] User data unavailable - redirect loop detected")
                 
-                // Record recent failure to prevent immediate retries
-                if !skipRetryAndBlacklist {
-                    recordRecentFailure(user.mid)
-                }
-                
                 throw HproseError.redirectLoop(ip: providerIP)
             }
         }
         
         if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedRedirectIp) {
             print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected to same IP:port: \(providerIP) (current: \(user.baseUrl?.absoluteString ?? "nil"))")
-            print("ERROR: [handleRedirectAndRetry] User is unavailable - recording recent failure")
+            print("ERROR: [handleRedirectAndRetry] User is unavailable")
             
-            // Record recent failure AND blacklist
+            // Add to long-term blacklist for repeated failures over time
             if !skipRetryAndBlacklist {
-                recordRecentFailure(user.mid)
                 blackList.recordFailure(user.mid)
             }
             
