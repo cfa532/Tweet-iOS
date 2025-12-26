@@ -436,7 +436,8 @@ final class HproseInstance: ObservableObject {
     private func findEntryIP() async throws -> String? {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
-                let html = try await fetchHTML(from: url)
+                let urlWithPrefix = ensureHttpPrefix(url)
+                let html = try await fetchHTML(from: urlWithPrefix)
                 let paramData = Gadget.shared.extractParamMap(from: html)
                 // Update appId from server if provided, otherwise keep AppConfig value
                 if let serverAppId = paramData["mid"] as? String, !serverAppId.isEmpty {
@@ -6548,7 +6549,8 @@ final class HproseInstance: ObservableObject {
         
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
-                let html = try await fetchHTML(from: url)
+                let urlWithPrefix = ensureHttpPrefix(url)
+                let html = try await fetchHTML(from: urlWithPrefix)
                 let paramData = Gadget.shared.extractParamMap(from: html)
                 
                 guard let addrs = paramData["addrs"] as? String else { continue }
