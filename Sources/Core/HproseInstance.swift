@@ -8,12 +8,27 @@ import ffmpegkit
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
 
+// MARK: - IP Cache Entry
+private struct IPCacheEntry {
+    let ip: String
+    let timestamp: Date
+    
+    var isExpired: Bool {
+        // 30 minute expiry
+        return Date().timeIntervalSince(timestamp) > 1800
+    }
+}
+
 // MARK: - HproseInstance
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     private var _domainToShare: String = AppConfig.baseUrl
+    
+    // IP Cache: Stores validated IPs with 30-minute expiry
+    private var ipCache: [String: IPCacheEntry] = [:]
+    private let ipCacheLock = NSLock()
     
     /// The domain to use for sharing links
     var domainToShare: String {
@@ -1722,23 +1737,131 @@ final class HproseInstance: ObservableObject {
         return nil
     }
     
-    private func isServerHealthy(_ hproseClient: HproseClient) async -> Bool {
-        let entry = "health"
-        let params: [String: Any] = [
-            "aid": appId,
-            "ver": "last"
-        ]
+    // MARK: - IP Cache Methods
+    
+    /// Check if an IP is in the cache and still valid
+    private func getCachedIP(_ ip: String) -> Bool {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
         
-        // Perform the invoke in a Task to avoid blocking
-        return await Task {
-            let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
-            if let responseDict = rawResponse as? [String: Any] {
-                if let success = responseDict["success"] as? Bool, success {
+        if let entry = ipCache[ip] {
+            if !entry.isExpired {
+                print("DEBUG: [IPCache] Cache HIT for IP: \(ip) (age: \(Int(Date().timeIntervalSince(entry.timestamp)))s)")
+                return true
+            } else {
+                print("DEBUG: [IPCache] Cache EXPIRED for IP: \(ip)")
+                ipCache.removeValue(forKey: ip)
+            }
+        }
+        return false
+    }
+    
+    /// Cache a validated IP
+    private func cacheIP(_ ip: String) {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        ipCache[ip] = IPCacheEntry(ip: ip, timestamp: Date())
+        print("DEBUG: [IPCache] Cached IP: \(ip)")
+    }
+    
+    /// Clear expired entries from cache
+    private func cleanupExpiredCache() {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        let beforeCount = ipCache.count
+        ipCache = ipCache.filter { !$0.value.isExpired }
+        let removedCount = beforeCount - ipCache.count
+        if removedCount > 0 {
+            print("DEBUG: [IPCache] Cleaned up \(removedCount) expired entries")
+        }
+    }
+    
+    /// Invalidate a specific IP from cache (useful when an IP fails after being cached)
+    func invalidateIPCache(for ip: String) {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        if ipCache.removeValue(forKey: ip) != nil {
+            print("DEBUG: [IPCache] Invalidated cache for IP: \(ip)")
+        }
+    }
+    
+    /// Clear all cached IPs (useful for testing or reset)
+    func clearIPCache() {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        let count = ipCache.count
+        ipCache.removeAll()
+        print("DEBUG: [IPCache] Cleared all \(count) cached IPs")
+    }
+    
+    // MARK: - Health Check Methods
+    
+    /// Checks if a server is healthy using HTTP HEAD request to base URL
+    /// - Parameter hproseClient: The client to check (uses its uri property)
+    /// - Returns: true if server responds to HEAD request, false otherwise
+    private func isServerHealthy(_ hproseClient: HproseClient) async -> Bool {
+        // Extract IP from client URI
+        guard let uriString = hproseClient.uri else {
+            print("DEBUG: [isServerHealthy] No URI found in client")
+            return false
+        }
+        
+        // Extract base URL (without /webapi/ path) for server health check
+        // URI format is "http://IP/webapi/" -> we want "http://IP/"
+        guard let fullURL = URL(string: uriString),
+              let scheme = fullURL.scheme,
+              let host = fullURL.host else {
+            print("DEBUG: [isServerHealthy] Invalid URI: \(uriString)")
+            return false
+        }
+        
+        // Construct base URL for testing the server itself
+        var baseURLString = "\(scheme)://\(host)"
+        if let port = fullURL.port {
+            baseURLString += ":\(port)"
+        }
+        baseURLString += "/"
+        
+        // Check cache first (cache by IP only, not full URL)
+        let cacheKey = host + (fullURL.port.map { ":\($0)" } ?? "")
+        if getCachedIP(cacheKey) {
+            return true
+        }
+        
+        guard let baseURL = URL(string: baseURLString) else {
+            print("DEBUG: [isServerHealthy] Failed to construct base URL from: \(uriString)")
+            return false
+        }
+        
+        // Perform HTTP HEAD request to base URL (test server, not service endpoint)
+        var request = URLRequest(url: baseURL, timeoutInterval: 5.0)
+        request.httpMethod = "HEAD"
+        
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                let isHealthy = (200...299).contains(httpResponse.statusCode)
+                
+                if isHealthy {
+                    print("DEBUG: [isServerHealthy] ✅ HEAD request succeeded: \(baseURLString) (status: \(httpResponse.statusCode))")
+                    
+                    // Cache the validated IP
+                    cacheIP(cacheKey)
                     return true
+                } else {
+                    print("DEBUG: [isServerHealthy] ❌ HEAD request failed: \(baseURLString) (status: \(httpResponse.statusCode))")
                 }
             }
-            return false
-        }.value
+        } catch {
+            print("DEBUG: [isServerHealthy] ❌ HEAD request error for \(baseURLString): \(error.localizedDescription)")
+        }
+        
+        return false
     }
     
     /// Checks if a server is healthy with a timeout
@@ -1752,8 +1875,11 @@ final class HproseInstance: ObservableObject {
             return false
         }
         
+        // Periodically clean up expired cache entries
+        cleanupExpiredCache()
+        
         return await withTaskGroup(of: Bool.self) { group in
-            // Task 1: Perform health check
+            // Task 1: Perform health check (HEAD request)
             group.addTask {
                 if Task.isCancelled {
                     return false
@@ -7220,3 +7346,4 @@ final class HproseInstance: ObservableObject {
 }
 
 // NOTE: Array.chunked extension is now in TweetUploadManager.swift
+

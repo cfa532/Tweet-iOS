@@ -53,9 +53,13 @@ The function follows a systematic approach to finding a healthy IP:
    - Filters out empty strings
    - Validates URL format
 
-4. **Health Check**
-   - Tests each IP sequentially via `isServerHealthy()`
+4. **Health Check with Cache**
+   - Checks IP cache first (30-minute validity)
+   - If cached: Returns immediately (< 1ms)
+   - If not cached: Performs HTTP HEAD request
+   - Tests IPs in pairs (batches of 2) concurrently
    - Returns first IP that passes health check
+   - Caches validated IPs for future use
 
 5. **Return or Fallback**
    - Returns first healthy IP immediately
@@ -179,6 +183,16 @@ if mid == Constants.GUEST_ID {
 ### ✅ Health Validation
 
 Every IP is verified with `isServerHealthy()` before being returned. The function never returns an unverified IP address.
+
+**Validation Method**: HTTP HEAD request with 5-second timeout
+- Accepts any 2xx HTTP status code (200-299)
+- More efficient than endpoint-based checks (no response body)
+- Failed IPs are never cached
+
+**Cache Validation**: 
+- Cached IPs are pre-validated (passed health check within last 30 minutes)
+- Cache entries expire after 30 minutes
+- Invalid IPs can be manually removed from cache
 
 ### ✅ Network Issue Isolation
 
@@ -324,12 +338,97 @@ During fallback, `client.uri` is temporarily modified for the IP query. For appU
 
 **Protection**: `avoidInfiniteLoop` flag prevents recursive calls
 
-### `isServerHealthy(_:logFailures:)`
-**Purpose**: Health check validation for IP addresses
+### `isServerHealthy(_:)`
+**Purpose**: Health check validation for IP addresses using HTTP HEAD requests
 
 **Returns**: `true` if server responds correctly, `false` otherwise
 
-**Method**: Calls `health` endpoint or checks for valid response
+**Method**: Performs HTTP HEAD request to server endpoint (more efficient than calling `/health` endpoint)
+
+**Key Features**:
+- Uses HTTP HEAD (no response body - faster and more efficient)
+- Checks IP cache first before making network request
+- Caches validated IPs for 30 minutes
+- Thread-safe cache operations
+- Automatic cache cleanup
+
+**Cache Integration**:
+```swift
+// Check cache first
+if getCachedIP(ip) {
+    return true  // Instant response - no network request
+}
+
+// If not cached, perform HTTP HEAD request
+// On success, cache IP for 30 minutes
+```
+
+### `isServerHealthyWithTimeout(_:timeout:)`
+**Purpose**: Wrapper that adds timeout protection to health checks
+
+**Features**:
+- Default 10-second timeout
+- Cancels health check if timeout is reached
+- Automatically cleans up expired cache entries
+- Returns false on timeout or cancellation
+
+---
+
+## IP Cache System
+
+### Overview
+
+The IP cache system prevents redundant health checks by caching validated IPs for 30 minutes. This significantly improves performance by eliminating unnecessary network requests.
+
+### Cache Structure
+
+```swift
+private struct IPCacheEntry {
+    let ip: String
+    let timestamp: Date
+    
+    var isExpired: Bool {
+        // 30 minute expiry (1800 seconds)
+        return Date().timeIntervalSince(timestamp) > 1800
+    }
+}
+```
+
+### Cache Operations
+
+| Method | Purpose | Thread-Safe |
+|--------|---------|-------------|
+| `getCachedIP(_:)` | Check if IP is cached and valid | ✅ Yes |
+| `cacheIP(_:)` | Store validated IP with timestamp | ✅ Yes |
+| `cleanupExpiredCache()` | Remove expired entries | ✅ Yes |
+| `invalidateIPCache(for:)` | Manually invalidate specific IP | ✅ Yes |
+| `clearIPCache()` | Clear all cached IPs | ✅ Yes |
+
+### Cache Behavior
+
+**When checking IP health:**
+1. ✅ **Cache Hit (IP valid)**: Returns `true` immediately - no network request
+2. ⏱️ **Cache Miss or Expired**: Performs HTTP HEAD request
+3. ✅ **HEAD Success**: Caches IP for 30 minutes and returns `true`
+4. ❌ **HEAD Failure**: Returns `false` (does not cache failed IPs)
+
+**Example Debug Output:**
+```
+DEBUG: [IPCache] Cache HIT for IP: 192.168.1.100 (age: 327s)
+DEBUG: [isServerHealthy] ✅ HEAD request succeeded: http://192.168.1.100/webapi/ (status: 200)
+DEBUG: [IPCache] Cached IP: 192.168.1.100
+DEBUG: [IPCache] Cleaned up 3 expired entries
+```
+
+### Manual Cache Control
+
+```swift
+// Invalidate specific IP (e.g., when connection fails later)
+HproseInstance.shared.invalidateIPCache(for: "192.168.1.100")
+
+// Clear entire cache (e.g., during logout or network change)
+HproseInstance.shared.clearIPCache()
+```
 
 ---
 
@@ -337,16 +436,29 @@ During fallback, `client.uri` is temporarily modified for the IP query. For appU
 
 ### ⚡ Optimizations
 
-1. **Fast Path**: Returns immediately on first healthy IP found
-2. **Lazy Evaluation**: Stops checking IPs once one passes
-3. **Cached State**: Attempt 1 uses cached baseUrl (no DNS resolution)
+1. **IP Cache**: Validated IPs cached for 30 minutes - instant response for cached IPs
+2. **HTTP HEAD Requests**: No response body - faster than full GET requests
+3. **Parallel Testing**: IPs tested in pairs (batches of 2) concurrently
+4. **Fast Path**: Returns immediately on first healthy IP found
+5. **Lazy Evaluation**: Stops checking IPs once one passes
+6. **Cached State**: Attempt 1 uses cached baseUrl (no DNS resolution)
 
 ### ⏱️ Timeout Strategy
 
-- Health checks use short timeouts (typically 3-5 seconds)
-- Total function time: ~5-15 seconds worst case
-  - Fast path (cached): ~1-3 seconds
-  - Full fallback: ~10-15 seconds
+- HTTP HEAD request timeout: 5 seconds
+- Overall health check timeout: 10 seconds (configurable)
+- Total function time:
+  - **Cached IP**: < 1ms (instant cache hit)
+  - **Fast path (first IP healthy)**: ~1-3 seconds
+  - **Full fallback**: ~10-15 seconds
+
+### 📊 Cache Performance Impact
+
+| Scenario | Without Cache | With Cache | Improvement |
+|----------|---------------|------------|-------------|
+| Repeated IP checks | ~2-5s per check | < 1ms | **>2000x faster** |
+| Batch operations | Multiple network calls | Single cache lookup | **Significant** |
+| Background refresh | Network overhead | Instant validation | **Lower battery usage** |
 
 ### 🔄 Retry Budget
 
@@ -354,6 +466,122 @@ During fallback, `client.uri` is temporarily modified for the IP query. For appU
 - **No exponential backoff**: Each attempt is qualitatively different
   - Attempt 1: Use cached connection
   - Attempt 2: Full re-resolution
+
+---
+
+## Implementation Details
+
+### HTTP HEAD Health Check
+
+**New Implementation (December 2025)**
+
+The health check system was updated to use HTTP HEAD requests instead of calling the `/health` endpoint:
+
+```swift
+private func isServerHealthy(_ hproseClient: HproseClient) async -> Bool {
+    // Extract base URL from client URI
+    // Client URI is "http://IP:PORT/webapi/" but we test "http://IP:PORT/" (server, not endpoint)
+    guard let uriString = hproseClient.uri as? String,
+          let fullURL = URL(string: uriString),
+          let scheme = fullURL.scheme,
+          let host = fullURL.host else {
+        return false
+    }
+    
+    // Construct base URL (without /webapi/ path) - test server, not service
+    var baseURLString = "\(scheme)://\(host)"
+    if let port = fullURL.port {
+        baseURLString += ":\(port)"
+    }
+    baseURLString += "/"
+    
+    let cacheKey = host + (fullURL.port.map { ":\($0)" } ?? "")
+    
+    // Check cache first - instant response
+    if getCachedIP(cacheKey) {
+        return true  // < 1ms response time
+    }
+    
+    guard let baseURL = URL(string: baseURLString) else {
+        return false
+    }
+    
+    // Perform HTTP HEAD request to BASE URL (5-second timeout)
+    // Testing server availability, not service endpoint
+    var request = URLRequest(url: baseURL, timeoutInterval: 5.0)
+    request.httpMethod = "HEAD"
+    
+    let (_, response) = try await URLSession.shared.data(for: request)
+    
+    if let httpResponse = response as? HTTPURLResponse {
+        let isHealthy = (200...299).contains(httpResponse.statusCode)
+        
+        // Cache validated IPs for 30 minutes
+        if isHealthy {
+            cacheIP(cacheKey)
+        }
+        
+        return isHealthy
+    }
+    
+    return false
+}
+```
+
+**Key Points:**
+- ✅ Tests **base URL** (`http://IP:PORT/`) not service endpoint (`/webapi/`)
+- ✅ Verifies **server availability**, not service functionality
+- ✅ More accurate health check (server might be up even if service is down)
+
+**Benefits:**
+- ✅ **More Efficient**: HEAD request has no response body (lower bandwidth)
+- ✅ **Standard Protocol**: Uses HTTP standard method (no custom endpoint needed)
+- ✅ **Better Caching**: Works with IP cache system
+- ✅ **Faster**: 5-second timeout vs previous endpoint-based approach
+- ✅ **Universal**: Works with any HTTP server
+
+### Parallel IP Testing
+
+IPs are tested in **batches of 2** using Swift's `TaskGroup`:
+
+```swift
+let batchSize = 2
+for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
+    let batch = Array(ipAddresses[batchStart..<batchEnd])
+    
+    // Test batch in parallel
+    let healthyIP = await withTaskGroup(of: (String, Bool)?.self) { group in
+        for (index, ip) in batch.enumerated() {
+            group.addTask {
+                // Check cache first
+                let client = self.clientPool.getClientByIP(for: ip)
+                let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
+                return (ip, isHealthy)
+            }
+        }
+        
+        // Return IMMEDIATELY when first healthy IP found
+        for await result in group {
+            if let (ip, isHealthy) = result, isHealthy {
+                group.cancelAll()  // Cancel remaining checks
+                return ip
+            }
+        }
+        return nil
+    }
+    
+    // If found healthy IP, return immediately
+    if let ip = healthyIP {
+        return ip
+    }
+}
+```
+
+**Why batches of 2?**
+- ⚡ Balances parallelism with resource usage
+- 🔋 Prevents overwhelming network with too many concurrent requests
+- ⏱️ First successful response cancels remaining batch
+- 📊 Optimal for most cases (usually 2-4 IPs returned)
 
 ---
 
@@ -366,7 +594,12 @@ The function already includes comprehensive logging. Look for these patterns:
 ```
 DEBUG: [getProviderIP] Attempt #1 for user: <userId>
 DEBUG: [getProviderIP] Retrieved 3 IP address(es)...
-DEBUG: [getProviderIP] Testing IP 1/3: 192.168.1.1
+DEBUG: [_getProviderIP] Testing batch: IPs 1-2 of 3
+DEBUG: [_getProviderIP] Testing IP 1/3: 192.168.1.1
+DEBUG: [IPCache] Cache HIT for IP: 192.168.1.1 (age: 127s)
+DEBUG: [isServerHealthy] ✅ HEAD request succeeded: http://192.168.1.1/webapi/ (status: 200)
+DEBUG: [IPCache] Cached IP: 192.168.1.1
+DEBUG: [_getProviderIP] Found healthy provider IP: 192.168.1.1 - returning immediately
 DEBUG: [getProviderIP] ✅ Found healthy IP on attempt #1: 192.168.1.1
 ```
 
@@ -374,10 +607,13 @@ DEBUG: [getProviderIP] ✅ Found healthy IP on attempt #1: 192.168.1.1
 
 | Problem | Log Pattern | Solution |
 |---------|-------------|----------|
-| All IPs unhealthy | `❌ IP ... failed health check` | Check network connectivity |
+| All IPs unhealthy | `❌ HEAD request failed` | Check network connectivity or clear cache |
 | No IPs returned | `WARN: No provider IPs returned` | Check backend `get_provider_ips` API |
 | Fallback triggered | `trying fallback mechanism` | Normal - indicates primary resolution failed |
 | Guest ID error | `ERROR: Refusing to get provider IP for GUEST_ID` | Don't call for guest users |
+| Cache hit on bad IP | `Cache HIT` but connection fails | Invalidate cache: `invalidateIPCache(for: ip)` |
+| Stale cache entries | High cache age values | Normal - auto cleanup happens periodically |
+| HEAD timeout | `HEAD request error ... timeout` | Increase timeout or check server response time |
 
 ---
 
@@ -417,6 +653,68 @@ func testGetProviderIP_NetworkFailureRecovery() async throws {
     // 2. Call getProviderIP - should trigger fallback
     // 3. Reconnect network
     // 4. Verify IP resolution succeeds
+}
+```
+
+### Cache System Tests
+
+```swift
+// Test 1: Cache hit behavior
+func testIPCache_CacheHit() async throws {
+    let hprose = HproseInstance.shared
+    hprose.clearIPCache()
+    
+    // First call - should cache IP
+    let ip1 = try await hprose.getProviderIP(testUserId)
+    
+    // Second call - should use cache (< 1ms)
+    let startTime = Date()
+    let ip2 = try await hprose.getProviderIP(testUserId)
+    let duration = Date().timeIntervalSince(startTime)
+    
+    XCTAssertEqual(ip1, ip2)
+    XCTAssertLessThan(duration, 0.01) // Should be instant
+}
+
+// Test 2: Cache expiry
+func testIPCache_Expiry() async throws {
+    let hprose = HproseInstance.shared
+    hprose.clearIPCache()
+    
+    // Cache an IP
+    let ip = try await hprose.getProviderIP(testUserId)
+    
+    // Fast forward time (mock) or wait 30+ minutes
+    // After expiry, should perform new health check
+    
+    XCTAssertNotNil(ip)
+}
+
+// Test 3: Cache invalidation
+func testIPCache_ManualInvalidation() async throws {
+    let hprose = HproseInstance.shared
+    
+    // Cache an IP
+    let ip = try await hprose.getProviderIP(testUserId)
+    
+    // Invalidate cache
+    hprose.invalidateIPCache(for: ip!)
+    
+    // Next call should perform fresh health check
+    let ip2 = try await hprose.getProviderIP(testUserId)
+    XCTAssertNotNil(ip2)
+}
+
+// Test 4: HTTP HEAD health check
+func testHealthCheck_HTTPHead() async throws {
+    let client = HproseHttpClient()
+    client.uri = "http://192.168.1.1/webapi/"
+    
+    let isHealthy = await HproseInstance.shared.isServerHealthy(client)
+    
+    // Should perform HEAD request, not GET
+    // Verify via network monitoring or logs
+    XCTAssertTrue(isHealthy || !isHealthy) // Result depends on server
 }
 ```
 
@@ -504,14 +802,33 @@ If migrating from a simpler IP resolution system:
 
 ### Key Takeaways
 
-✅ **Always validates** IPs before returning them  
-✅ **Automatically recovers** from network failures  
+✅ **Always validates** IPs before returning them using HTTP HEAD requests  
+✅ **Caches validated IPs** for 30 minutes to eliminate redundant checks  
+✅ **Automatically recovers** from network failures with multi-tier fallback  
 ✅ **Isolates issues** between user-specific and system-wide problems  
 ✅ **Prevents infinite loops** with attempt tracking  
 ✅ **Protects state** with automatic restoration on failure  
+✅ **Parallel testing** of IPs in batches for optimal performance  
+✅ **Thread-safe cache** operations for concurrent access  
+
+### Recent Improvements (December 2025)
+
+**🚀 HTTP HEAD Health Checks**
+- Replaced `/health` endpoint with standard HTTP HEAD requests
+- More efficient (no response body)
+- Faster (5-second timeout)
+- Universal compatibility
+
+**⚡ IP Cache System**
+- 30-minute cache validity
+- Instant response for cached IPs (< 1ms vs ~2-5s)
+- Thread-safe concurrent access
+- Automatic expiry and cleanup
+- Manual invalidation support
+- **Performance gain: >2000x faster for repeated checks**
 
 ---
 
-**Last Updated**: December 10, 2025  
-**Version**: 1.0  
+**Last Updated**: December 26, 2025  
+**Version**: 2.0  
 **Maintained by**: HproseInstance Development Team

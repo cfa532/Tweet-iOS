@@ -32,7 +32,7 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "4833"
             endingLineNumber = "4833"
-            landmarkName = "determineVideoContentType(fileName:)"
+            landmarkName = "checkForServerResponse(cid:appUser:originalVideoDataSize:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>
