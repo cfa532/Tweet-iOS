@@ -6535,40 +6535,6 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected server response"])
     }
     
-    /// Resolves the first available IP from app initialization URLs
-    /// This is the fallback mechanism used during app initialization
-    /// - Parameter avoidInfiniteLoop: Internal flag to prevent recursive calls
-    /// - Returns: First valid IP address from app URLs, or nil if none found
-    private func resolveEntryIPFromAppUrls(avoidInfiniteLoop: Bool = false) async -> String? {
-        guard !avoidInfiniteLoop else {
-            print("DEBUG: [resolveEntryIPFromAppUrls] Avoiding infinite loop, returning nil")
-            return nil
-        }
-        
-        print("DEBUG: [resolveEntryIPFromAppUrls] Starting fallback IP resolution from app URLs")
-        
-        for url in preferenceHelper?.getAppUrls() ?? [] {
-            do {
-                let urlWithPrefix = ensureHttpPrefix(url)
-                let html = try await fetchHTML(from: urlWithPrefix)
-                let paramData = Gadget.shared.extractParamMap(from: html)
-                
-                guard let addrs = paramData["addrs"] as? String else { continue }
-                
-                if let entryIP = Gadget.shared.filterIpAddresses(addrs) {
-                    print("DEBUG: [resolveEntryIPFromAppUrls] Successfully resolved fallback IP: \(entryIP)")
-                    return entryIP
-                }
-            } catch {
-                print("DEBUG: [resolveEntryIPFromAppUrls] Error processing URL \(url): \(error)")
-                continue
-            }
-        }
-        
-        print("WARN: [resolveEntryIPFromAppUrls] Failed to resolve any IP from app URLs")
-        return nil
-    }
-    
     /// Find IP addresses of given nodeId
     func getHostIP(_ nodeId: String, v4Only: String = "false") async -> String? {
         let params = [

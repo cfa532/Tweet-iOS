@@ -11,12 +11,15 @@ class PreferenceHelper {
     
     func getAppUrls() -> Set<String> {
         let urlsString = userDefaults.string(forKey: "custom_urls") ?? ""
+        var urls: Set<String>
         if !urlsString.isEmpty {
-            return Set(urlsString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+            urls = Set(urlsString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
         } else {
-            // Replace with your default base URL if needed
-            return [AppConfig.baseUrl]
+            urls = Set<String>()
         }
+        // Always include AppConfig.baseUrl if not already present
+        urls.insert(AppConfig.baseUrl)
+        return urls
     }
     
     // MARK: - Speaker Mute
