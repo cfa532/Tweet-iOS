@@ -51,8 +51,19 @@ struct Avatar: View {
                 .clipShape(Circle())
                 .onAppear {
                     // Try to load from cache first when view appears
-                    if cachedImage == nil && !loadFailed {
-                        loadAvatar(from: avatarUrl)
+                    // Always check cache even if loadFailed is true, as the avatar might have been loaded elsewhere
+                    if cachedImage == nil {
+                        let cacheKey = user.avatar ?? (URL(string: avatarUrl)?.lastPathComponent ?? avatarUrl)
+                        let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
+                        
+                        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
+                            // Found in cache - use it and reset failed state
+                            cachedImage = cached
+                            loadFailed = false
+                        } else if !loadFailed {
+                            // Not in cache and haven't failed before - try loading from network
+                            loadAvatar(from: avatarUrl)
+                        }
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in

@@ -1673,7 +1673,7 @@ final class HproseInstance: ObservableObject {
                             print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let client = self.clientPool.getClientByIP(for: ip)
-                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 30.0)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
                             self.clientPool.releaseClient(client, for: ip)
                             
                             // Check for cancellation after health check
@@ -1708,8 +1708,14 @@ final class HproseInstance: ObservableObject {
                 }
             }
             
-            // If no healthy IP found in any batch
-            print("DEBUG: [_getProviderIP] No healthy provider IP found in list: \(ipList)")
+            // If no healthy IP found in any batch, return first IP as fallback
+            // Health checks can give false negatives, so try the first IP anyway
+            if !ipAddresses.isEmpty {
+                print("DEBUG: [_getProviderIP] All health checks failed for \(ipAddresses.count) IP(s), but returning first IP anyway: \(ipAddresses[0])")
+                return ipAddresses[0]
+            }
+            
+            print("DEBUG: [_getProviderIP] No IPs available in response")
             return nil
         }
         print("DEBUG: [_getProviderIP] Invalid IpList response format")
