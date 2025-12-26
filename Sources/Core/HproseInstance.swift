@@ -1820,13 +1820,23 @@ final class HproseInstance: ObservableObject {
         }
         
         // Construct base URL for testing the server itself
-        var baseURLString = "\(scheme)://\(host)"
+        // Handle IPv6 addresses which need brackets: [2001:...]:port
+        var baseURLString = "\(scheme)://"
+        
+        // Check if this is an IPv6 address (contains colons but not wrapped in brackets yet)
+        if host.contains(":") && !host.hasPrefix("[") {
+            baseURLString += "[\(host)]"
+        } else {
+            baseURLString += host
+        }
+        
         if let port = fullURL.port {
             baseURLString += ":\(port)"
         }
         baseURLString += "/"
         
         // Check cache first (cache by IP only, not full URL)
+        // For IPv6, use the raw host without brackets for caching
         let cacheKey = host + (fullURL.port.map { ":\($0)" } ?? "")
         if getCachedIP(cacheKey) {
             return true
