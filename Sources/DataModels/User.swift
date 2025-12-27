@@ -569,10 +569,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     var avatarUrl: String? {
         if let avatar = avatar {
             // Use user's baseUrl if available, otherwise fallback to HproseInstance.baseUrl
-            // baseUrl now usually available (cached from disk), fallback for edge cases
-            if let baseUrl = baseUrl {
-                return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
-            }
+            // This ensures avatars load even when cached user doesn't have baseUrl yet (e.g., at app startup)
+            let effectiveBaseUrl = baseUrl ?? HproseInstance.baseUrl
+            return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(effectiveBaseUrl)/ipfs/\(avatar)" :  "\(effectiveBaseUrl)/mm/\(avatar)"
         }
         return nil
     }

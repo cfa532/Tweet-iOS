@@ -101,6 +101,17 @@ struct Avatar: View {
             loadFailed = false
             loadAvatar(from: avatarUrl)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in
+            // When app user is ready (baseUrl resolved), reload avatar if it wasn't loaded before
+            guard user.mid == HproseInstance.shared.appUser.mid,
+                  !isLoading,
+                  let avatarUrl = user.avatarUrl,
+                  cachedImage == nil else { return }
+            
+            // baseUrl was resolved, avatarUrl is now available - start loading
+            loadFailed = false
+            loadAvatar(from: avatarUrl)
+        }
         .id(user.mid) // Stable ID - notification handles avatar changes
     }
     
