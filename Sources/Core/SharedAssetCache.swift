@@ -100,7 +100,8 @@ class SharedAssetCache: ObservableObject {
     private var memoryMonitorTimer: Timer?
     
     private func startBackgroundCleanup() {
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+        // PERFORMANCE FIX: Reduced cleanup interval from 30s to 15s for more aggressive cleanup
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
             Task { @MainActor in
                 self.performCleanup()
             }
@@ -108,10 +109,16 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func startMemoryMonitoring() {
-        // Monitor memory every 10 seconds to catch rapid memory growth
-        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+        // PERFORMANCE FIX: Monitor memory more frequently (every 5 seconds) to catch rapid growth
+        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             Task { @MainActor in
                 self.checkMemoryPressure()
+                
+                // Also log cache statistics periodically for monitoring
+                let stats = self.getCacheStats()
+                if stats.playerCount > 5 || stats.assetCount > 10 {
+                    print("DEBUG: [SharedAssetCache] Cache stats - Players: \(stats.playerCount)/\(self.maxPlayerCacheSize), Assets: \(stats.assetCount)/\(self.maxCacheSize)")
+                }
             }
         }
     }
@@ -121,6 +128,12 @@ class SharedAssetCache: ObservableObject {
         let expiredKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > cacheExpirationInterval }.map { $0.key }
         
         for key in expiredKeys {
+            // PERFORMANCE FIX: Pause players before removing
+            if let player = playerCache[key] {
+                player.pause()
+                player.replaceCurrentItem(with: nil)
+            }
+            
             assetCache.removeValue(forKey: key)
             playerCache.removeValue(forKey: key)
             cacheTimestamps.removeValue(forKey: key)
@@ -128,8 +141,15 @@ class SharedAssetCache: ObservableObject {
             resourceLoaderDelegates.removeValue(forKey: key)
         }
         
+        if !expiredKeys.isEmpty {
+            print("DEBUG: [SharedAssetCache] Cleaned up \(expiredKeys.count) expired items")
+        }
+        
         // Manage cache size
         manageCacheSize()
+        
+        // PERFORMANCE FIX: Also trigger player cache size management
+        managePlayerCacheSize()
     }
     
     // MARK: - Asset Management
@@ -1098,29 +1118,47 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func managePlayerCacheSize() {
+        // PERFORMANCE FIX: More aggressive player cleanup
         if playerCache.count > maxPlayerCacheSize {
-            // Remove least recently used players - do sorting on background thread
-            Task.detached {
-                let sortedKeys = await MainActor.run {
-                    self.cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+            // Remove least recently used players
+            let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+            let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)
+            
+            for key in keysToRemove {
+                if let player = playerCache[key] {
+                    // Pause and clear player item immediately
+                    player.pause()
+                    player.replaceCurrentItem(with: nil)
+                    print("DEBUG: [SharedAssetCache] Removed LRU player: \(key)")
                 }
-                let keysToRemove = sortedKeys.prefix(await MainActor.run { self.playerCache.count - self.maxPlayerCacheSize })
-                
-                await MainActor.run {
-                    for key in keysToRemove {
-                        if let player = self.playerCache[key] {
-                            // Pause player asynchronously
-                            Task.detached {
-                                player.pause()
-                            }
-                            self.playerCache.removeValue(forKey: key)
-                            self.cacheTimestamps.removeValue(forKey: key)
-                            self.cachingPlayerItems.removeValue(forKey: key)
-                            self.resourceLoaderDelegates.removeValue(forKey: key)
-                        }
-                    }
-                }
+                playerCache.removeValue(forKey: key)
+                cacheTimestamps.removeValue(forKey: key)
+                cachingPlayerItems.removeValue(forKey: key)
+                resourceLoaderDelegates.removeValue(forKey: key)
             }
+            
+            if !keysToRemove.isEmpty {
+                print("DEBUG: [SharedAssetCache] Cleaned up \(keysToRemove.count) players (cache size: \(playerCache.count))")
+            }
+        }
+        
+        // PERFORMANCE FIX: Also remove players not accessed in last 5 minutes
+        let now = Date()
+        let inactiveThreshold: TimeInterval = 300 // 5 minutes
+        let inactiveKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > inactiveThreshold }.map { $0.key }
+        
+        if !inactiveKeys.isEmpty {
+            for key in inactiveKeys {
+                if let player = playerCache[key] {
+                    player.pause()
+                    player.replaceCurrentItem(with: nil)
+                }
+                playerCache.removeValue(forKey: key)
+                cacheTimestamps.removeValue(forKey: key)
+                cachingPlayerItems.removeValue(forKey: key)
+                resourceLoaderDelegates.removeValue(forKey: key)
+            }
+            print("DEBUG: [SharedAssetCache] Removed \(inactiveKeys.count) inactive players (>5min old)")
         }
     }
     

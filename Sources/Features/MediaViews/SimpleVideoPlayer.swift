@@ -65,11 +65,27 @@ class VideoStateCache {
     static let shared = VideoStateCache()
     private var cache: [String: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool, timestamp: Date)] = [:]
     private let cacheExpirationInterval: TimeInterval = 600 // 10 minutes
+    private let maxCacheSize = 15 // Maximum number of cached states (reduced for better performance)
     
     private init() {}
     
     func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
         cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
+        
+        // Manage cache size with LRU eviction
+        if cache.count > maxCacheSize {
+            // Sort by timestamp (oldest first) and remove oldest entries
+            let sortedKeys = cache.sorted { $0.value.timestamp < $1.value.timestamp }.map { $0.key }
+            let keysToRemove = sortedKeys.prefix(cache.count - maxCacheSize)
+            
+            for key in keysToRemove {
+                if let oldPlayer = cache[key]?.player {
+                    oldPlayer.pause()
+                    print("DEBUG: [VIDEO CACHE] Removed old cached player for \(key) due to cache size limit")
+                }
+                cache.removeValue(forKey: key)
+            }
+        }
     }
     
     func getCachedState(for mid: String) -> (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)? {
@@ -962,30 +978,11 @@ struct SimpleVideoPlayer: View {
             }
         }
         
-        // CRITICAL: For MediaCell mode, KEEP video completion observer active
-        // Videos can finish while off-screen, and we need to catch that for sequential playback
-        // Only remove KVO observers to prevent crashes if player item changes
-        if mode == .mediaCell {
-            NSLog("DEBUG: [OBSERVER LIFECYCLE] Keeping videoCompletionObserver active for off-screen playback: \(mid)")
-            // Remove KVO observers only (these can cause crashes if playerItem changes)
-            playerItemStatusObserver?.invalidate()
-            playerItemStatusObserver = nil
-            playerItemBufferObserver?.invalidate()
-            playerItemBufferObserver = nil
-            
-            // Remove time observer to save resources
-            if let timeObserver = timeObserver {
-                player?.removeTimeObserver(timeObserver)
-                self.timeObserver = nil
-            }
-            
-            // KEEP videoCompletionObserver, videoErrorObserver, and playerItem reference active!
-            // These are needed to handle videos finishing/failing while off-screen
-            // playerItem reference is kept so setupPlayerObservers() can detect if already set up
-        } else {
-            // For other modes (mediaBrowser, tweetDetail, embeddedDetail), remove all observers
-            removePlayerObservers()
-        }
+        // PERFORMANCE FIX: Remove ALL observers when off-screen to free resources
+        // Previously kept video completion observers active for sequential playback,
+        // but this caused excessive resource usage when many videos are off-screen
+        NSLog("DEBUG: [OBSERVER LIFECYCLE] Removing all observers for off-screen video: \(mid)")
+        removePlayerObservers()
 
         // Cache the current video state (MediaCell only, NOT TweetDetail or MediaBrowser)
         // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
