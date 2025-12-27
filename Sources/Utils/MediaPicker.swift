@@ -356,6 +356,15 @@ struct MediaUploadHelper {
         
         // Process camera images
         for image in selectedImages {
+            // Validate image dimensions before processing
+            let imageSize = image.size
+            guard imageSize.width.isFinite, imageSize.height.isFinite,
+                  imageSize.width > 0, imageSize.height > 0,
+                  imageSize.width < 50000, imageSize.height < 50000 else {
+                print("DEBUG: Skipping invalid camera image with dimensions: \(imageSize)")
+                continue
+            }
+            
             if let imageData = image.jpegData(compressionQuality: 0.8) {
                 let timestamp = Int(Date().timeIntervalSince1970)
                 let filename = "\(timestamp)_\(UUID().uuidString).jpg"
@@ -516,8 +525,22 @@ struct VideoThumbnailView: View {
     @State private var isLoading = true
     @State private var hasError = false
 
-    // Static cache to avoid regenerating thumbnails for the same video
+    // Thread-safe static cache to avoid regenerating thumbnails for the same video
     private static var thumbnailCache: [String: UIImage] = [:]
+    private static let cacheQueue = DispatchQueue(label: "com.tweet.videothumbnailcache", attributes: .concurrent)
+    
+    // Thread-safe cache access methods
+    private static func getCachedThumbnail(forKey key: String) -> UIImage? {
+        return cacheQueue.sync {
+            return thumbnailCache[key]
+        }
+    }
+    
+    private static func setCachedThumbnail(_ image: UIImage, forKey key: String) {
+        cacheQueue.async(flags: .barrier) {
+            thumbnailCache[key] = image
+        }
+    }
     
     var body: some View {
         Group {
@@ -568,8 +591,8 @@ struct VideoThumbnailView: View {
         let videoPath = videoURL.path
         print("DEBUG: [VideoThumbnailView] Starting thumbnail generation for: \(videoURL.lastPathComponent)")
         
-        // Check cache first
-        if let cachedThumbnail = Self.thumbnailCache[videoPath] {
+        // Check cache first (thread-safe)
+        if let cachedThumbnail = Self.getCachedThumbnail(forKey: videoPath) {
             print("DEBUG: [VideoThumbnailView] Using cached thumbnail for: \(videoURL.lastPathComponent)")
             self.thumbnail = cachedThumbnail
             self.isLoading = false
@@ -643,8 +666,8 @@ struct VideoThumbnailView: View {
                             self.isLoading = false
                             self.hasError = false
                             
-                            // Cache the generated thumbnail
-                            Self.thumbnailCache[videoPath] = uiImage
+                            // Cache the generated thumbnail (thread-safe)
+                            Self.setCachedThumbnail(uiImage, forKey: videoPath)
                             print("DEBUG: [VideoThumbnailView] Thumbnail cached for: \(videoURL.lastPathComponent)")
                         }
                         thumbnailGenerated = true
@@ -662,8 +685,10 @@ struct VideoThumbnailView: View {
                         self.isLoading = false
                         self.hasError = false // Don't show error state since we have a placeholder
 
-                        // Cache the placeholder
-                        Self.thumbnailCache[videoPath] = self.thumbnail
+                        // Cache the placeholder (thread-safe)
+                        if let placeholderThumbnail = self.thumbnail {
+                            Self.setCachedThumbnail(placeholderThumbnail, forKey: videoPath)
+                        }
                     }
                 }
                 
