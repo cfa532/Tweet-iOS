@@ -14,8 +14,8 @@ private struct IPCacheEntry {
     let timestamp: Date
     
     var isExpired: Bool {
-        // 30 minute expiry
-        return Date().timeIntervalSince(timestamp) > 1800
+        // 30 seconds expiry
+        return Date().timeIntervalSince(timestamp) > 30
     }
 }
 
