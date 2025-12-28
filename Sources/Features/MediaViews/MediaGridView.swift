@@ -874,9 +874,8 @@ struct MediaGridViewModel {
         // This prevents layout shifts when images load asynchronously
         // The .fill content mode will handle any aspect ratio differences gracefully
         if attachment.type == .image {
-            // Use a stable default aspect ratio (golden ratio landscape)
-            // This provides better visual consistency than 1.0 square
-            return 1.618
+            // Use 1.0 square as default for images without aspect ratio
+            return 1.0
         }
         
         // For videos without aspect ratio, default to 16:9 (standard video format)
