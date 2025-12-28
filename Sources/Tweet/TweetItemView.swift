@@ -285,7 +285,10 @@ struct TweetItemView: View, Equatable {
                             isPinned: isPinned,
                             onTap: onTap, // Pass onTap directly (nil when using NavigationLink)
                             backgroundColor: Color(.systemGray4).opacity(0.6),
-                            isEmbedded: true
+                            isEmbedded: true,
+                            isInProfile: isInProfile,
+                            currentProfileUser: currentProfileUser,
+                            onAvatarTapInProfile: onAvatarTapInProfile
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
@@ -437,8 +440,37 @@ struct EmbeddedTweetView: View, Equatable {
     var onTap: ((Tweet) -> Void)? = nil
     var backgroundColor: Color = Color(.systemBackground)
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
+    var isInProfile: Bool = false
+    var currentProfileUser: User? = nil
+    var onAvatarTapInProfile: ((User) -> Void)? = nil
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
+
+    @ViewBuilder
+    private func avatarView(for user: User) -> some View {
+        if isInProfile {
+            // Check if this is the same user as the profile being viewed
+            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
+                // Same user - scroll to top
+                Avatar(user: user)
+                    .onTapGesture {
+                        onAvatarTapInProfile?(user)
+                    }
+            } else {
+                // Different user - navigate to their profile
+                NavigationLink(value: user) {
+                    Avatar(user: user)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        } else {
+            // Use NavigationLink when not in profile
+            NavigationLink(value: user) {
+                Avatar(user: user)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
 
     var body: some View {
         Group {
@@ -478,7 +510,7 @@ struct EmbeddedTweetView: View, Equatable {
             // Use Group to force re-evaluation when tweet.author changes (@Published)
             Group {
                 if let user = tweet.author {
-                    Avatar(user: user)
+                    avatarView(for: user)
                 } else {
                     // Placeholder (same size as Avatar default: 40)
                     Circle()
@@ -516,6 +548,8 @@ struct EmbeddedTweetView: View, Equatable {
         return lhs.tweet.mid == rhs.tweet.mid &&
                lhs.isPinned == rhs.isPinned &&
                lhs.backgroundColor == rhs.backgroundColor &&
-               lhs.isEmbedded == rhs.isEmbedded
+               lhs.isEmbedded == rhs.isEmbedded &&
+               lhs.isInProfile == rhs.isInProfile &&
+               lhs.currentProfileUser?.mid == rhs.currentProfileUser?.mid
     }
 }

@@ -159,9 +159,15 @@ struct TweetListView<RowView: View>: View {
     // MARK: - Body
     var body: some View {
         ZStack {
-            ScrollView {
-                VStack(spacing: 0) {
-                    TweetListContentView(
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Invisible anchor for scroll-to-top
+                        Color.clear
+                            .frame(height: 0)
+                            .id("top")
+                        
+                        TweetListContentView(
                         tweets: Binding(
                             get: { tweets.map { Optional($0) } },
                             set: { newValue in
@@ -182,32 +188,42 @@ struct TweetListView<RowView: View>: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 16) // Add horizontal padding to prevent content from expanding beyond screen
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .scrollBounceBehavior(.basedOnSize)
-            // STABILITY: Scroll indicators help users track position during smooth scrolling
-            .scrollIndicators(.visible)
-            .safeAreaInset(edge: .top) {
-                Color.clear.frame(height: 0)
-            }
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.y
-            } action: { oldValue, newValue in
-                // Ignore negative offsets (pull-to-refresh / bounce)
-                guard newValue >= 0, oldValue >= 0 else { return }
-                
-                // Only forward significant changes to reduce jitter
-                let effectiveDelta = newValue - lastScrollOffset
-                let headerThreshold: CGFloat = 20
-                guard abs(effectiveDelta) >= headerThreshold else { return }
-                
-                lastScrollOffset = newValue
-                onScroll?(newValue, effectiveDelta)
-            }
-            .onAppear {
-                lastScrollOffset = 0
-                onScroll?(0, 0)
-            }
+                .scrollDismissesKeyboard(.interactively)
+                .scrollBounceBehavior(.basedOnSize)
+                // STABILITY: Scroll indicators help users track position during smooth scrolling
+                .scrollIndicators(.visible)
+                .safeAreaInset(edge: .top) {
+                    Color.clear.frame(height: 0)
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentOffset.y
+                } action: { oldValue, newValue in
+                    // Ignore negative offsets (pull-to-refresh / bounce)
+                    guard newValue >= 0, oldValue >= 0 else { return }
+                    
+                    // Only forward significant changes to reduce jitter
+                    let effectiveDelta = newValue - lastScrollOffset
+                    let headerThreshold: CGFloat = 20
+                    guard abs(effectiveDelta) >= headerThreshold else { return }
+                    
+                    lastScrollOffset = newValue
+                    onScroll?(newValue, effectiveDelta)
+                }
+                .onAppear {
+                    lastScrollOffset = 0
+                    onScroll?(0, 0)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .scrollToTop)) { _ in
+                    print("DEBUG: [TweetListView] Received scrollToTop notification - attempting scroll")
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.5)) {
+                            proxy.scrollTo("top", anchor: .top)
+                            print("DEBUG: [TweetListView] Scroll command executed")
+                        }
+                    }
+                }
+            }  // Close ScrollView
+            }  // Close ScrollViewReader
             
             if showToast {
                 VStack {

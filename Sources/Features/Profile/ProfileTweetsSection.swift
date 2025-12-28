@@ -163,8 +163,7 @@ struct ProfileTweetsSection<Header: View>: View {
     }
     
     var body: some View {
-        ScrollViewReader { proxy in
-            TweetListView<TweetItemView>(
+        TweetListView<TweetItemView>(
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache in
@@ -286,12 +285,6 @@ struct ProfileTweetsSection<Header: View>: View {
         }
         .onDisappear {
             print("DEBUG: [ProfileTweetsSection] Section disappeared")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .scrollToTop)) { _ in
-            withAnimation(.easeInOut(duration: 0.5)) {
-                proxy.scrollTo("top", anchor: .top)
-            }
-        }
         }
     }
     
