@@ -231,6 +231,19 @@ extension ChatCacheManager {
         }
     }
     
+    /// Delete a single chat message
+    func deleteChatMessage(_ message: ChatMessage) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", message.id)
+            
+            if let cdMessages = try? context.fetch(request), let cdMessage = cdMessages.first {
+                context.delete(cdMessage)
+                try? context.save()
+            }
+        }
+    }
+    
     /// Fetch all message IDs from Core Data
     func fetchAllMessageIds() -> [String] {
         var messageIds: [String] = []

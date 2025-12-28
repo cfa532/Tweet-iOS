@@ -525,6 +525,13 @@
 "Failed to send message" = "发送消息失败";
 "Sending message in background..." = "正在后台发送消息...";
 "Sending message..." = "正在发送消息...";
+"Cannot resend messages with attachments. Please send the attachment again." = "无法重新发送带附件的消息。请重新发送附件。";
+"Cannot resend empty message" = "无法重新发送空消息";
+"Message sent successfully" = "消息发送成功";
+"Please wait while the attachment is being prepared..." = "正在准备附件...请稍候...";
+"Attachment not ready. Please try selecting the media again." = "附件未准备好。请重新选择媒体。";
+"Failed to create error message" = "创建错误消息失败";
+"Message cannot be empty" = "消息不能为空";
 
 // MARK: - Fallback Text
 "User Name" = "用户名";

@@ -533,6 +533,13 @@
 "Failed to send message" = "Failed to send message";
 "Sending message in background..." = "Sending message in background...";
 "Sending message..." = "Sending message...";
+"Cannot resend messages with attachments. Please send the attachment again." = "Cannot resend messages with attachments. Please send the attachment again.";
+"Cannot resend empty message" = "Cannot resend empty message";
+"Message sent successfully" = "Message sent successfully";
+"Please wait while the attachment is being prepared..." = "Please wait while the attachment is being prepared...";
+"Attachment not ready. Please try selecting the media again." = "Attachment not ready. Please try selecting the media again.";
+"Failed to create error message" = "Failed to create error message";
+"Message cannot be empty" = "Message cannot be empty";
 
 // MARK: - Fallback Text
 "User Name" = "User Name";

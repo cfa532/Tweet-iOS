@@ -543,6 +543,13 @@
 "Failed to send message" = "メッセージの送信に失敗しました";
 "Sending message in background..." = "バックグラウンドでメッセージを送信中...";
 "Sending message..." = "メッセージを送信中...";
+"Cannot resend messages with attachments. Please send the attachment again." = "添付ファイル付きメッセージは再送信できません。添付ファイルを再度送信してください。";
+"Cannot resend empty message" = "空のメッセージは再送信できません";
+"Message sent successfully" = "メッセージが正常に送信されました";
+"Please wait while the attachment is being prepared..." = "添付ファイルの準備中です。お待ちください...";
+"Attachment not ready. Please try selecting the media again." = "添付ファイルの準備ができていません。メディアを再度選択してください。";
+"Failed to create error message" = "エラーメッセージの作成に失敗しました";
+"Message cannot be empty" = "メッセージを空にすることはできません";
 
 // MARK: - Cloud Drive Limit
 "Tweet Limit Reached" = "ツイート制限に達しました";

@@ -19,6 +19,7 @@ struct ChatMessageView: View {
     let isLastFromSender: Bool
     let showTimestamp: Bool
     let isChatScreenVisible: Bool
+    let onResendMessage: ((ChatMessage) -> Void)?
     @State private var receiptUser: User?
     
     var body: some View {
@@ -57,8 +58,7 @@ struct ChatMessageView: View {
                         // Show failure icon for sent messages that failed
                         if isFromCurrentUser && message.success == false {
                             Button(action: {
-                                // TODO: Implement retry functionality
-                                print("Retry sending message: \(message.errorMsg ?? "Unknown error")")
+                                onResendMessage?(message)
                             }) {
                                 Image(systemName: "exclamationmark.circle.fill")
                                     .foregroundColor(.red)
@@ -107,8 +107,7 @@ struct ChatMessageView: View {
                         // Show failure icon for sent messages with attachments that failed
                         if isFromCurrentUser && message.success == false {
                             Button(action: {
-                                // TODO: Implement retry functionality
-                                print("Retry sending message with attachments: \(message.errorMsg ?? "Unknown error")")
+                                onResendMessage?(message)
                             }) {
                                 Image(systemName: "exclamationmark.circle.fill")
                                     .foregroundColor(.red)

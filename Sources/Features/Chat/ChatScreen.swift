@@ -177,7 +177,10 @@ struct ChatScreen: View {
                             isLastMessage: index == messages.count - 1,
                             isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
                             showTimestamp: isLastMessageFromSender(index: index, messages: messages),
-                            isChatScreenVisible: isChatScreenVisible
+                            isChatScreenVisible: isChatScreenVisible,
+                            onResendMessage: { failedMessage in
+                                resendMessage(failedMessage)
+                            }
                         )
                         .id(message.id)
                     }
@@ -396,6 +399,111 @@ struct ChatScreen: View {
         } else {
             // Send text-only message directly
             sendTextMessageDirectly()
+        }
+    }
+    
+    private func resendMessage(_ failedMessage: ChatMessage) {
+        print("[ChatScreen] Attempting to resend message: \(failedMessage.id)")
+        
+        // Check if message has attachments
+        let hasAttachments = failedMessage.attachments != nil && !failedMessage.attachments!.isEmpty
+        
+        if hasAttachments {
+            // For messages with attachments, we can't retry because we don't have the original file data
+            showToastMessage(
+                NSLocalizedString("Cannot resend messages with attachments. Please send the attachment again.", comment: "Chat resend error"),
+                type: .info
+            )
+            return
+        }
+        
+        // For text-only messages, we can resend
+        guard let content = failedMessage.content, !content.isEmpty else {
+            showToastMessage(NSLocalizedString("Cannot resend empty message", comment: "Chat resend error"), type: .error)
+            return
+        }
+        
+        // Remove the failed message from the UI and cache
+        messages.removeAll { $0.id == failedMessage.id }
+        allCachedMessages.removeAll { $0.id == failedMessage.id }
+        
+        // Create a new message with the same content
+        let newMessage = ChatMessage(
+            authorId: HproseInstance.shared.appUser.mid,
+            receiptId: receiptId,
+            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+            content: content,
+            attachments: nil
+        )
+        
+        // Add new message to UI and cache immediately
+        messages.append(newMessage)
+        allCachedMessages.append(newMessage)
+        
+        // Scroll to bottom for sent message
+        shouldAnimateScroll = true
+        shouldScrollToBottom = true
+        
+        // Send message
+        Task {
+            do {
+                // Send message to backend
+                let resultMessage = try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: newMessage)
+                
+                // Update the chat session with the result message
+                await chatSessionManager.updateOrCreateChatSession(
+                    senderId: receiptId,
+                    message: resultMessage,
+                    hasNews: false
+                )
+                
+                // Save message to Core Data and update UI
+                await MainActor.run {
+                    // Replace the original message with the result message that has status
+                    if let index = messages.firstIndex(where: { $0.id == newMessage.id }) {
+                        messages[index] = resultMessage
+                    }
+                    chatRepository.addMessagesToCoreData([resultMessage])
+                    
+                    // Delete the failed message from Core Data
+                    chatRepository.deleteMessage(failedMessage)
+                    
+                    if resultMessage.success == true {
+                        print("[ChatScreen] Message resent successfully")
+                        showToastMessage(NSLocalizedString("Message sent successfully", comment: "Chat success"), type: .success)
+                    } else {
+                        print("[ChatScreen] Message failed to resend: \(resultMessage.errorMsg ?? "Unknown error")")
+                    }
+                }
+                
+            } catch {
+                print("[ChatScreen] Error resending message: \(error)")
+                
+                // Handle network exceptions the same as backend failures
+                await MainActor.run {
+                    let failedResendMessage = ChatMessage(
+                        id: newMessage.id,
+                        authorId: newMessage.authorId,
+                        receiptId: newMessage.receiptId,
+                        chatSessionId: newMessage.chatSessionId,
+                        content: newMessage.content,
+                        timestamp: newMessage.timestamp,
+                        attachments: newMessage.attachments,
+                        success: false,
+                        errorMsg: ErrorMessageHelper.userFriendlyMessage(from: error)
+                    )
+                    
+                    // Replace the message with the failed message
+                    if let index = messages.firstIndex(where: { $0.id == newMessage.id }) {
+                        messages[index] = failedResendMessage
+                    }
+                    
+                    // Save failed message to Core Data
+                    chatRepository.addMessagesToCoreData([failedResendMessage])
+                    
+                    print("[ChatScreen] Message failed to resend (network error): \(error.localizedDescription)")
+                }
+            }
         }
     }
     
