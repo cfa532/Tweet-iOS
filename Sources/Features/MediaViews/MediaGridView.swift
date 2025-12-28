@@ -272,142 +272,249 @@ struct MediaGridView: View, Equatable {
                         let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1
                         
                         if allPortrait {
-                            // All portrait: square grid, first item takes 61.8% of left side, other two divide right part vertically
+                            // All portrait: first (hero) takes 61.8% width on left (golden ratio)
+                            // Right side: two images stacked vertically with heights divided proportionally
+                            let heroWidth = actualWidth * 0.618 - 1
+                            let sideWidth = actualWidth * 0.382 - 1
+                            
+                            // Calculate proportional heights for right-side images
+                            let idealHeight1 = sideWidth / CGFloat(ar1)
+                            let idealHeight2 = sideWidth / CGFloat(ar2)
+                            let totalIdealHeight = idealHeight1 + idealHeight2
+                            let proportion1 = idealHeight1 / totalIdealHeight
+                            let proportion2 = idealHeight2 / totalIdealHeight
+                            let height1 = (gridHeight - 2) * proportion1
+                            let height2 = (gridHeight - 2) * proportion2
+                            
                             HStack(spacing: 2) {
-                                // First item: 61.8% of width (golden ratio)
+                                // Hero image on left
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float((actualWidth * 0.618 - 1) / gridHeight),
-                                    
+                                    aspectRatio: Float(heroWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
                                     isEmbedded: isEmbedded
                                 )
-                                .frame(width: actualWidth * 0.618 - 1, height: gridHeight)
+                                .frame(width: heroWidth, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 
-                                // Right side: remaining 38.2% divided vertically
+                                // Right side: two images stacked with proportional heights
                                 VStack(spacing: 2) {
-                                    ForEach(1..<3) { idx in
-                                        MediaCell(
-                                            parentTweet: parentTweet,
-                                            attachmentIndex: idx,
-                                            aspectRatio: Float((actualWidth * 0.382 - 1) / (gridHeight/2 - 1)),
-                                            
-                                            shouldLoadVideo: shouldLoadVideo,
-                                            onVideoFinished: onVideoFinished,
-                                            videoManager: videoManager,
-                                            isEmbedded: isEmbedded
-                                        )
-                                                .frame(width: actualWidth * 0.382 - 1, height: gridHeight/2 - 1)
-                                        .clipped().contentShape(Rectangle())
-                                        .contentShape(Rectangle())
-                                    }
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 1,
+                                        aspectRatio: Float(sideWidth / height1),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: sideWidth, height: height1)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
+                                    
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 2,
+                                        aspectRatio: Float(sideWidth / height2),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: sideWidth, height: height2)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
                                 }
                             }
                         } else if allLandscape {
-                            // All landscape: square grid, first item takes 61.8% of top portion, other two divide lower part horizontally
+                            // All landscape: first (hero) takes 61.8% height on top (golden ratio)
+                            // Bottom: two images side-by-side with widths divided proportionally
+                            let heroHeight = gridHeight * 0.618 - 1
+                            let bottomHeight = gridHeight * 0.382 - 1
+                            
+                            // Calculate proportional widths for bottom images
+                            let idealWidth1 = bottomHeight * CGFloat(ar1)
+                            let idealWidth2 = bottomHeight * CGFloat(ar2)
+                            let totalIdealWidth = idealWidth1 + idealWidth2
+                            let proportion1 = idealWidth1 / totalIdealWidth
+                            let proportion2 = idealWidth2 / totalIdealWidth
+                            let width1 = (actualWidth - 2) * proportion1
+                            let width2 = (actualWidth - 2) * proportion2
+                            
                             VStack(spacing: 2) {
-                                // First item: 61.8% of height (golden ratio)
+                                // Hero image on top
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float(actualWidth / (gridHeight * 0.618 - 1)),
-                                    
+                                    aspectRatio: Float(actualWidth / heroHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
                                     isEmbedded: isEmbedded
                                 )
-                                .frame(width: actualWidth, height: gridHeight * 0.618 - 1)
+                                .frame(width: actualWidth, height: heroHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
                                 
-                                // Bottom part: remaining 38.2% divided horizontally
+                                // Bottom: two images side-by-side with proportional widths
                                 HStack(spacing: 2) {
-                                    ForEach(1..<3) { idx in
-                                        MediaCell(
-                                            parentTweet: parentTweet,
-                                            attachmentIndex: idx,
-                                            aspectRatio: Float((actualWidth/2 - 1) / (gridHeight * 0.382 - 1)),
-                                            
-                                            shouldLoadVideo: shouldLoadVideo,
-                                            onVideoFinished: onVideoFinished,
-                                            videoManager: videoManager,
-                                            isEmbedded: isEmbedded
-                                        )
-                                                .frame(width: actualWidth/2 - 1, height: gridHeight * 0.382 - 1)
-                                        .clipped().contentShape(Rectangle())
-                                        .contentShape(Rectangle())
-                                    }
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 1,
+                                        aspectRatio: Float(width1 / bottomHeight),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: width1, height: bottomHeight)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
+                                    
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 2,
+                                        aspectRatio: Float(width2 / bottomHeight),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: width2, height: bottomHeight)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
                                 }
                             }
                         } else if ar0 < 1 {
-                            // First is portrait: left column tall, right column two stacked
+                            // Mixed: first is portrait (hero on left), others stacked on right
+                            // Divide width proportionally between left and right sections
+                            let idealWidth0 = gridHeight * CGFloat(ar0)
+                            let idealWidth1 = gridHeight * CGFloat(ar1)
+                            let idealWidth2 = gridHeight * CGFloat(ar2)
+                            // Right side gets combined ideal width of both images
+                            let rightIdealWidth = max(idealWidth1, idealWidth2) // Use max to ensure enough space
+                            let totalIdealWidth = idealWidth0 + rightIdealWidth
+                            
+                            let leftWidth = (actualWidth - 2) * (idealWidth0 / totalIdealWidth)
+                            let rightWidth = (actualWidth - 2) * (rightIdealWidth / totalIdealWidth)
+                            
+                            // Calculate proportional heights for right-side images
+                            let idealHeight1 = rightWidth / CGFloat(ar1)
+                            let idealHeight2 = rightWidth / CGFloat(ar2)
+                            let totalIdealHeight = idealHeight1 + idealHeight2
+                            let height1 = (gridHeight - 2) * (idealHeight1 / totalIdealHeight)
+                            let height2 = (gridHeight - 2) * (idealHeight2 / totalIdealHeight)
+                            
                             HStack(spacing: 2) {
+                                // Hero portrait on left
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float((actualWidth/2 - 1) / gridHeight),
-                                    
+                                    aspectRatio: Float(leftWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
                                     isEmbedded: isEmbedded
                                 )
-                                .frame(width: actualWidth/2 - 1, height: gridHeight)
+                                .frame(width: leftWidth, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
                                 .contentShape(Rectangle())
+                                
+                                // Right side: two images stacked with proportional heights
                                 VStack(spacing: 2) {
-                                    ForEach(1..<3) { idx in
-                                        MediaCell(
-                                            parentTweet: parentTweet,
-                                            attachmentIndex: idx,
-                                            aspectRatio: Float((actualWidth/2 - 1) / (gridHeight/2 - 1)),
-                                            
-                                            shouldLoadVideo: shouldLoadVideo,
-                                            onVideoFinished: onVideoFinished,
-                                            videoManager: videoManager,
-                                            isEmbedded: isEmbedded
-                                        )
-                                                .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
-                                        .clipped().contentShape(Rectangle())
-                                    }
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 1,
+                                        aspectRatio: Float(rightWidth / height1),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: rightWidth, height: height1)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
+                                    
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 2,
+                                        aspectRatio: Float(rightWidth / height2),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: rightWidth, height: height2)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
                                 }
                             }
                         } else {
-                            // First is landscape: top row wide, bottom row two images
+                            // Mixed: first is landscape (hero on top), others side-by-side on bottom
+                            // Divide height proportionally between top and bottom sections
+                            let idealHeight0 = actualWidth / CGFloat(ar0)
+                            let idealHeight1 = actualWidth / CGFloat(ar1)
+                            let idealHeight2 = actualWidth / CGFloat(ar2)
+                            // Bottom gets combined ideal height of both images
+                            let bottomIdealHeight = max(idealHeight1, idealHeight2) // Use max to ensure enough space
+                            let totalIdealHeight = idealHeight0 + bottomIdealHeight
+                            
+                            let topHeight = (gridHeight - 2) * (idealHeight0 / totalIdealHeight)
+                            let bottomHeight = (gridHeight - 2) * (bottomIdealHeight / totalIdealHeight)
+                            
+                            // Calculate proportional widths for bottom images
+                            let idealWidth1 = bottomHeight * CGFloat(ar1)
+                            let idealWidth2 = bottomHeight * CGFloat(ar2)
+                            let totalIdealWidth = idealWidth1 + idealWidth2
+                            let width1 = (actualWidth - 2) * (idealWidth1 / totalIdealWidth)
+                            let width2 = (actualWidth - 2) * (idealWidth2 / totalIdealWidth)
+                            
                             VStack(spacing: 2) {
+                                // Hero landscape on top
                                 MediaCell(
                                     parentTweet: parentTweet,
                                     attachmentIndex: 0,
-                                    aspectRatio: Float(actualWidth / (gridHeight/2 - 1)),
-                                    
+                                    aspectRatio: Float(actualWidth / topHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                                     onVideoFinished: onVideoFinished,
                                     videoManager: videoManager,
                                     isEmbedded: isEmbedded
                                 )
-                                .frame(width: actualWidth, height: gridHeight/2 - 1)
+                                .frame(width: actualWidth, height: topHeight)
                                 .clipped().contentShape(Rectangle())
+                                .contentShape(Rectangle())
+                                
+                                // Bottom: two images side-by-side with proportional widths
                                 HStack(spacing: 2) {
-                                    ForEach(1..<3) { idx in
-                                        MediaCell(
-                                            parentTweet: parentTweet,
-                                            attachmentIndex: idx,
-                                            aspectRatio: Float((actualWidth/2 - 1) / (gridHeight/2 - 1)),
-                                            
-                                            shouldLoadVideo: shouldLoadVideo,
-                                            onVideoFinished: onVideoFinished,
-                                            videoManager: videoManager,
-                                            isEmbedded: isEmbedded
-                                        )
-                                                .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
-                                        .clipped().contentShape(Rectangle())
-                                    }
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 1,
+                                        aspectRatio: Float(width1 / bottomHeight),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: width1, height: bottomHeight)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
+                                    
+                                    MediaCell(
+                                        parentTweet: parentTweet,
+                                        attachmentIndex: 2,
+                                        aspectRatio: Float(width2 / bottomHeight),
+                                        shouldLoadVideo: shouldLoadVideo,
+                                        onVideoFinished: onVideoFinished,
+                                        videoManager: videoManager,
+                                        isEmbedded: isEmbedded
+                                    )
+                                    .frame(width: width2, height: bottomHeight)
+                                    .clipped().contentShape(Rectangle())
+                                    .contentShape(Rectangle())
                                 }
                             }
                         }
@@ -782,17 +889,22 @@ struct MediaGridViewModel {
     }
     
     static func aspectRatio(for attachments: [MimeiFileType]) -> CGFloat {
+        // Clamp aspect ratios between 0.8 (tallest) and 1.618 (widest, golden ratio)
+        // This prevents extreme layouts that are too narrow or too wide
+        let minAspectRatio: CGFloat = 0.8
+        let maxAspectRatio: CGFloat = 1.618
+        
         switch attachments.count {
         case 1:
             let ar = getAspectRatio(for: attachments[0])
             if ar > 0 {
                 if ar < 0.9 {
-                    return 0.9 // Portrait aspect ratio
+                    return max(minAspectRatio, 0.9) // Portrait aspect ratio
                 } else {
-                    return CGFloat(ar) // Use actual aspect ratio for landscape
+                    return min(max(CGFloat(ar), minAspectRatio), maxAspectRatio) // Clamped
                 }
             } else {
-                return 1.618 // Square when no aspect ratio is available
+                return maxAspectRatio // Golden ratio when no aspect ratio is available
             }
         case 2:
             let ar0 = getAspectRatio(for: attachments[0])
@@ -802,15 +914,16 @@ struct MediaGridViewModel {
             let isLandscape0 = ar0 > 1
             let isLandscape1 = ar1 > 1
             if isPortrait0 && isPortrait1 {
-                return 1.5  // Both portrait: horizontal, aspect 3:2 (optimized for dual portrait view)
+                // Both portrait: horizontal layout
+                return min(1.5, maxAspectRatio)  // Clamped to max
             } else if isLandscape0 && isLandscape1 {
-                return 0.8  // Both landscape: vertical, aspect 4:5 (optimized for dual landscape view)
+                // Both landscape: vertical layout
+                return max(0.8, minAspectRatio)  // Clamped to min
             } else {
                 // Mixed: one portrait, one landscape
-                // Calculate ideal grid aspect ratio based on actual aspect ratios
-                // This ensures the grid matches the natural proportions of the images
+                // Calculate and clamp dynamic aspect ratio
                 let totalIdealWidth = ar0 + ar1
-                return CGFloat(totalIdealWidth)  // Dynamic aspect ratio based on images
+                return min(max(CGFloat(totalIdealWidth), minAspectRatio), maxAspectRatio)
             }
         case 4:
             // Get aspect ratios - detect from cached images if nil
@@ -824,11 +937,11 @@ struct MediaGridViewModel {
             let allLandscape = ar0 > 1.0 && ar1 > 1.0 && ar2 > 1.0 && ar3 > 1.0
             
             if allLandscape {
-                return 1.618
+                return min(maxAspectRatio, 1.618)  // Clamped
             } else if allPortrait {
-                return 0.8
+                return max(minAspectRatio, 0.8)  // Clamped
             } else {
-                return 1.0
+                return 1.0  // Square for mixed orientations
             }
         default:
             // For 5+ attachments, only show first 4 in grid
@@ -849,11 +962,11 @@ struct MediaGridViewModel {
             let allLandscape = ar0 > 1.0 && ar1 > 1.0 && ar2 > 1.0 && ar3 > 1.0
             
             if allLandscape {
-                return 1.618  // Golden ratio for all landscape
+                return min(maxAspectRatio, 1.618)  // Clamped golden ratio for all landscape
             } else if allPortrait {
-                return 0.8    // Tall for all portrait
+                return max(minAspectRatio, 0.8)  // Clamped tall for all portrait
             } else {
-                return 1.0    // Square for mixed orientations
+                return 1.0  // Square for mixed orientations
             }
         }
     }
