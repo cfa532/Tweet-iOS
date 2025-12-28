@@ -399,10 +399,9 @@ struct CachingVideoPlayer: View {
         // Capture values we need to avoid capturing self
         let callback = self.onPlaybackStateChanged
         
-        // Report initial state immediately
+        // Report initial state immediately to sync button with actual player state
         DispatchQueue.main.async {
             let initialIsPlaying = player.timeControlStatus == .playing
-            print("DEBUG: [CachingVideoPlayer] Initial playback state: \(initialIsPlaying), timeControlStatus: \(player.timeControlStatus.rawValue)")
             callback?(initialIsPlaying)
         }
         
@@ -410,7 +409,6 @@ struct CachingVideoPlayer: View {
         playbackStateObserver = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
             DispatchQueue.main.async {
                 let isPlaying = player.timeControlStatus == .playing
-                print("DEBUG: [CachingVideoPlayer] Playback state changed: \(isPlaying), timeControlStatus: \(player.timeControlStatus.rawValue)")
                 callback?(isPlaying)
             }
         }
