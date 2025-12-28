@@ -21,6 +21,8 @@ struct CachingVideoPlayer: View {
     let isMuted: Bool
     let onVideoTap: (() -> Void)?
     let onVideoFinished: (() -> Void)?
+    let onManualRestart: (() -> Void)?
+    let onPlaybackStateChanged: ((Bool) -> Void)?
     
     @State private var player: AVPlayer?
     @State private var cachingPlayerItem: CachingPlayerItem?
@@ -34,6 +36,7 @@ struct CachingVideoPlayer: View {
     @State private var playerRefreshID = UUID()
     @State private var recoveryTask: Task<Void, Never>?
     @State private var isRecovering = false
+    @State private var playbackStateObserver: NSKeyValueObservation?
     
     init(
         url: URL,
@@ -46,7 +49,9 @@ struct CachingVideoPlayer: View {
         showNativeControls: Bool = true,
         isMuted: Bool = false,
         onVideoTap: (() -> Void)? = nil,
-        onVideoFinished: (() -> Void)? = nil
+        onVideoFinished: (() -> Void)? = nil,
+        onManualRestart: (() -> Void)? = nil,
+        onPlaybackStateChanged: ((Bool) -> Void)? = nil
     ) {
         self.url = url
         self.mid = mid
@@ -59,6 +64,8 @@ struct CachingVideoPlayer: View {
         self.isMuted = isMuted
         self.onVideoTap = onVideoTap
         self.onVideoFinished = onVideoFinished
+        self.onManualRestart = onManualRestart
+        self.onPlaybackStateChanged = onPlaybackStateChanged
     }
     
     var body: some View {
@@ -146,12 +153,29 @@ struct CachingVideoPlayer: View {
             }
         }
         .onChange(of: autoPlay) { _, shouldPlay in
-            if shouldPlay && isVisible {
+            if shouldPlay {
+                // Check if video is at the end and needs to seek to beginning first
+                if let player = player, let currentItem = player.currentItem {
+                    let duration = currentItem.duration.seconds
+                    let currentTime = player.currentTime().seconds
+                    // If duration and currentTime are valid and we're within 0.5 seconds of the end
+                    if duration.isFinite && duration > 0 && currentTime.isFinite {
+                        let timeRemaining = duration - currentTime
+                        // If we're within 0.5 seconds of the end, seek to beginning before playing
+                        if timeRemaining <= 0.5 {
+                            player.seek(to: .zero) { finished in
+                                if finished {
+                                    player.play()
+                                    onManualRestart?() // Notify that we manually restarted
+                                }
+                            }
+                            return
+                        }
+                    }
+                }
                 player?.play()
-                print("DEBUG: [CachingVideoPlayer] Started playing \(mid)")
             } else {
                 player?.pause()
-                print("DEBUG: [CachingVideoPlayer] Paused \(mid)")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
@@ -289,6 +313,9 @@ struct CachingVideoPlayer: View {
                     // Set up video completion observer
                     self.setupVideoCompletionObserver(newPlayer)
                     
+                    // Set up playback state observer
+                    self.setupPlaybackStateObserver(newPlayer)
+                    
                     // Start playback if needed - don't automatically rewind
                     if self.autoPlay && self.isVisible {
                         newPlayer.play()
@@ -365,6 +392,30 @@ struct CachingVideoPlayer: View {
         print("DEBUG: [CachingVideoPlayer] Video completion observer setup complete for \(mid)")
     }
     
+    private func setupPlaybackStateObserver(_ player: AVPlayer) {
+        // Remove existing observer if any
+        playbackStateObserver?.invalidate()
+        
+        // Capture values we need to avoid capturing self
+        let callback = self.onPlaybackStateChanged
+        
+        // Report initial state immediately
+        DispatchQueue.main.async {
+            let initialIsPlaying = player.timeControlStatus == .playing
+            print("DEBUG: [CachingVideoPlayer] Initial playback state: \(initialIsPlaying), timeControlStatus: \(player.timeControlStatus.rawValue)")
+            callback?(initialIsPlaying)
+        }
+        
+        // Observe the timeControlStatus to track actual playback state changes
+        playbackStateObserver = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
+            DispatchQueue.main.async {
+                let isPlaying = player.timeControlStatus == .playing
+                print("DEBUG: [CachingVideoPlayer] Playback state changed: \(isPlaying), timeControlStatus: \(player.timeControlStatus.rawValue)")
+                callback?(isPlaying)
+            }
+        }
+    }
+    
     private func cleanupPlayer() {
         // Cancel any ongoing recovery task
         recoveryTask?.cancel()
@@ -376,6 +427,10 @@ struct CachingVideoPlayer: View {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
         }
+        
+        // Remove playback state observer
+        playbackStateObserver?.invalidate()
+        playbackStateObserver = nil
         
         // Restore mute state to global state before exiting fullscreen
         // This ensures the player instance is properly muted when returning to MediaCell

@@ -1854,5 +1854,240 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             }
         }
     }
-    
+
+}
+
+/// Chat Video Manager for managing video playback within chat sessions
+/// Handles visibility-based autoplay and pause for chat videos
+@MainActor
+class ChatVideoManager: ObservableObject {
+    static let shared = ChatVideoManager()
+
+    private init() {}
+
+    // Track active chat sessions and their video states
+    @Published var activeChatSessions: [String: ChatSessionVideoState] = [:] // Key: receiptId
+
+    // Current visible videos per chat session
+    private var visibleVideos: [String: Set<String>] = [:] // Key: receiptId, Value: Set of video mids
+
+    /// State for a specific chat session's videos
+    struct ChatSessionVideoState {
+        var playingVideos: Set<String> = [] // mids of videos currently playing
+        var pausedVideos: Set<String> = [] // mids of videos paused due to visibility
+        var isChatVisible: Bool = true // whether the chat screen is currently visible
+    }
+
+    /// Register a chat session for video management
+    func registerChatSession(receiptId: String) {
+        if activeChatSessions[receiptId] == nil {
+            activeChatSessions[receiptId] = ChatSessionVideoState()
+            visibleVideos[receiptId] = Set<String>()
+            print("DEBUG: [ChatVideoManager] Registered chat session: \(receiptId)")
+        }
+    }
+
+    /// Unregister a chat session (cleanup when leaving chat)
+    func unregisterChatSession(receiptId: String) {
+        // Stop all videos in this session
+        if let sessionState = activeChatSessions[receiptId] {
+            for videoMid in sessionState.playingVideos {
+                stopVideo(mid: videoMid, receiptId: receiptId)
+            }
+        }
+
+        activeChatSessions.removeValue(forKey: receiptId)
+        visibleVideos.removeValue(forKey: receiptId)
+        print("DEBUG: [ChatVideoManager] Unregistered chat session: \(receiptId)")
+    }
+
+    /// Update chat screen visibility (called when ChatScreen appears/disappears)
+    func setChatVisibility(receiptId: String, isVisible: Bool) {
+        guard var sessionState = activeChatSessions[receiptId] else {
+            print("WARNING: [ChatVideoManager] Trying to set visibility for unregistered session: \(receiptId)")
+            return
+        }
+
+        sessionState.isChatVisible = isVisible
+        activeChatSessions[receiptId] = sessionState
+
+        if !isVisible {
+            // Chat screen is not visible - pause all playing videos
+            pauseAllVideosInSession(receiptId: receiptId)
+            print("DEBUG: [ChatVideoManager] Chat screen hidden for \(receiptId) - paused all videos")
+        } else {
+            // Chat screen became visible - resume visible videos
+            resumeVisibleVideosInSession(receiptId: receiptId)
+            print("DEBUG: [ChatVideoManager] Chat screen visible for \(receiptId) - resumed visible videos")
+        }
+    }
+
+    /// Update which videos are currently visible in the scroll view
+    func updateVisibleVideos(receiptId: String, visibleMids: Set<String>) {
+        guard let sessionState = activeChatSessions[receiptId] else {
+            print("WARNING: [ChatVideoManager] Trying to update visibility for unregistered session: \(receiptId)")
+            return
+        }
+
+        let previousVisible = visibleVideos[receiptId] ?? Set<String>()
+        visibleVideos[receiptId] = visibleMids
+
+        // Early return if no changes
+        guard previousVisible != visibleMids else {
+            return
+        }
+
+        // Find videos that became visible
+        let newlyVisible = visibleMids.subtracting(previousVisible)
+
+        // Find videos that became invisible
+        let newlyInvisible = previousVisible.subtracting(visibleMids)
+
+        // Handle newly visible videos
+        if sessionState.isChatVisible && !newlyVisible.isEmpty {
+            for videoMid in newlyVisible {
+                startVideo(mid: videoMid, receiptId: receiptId)
+            }
+        }
+
+        // Handle newly invisible videos
+        if !newlyInvisible.isEmpty {
+            for videoMid in newlyInvisible {
+                pauseVideo(mid: videoMid, receiptId: receiptId)
+            }
+        }
+
+        print("DEBUG: [ChatVideoManager] Updated visibility for \(receiptId): +\(newlyVisible.count) visible, -\(newlyInvisible.count) invisible")
+    }
+
+    /// Check if a video should be playing (visible and chat screen active)
+    func shouldPlayVideo(mid: String, receiptId: String) -> Bool {
+        guard let sessionState = activeChatSessions[receiptId],
+              sessionState.isChatVisible else {
+            return false
+        }
+
+        let visibleMids = visibleVideos[receiptId] ?? Set<String>()
+        return visibleMids.contains(mid)
+    }
+
+    /// Get current playing state for a video
+    func isVideoPlaying(mid: String, receiptId: String) -> Bool {
+        guard let sessionState = activeChatSessions[receiptId] else {
+            return false
+        }
+        return sessionState.playingVideos.contains(mid)
+    }
+
+    // MARK: - Private Methods
+
+    private func startVideo(mid: String, receiptId: String) {
+        guard var sessionState = activeChatSessions[receiptId] else { return }
+
+        // Check if already playing
+        guard !sessionState.playingVideos.contains(mid) else { return }
+
+        // Add to playing videos
+        sessionState.playingVideos.insert(mid)
+        sessionState.pausedVideos.remove(mid)
+        activeChatSessions[receiptId] = sessionState
+
+        // Notify CachingVideoPlayer to start playing
+        NotificationCenter.default.post(
+            name: NSNotification.Name("ChatVideoShouldPlay"),
+            object: nil,
+            userInfo: [
+                "videoMid": mid,
+                "receiptId": receiptId,
+                "shouldPlay": true
+            ]
+        )
+
+        print("DEBUG: [ChatVideoManager] Started video: \(mid) in session: \(receiptId)")
+    }
+
+    private func pauseVideo(mid: String, receiptId: String) {
+        guard var sessionState = activeChatSessions[receiptId] else { return }
+
+        // Check if already paused
+        guard !sessionState.pausedVideos.contains(mid) else { return }
+
+        // Remove from playing videos, add to paused
+        sessionState.playingVideos.remove(mid)
+        sessionState.pausedVideos.insert(mid)
+        activeChatSessions[receiptId] = sessionState
+
+        // Notify CachingVideoPlayer to pause
+        NotificationCenter.default.post(
+            name: NSNotification.Name("ChatVideoShouldPlay"),
+            object: nil,
+            userInfo: [
+                "videoMid": mid,
+                "receiptId": receiptId,
+                "shouldPlay": false
+            ]
+        )
+
+        print("DEBUG: [ChatVideoManager] Paused video: \(mid) in session: \(receiptId)")
+    }
+
+    private func stopVideo(mid: String, receiptId: String) {
+        guard var sessionState = activeChatSessions[receiptId] else { return }
+
+        // Remove from both playing and paused
+        sessionState.playingVideos.remove(mid)
+        sessionState.pausedVideos.remove(mid)
+        activeChatSessions[receiptId] = sessionState
+
+        // Notify CachingVideoPlayer to stop
+        NotificationCenter.default.post(
+            name: NSNotification.Name("ChatVideoShouldStop"),
+            object: nil,
+            userInfo: [
+                "videoMid": mid,
+                "receiptId": receiptId
+            ]
+        )
+
+        print("DEBUG: [ChatVideoManager] Stopped video: \(mid) in session: \(receiptId)")
+    }
+
+    private func pauseAllVideosInSession(receiptId: String) {
+        guard var sessionState = activeChatSessions[receiptId] else { return }
+
+        let videosToPause = sessionState.playingVideos
+        sessionState.playingVideos.removeAll()
+        sessionState.pausedVideos.formUnion(videosToPause)
+        activeChatSessions[receiptId] = sessionState
+
+        // Notify all videos in session to pause
+        for videoMid in videosToPause {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("ChatVideoShouldPlay"),
+                object: nil,
+                userInfo: [
+                    "videoMid": videoMid,
+                    "receiptId": receiptId,
+                    "shouldPlay": false
+                ]
+            )
+        }
+
+        print("DEBUG: [ChatVideoManager] Paused all \(videosToPause.count) videos in session: \(receiptId)")
+    }
+
+    private func resumeVisibleVideosInSession(receiptId: String) {
+        guard let sessionState = activeChatSessions[receiptId] else { return }
+
+        let visibleMids = visibleVideos[receiptId] ?? Set<String>()
+
+        // Resume videos that are visible and were previously playing
+        for videoMid in visibleMids {
+            if sessionState.pausedVideos.contains(videoMid) {
+                startVideo(mid: videoMid, receiptId: receiptId)
+            }
+        }
+
+        print("DEBUG: [ChatVideoManager] Resumed visible videos in session: \(receiptId)")
+    }
 }

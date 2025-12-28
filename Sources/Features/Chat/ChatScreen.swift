@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import Combine
 
 struct ChatScreen: View {
     let receiptId: MimeiId
@@ -23,6 +24,7 @@ struct ChatScreen: View {
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var messageRefreshTimer: Timer?
+    @State private var visibilityCheckTimer: Timer?
     @State private var isChatScreenVisible = true
     
     init(receiptId: MimeiId, navigationPath: Binding<NavigationPath> = .constant(NavigationPath()), onProfileNavigate: (() -> Void)? = nil) {
@@ -43,6 +45,51 @@ struct ChatScreen: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
+
+    // Video visibility tracking
+    @State private var visibleVideoMids: Set<String> = []
+
+    // Scroll position persistence
+    @State private var savedScrollPosition: String? = nil
+    @State private var isInitialLoad = true
+    @State private var userScrolled = false
+
+    // Update visible videos in the video manager
+    private func updateVisibleVideos() {
+        ChatVideoManager.shared.updateVisibleVideos(receiptId: receiptId, visibleMids: visibleVideoMids)
+    }
+
+    // MARK: - Scroll Position Management
+
+    private func saveScrollPosition(for messageId: String) {
+        savedScrollPosition = messageId
+        UserDefaults.standard.set(messageId, forKey: "chat_scroll_position_\(receiptId)")
+        print("[ChatScreen] Saved scroll position: \(messageId) for receiptId: \(receiptId)")
+    }
+
+    private func loadScrollPosition() -> String? {
+        if let saved = UserDefaults.standard.string(forKey: "chat_scroll_position_\(receiptId)") {
+            print("[ChatScreen] Loaded scroll position: \(saved) for receiptId: \(receiptId)")
+            return saved
+        }
+        return nil
+    }
+
+    private func clearScrollPosition() {
+        savedScrollPosition = nil
+        UserDefaults.standard.removeObject(forKey: "chat_scroll_position_\(receiptId)")
+        print("[ChatScreen] Cleared scroll position for receiptId: \(receiptId)")
+    }
+
+    private func shouldAutoScrollToBottom(for message: ChatMessage? = nil) -> Bool {
+        // Always scroll to bottom for messages sent by current user
+        if let message = message, message.authorId == HproseInstance.shared.appUser.mid {
+            return true
+        }
+
+        // Check if user was previously scrolled to bottom (no saved position = was at bottom)
+        return savedScrollPosition == nil || savedScrollPosition == messages.last?.id
+    }
     
     private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
         guard index < messages.count else { return false }
@@ -86,15 +133,29 @@ struct ChatScreen: View {
                 print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
                 isChatScreenVisible = true
                 chatSessionManager.markSessionAsRead(receiptId: receiptId)
+                // Register chat session with video manager
+                ChatVideoManager.shared.registerChatSession(receiptId: receiptId)
+                ChatVideoManager.shared.setChatVisibility(receiptId: receiptId, isVisible: true)
                 await loadUser()
                 await loadMessages()
                 startPeriodicMessageRefresh()
+                startVisibilityCheckTimer()
                 print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
             }
             .onDisappear {
                 print("[ChatScreen] Screen disappearing - stopping all videos")
                 isChatScreenVisible = false
+
+                // Save current scroll position before leaving
+                if let lastVisibleMessage = messages.last {
+                    saveScrollPosition(for: lastVisibleMessage.id)
+                }
+
+                ChatVideoManager.shared.setChatVisibility(receiptId: receiptId, isVisible: false)
+                ChatVideoManager.shared.unregisterChatSession(receiptId: receiptId)
                 stopPeriodicMessageRefresh()
+                stopVisibilityCheckTimer()
+                visibleVideoMids.removeAll() // Clear visible videos when leaving chat
             }
             .sheet(isPresented: $showDocumentPicker) {
                 DocumentPicker(
@@ -162,7 +223,7 @@ struct ChatScreen: View {
                                 }
                         }
                     }
-                    
+
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                         if index > 0 {
                             let timeDiff = message.timestamp - messages[index - 1].timestamp
@@ -170,7 +231,7 @@ struct ChatScreen: View {
                                 TimeDividerView(timestamp: message.timestamp)
                             }
                         }
-                        
+
                         ChatMessageView(
                             message: message,
                             isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
@@ -178,17 +239,25 @@ struct ChatScreen: View {
                             isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
                             showTimestamp: isLastMessageFromSender(index: index, messages: messages),
                             isChatScreenVisible: isChatScreenVisible,
+                            receiptId: receiptId,
                             onResendMessage: { failedMessage in
                                 resendMessage(failedMessage)
                             }
                         )
                         .id(message.id)
+                        .onAppear {
+                            // Save scroll position when this message becomes visible (user is here)
+                            if !isInitialLoad && !shouldScrollToBottom {
+                                saveScrollPosition(for: message.id)
+                            }
+                        }
                     }
                 }
                 .padding()
             }
             .onChange(of: shouldScrollToBottom) { _, newValue in
                 guard newValue, let lastMessage = messages.last else { return }
+
                 if shouldAnimateScroll {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         proxy.scrollTo(lastMessage.id, anchor: .bottom)
@@ -198,6 +267,7 @@ struct ChatScreen: View {
                 }
                 shouldScrollToBottom = false
                 shouldAnimateScroll = true
+                userScrolled = false // Reset user scroll flag after programmatic scroll
             }
             .onChange(of: keyboardHeight) { _, newHeight in
                 if let lastMessage = messages.last {
@@ -209,7 +279,18 @@ struct ChatScreen: View {
             .navigationBarHidden(true)
             .onAppear {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    if let lastMessage = messages.last {
+                    if isInitialLoad {
+                        // On initial load, scroll to bottom
+                        if let lastMessage = messages.last {
+                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        }
+                        isInitialLoad = false
+                    } else if let savedPosition = loadScrollPosition() {
+                        // Restore saved scroll position
+                        proxy.scrollTo(savedPosition, anchor: .center)
+                        print("[ChatScreen] Restored scroll position to: \(savedPosition)")
+                    } else if let lastMessage = messages.last {
+                        // Fallback to bottom if no saved position
                         proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
                 }
@@ -464,10 +545,14 @@ struct ChatScreen: View {
                         messages[index] = resultMessage
                     }
                     chatRepository.addMessagesToCoreData([resultMessage])
-                    
+
                     // Delete the failed message from Core Data
                     chatRepository.deleteMessage(failedMessage)
-                    
+
+                    // Scroll to bottom for resent messages (since it's a user action)
+                    shouldAnimateScroll = true
+                    shouldScrollToBottom = true
+
                     if resultMessage.success == true {
                         print("[ChatScreen] Message resent successfully")
                         showToastMessage(NSLocalizedString("Message sent successfully", comment: "Chat success"), type: .success)
@@ -556,7 +641,11 @@ struct ChatScreen: View {
                         messages[index] = resultMessage
                     }
                     chatRepository.addMessagesToCoreData([resultMessage])
-                    
+
+                    // Scroll to bottom for sent messages (user action)
+                    shouldAnimateScroll = true
+                    shouldScrollToBottom = true
+
                     if resultMessage.success == true {
                         print("[ChatScreen] Text message sent successfully")
                     } else {
@@ -704,19 +793,21 @@ struct ChatScreen: View {
                     var updatedCache = allCachedMessages + newMessages
                     updatedCache.sort { $0.timestamp < $1.timestamp }
                     allCachedMessages = updatedCache
-                    
+
                     // Append new messages to displayed messages
                     messages.append(contentsOf: newMessages)
                     messages.sort { $0.timestamp < $1.timestamp }
-                    
+
                     // Update offset to account for new messages
                     currentOffset = max(0, allCachedMessages.count - messages.count)
                     hasMoreMessages = currentOffset > 0
-                    
-                    // Scroll to bottom for new messages
-                    shouldAnimateScroll = true
-                    shouldScrollToBottom = true
-                    
+
+                    // Only scroll to bottom if user was at bottom or if new messages are from current user
+                    if shouldAutoScrollToBottom() {
+                        shouldAnimateScroll = true
+                        shouldScrollToBottom = true
+                    }
+
                     print("[ChatScreen] Added \(newMessages.count) new messages from backend, total: \(messages.count)")
                 }
             } else {
@@ -871,21 +962,88 @@ struct ChatScreen: View {
     private func startPeriodicMessageRefresh() {
         // Stop any existing timer first
         stopPeriodicMessageRefresh()
-        
+
         // Start timer to refresh messages every 15 seconds
         messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { _ in
             Task {
                 await refreshMessagesFromBackend()
             }
         }
-        
+
         print("[ChatScreen] Started periodic message refresh timer (15 seconds)")
     }
-    
+
     private func stopPeriodicMessageRefresh() {
         messageRefreshTimer?.invalidate()
         messageRefreshTimer = nil
         print("[ChatScreen] Stopped periodic message refresh timer")
+    }
+
+    private func startVisibilityCheckTimer() {
+        // Stop any existing timer first
+        stopVisibilityCheckTimer()
+
+        // Only start timer if chat screen is visible
+        guard isChatScreenVisible else { return }
+
+        // Start timer to check video visibility every 1.5 seconds (further reduced frequency)
+        visibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+            Task { @MainActor in
+                checkVisibleVideos()
+            }
+        }
+
+        print("[ChatScreen] Started video visibility check timer (1.5 seconds)")
+    }
+
+    private func stopVisibilityCheckTimer() {
+        visibilityCheckTimer?.invalidate()
+        visibilityCheckTimer = nil
+        print("[ChatScreen] Stopped video visibility check timer")
+    }
+
+    private func checkVisibleVideos() {
+        // Only check visibility if chat screen is active and we have messages
+        guard isChatScreenVisible, !messages.isEmpty else {
+            if !visibleVideoMids.isEmpty {
+                visibleVideoMids.removeAll()
+                updateVisibleVideos()
+            }
+            return
+        }
+
+        // Quick check: if we have no videos in recent messages, clear visible videos
+        let recentMessages = messages.suffix(min(20, messages.count))
+        let hasRecentVideos = recentMessages.contains { message in
+            message.attachments?.contains { $0.type == .video || $0.type == .hls_video } ?? false
+        }
+
+        if !hasRecentVideos {
+            if !visibleVideoMids.isEmpty {
+                visibleVideoMids.removeAll()
+                updateVisibleVideos()
+            }
+            return
+        }
+
+        // Collect video mids from recent messages only (for performance)
+        var visibleMids = Set<String>()
+
+        for message in recentMessages {
+            if let attachments = message.attachments {
+                for attachment in attachments {
+                    if attachment.type == .video || attachment.type == .hls_video {
+                        visibleMids.insert(attachment.mid)
+                    }
+                }
+            }
+        }
+
+        // Only update if visibility actually changed
+        if visibleMids != visibleVideoMids {
+            visibleVideoMids = visibleMids
+            updateVisibleVideos()
+        }
     }
     
     // MARK: - Photo Selection

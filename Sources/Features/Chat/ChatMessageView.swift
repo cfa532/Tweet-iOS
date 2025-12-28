@@ -19,6 +19,7 @@ struct ChatMessageView: View {
     let isLastFromSender: Bool
     let showTimestamp: Bool
     let isChatScreenVisible: Bool
+    let receiptId: String
     let onResendMessage: ((ChatMessage) -> Void)?
     @State private var receiptUser: User?
     
@@ -82,10 +83,12 @@ struct ChatMessageView: View {
                                 )
                             } else if attachment.type == .video || attachment.type == .hls_video {
                                 ChatVideoPlayer(
-                                    attachment: attachment, 
+                                    attachment: attachment,
                                     isFromCurrentUser: isFromCurrentUser,
                                     senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser,
-                                    isChatScreenVisible: isChatScreenVisible
+                                    isChatScreenVisible: isChatScreenVisible,
+                                    receiptId: receiptId,
+                                    shouldPlayVideo: ChatVideoManager.shared.shouldPlayVideo(mid: attachment.mid, receiptId: receiptId)
                                 )
                             } else {
                                 // Document attachments - use DocumentAttachmentsView
@@ -465,9 +468,13 @@ struct ChatVideoPlayer: View {
     let isFromCurrentUser: Bool
     let senderUser: User?
     let isChatScreenVisible: Bool
-    
+    let receiptId: String
+    let shouldPlayVideo: Bool
+
     @State private var showFullScreen = false
-    @State private var isPlaying = true  // Start with autoplay enabled
+    @State private var isPlaying = false  // Button state synced with actual player state
+    @State private var userInteracted = false  // Track if user manually interacted with playback
+    @State private var videoFinished = false  // Track if video finished naturally
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -487,27 +494,119 @@ struct ChatVideoPlayer: View {
                 let videoAR = attachment.aspectRatio ?? 1.0
                 let isPortrait = videoAR < 0.9
                 let gridAspectRatio = isPortrait ? 0.9 : videoAR
-                
+
                 // Calculate grid dimensions (max width 70% of screen like images)
                 let maxWidth = UIScreen.main.bounds.width * 0.7
                 let gridHeight = maxWidth / CGFloat(gridAspectRatio)
-                
-                ChatVideoPlayerContent(
-                    url: url,
-                    attachment: attachment,
-                    videoAR: CGFloat(videoAR),
-                    gridAspectRatio: CGFloat(gridAspectRatio),
-                    maxWidth: maxWidth,
-                    gridHeight: gridHeight,
-                    showFullScreen: $showFullScreen,
-                    isPlaying: $isPlaying,
-                    isChatScreenVisible: isChatScreenVisible
-                )
+
+                ZStack {
+                    CachingVideoPlayer(
+                        url: url,
+                        mid: attachment.mid,
+                        isVisible: !showFullScreen && shouldPlayVideo, // Use passed parameter to determine if video should play
+                        mediaType: attachment.type,
+                        autoPlay: isPlaying, // Control playback based on state
+                        loopOnCompletion: false, // Don't auto-replay when video finishes
+                        videoAspectRatio: CGFloat(videoAR),
+                        showNativeControls: false,
+                        isMuted: MuteState.shared.isMuted,
+                        onVideoTap: {
+                            // This is handled by the overlay below
+                        },
+                        onVideoFinished: {
+                            // Reset play button to triangle when video finishes
+                            isPlaying = false
+                            // Reset user interaction flag so video can autoplay again if needed
+                            userInteracted = false
+                            // Mark that video finished naturally
+                            videoFinished = true
+                        },
+                        onManualRestart: {
+                            // Called when CachingVideoPlayer seeks to beginning before playing
+                            videoFinished = false
+                            print("DEBUG: [ChatVideoPlayer] Manual restart completed for \(attachment.mid)")
+                        },
+                        onPlaybackStateChanged: { actualIsPlaying in
+                            // Sync button state with actual player state
+                            // Only update if user hasn't manually interacted recently
+                            if !userInteracted {
+                                isPlaying = actualIsPlaying
+                            }
+                        }
+                    )
+                    .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
+                    .frame(width: maxWidth, height: gridHeight) // Fixed grid size
+                    .clipped() // Clip overflow
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
+
+                    // Clear overlay to capture taps for full-screen
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // Only open fullscreen if not tapping on play/mute buttons
+                            showFullScreen = true
+                        }
+
+                     // Bottom overlay with play and mute buttons
+                     VStack {
+                         Spacer()
+                         HStack {
+                             // Play/Pause button (bottom left, small and compact)
+                             Button {
+                                 userInteracted = true
+                                 videoFinished = false  // Reset finished flag on manual interaction
+                                 isPlaying.toggle()
+                             } label: {
+                                 Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                     .font(.system(size: 24))
+                                     .foregroundColor(.white)
+                                     .background(
+                                         Circle()
+                                             .fill(Color.black.opacity(0.3))
+                                             .frame(width: 32, height: 32)
+                                     )
+                             }
+                             .buttonStyle(PlainButtonStyle())
+                             .padding(.leading, 8)
+                             .padding(.bottom, 8)
+
+                             Spacer()
+
+                             // Mute button (bottom right)
+                             MuteButton()
+                                 .padding(.trailing, 8)
+                                 .padding(.bottom, 8)
+                         }
+                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ChatVideoShouldPlay"))) { notification in
+                    guard let userInfo = notification.userInfo,
+                          let videoMid = userInfo["videoMid"] as? String,
+                          let notificationReceiptId = userInfo["receiptId"] as? String,
+                          let shouldPlay = userInfo["shouldPlay"] as? Bool,
+                          videoMid == attachment.mid,
+                          notificationReceiptId == receiptId else {
+                        return
+                    }
+
+                    // Only update playback state based on manager's decision if user hasn't manually interacted
+                    // For automatic visibility-based control, don't restart videos that finished naturally
+                    if !userInteracted {
+                        if !videoFinished {
+                            isPlaying = shouldPlay
+                        }
+                    }
+                }
                 .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
                 .onChange(of: isChatScreenVisible) { _, visible in
                     if !visible {
                         // Stop playing when chat screen becomes invisible
                         isPlaying = false
+                        // Reset user interaction flag when chat becomes invisible
+                        userInteracted = false
+                        // Reset finished flag for fresh context
+                        videoFinished = false
                     }
                 }
                 .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
@@ -524,7 +623,7 @@ struct ChatVideoPlayer: View {
                         author: videoAuthor,
                         attachments: [attachment]
                     )
-                    
+
                     MediaBrowserView(
                         tweet: tempTweet,
                         initialIndex: 0
@@ -544,85 +643,7 @@ struct ChatVideoPlayer: View {
     }
 }
 
-// MARK: - Chat Video Player Content
-
-private struct ChatVideoPlayerContent: View {
-    let url: URL
-    let attachment: MimeiFileType
-    let videoAR: CGFloat
-    let gridAspectRatio: CGFloat
-    let maxWidth: CGFloat
-    let gridHeight: CGFloat
-    @Binding var showFullScreen: Bool
-    @Binding var isPlaying: Bool
-    let isChatScreenVisible: Bool
-    
-    var body: some View {
-        ZStack {
-            CachingVideoPlayer(
-                url: url,
-                mid: attachment.mid,
-                isVisible: !showFullScreen && isChatScreenVisible, // Hide when full-screen is open or chat screen is not visible
-                mediaType: attachment.type,
-                autoPlay: isPlaying, // Control playback based on state
-                loopOnCompletion: false, // Don't auto-replay when video finishes
-                videoAspectRatio: CGFloat(videoAR),
-                showNativeControls: false,
-                isMuted: MuteState.shared.isMuted,
-                onVideoTap: {
-                    // This is handled by the overlay below
-                },
-                onVideoFinished: {
-                    // Reset play button to triangle when video finishes
-                    isPlaying = false
-                }
-            )
-            .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
-            .frame(width: maxWidth, height: gridHeight) // Fixed grid size
-            .clipped() // Clip overflow
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .contentShape(Rectangle())
-            
-            // Clear overlay to capture taps for full-screen
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    // Only open fullscreen if not tapping on play/mute buttons
-                    showFullScreen = true
-                }
-            
-             // Bottom overlay with play and mute buttons
-             VStack {
-                 Spacer()
-                 HStack {
-                     // Play/Pause button (bottom left, small and compact)
-                     Button {
-                         isPlaying.toggle()
-                     } label: {
-                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                             .font(.system(size: 24))
-                             .foregroundColor(.white)
-                             .background(
-                                 Circle()
-                                     .fill(Color.black.opacity(0.3))
-                                     .frame(width: 32, height: 32)
-                             )
-                     }
-                     .buttonStyle(PlainButtonStyle())
-                     .padding(.leading, 8)
-                     .padding(.bottom, 8)
-                     
-                     Spacer()
-                     
-                     // Mute button (bottom right)
-                     MuteButton()
-                         .padding(.trailing, 8)
-                         .padding(.bottom, 8)
-                 }
-             }
-        }
-    }
-}
+// MARK: - Chat Attachment Loader
 
 // MARK: - Chat Attachment Loader
 
