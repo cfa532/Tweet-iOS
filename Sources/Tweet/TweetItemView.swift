@@ -211,6 +211,8 @@ struct TweetItemView: View, Equatable {
                                 .frame(width: 40, height: 40)
                         }
                     }
+                    // STABILITY: Fixed avatar size prevents layout shifts
+                    .frame(width: 40, height: 40)
                     
                     // Show original tweet with retweet menu.
                     VStack(alignment: .leading, spacing: 2) {
@@ -240,10 +242,14 @@ struct TweetItemView: View, Equatable {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
                         TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
+                            // STABILITY: Layout priority for tweet body prevents shifting
+                            .layoutPriority(1)
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
                     }
+                    // STABILITY: Fixed size maintains consistent vertical spacing
+                    .fixedSize(horizontal: false, vertical: true)
                 } else {
                     // Show retweet with content and embedded original tweet
                     // Use Group to force re-evaluation when tweet.author changes (@Published)
@@ -257,6 +263,8 @@ struct TweetItemView: View, Equatable {
                                 .frame(width: 40, height: 40)
                         }
                     }
+                    // STABILITY: Fixed avatar size prevents layout shifts
+                    .frame(width: 40, height: 40)
                     
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .top, spacing: 0) {
@@ -266,7 +274,10 @@ struct TweetItemView: View, Equatable {
                                 .padding(.trailing, -24)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                            // STABILITY: Layout priority for tweet body prevents shifting
+                            .layoutPriority(1)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         EmbeddedTweetView(
@@ -289,6 +300,8 @@ struct TweetItemView: View, Equatable {
                                 .padding(.top, 8)
                         }
                     }
+                    // STABILITY: Fixed size maintains consistent vertical spacing
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             } else if isRetweetOrQuotedTweet && !hasLoadedOriginalTweet {
                 // originalTweet is nil and hasn't loaded yet - show placeholder
@@ -302,6 +315,8 @@ struct TweetItemView: View, Equatable {
                             .frame(width: 40, height: 40)
                     }
                 }
+                // STABILITY: Fixed avatar size prevents layout shifts
+                .frame(width: 40, height: 40)
                 
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 0) {
@@ -315,9 +330,11 @@ struct TweetItemView: View, Equatable {
                     // Show tweet content if available
                     if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                            // STABILITY: Layout priority for tweet body prevents shifting
+                            .layoutPriority(1)
                     }
                     
-                    // Placeholder for embedded tweet
+                    // STABILITY: Placeholder for embedded tweet with fixed height
                     HStack(alignment: .top, spacing: 8) {
                         Circle()
                             .fill(Color.gray.opacity(0.3))
@@ -338,6 +355,7 @@ struct TweetItemView: View, Equatable {
                     .cornerRadius(8)
                     .frame(height: 60)
                     .padding(.top, (tweet.content?.isEmpty ?? true) ? 0 : 8)
+                    .fixedSize(horizontal: false, vertical: true)
                     
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
@@ -363,6 +381,9 @@ struct TweetItemView: View, Equatable {
                             )
                     }
                 }
+                // STABILITY: Fixed avatar size prevents layout shifts
+                .frame(width: 40, height: 40)
+                
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
@@ -371,12 +392,18 @@ struct TweetItemView: View, Equatable {
                             .padding(.trailing, -24)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    
                     TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
+                        // STABILITY: Layout priority for tweet body prevents shifting
+                        .layoutPriority(1)
+                    
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
                     }
                 }
+                // STABILITY: Fixed size maintains consistent vertical spacing
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.top)
@@ -385,6 +412,8 @@ struct TweetItemView: View, Equatable {
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
         }
+        // STABILITY: Stable ID prevents view recreation during recomposition
+        .id("tweet_\(tweet.mid)")
     }
     
     // MARK: - Equatable Implementation
@@ -457,6 +486,9 @@ struct EmbeddedTweetView: View, Equatable {
                         .frame(width: 40, height: 40)
                 }
             }
+            // STABILITY: Fixed avatar size prevents layout shifts
+            .frame(width: 40, height: 40)
+            
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .top) {
                     TweetItemHeaderView(tweet: tweet)
@@ -469,7 +501,11 @@ struct EmbeddedTweetView: View, Equatable {
                     isVisible: isVisible,
                     isEmbedded: isEmbedded
                 )
+                // STABILITY: Layout priority for embedded tweet body
+                .layoutPriority(1)
             }
+            // STABILITY: Fixed size maintains consistent vertical spacing
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(8)
         .background(backgroundColor)

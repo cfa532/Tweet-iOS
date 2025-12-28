@@ -178,11 +178,15 @@ struct TweetListView<RowView: View>: View {
                         initialLoadComplete: initialLoadComplete,
                         loadMoreTweets: { loadMoreTweets() }
                     )
+                    // STABILITY: Fixed size ensures scroll view respects content dimensions
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 16) // Add horizontal padding to prevent content from expanding beyond screen
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.basedOnSize)
+            // STABILITY: Scroll indicators help users track position during smooth scrolling
+            .scrollIndicators(.visible)
             .safeAreaInset(edge: .top) {
                 Color.clear.frame(height: 0)
             }

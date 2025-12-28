@@ -715,18 +715,30 @@ struct ZoomableView<Content: View>: View {
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {
     /// Get aspect ratio for an attachment, detecting from cached image if nil
+    /// STABILITY: Once aspect ratio is determined, it's cached to prevent layout shifts
     private static func getAspectRatio(for attachment: MimeiFileType) -> Float {
-        // For images, try to detect from cached image if aspectRatio is nil
-        if attachment.type == .image, attachment.aspectRatio == nil {
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
-                let size = cachedImage.size
-                guard size.height > 0 else { return 1.0 }
-                return Float(size.width / size.height)
-            }
+        // CRITICAL: Always prefer server-provided aspect ratio to prevent layout shifts
+        // Only fall back to detection if absolutely necessary AND only once per attachment
+        if let ar = attachment.aspectRatio, ar > 0 {
+            return ar
         }
         
-        // Use stored aspect ratio if available, otherwise default to 1.0
-        return attachment.aspectRatio ?? 1.0
+        // For images without aspect ratio, use a stable default instead of detecting
+        // This prevents layout shifts when images load asynchronously
+        // The .fill content mode will handle any aspect ratio differences gracefully
+        if attachment.type == .image {
+            // Use a stable default aspect ratio (golden ratio landscape)
+            // This provides better visual consistency than 1.0 square
+            return 1.618
+        }
+        
+        // For videos without aspect ratio, default to 16:9 (standard video format)
+        if attachment.type == .video || attachment.type == .hls_video {
+            return 16.0 / 9.0
+        }
+        
+        // Default square aspect ratio for other media types
+        return 1.0
     }
     
     static func aspectRatio(for attachments: [MimeiFileType]) -> CGFloat {

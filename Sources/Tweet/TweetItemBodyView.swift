@@ -102,6 +102,10 @@ struct TweetItemBodyView: View {
                             .cornerRadius(8)
                             .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
                             .padding(.top, 4)
+                            // STABILITY: Layout priority ensures media grid maintains consistent sizing
+                            .layoutPriority(1)
+                            // STABILITY: Fixed vertical size prevents content from shifting media position
+                            .fixedSize(horizontal: false, vertical: true)
                         
                         if let caption = singleVideoCaption(for: mediaAttachments) {
                             Text(caption)

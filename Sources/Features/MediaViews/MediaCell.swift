@@ -113,66 +113,53 @@ struct MediaCell: View, Equatable {
                             }
                         }
                 case .image:
-                    // MediaGrid already sets fixed frame - content should fill parent naturally
-                    // Use .fill to maintain aspect ratio and clip overflow
-                    Group {
-                        if let image = image {
-                            Image(uiImage: image)
+                    // STABILITY: MediaGrid already sets fixed frame - content must maintain stable dimensions
+                    // All image states (loading, cached, loaded) use same frame to prevent layout shifts
+                    ZStack {
+                        // Background: Always show gray placeholder to reserve space
+                        Color.gray.opacity(0.2)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        
+                        // Layer 1: Cached/Loaded image (fills parent with aspect ratio preserved)
+                        if let displayImage = image ?? imageCache.getCompressedImage(for: attachment) {
+                            Image(uiImage: displayImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if isLoading {
-                            // Show cached placeholder while loading original image
-                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
-                                Image(uiImage: cachedImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            } else {
-                                // Reserve space with placeholder color
-                                Color.gray.opacity(0.3)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            }
-                        } else {
-                            // Show cached placeholder if available, otherwise gray background
-                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
-                                Image(uiImage: cachedImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            } else {
-                                // Reserve space with placeholder color
-                                Color.gray.opacity(0.3)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            }
+                                .clipped()
+                                // STABILITY: Use transition to smooth appearance, reducing visual jump
+                                .transition(.opacity)
+                        }
+                        
+                        // Layer 2: Loading indicator (only show if no cached image available)
+                        if isLoading, imageCache.getCompressedImage(for: attachment) == nil {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .scaleEffect(1.2)
+                        } else if isLoading, image == nil {
+                            // Small indicator when refining cached image
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.6)
+                                .padding(8)
+                                .background(
+                                    Circle()
+                                        .fill(Color.black.opacity(0.3))
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                                .padding(8)
                         }
                     }
-                    .clipped()
+                    // STABILITY: Fixed frame prevents any size changes during loading
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(
-                        // Show loading indicator only when loading and no cached image
-                        Group {
-                            if isLoading, imageCache.getCompressedImage(for: attachment) == nil {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .scaleEffect(1.2)
-                            } else if isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                                    .background(Color.gray.opacity(0.3))
-                                    .clipShape(Circle())
-                                    .padding(4)
-                            }
-                        },
-                        alignment: isLoading && imageCache.getCompressedImage(for: attachment) != nil ? .topTrailing : .center
-                    )
                     .contentShape(Rectangle())
                     .onTapGesture {
                         if !isEmbedded {
                             handleTap()
                         }
                     }
+                    // STABILITY: ID ensures SwiftUI doesn't recreate view when image changes
+                    .id("image_\(attachment.mid)")
                 default:
                     // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
                     EmptyView()
