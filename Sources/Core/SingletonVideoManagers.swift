@@ -1326,70 +1326,101 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return
         }
         
-        // Layer 1 (Basic Restoration): Player is healthy, restore state
-        print("DEBUG: [FullScreenVideoManager] Layer 1 (Basic Restoration): Restoring playback state")
+        // Layer 1 (Basic Restoration): Player is healthy, let buffering observer handle position restoration
+        NSLog("DEBUG: [FullScreenVideoManager] Layer 1 (Basic Restoration): Letting buffering observer handle position restoration to avoid race conditions")
+        
+        // CRITICAL FIX: Don't seek here to avoid race condition with buffering observer
+        // The buffering observer (setupTimeControlStatusObserver) will handle position restoration
+        // when the player has enough buffer. Seeking here causes duplicate seeks and stuck loading state.
         
         // Ensure mute state is correct
         player.isMuted = false
         
-        // Try to get persistent state first, fall back to local saved state
-        let wasPlaying: Bool
-        let seekTime: CMTime
+        // Check if we have saved state to restore
+        let shouldRestore = currentVideoMid.map { videoMid in
+            PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen)
+        } ?? false
         
+        if shouldRestore {
+            // Mark as not restored yet so buffering observer will restore when ready
+            hasRestoredPosition = false
+            isSeekingToRestoredPosition = false
+            NSLog("DEBUG: [FullScreenVideoManager] Marked for position restoration by buffering observer")
+        } else {
+            // No saved state, mark as restored
+            hasRestoredPosition = true
+            isSeekingToRestoredPosition = false
+            NSLog("DEBUG: [FullScreenVideoManager] No saved state to restore")
+        }
+        
+        // Get wasPlaying state to decide if we should auto-play
+        let wasPlaying: Bool
         if let videoMid = currentVideoMid,
-           PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: videoMid, context: .fullScreen),
            let persistentState = PersistentVideoStateManager.shared.getState(videoMid: videoMid, context: .fullScreen) {
-            // Use persistent state (survives player recreation)
             wasPlaying = persistentState.wasPlaying
-            seekTime = persistentState.currentTime
-            print("DEBUG: [FullScreenVideoManager] Using persistent state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+            NSLog("DEBUG: [FullScreenVideoManager] Using persistent wasPlaying: \(wasPlaying)")
         } else if let savedState = savedPlaybackState {
-            // Use local saved state (same session)
             wasPlaying = savedState.wasPlaying
-            seekTime = savedState.time
-            print("DEBUG: [FullScreenVideoManager] Using saved state - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+            NSLog("DEBUG: [FullScreenVideoManager] Using saved wasPlaying: \(wasPlaying)")
             savedPlaybackState = nil
         } else {
-            // No saved state, use current
             wasPlaying = isPlaying
-            seekTime = player.currentTime()
-            print("DEBUG: [FullScreenVideoManager] No saved state, using current - wasPlaying: \(wasPlaying), time: \(seekTime.seconds)")
+            NSLog("DEBUG: [FullScreenVideoManager] Using current wasPlaying: \(wasPlaying)")
         }
         
-        // Pause first to ensure clean state
-        player.pause()
-        isPlaying = false
+        // Set playing state so buffering observer knows to auto-play
+        isPlaying = wasPlaying
+        wasPlayingBeforeWaiting = wasPlaying
         
-        // CRITICAL: Validate seek time before seeking to prevent crash
-        let validSeekTime: CMTime
-        if seekTime.isValid && seekTime.seconds.isFinite {
-            validSeekTime = seekTime
-        } else {
-            print("⚠️ [FullScreenVideoManager] Invalid seek time (\(seekTime.seconds)s) - using .zero")
-            validSeekTime = .zero
-        }
-        
-        // Force a seek to refresh the video layer
-        player.seek(to: validSeekTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-            guard finished, let self = self else { return }
+        // CRITICAL: Manually trigger buffering state check after recovery
+        // After lock screen, iOS player state can be inconsistent and KVO observers might not fire
+        // We need to actively check and recover the playback state
+        Task { @MainActor in
+            // Small delay to let iOS settle the player state after unlock
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             
-            Task { @MainActor in
-                print("DEBUG: [FullScreenVideoManager] Seek completed, layer refreshed")
+            guard let player = self.singletonPlayer, let playerItem = player.currentItem else {
+                NSLog("⚠️ [FullScreenVideoManager] Player or item nil after recovery")
+                return
+            }
+            
+            let isBufferEmpty = playerItem.isPlaybackBufferEmpty
+            let loadedRanges = playerItem.loadedTimeRanges
+            let hasBuffer = !loadedRanges.isEmpty
+            var bufferedDuration: Double = 0
+            if hasBuffer {
+                bufferedDuration = loadedRanges.reduce(0.0) { max($0, CMTimeGetSeconds($1.timeRangeValue.duration)) }
+            }
+            let isReadyToPlay = playerItem.status == .readyToPlay
+            let isNotPlaying = player.rate == 0
+            
+            NSLog("🔍 [FullScreenVideoManager] Post-recovery check: bufferEmpty=\(isBufferEmpty), hasBuffer=\(hasBuffer), bufferedDuration=\(String(format: "%.1f", bufferedDuration))s, ready=\(isReadyToPlay), rate=\(player.rate), wantsToPlay=\(self.isPlaying)")
+            
+            // WORKAROUND: After lock screen, isPlaybackBufferEmpty can be stuck at true
+            // even when we have buffered data. Trust loadedTimeRanges over isPlaybackBufferEmpty.
+            let hasSignificantBuffer = hasBuffer && bufferedDuration >= 0.5
+            
+            if hasSignificantBuffer && self.isPlaying && isNotPlaying && isReadyToPlay {
+                // Player has data and should be playing, but isn't
+                // This handles the case where buffering observer didn't trigger
+                NSLog("✅ [FullScreenVideoManager] Post-recovery: Player has buffer but not playing - forcing play")
                 
-                // Resume playback if it was playing before
-                if wasPlaying {
-                    print("DEBUG: [FullScreenVideoManager] Resuming playback - checking position first")
-                    // Check position and rewind if at end before resuming
-                    self.checkAndRewindIfAtEnd {
-                        self.singletonPlayer?.play()
-                        self.isPlaying = true
-                        print("DEBUG: [FullScreenVideoManager] Resumed playback after position check")
-                    }
+                // If position needs restoration, buffering observer will handle it
+                // Otherwise just play
+                if !self.hasRestoredPosition && shouldRestore {
+                    NSLog("🔄 [FullScreenVideoManager] Position not restored yet, letting buffering observer handle it")
                 } else {
-                    print("DEBUG: [FullScreenVideoManager] Not resuming (was paused)")
+                    player.play()
+                    NSLog("▶️ [FullScreenVideoManager] Resumed playback after recovery")
                 }
+            } else if !hasSignificantBuffer {
+                NSLog("⏳ [FullScreenVideoManager] Post-recovery: Waiting for buffer (buffered: \(String(format: "%.1f", bufferedDuration))s)")
+            } else if !self.isPlaying {
+                NSLog("⏸️ [FullScreenVideoManager] Post-recovery: Not resuming (was paused)")
             }
         }
+        
+        NSLog("DEBUG: [FullScreenVideoManager] Recovery complete - buffering observer will restore position and resume playback")
     }
     
     /// Clear search function
