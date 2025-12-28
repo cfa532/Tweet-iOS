@@ -147,22 +147,8 @@ struct CachingVideoPlayer: View {
         }
         .onChange(of: autoPlay) { _, shouldPlay in
             if shouldPlay && isVisible {
-                // Check if video is at the end before playing
-                if let player = player, isVideoAtEnd(player) {
-                    print("DEBUG: [CachingVideoPlayer] Video at end, rewinding before play for \(mid)")
-                    // Rewind to beginning first
-                    player.seek(to: .zero) { finished in
-                        guard finished else {
-                            print("DEBUG: [CachingVideoPlayer] Seek to zero failed for \(mid)")
-                            return
-                        }
-                        print("DEBUG: [CachingVideoPlayer] Successfully rewound, now playing \(mid)")
-                        player.play()
-                    }
-                } else {
-                    player?.play()
-                    print("DEBUG: [CachingVideoPlayer] Started playing \(mid)")
-                }
+                player?.play()
+                print("DEBUG: [CachingVideoPlayer] Started playing \(mid)")
             } else {
                 player?.pause()
                 print("DEBUG: [CachingVideoPlayer] Paused \(mid)")

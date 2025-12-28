@@ -432,18 +432,20 @@ struct ChatImageThumbnail: View {
     }
     
     private func createMockTweet(for attachment: MimeiFileType) -> Tweet {
-        // Create a minimal Tweet object for MediaBrowserView
-        // Create a NEW User instance instead of modifying singleton to avoid state update issues
+        // Create a minimal Tweet object for MediaBrowserView using singletons
         let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")
-        let authorName = isFromCurrentUser ? HproseInstance.shared.appUser.name : senderUser?.name
-        let authorAvatar = isFromCurrentUser ? HproseInstance.shared.appUser.avatar : senderUser?.avatar
-        
-        let mockAuthor = User(
-            mid: authorId,
-            baseUrl: baseUrl,
-            name: authorName,
-            avatar: authorAvatar
-        )
+        let mockAuthor = User.getInstance(mid: authorId)
+        // Update author properties if needed
+        if mockAuthor.baseUrl != baseUrl {
+            mockAuthor.baseUrl = baseUrl
+        }
+        if isFromCurrentUser {
+            mockAuthor.name = HproseInstance.shared.appUser.name
+            mockAuthor.avatar = HproseInstance.shared.appUser.avatar
+        } else if let senderUser = senderUser {
+            mockAuthor.name = senderUser.name
+            mockAuthor.avatar = senderUser.avatar
+        }
         
         return Tweet.getInstance(
             mid: MimeiId("chat_message_\(attachment.mid)"),
@@ -464,11 +466,8 @@ struct ChatVideoPlayer: View {
     let senderUser: User?
     let isChatScreenVisible: Bool
     
-    @StateObject private var videoManager = VideoManager()  // Simple manager for chat videos
     @State private var showFullScreen = false
-    @State private var isPlaying = false
-    @State private var isVisible = false  // Track if this video cell is visible
-    @State private var hasAppeared = false  // Track if view has appeared to delay initial load
+    @State private var isPlaying = true  // Start with autoplay enabled
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -502,69 +501,22 @@ struct ChatVideoPlayer: View {
                     gridHeight: gridHeight,
                     showFullScreen: $showFullScreen,
                     isPlaying: $isPlaying,
-                    isVisible: $isVisible,
-                    videoManager: videoManager,
                     isChatScreenVisible: isChatScreenVisible
                 )
                 .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
-                .onAppear {
-                    // Delay marking as visible to stagger video loads
-                    Task {
-                        try? await Task.sleep(nanoseconds: 200_000_000) // 200ms delay
-                        hasAppeared = true
-                        isVisible = true
-                        
-                        // Setup video manager for this single video
-                        videoManager.setupSequentialPlayback(
-                            for: [attachment.mid],
-                            tweetId: "chat_\(attachment.mid)"
-                        )
-                        
-                        // Start playing if chat screen is visible
-                        if isChatScreenVisible {
-                            isPlaying = true
-                        }
-                    }
-                }
-                .onDisappear {
-                    // Mark as not visible and stop playing when scrolled off screen
-                    isVisible = false
-                    isPlaying = false
-                    hasAppeared = false
-                }
                 .onChange(of: isChatScreenVisible) { _, visible in
                     if !visible {
                         // Stop playing when chat screen becomes invisible
                         isPlaying = false
-                    } else if isVisible && hasAppeared {
-                        // Resume if visible and chat screen becomes visible
-                        isPlaying = true
-                    }
-                }
-                .onChange(of: isVisible) { _, visible in
-                    if visible && isChatScreenVisible && hasAppeared {
-                        // Start playing when video becomes visible
-                        isPlaying = true
-                    } else {
-                        // Stop playing when scrolled out of view
-                        isPlaying = false
                     }
                 }
                 .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
-                    // Don't resume playing when returning from fullscreen
-                    isPlaying = false
+                    // Resume playing when returning from fullscreen
+                    isPlaying = true
                 }) {
-                    // Create a temporary tweet-like structure for the video
-                    // Use a NEW User instance instead of singleton to avoid state update issues
+                    // Create a temporary tweet-like structure for the video using singleton
                     let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID)
-                    let authorName = isFromCurrentUser ? HproseInstance.shared.appUser.name : senderUser?.name
-                    let authorAvatar = isFromCurrentUser ? HproseInstance.shared.appUser.avatar : senderUser?.avatar
-                    
-                    let videoAuthor = User(
-                        mid: authorId,
-                        name: authorName,
-                        avatar: authorAvatar
-                    )
+                    let videoAuthor = User.getInstance(mid: authorId)
                     let tempTweet = Tweet.getInstance(
                         mid: "chat_video_\(attachment.mid)",
                         authorId: authorId,
@@ -603,34 +555,31 @@ private struct ChatVideoPlayerContent: View {
     let gridHeight: CGFloat
     @Binding var showFullScreen: Bool
     @Binding var isPlaying: Bool
-    @Binding var isVisible: Bool
-    @ObservedObject var videoManager: VideoManager
     let isChatScreenVisible: Bool
     
     var body: some View {
         ZStack {
-            SimpleVideoPlayer(
+            CachingVideoPlayer(
                 url: url,
                 mid: attachment.mid,
-                parentTweetId: "chat_\(attachment.mid)",
-                isVisible: isVisible && !showFullScreen && isChatScreenVisible,
+                isVisible: !showFullScreen && isChatScreenVisible, // Hide when full-screen is open or chat screen is not visible
                 mediaType: attachment.type,
-                autoPlay: isPlaying,
-                videoManager: videoManager,  // Use chat's video manager
-                onVideoFinished: {
-                    isPlaying = false
-                },
-                cellAspectRatio: gridAspectRatio,
-                videoAspectRatio: videoAR,
+                autoPlay: isPlaying, // Control playback based on state
+                loopOnCompletion: false, // Don't auto-replay when video finishes
+                videoAspectRatio: CGFloat(videoAR),
                 showNativeControls: false,
                 isMuted: MuteState.shared.isMuted,
-                onVideoTap: nil,  // Handle taps with overlay
-                disableAutoRestart: true,
-                shouldLoadVideo: isVisible,  // Load when visible
-                mode: .mediaCell
+                onVideoTap: {
+                    // This is handled by the overlay below
+                },
+                onVideoFinished: {
+                    // Reset play button to triangle when video finishes
+                    isPlaying = false
+                }
             )
-            .frame(width: maxWidth, height: gridHeight)
-            .clipped()
+            .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
+            .frame(width: maxWidth, height: gridHeight) // Fixed grid size
+            .clipped() // Clip overflow
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
             
