@@ -50,9 +50,6 @@ struct ChatScreen: View {
     @State private var visibleVideoMids: Set<String> = []
 
     // Scroll position persistence
-    @State private var savedScrollPosition: String? = nil
-    @State private var isInitialLoad = true
-    @State private var userScrolled = false
     @State private var messagesLoaded = false
 
     // Update visible videos in the video manager
@@ -60,53 +57,6 @@ struct ChatScreen: View {
         ChatVideoManager.shared.updateVisibleVideos(receiptId: receiptId, visibleMids: visibleVideoMids)
     }
 
-    // MARK: - Scroll Position Management
-
-    private func saveScrollPosition(for messageId: String) {
-        savedScrollPosition = messageId
-        UserDefaults.standard.set(messageId, forKey: "chat_scroll_position_\(receiptId)")
-        // Also save the last message ID to detect new messages
-        if let lastMessageId = messages.last?.id {
-            UserDefaults.standard.set(lastMessageId, forKey: "chat_last_message_\(receiptId)")
-        }
-        print("[ChatScreen] Saved scroll position: \(messageId) for receiptId: \(receiptId)")
-    }
-
-    private func shouldRestoreScrollPosition() -> String? {
-        guard let savedPosition = UserDefaults.standard.string(forKey: "chat_scroll_position_\(receiptId)"),
-              let savedLastMessageId = UserDefaults.standard.string(forKey: "chat_last_message_\(receiptId)"),
-              let currentLastMessageId = messages.last?.id else {
-            return nil
-        }
-        
-        // If there are new messages (last message ID changed), don't restore position
-        if savedLastMessageId != currentLastMessageId {
-            print("[ChatScreen] New messages detected, scrolling to bottom instead of restoring position")
-            clearScrollPosition()
-            return nil
-        }
-        
-        // No new messages, safe to restore position
-        print("[ChatScreen] No new messages, restoring scroll position: \(savedPosition)")
-        return savedPosition
-    }
-
-    private func clearScrollPosition() {
-        savedScrollPosition = nil
-        UserDefaults.standard.removeObject(forKey: "chat_scroll_position_\(receiptId)")
-        UserDefaults.standard.removeObject(forKey: "chat_last_message_\(receiptId)")
-        print("[ChatScreen] Cleared scroll position for receiptId: \(receiptId)")
-    }
-
-    private func shouldAutoScrollToBottom(for message: ChatMessage? = nil) -> Bool {
-        // Always scroll to bottom for messages sent by current user
-        if let message = message, message.authorId == HproseInstance.shared.appUser.mid {
-            return true
-        }
-
-        // Check if user was previously scrolled to bottom (no saved position = was at bottom)
-        return savedScrollPosition == nil || savedScrollPosition == messages.last?.id
-    }
     
     private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
         guard index < messages.count else { return false }
@@ -262,12 +212,6 @@ struct ChatScreen: View {
                             }
                         )
                         .id(message.id)
-                        .onAppear {
-                            // Save scroll position when this message becomes visible (user is here)
-                            if !isInitialLoad && !shouldScrollToBottom {
-                                saveScrollPosition(for: message.id)
-                            }
-                        }
                     }
                 }
                 .padding()
@@ -284,7 +228,6 @@ struct ChatScreen: View {
                 }
                 shouldScrollToBottom = false
                 shouldAnimateScroll = true
-                userScrolled = false // Reset user scroll flag after programmatic scroll
             }
             .onChange(of: keyboardHeight) { _, newHeight in
                 if let lastMessage = messages.last {
@@ -295,25 +238,11 @@ struct ChatScreen: View {
             }
             .navigationBarHidden(true)
             .onChange(of: messagesLoaded) { _, loaded in
-                guard loaded else { return }
+                guard loaded, let lastMessage = messages.last else { return }
                 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if isInitialLoad {
-                        // On initial load, check if we should restore position or scroll to bottom
-                        if let savedPosition = shouldRestoreScrollPosition(),
-                           messages.contains(where: { $0.id == savedPosition }) {
-                            // Validate message exists and no new messages, restore saved position
-                            proxy.scrollTo(savedPosition, anchor: .center)
-                            print("[ChatScreen] ✅ Restored scroll position to: \(savedPosition) on initial load")
-                        } else {
-                            // New messages, invalid position, or no saved position - scroll to bottom
-                            if let lastMessage = messages.last {
-                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                                print("[ChatScreen] Scrolled to bottom on initial load")
-                            }
-                        }
-                        isInitialLoad = false
-                    }
+                // Simple: always scroll to bottom when messages load
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
                 }
             }
             .onAppear {
@@ -493,10 +422,6 @@ struct ChatScreen: View {
     
     private func sendMessage() {
         guard canSendMessage else { return }
-        
-        // Clear saved scroll position when sending a message
-        // This ensures we scroll to bottom next time to see the sent message
-        clearScrollPosition()
         
         // Check if message has attachments
         let hasAttachments = selectedAttachment != nil
@@ -829,11 +754,9 @@ struct ChatScreen: View {
                     currentOffset = max(0, allCachedMessages.count - messages.count)
                     hasMoreMessages = currentOffset > 0
 
-                    // Only scroll to bottom if user was at bottom or if new messages are from current user
-                    if shouldAutoScrollToBottom() {
-                        shouldAnimateScroll = true
-                        shouldScrollToBottom = true
-                    }
+                    // Scroll to bottom when new messages arrive
+                    shouldAnimateScroll = true
+                    shouldScrollToBottom = true
 
                     print("[ChatScreen] Added \(newMessages.count) new messages from backend, total: \(messages.count)")
                 }

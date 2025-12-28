@@ -476,38 +476,42 @@ struct ChatVideoPlayer: View {
     @State private var userInteracted = false  // Track if user manually interacted with playback
     @State private var videoFinished = false  // Track if video finished naturally
     
+    // Cache expensive calculations
+    private static let maxWidth = UIScreen.main.bounds.width * 0.7
+    
     private var baseUrl: URL {
         if isFromCurrentUser {
-            // For messages sent by current user, use app user's baseUrl
             return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
         } else {
-            // For messages received from other users, use sender's baseUrl
             return senderUser?.baseUrl ?? HproseInstance.baseUrl
         }
     }
     
+    private var videoAR: CGFloat {
+        CGFloat(attachment.aspectRatio ?? 1.0)
+    }
+    
+    private var gridAspectRatio: CGFloat {
+        videoAR < 0.9 ? 0.9 : videoAR
+    }
+    
+    private var gridHeight: CGFloat {
+        Self.maxWidth / gridAspectRatio
+    }
+    
     var body: some View {
         Group {
-            // Compact layout to minimize spacing
             if let url = attachment.getUrl(baseUrl) {
-                // Calculate grid aspect ratio same as MediaGridViewModel
-                let videoAR = attachment.aspectRatio ?? 1.0
-                let isPortrait = videoAR < 0.9
-                let gridAspectRatio = isPortrait ? 0.9 : videoAR
-
-                // Calculate grid dimensions (max width 70% of screen like images)
-                let maxWidth = UIScreen.main.bounds.width * 0.7
-                let gridHeight = maxWidth / CGFloat(gridAspectRatio)
 
                 ZStack {
                     CachingVideoPlayer(
                         url: url,
                         mid: attachment.mid,
-                        isVisible: !showFullScreen && shouldPlayVideo, // Use passed parameter to determine if video should play
+                        isVisible: !showFullScreen && shouldPlayVideo,
                         mediaType: attachment.type,
-                        autoPlay: isPlaying, // Control playback based on state
-                        loopOnCompletion: false, // Don't auto-replay when video finishes
-                        videoAspectRatio: CGFloat(videoAR),
+                        autoPlay: isPlaying,
+                        loopOnCompletion: false,
+                        videoAspectRatio: videoAR,
                         showNativeControls: false,
                         isMuted: MuteState.shared.isMuted,
                         onVideoTap: {
@@ -534,9 +538,10 @@ struct ChatVideoPlayer: View {
                             }
                         }
                     )
-                    .aspectRatio(CGFloat(videoAR), contentMode: .fill) // Use fill like MediaCell
-                    .frame(width: maxWidth, height: gridHeight) // Fixed grid size
-                    .clipped() // Clip overflow
+                    .id(attachment.mid) // Stable ID prevents unnecessary recreation
+                    .aspectRatio(videoAR, contentMode: .fill)
+                    .frame(width: Self.maxWidth, height: gridHeight)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
 
@@ -598,7 +603,7 @@ struct ChatVideoPlayer: View {
                         }
                     }
                 }
-                .frame(width: maxWidth, height: gridHeight) // Constrain ZStack to grid size
+                .frame(width: Self.maxWidth, height: gridHeight)
                 .onChange(of: isChatScreenVisible) { _, visible in
                     if !visible {
                         // Stop playing when chat screen becomes invisible
