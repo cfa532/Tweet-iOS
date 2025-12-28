@@ -655,20 +655,7 @@ struct ChatScreen: View {
     }
     
     private func loadMessages() async {
-        // First, fetch new messages from backend
-        do {
-            let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
-            let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
-            
-            // Save new messages to Core Data
-            chatRepository.addMessagesToCoreData(validBackendMessages)
-            
-            print("[ChatScreen] Fetched \(validBackendMessages.count) messages from backend")
-        } catch {
-            print("[ChatScreen] Error fetching messages from backend: \(error)")
-        }
-        
-        // Load all messages from local storage for pagination
+        // FIRST: Load cached messages immediately for instant display
         let localMessages = chatRepository.getMessages(for: receiptId)
         let validLocalMessages = localMessages.filter { isValidChatMessage($0) }
         let sortedMessages = validLocalMessages.sorted { $0.timestamp < $1.timestamp }
@@ -683,18 +670,61 @@ struct ChatScreen: View {
             hasMoreMessages = currentOffset > 0
             isLoadMoreEnabled = false
             
-            print("[ChatScreen] Loaded \(initialMessages.count) initial messages (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
+            print("[ChatScreen] Loaded \(initialMessages.count) initial messages from cache (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
             
             // Scroll to bottom after messages are set
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                shouldAnimateScroll = false
+                shouldScrollToBottom = true
+                
+                // Allow loading older messages only after initial scroll completes
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    shouldAnimateScroll = false
+                    isLoadMoreEnabled = true
+                }
+            }
+        }
+        
+        // THEN: Fetch new messages from backend in the background
+        do {
+            let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
+            let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
+            
+            // Check if we have new messages that aren't in cache
+            let currentCachedIds = Set(allCachedMessages.map { $0.id })
+            let newMessages = validBackendMessages.filter { !currentCachedIds.contains($0.id) }
+            
+            if !newMessages.isEmpty {
+                print("[ChatScreen] Fetched \(newMessages.count) new messages from backend")
+                
+                // Save new messages to Core Data
+                chatRepository.addMessagesToCoreData(newMessages)
+                
+                await MainActor.run {
+                    // Add new messages to allCachedMessages
+                    var updatedCache = allCachedMessages + newMessages
+                    updatedCache.sort { $0.timestamp < $1.timestamp }
+                    allCachedMessages = updatedCache
+                    
+                    // Append new messages to displayed messages
+                    messages.append(contentsOf: newMessages)
+                    messages.sort { $0.timestamp < $1.timestamp }
+                    
+                    // Update offset to account for new messages
+                    currentOffset = max(0, allCachedMessages.count - messages.count)
+                    hasMoreMessages = currentOffset > 0
+                    
+                    // Scroll to bottom for new messages
+                    shouldAnimateScroll = true
                     shouldScrollToBottom = true
                     
-                    // Allow loading older messages only after initial scroll completes
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        isLoadMoreEnabled = true
-                    }
+                    print("[ChatScreen] Added \(newMessages.count) new messages from backend, total: \(messages.count)")
                 }
+            } else {
+                print("[ChatScreen] No new messages from backend (fetched \(validBackendMessages.count) total)")
+            }
+        } catch {
+            print("[ChatScreen] Error fetching messages from backend: \(error)")
+            // Don't show error toast - cached messages are already displayed
         }
         
         // Update session timestamp if there are messages
