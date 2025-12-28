@@ -393,6 +393,7 @@ struct SimpleVideoPlayer: View {
     @State private var playbackWatchdogTask: Task<Void, Never>? = nil
     @State private var isHoldingRecoveryCover: Bool = false
     @State private var recoveryCoverTask: Task<Void, Never>? = nil
+    @State private var recoveryTimeoutTask: Task<Void, Never>? = nil // 15s timeout for MediaCell recovery
     // (removed) finished-video last-frame cover behavior; last-frame is for background recovery only
     @State private var isHandlingFinishEvent: Bool = false
     
@@ -967,6 +968,10 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleOnDisappear() {
+        // Cancel recovery timeout task (cleanup)
+        recoveryTimeoutTask?.cancel()
+        recoveryTimeoutTask = nil
+        
         // Handle idle timer for fullscreen modes
         if mode == .mediaBrowser {
             UIApplication.shared.isIdleTimerDisabled = false
@@ -1751,6 +1756,72 @@ struct SimpleVideoPlayer: View {
         // If previous recovery partially failed, these flags can block future playback
         isStartingPlayback = false
         
+        // CRITICAL: Cancel any existing recovery timeout task
+        recoveryTimeoutTask?.cancel()
+        recoveryTimeoutTask = nil
+        
+        // Start 15-second timeout for MediaCell recovery
+        // If video doesn't get ready and start playing within 15s, force full recreation
+        if mode == .mediaCell {
+            let videoMid = mid // Capture for closure
+            recoveryTimeoutTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 15_000_000_000) // 15 seconds
+                
+                // Check if task was cancelled (normal recovery succeeded)
+                guard !Task.isCancelled else {
+                    print("DEBUG: [VIDEO RECOVERY TIMEOUT] Timeout cancelled for \(videoMid) - normal recovery succeeded")
+                    return
+                }
+                
+                // After 15 seconds, check if video is playing properly
+                guard let player = self.player, let playerItem = player.currentItem else {
+                    print("⚠️ [VIDEO RECOVERY TIMEOUT] \(videoMid) has no player after 15s - already cleared")
+                    return
+                }
+                
+                let isPlaying = player.rate > 0
+                let isReady = playerItem.status == .readyToPlay
+                let hasBuffer = !playerItem.loadedTimeRanges.isEmpty
+                
+                // If video is playing or at least ready with buffer, recovery succeeded
+                if isPlaying || (isReady && hasBuffer) {
+                    print("✅ [VIDEO RECOVERY TIMEOUT] \(videoMid) recovered successfully within 15s (playing: \(isPlaying), ready: \(isReady), hasBuffer: \(hasBuffer))")
+                    self.recoveryTimeoutTask = nil
+                    return
+                }
+                
+                // Video still not ready after 15s - force full recreation
+                NSLog("⚠️ [VIDEO RECOVERY TIMEOUT] \(videoMid) failed to recover within 15s - forcing full recreation")
+                NSLog("⚠️ [VIDEO RECOVERY TIMEOUT] State: playing=\(isPlaying), ready=\(isReady), hasBuffer=\(hasBuffer), status=\(playerItem.status.rawValue)")
+                
+                // Clean up observers
+                if let observer = self.timeObserver, let observerPlayer = self.timeObserverPlayer {
+                    observerPlayer.removeTimeObserver(observer)
+                }
+                self.timeObserver = nil
+                self.timeObserverPlayer = nil
+                
+                // Remove from SharedAssetCache
+                SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
+                
+                // Clear player and state
+                player.pause()
+                self.player = nil
+                self.loadingState = .idle
+                self.playbackState = .notStarted
+                
+                // Force recreation
+                if self.shouldLoadVideo || self.isVisible {
+                    NSLog("🔄 [VIDEO RECOVERY TIMEOUT] Recreating player for \(videoMid)")
+                    self.setupPlayer()
+                } else {
+                    NSLog("⏸️ [VIDEO RECOVERY TIMEOUT] Not recreating player for \(videoMid) (not visible/not needed)")
+                }
+                
+                self.recoveryTimeoutTask = nil
+            }
+        }
+        
         // CONSERVATIVE RECOVERY STRATEGY:
         // Only recreate players that are actually broken, leave healthy ones alone
         // This prevents unnecessary work and potential issues with working players
@@ -1814,6 +1885,9 @@ struct SimpleVideoPlayer: View {
                                             player.play()
                                             self.playbackState = .playing
                                             print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (MediaCell, approved)")
+                                            // Cancel recovery timeout - video is playing successfully
+                                            self.recoveryTimeoutTask?.cancel()
+                                            self.recoveryTimeoutTask = nil
                                         } else {
                                             print("⏳ [VIDEO RECOVERY] Video was playing but not approved yet or not visible - will resume when approved")
                                         }
@@ -1823,6 +1897,9 @@ struct SimpleVideoPlayer: View {
                                             player.play()
                                             self.playbackState = .playing
                                             print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid)")
+                                            // Cancel recovery timeout - video is playing successfully
+                                            self.recoveryTimeoutTask?.cancel()
+                                            self.recoveryTimeoutTask = nil
                                         }
                                     }
                                 }
@@ -1838,11 +1915,17 @@ struct SimpleVideoPlayer: View {
                                     player.play()
                                     self.playbackState = .playing
                                     print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (MediaCell, approved, no seek)")
+                                    // Cancel recovery timeout - video is playing successfully
+                                    self.recoveryTimeoutTask?.cancel()
+                                    self.recoveryTimeoutTask = nil
                                 }
                             } else if self.isVisible {
                                 player.play()
                                 self.playbackState = .playing
                                 print("✅ [VIDEO RECOVERY] Resumed playback after recreation for \(self.mid) (no seek)")
+                                // Cancel recovery timeout - video is playing successfully
+                                self.recoveryTimeoutTask?.cancel()
+                                self.recoveryTimeoutTask = nil
                             }
                         }
                     } else {
