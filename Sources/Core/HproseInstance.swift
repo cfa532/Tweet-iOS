@@ -7115,17 +7115,8 @@ final class HproseInstance: ObservableObject {
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
                 if message.authorId != appUser.mid {
-                    // Update timestamp to current system time for incoming messages
-                    let updatedMessage = ChatMessage(
-                        id: message.id,
-                        authorId: message.authorId,
-                        receiptId: message.receiptId,
-                        chatSessionId: message.chatSessionId,
-                        content: message.content,
-                        timestamp: Date().timeIntervalSince1970,
-                        attachments: message.attachments
-                    )
-                    return updatedMessage
+                    // Return message with server's timestamp preserved
+                    return message
                 } else {
                     print("[fetchMessages] Filtered out outgoing message from \(message.authorId)")
                     return nil
@@ -7166,17 +7157,8 @@ final class HproseInstance: ObservableObject {
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
                 if message.authorId != appUser.mid {
-                    // Update timestamp to current system time for incoming messages
-                    let updatedMessage = ChatMessage(
-                        id: message.id,
-                        authorId: message.authorId,
-                        receiptId: message.receiptId,
-                        chatSessionId: message.chatSessionId,
-                        content: message.content,
-                        timestamp: Date().timeIntervalSince1970,
-                        attachments: message.attachments
-                    )
-                    return updatedMessage
+                    // Return message with server's timestamp preserved
+                    return message
                 } else {
                     print("[checkNewMessages] Filtered out outgoing message from \(message.authorId)")
                     return nil
