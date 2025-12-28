@@ -62,7 +62,7 @@ struct ChatMessageView: View {
                             }) {
                                 Image(systemName: "exclamationmark.circle.fill")
                                     .foregroundColor(.red)
-                                    .font(.system(size: 16))
+                                    .font(.system(size: 22))
                             }
                             .help(message.errorMsg ?? "Message failed to send")
                         }
@@ -111,7 +111,7 @@ struct ChatMessageView: View {
                             }) {
                                 Image(systemName: "exclamationmark.circle.fill")
                                     .foregroundColor(.red)
-                                    .font(.system(size: 16))
+                                    .font(.system(size: 22))
                             }
                             .help(message.errorMsg ?? "Message failed to send")
                         }
