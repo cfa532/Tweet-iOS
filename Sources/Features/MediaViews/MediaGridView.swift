@@ -116,47 +116,100 @@ struct MediaGridView: View, Equatable {
                     //  .border(Color.red, width: 1)
                     
                 case 2:
-                    let ar0 = attachments[0].aspectRatio ?? 1
-                    let ar1 = attachments[1].aspectRatio ?? 1
+                    // Use getAspectRatio to get stable defaults if aspect ratio is nil
+                    let ar0 = MediaGridViewModel.getAspectRatio(for: attachments[0])
+                    let ar1 = MediaGridViewModel.getAspectRatio(for: attachments[1])
                     let isPortrait0 = ar0 < 1
                     let isPortrait1 = ar1 < 1
                     let isLandscape0 = ar0 > 1
                     let isLandscape1 = ar1 > 1
                     if isPortrait0 && isPortrait1 {
                         // Both portrait: horizontal, aspect 3:2
+                        // Divide width proportionally based on each image's aspect ratio
+                        // This ensures both images show maximum content without excessive cropping
+                        let totalWidth = actualWidth
+                        
+                        // Calculate ideal widths for each image based on their aspect ratios
+                        let idealWidth0 = gridHeight * CGFloat(ar0)
+                        let idealWidth1 = gridHeight * CGFloat(ar1)
+                        let totalIdealWidth = idealWidth0 + idealWidth1
+                        
+                        // Calculate proportional widths (subtracting spacing)
+                        let proportion0 = idealWidth0 / totalIdealWidth
+                        let proportion1 = idealWidth1 / totalIdealWidth
+                        let width0 = (totalWidth - 2) * proportion0
+                        let width1 = (totalWidth - 2) * proportion1
+                        
                         HStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    aspectRatio: Float((actualWidth/2 - 1) / gridHeight),
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    isEmbedded: isEmbedded
-                                )
-                                .frame(width: actualWidth/2 - 1, height: gridHeight)
-                                .clipped().contentShape(Rectangle())
-                                .contentShape(Rectangle())
-                            }
+                            MediaCell(
+                                parentTweet: parentTweet,
+                                attachmentIndex: 0,
+                                aspectRatio: Float(width0 / gridHeight),
+                                shouldLoadVideo: shouldLoadVideo,
+                                onVideoFinished: onVideoFinished,
+                                videoManager: videoManager,
+                                isEmbedded: isEmbedded
+                            )
+                            .frame(width: width0, height: gridHeight)
+                            .clipped().contentShape(Rectangle())
+                            .contentShape(Rectangle())
+                            
+                            MediaCell(
+                                parentTweet: parentTweet,
+                                attachmentIndex: 1,
+                                aspectRatio: Float(width1 / gridHeight),
+                                shouldLoadVideo: shouldLoadVideo,
+                                onVideoFinished: onVideoFinished,
+                                videoManager: videoManager,
+                                isEmbedded: isEmbedded
+                            )
+                            .frame(width: width1, height: gridHeight)
+                            .clipped().contentShape(Rectangle())
+                            .contentShape(Rectangle())
                         }
                     } else if isLandscape0 && isLandscape1 {
-                        // Both landscape: vertical, aspect 4:5
+                        // Both landscape: vertical, aspect 4:5 (0.8)
+                        // Divide height proportionally based on each image's aspect ratio
+                        // This ensures both images show maximum content without excessive cropping
+                        let totalHeight = gridHeight
+                        
+                        // Calculate ideal heights for each image based on their aspect ratios
+                        let idealHeight0 = actualWidth / CGFloat(ar0)
+                        let idealHeight1 = actualWidth / CGFloat(ar1)
+                        let totalIdealHeight = idealHeight0 + idealHeight1
+                        
+                        // Calculate proportional heights (subtracting spacing)
+                        let proportion0 = idealHeight0 / totalIdealHeight
+                        let proportion1 = idealHeight1 / totalIdealHeight
+                        let height0 = (totalHeight - 2) * proportion0
+                        let height1 = (totalHeight - 2) * proportion1
+                        
                         VStack(spacing: 2) {
-                            ForEach(0..<2) { idx in
-                                MediaCell(
-                                    parentTweet: parentTweet,
-                                    attachmentIndex: idx,
-                                    aspectRatio: Float(actualWidth / (gridHeight/2 - 1)),
-                                    shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                                    videoManager: videoManager,
-                                    isEmbedded: isEmbedded
-                                )
-                                .frame(width: actualWidth, height: gridHeight/2 - 1)
-                                .clipped().contentShape(Rectangle())
-                                .contentShape(Rectangle())
-                            }
+                            MediaCell(
+                                parentTweet: parentTweet,
+                                attachmentIndex: 0,
+                                aspectRatio: Float(actualWidth / height0),
+                                shouldLoadVideo: shouldLoadVideo,
+                                onVideoFinished: onVideoFinished,
+                                videoManager: videoManager,
+                                isEmbedded: isEmbedded
+                            )
+                            .frame(width: actualWidth, height: height0)
+                            .clipped().contentShape(Rectangle())
+                            .contentShape(Rectangle())
+                            
+                            MediaCell(
+                                parentTweet: parentTweet,
+                                attachmentIndex: 1,
+                                aspectRatio: Float(actualWidth / height1),
+                                shouldLoadVideo: shouldLoadVideo,
+                                onVideoFinished: onVideoFinished,
+                                videoManager: videoManager,
+                                isEmbedded: isEmbedded
+                            )
+                            .frame(width: actualWidth, height: height1)
+                            .clipped().contentShape(Rectangle())
+                            .contentShape(Rectangle())
                         }
                     } else {
                         // One portrait, one landscape: horizontal, aspect 1:1, portrait 1/3, landscape 2/3
@@ -225,9 +278,10 @@ struct MediaGridView: View, Equatable {
                         EmptyView()
                     } else {
                         
-                        let ar0 = attachments[0].aspectRatio ?? 1
-                        let ar1 = attachments[1].aspectRatio ?? 1
-                        let ar2 = attachments[2].aspectRatio ?? 1
+                        // Use getAspectRatio to get stable defaults if aspect ratio is nil
+                        let ar0 = MediaGridViewModel.getAspectRatio(for: attachments[0])
+                        let ar1 = MediaGridViewModel.getAspectRatio(for: attachments[1])
+                        let ar2 = MediaGridViewModel.getAspectRatio(for: attachments[2])
                         let allPortrait = ar0 < 1 && ar1 < 1 && ar2 < 1
                         let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1
                         
@@ -716,7 +770,7 @@ struct ZoomableView<Content: View>: View {
 struct MediaGridViewModel {
     /// Get aspect ratio for an attachment, detecting from cached image if nil
     /// STABILITY: Once aspect ratio is determined, it's cached to prevent layout shifts
-    private static func getAspectRatio(for attachment: MimeiFileType) -> Float {
+    static func getAspectRatio(for attachment: MimeiFileType) -> Float {
         // CRITICAL: Always prefer server-provided aspect ratio to prevent layout shifts
         // Only fall back to detection if absolutely necessary AND only once per attachment
         if let ar = attachment.aspectRatio, ar > 0 {
@@ -762,9 +816,9 @@ struct MediaGridViewModel {
             let isLandscape0 = ar0 > 1
             let isLandscape1 = ar1 > 1
             if isPortrait0 && isPortrait1 {
-                return 3.0/2.0  // Both portrait: horizontal, aspect 3:2
+                return 1.5  // Both portrait: horizontal, aspect 3:2 (optimized for dual portrait view)
             } else if isLandscape0 && isLandscape1 {
-                return 4.0/5.0  // Both landscape: vertical, aspect 4:5
+                return 0.8  // Both landscape: vertical, aspect 4:5 (optimized for dual landscape view)
             } else {
                 return 2.0      // One portrait, one landscape: horizontal, aspect 2:1
             }
