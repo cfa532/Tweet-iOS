@@ -121,7 +121,8 @@ struct MediaCell: View, Equatable {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         
                         // Layer 1: Cached/Loaded image (fills parent with aspect ratio preserved)
-                        if let displayImage = image ?? imageCache.getCompressedImage(for: attachment) {
+                        // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+                        if let displayImage = image ?? imageCache.getCompressedImageFromMemory(for: attachment) {
                             Image(uiImage: displayImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
@@ -132,7 +133,8 @@ struct MediaCell: View, Equatable {
                         }
                         
                         // Layer 2: Loading indicator (only show if no cached image available)
-                        if isLoading, imageCache.getCompressedImage(for: attachment) == nil {
+                        // CRITICAL: Use memory-only cache check to avoid blocking disk I/O
+                        if isLoading, imageCache.getCompressedImageFromMemory(for: attachment) == nil {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
                                 .scaleEffect(1.2)
@@ -357,7 +359,8 @@ struct MediaCell: View, Equatable {
             return 
         }
         
-        // First, try to get cached image immediately
+        // First, try to get cached image immediately (disk check is OK in async context)
+        // This happens in onAppear which is safe for disk I/O
         if let cachedImage = imageCache.getCompressedImage(for: attachment) {
             self.image = cachedImage
             self.isLoading = false

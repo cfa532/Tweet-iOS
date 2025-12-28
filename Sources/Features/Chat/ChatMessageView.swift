@@ -316,7 +316,8 @@ struct ChatImageThumbnail: View {
                 }
         } else if isLoading {
             // Show loading state with cached placeholder
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+            // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+            if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
                 Image(uiImage: cachedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -349,7 +350,8 @@ struct ChatImageThumbnail: View {
             }
         } else {
             // Show cached placeholder if available, otherwise fallback
-            if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+            // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+            if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
                 Image(uiImage: cachedImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -407,7 +409,7 @@ struct ChatImageThumbnail: View {
     private func loadImage() {
         guard let url = attachment.getUrl(baseUrl) else { return }
         
-        // First, try to get cached image immediately
+        // First, try to get cached image immediately (disk check is OK in async context)
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             self.image = cachedImage
             return

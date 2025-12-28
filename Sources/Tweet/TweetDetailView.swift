@@ -116,7 +116,8 @@ struct DetailMediaCell: View {
                                     .if(!isLandscape) { $0.clipped() }
                             } else if loading {
                                 // Show cached placeholder while loading original image
-                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+                                // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
                                     Image(uiImage: cachedImage)
                                         .resizable()
                                         .aspectRatio(contentMode: isLandscape ? .fit : .fill)
@@ -137,7 +138,8 @@ struct DetailMediaCell: View {
                                 }
                             } else {
                                 // Show cached placeholder if available, otherwise gray background
-                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+                                // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
                                     Image(uiImage: cachedImage)
                                         .resizable()
                                         .aspectRatio(contentMode: isLandscape ? .fit : .fill)
@@ -202,7 +204,7 @@ struct DetailMediaCell: View {
         let loadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
         
-        // First, try to get cached image immediately
+        // First, try to get cached image immediately (disk check is OK in async context)
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             print("DEBUG: [TweetDetailView] Found cached image for \(loadId)")
             self.image = cachedImage

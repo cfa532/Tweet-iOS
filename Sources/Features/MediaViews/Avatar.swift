@@ -56,7 +56,8 @@ struct Avatar: View {
                         let cacheKey = user.avatar ?? (URL(string: avatarUrl)?.lastPathComponent ?? avatarUrl)
                         let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
                         
-                        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
+                        // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+                        if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                             // Found in cache - use it and reset failed state
                             cachedImage = cached
                             loadFailed = false
@@ -131,7 +132,7 @@ struct Avatar: View {
             mediaType: .image
         )
                 
-        // Check cache first
+        // Check cache first (disk check is OK in async context like onAppear/loadAvatar)
         if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
             cachedImage = cached
             return

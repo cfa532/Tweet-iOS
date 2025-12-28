@@ -326,6 +326,20 @@ class ImageCacheManager: @unchecked Sendable {
         return cacheDirectory.appendingPathComponent("\(key)_compressed.jpg")
     }
     
+    /// Get compressed image from memory cache only (safe for synchronous access in view body)
+    /// This method does NOT perform disk I/O and is safe to call from the main thread
+    func getCompressedImageFromMemory(for attachment: MimeiFileType) -> UIImage? {
+        guard let key = getCacheKey(for: attachment) else { return nil }
+        let cacheKey = "\(key)_compressed"
+        
+        // Only check memory cache - no disk I/O to avoid blocking UI
+        return cache.object(forKey: cacheKey as NSString)
+    }
+    
+    /// Get compressed image from memory or disk cache
+    /// ⚠️ WARNING: This method performs synchronous disk I/O and should NOT be called from view body
+    /// Use getCompressedImageFromMemory() for synchronous access in views
+    /// This method should only be used in async contexts (Task, loadImage, etc.)
     func getCompressedImage(for attachment: MimeiFileType) -> UIImage? {
         guard let key = getCacheKey(for: attachment) else { return nil }
         let cacheKey = "\(key)_compressed"
@@ -335,7 +349,7 @@ class ImageCacheManager: @unchecked Sendable {
             return cachedImage
         }
         
-        // Check disk cache
+        // Check disk cache (synchronous I/O - only use in async contexts)
         let fileURL = getCompressedCacheFileURL(for: key)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
@@ -346,7 +360,18 @@ class ImageCacheManager: @unchecked Sendable {
         return nil
     }
     
+    /// Get cached compressed image by mid alone (memory only, for when baseUrl is not yet available)
+    /// This method does NOT perform disk I/O and is safe to call from the main thread
+    func getCachedCompressedImageFromMemory(forMid mid: String) -> UIImage? {
+        guard !mid.isEmpty else { return nil }
+        let cacheKey = "\(mid)_compressed"
+        
+        // Only check memory cache - no disk I/O
+        return cache.object(forKey: cacheKey as NSString)
+    }
+    
     /// Get cached compressed image by mid alone (for when baseUrl is not yet available)
+    /// ⚠️ WARNING: This method performs synchronous disk I/O - only use in async contexts
     func getCachedCompressedImage(forMid mid: String) -> UIImage? {
         guard !mid.isEmpty else { return nil }
         
@@ -357,7 +382,7 @@ class ImageCacheManager: @unchecked Sendable {
             return cachedImage
         }
         
-        // Check disk cache
+        // Check disk cache (synchronous I/O - only use in async contexts)
         let fileURL = getCompressedCacheFileURL(for: mid)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
