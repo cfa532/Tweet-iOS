@@ -420,8 +420,8 @@ struct MediaBrowserView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .onChange(of: currentIndex) { _, newIndex in
-                print("DEBUG: [MediaBrowserView] TabView index changed to \(newIndex)")
+            .onChange(of: currentIndex) { oldIndex, newIndex in
+                print("DEBUG: [MediaBrowserView] TabView index changed from \(oldIndex) to \(newIndex)")
                 
                 // Load new video when user swipes TO this video
                 if newIndex == index && isVideoAttachment(attachment) {
@@ -434,9 +434,11 @@ struct MediaBrowserView: View {
                         mediaType: attachment.type
                     )
                 }
-                // Pause video when user swipes AWAY from this video to non-video media
-                else if previousIndex == index && newIndex != index && isVideoAttachment(attachment) {
-                    print("DEBUG: [MediaBrowserView] Pausing video at index \(index) as user swiped away")
+                // Pause video when user swipes AWAY from this video
+                else if oldIndex == index && newIndex != index && 
+                        FullScreenVideoManager.shared.currentVideoMid == attachment.mid &&
+                        isVideoAttachment(attachment) {
+                    print("DEBUG: [MediaBrowserView] Pausing video \(attachment.mid) at index \(index) as user swiped away")
                     FullScreenVideoManager.shared.pause()
                 }
             }

@@ -508,6 +508,9 @@ struct TweetDetailView: View {
                     .onTapGesture {
                         showBrowser = true
                     }
+                    .onChange(of: selectedMediaIndex) { [mediaAttachments] oldIndex, newIndex in
+                        handleMediaIndexChange(oldIndex: oldIndex, newIndex: newIndex, mediaAttachments: mediaAttachments)
+                    }
                 }
             }
         }
@@ -789,6 +792,23 @@ struct TweetDetailView: View {
         
         // Clamp to reasonable bounds
         return max(0.5, min(2.0, minAspectRatio))
+    }
+    
+    // Handle media index change to pause videos when swiping away
+    private func handleMediaIndexChange(oldIndex: Int, newIndex: Int, mediaAttachments: [MimeiFileType]) {
+        // Pause video when swiping away from it
+        guard oldIndex != newIndex,
+              oldIndex >= 0 && oldIndex < mediaAttachments.count else {
+            return
+        }
+        
+        let oldAttachment = mediaAttachments[oldIndex]
+        let isVideo = oldAttachment.type == .video || oldAttachment.type == .hls_video
+        
+        if isVideo && DetailVideoManager.shared.currentVideoMid == oldAttachment.mid {
+            print("DEBUG: [TweetDetailView] Pausing video \(oldAttachment.mid) as user swiped away from index \(oldIndex) to \(newIndex)")
+            DetailVideoManager.shared.pausePlayer()
+        }
     }
     
     // Helper to check if attachment is media type (image, video, audio)
