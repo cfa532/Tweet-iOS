@@ -53,6 +53,7 @@ struct ChatScreen: View {
     @State private var savedScrollPosition: String? = nil
     @State private var isInitialLoad = true
     @State private var userScrolled = false
+    @State private var messagesLoaded = false
 
     // Update visible videos in the video manager
     private func updateVisibleVideos() {
@@ -64,20 +65,36 @@ struct ChatScreen: View {
     private func saveScrollPosition(for messageId: String) {
         savedScrollPosition = messageId
         UserDefaults.standard.set(messageId, forKey: "chat_scroll_position_\(receiptId)")
+        // Also save the last message ID to detect new messages
+        if let lastMessageId = messages.last?.id {
+            UserDefaults.standard.set(lastMessageId, forKey: "chat_last_message_\(receiptId)")
+        }
         print("[ChatScreen] Saved scroll position: \(messageId) for receiptId: \(receiptId)")
     }
 
-    private func loadScrollPosition() -> String? {
-        if let saved = UserDefaults.standard.string(forKey: "chat_scroll_position_\(receiptId)") {
-            print("[ChatScreen] Loaded scroll position: \(saved) for receiptId: \(receiptId)")
-            return saved
+    private func shouldRestoreScrollPosition() -> String? {
+        guard let savedPosition = UserDefaults.standard.string(forKey: "chat_scroll_position_\(receiptId)"),
+              let savedLastMessageId = UserDefaults.standard.string(forKey: "chat_last_message_\(receiptId)"),
+              let currentLastMessageId = messages.last?.id else {
+            return nil
         }
-        return nil
+        
+        // If there are new messages (last message ID changed), don't restore position
+        if savedLastMessageId != currentLastMessageId {
+            print("[ChatScreen] New messages detected, scrolling to bottom instead of restoring position")
+            clearScrollPosition()
+            return nil
+        }
+        
+        // No new messages, safe to restore position
+        print("[ChatScreen] No new messages, restoring scroll position: \(savedPosition)")
+        return savedPosition
     }
 
     private func clearScrollPosition() {
         savedScrollPosition = nil
         UserDefaults.standard.removeObject(forKey: "chat_scroll_position_\(receiptId)")
+        UserDefaults.standard.removeObject(forKey: "chat_last_message_\(receiptId)")
         print("[ChatScreen] Cleared scroll position for receiptId: \(receiptId)")
     }
 
@@ -138,6 +155,7 @@ struct ChatScreen: View {
                 ChatVideoManager.shared.setChatVisibility(receiptId: receiptId, isVisible: true)
                 await loadUser()
                 await loadMessages()
+                messagesLoaded = true  // Trigger scroll restoration
                 startPeriodicMessageRefresh()
                 startVisibilityCheckTimer()
                 print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
@@ -145,11 +163,10 @@ struct ChatScreen: View {
             .onDisappear {
                 print("[ChatScreen] Screen disappearing - stopping all videos")
                 isChatScreenVisible = false
+                messagesLoaded = false  // Reset for next appearance
 
-                // Save current scroll position before leaving
-                if let lastVisibleMessage = messages.last {
-                    saveScrollPosition(for: lastVisibleMessage.id)
-                }
+                // Scroll position is already saved by message onAppear callbacks
+                // No need to save again here
 
                 ChatVideoManager.shared.setChatVisibility(receiptId: receiptId, isVisible: false)
                 ChatVideoManager.shared.unregisterChatSession(receiptId: receiptId)
@@ -277,23 +294,29 @@ struct ChatScreen: View {
                 }
             }
             .navigationBarHidden(true)
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            .onChange(of: messagesLoaded) { _, loaded in
+                guard loaded else { return }
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     if isInitialLoad {
-                        // On initial load, scroll to bottom
-                        if let lastMessage = messages.last {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        // On initial load, check if we should restore position or scroll to bottom
+                        if let savedPosition = shouldRestoreScrollPosition(),
+                           messages.contains(where: { $0.id == savedPosition }) {
+                            // Validate message exists and no new messages, restore saved position
+                            proxy.scrollTo(savedPosition, anchor: .center)
+                            print("[ChatScreen] ✅ Restored scroll position to: \(savedPosition) on initial load")
+                        } else {
+                            // New messages, invalid position, or no saved position - scroll to bottom
+                            if let lastMessage = messages.last {
+                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                                print("[ChatScreen] Scrolled to bottom on initial load")
+                            }
                         }
                         isInitialLoad = false
-                    } else if let savedPosition = loadScrollPosition() {
-                        // Restore saved scroll position
-                        proxy.scrollTo(savedPosition, anchor: .center)
-                        print("[ChatScreen] Restored scroll position to: \(savedPosition)")
-                    } else if let lastMessage = messages.last {
-                        // Fallback to bottom if no saved position
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
                 }
+            }
+            .onAppear {
                 DispatchQueue.main.async {
                     UNUserNotificationCenter.current().setBadgeCount(0) { error in
                         if let error = error {
@@ -470,6 +493,10 @@ struct ChatScreen: View {
     
     private func sendMessage() {
         guard canSendMessage else { return }
+        
+        // Clear saved scroll position when sending a message
+        // This ensures we scroll to bottom next time to see the sent message
+        clearScrollPosition()
         
         // Check if message has attachments
         let hasAttachments = selectedAttachment != nil
