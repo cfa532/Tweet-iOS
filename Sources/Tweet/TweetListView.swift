@@ -33,6 +33,8 @@ struct TweetListView<RowView: View>: View {
     @State private var loadingStartTime: Date? = nil
     @State private var lastScrollOffset: CGFloat = 0
     @State private var didPrewarmSingletonFirstItem: Bool = false
+    @State private var lastVisibleTweetIdBeforeLoad: String? = nil
+    @State private var scrollProxy: ScrollViewProxy? = nil
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -212,6 +214,7 @@ struct TweetListView<RowView: View>: View {
                 .onAppear {
                     lastScrollOffset = 0
                     onScroll?(0, 0)
+                    scrollProxy = proxy
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .scrollToTop)) { _ in
                     print("DEBUG: [TweetListView] Received scrollToTop notification - attempting scroll")
@@ -474,6 +477,12 @@ struct TweetListView<RowView: View>: View {
             let startTime = Date()
             
             await MainActor.run {
+                // Capture the last visible tweet before loading
+                if let lastTweet = tweets.last {
+                    lastVisibleTweetIdBeforeLoad = lastTweet.mid
+                    print("[TweetListView] Captured last visible tweet: \(lastTweet.mid)")
+                }
+                
                 isLoadingMore = true
                 loadingStartTime = startTime
             }
@@ -508,6 +517,18 @@ struct TweetListView<RowView: View>: View {
                     // Clear loading state after minimum duration
                     isLoadingMore = false
                     loadingStartTime = nil
+                    
+                    // Restore scroll position to keep the last visible tweet above bottom bar
+                    if let lastTweetId = lastVisibleTweetIdBeforeLoad {
+                        print("[TweetListView] Restoring scroll position to tweet: \(lastTweetId)")
+                        // Use a slight delay to ensure layout is complete
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
+                            }
+                        }
+                        lastVisibleTweetIdBeforeLoad = nil
+                    }
                 }
                 
                 // Step 2: Load from server to update with fresh data (non-blocking, no retry)
@@ -530,6 +551,17 @@ struct TweetListView<RowView: View>: View {
                     hasMoreTweets = false; 
                     isLoadingMore = false
                     loadingStartTime = nil
+                    
+                    // Restore scroll position even on error
+                    if let lastTweetId = lastVisibleTweetIdBeforeLoad {
+                        print("[TweetListView] Restoring scroll position after error to tweet: \(lastTweetId)")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
+                            }
+                        }
+                        lastVisibleTweetIdBeforeLoad = nil
+                    }
                 }
                 completion(false)
             }
@@ -745,20 +777,16 @@ struct TweetListContentView<RowView: View>: View {
                 
                 // Loading indicator for more tweets - shown as list item for smooth scrolling
                 if hasMoreTweets {
-                    if isLoadingMore {
-                        // Show spinner when loading
-                        VStack(spacing: 12) {
+                    // Use consistent height to prevent layout jumps
+                    ZStack {
+                        if isLoadingMore {
+                            // Show spinner when loading
                             ProgressView()
                                 .scaleEffect(1.0)
                         }
-                        .frame(height: 60)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                    } else {
-                        // Empty space when not loading to maintain consistent spacing
-                        Color.clear
-                            .frame(height: 40)
                     }
+                    .frame(height: 80)
+                    .frame(maxWidth: .infinity)
                 } else {
                     // Small spacer at bottom when no more tweets
                     Color.clear
