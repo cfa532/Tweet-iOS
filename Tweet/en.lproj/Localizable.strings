@@ -532,6 +532,7 @@
 // MARK: - Chat Messages
 "Failed to send message" = "Failed to send message";
 "Sending message in background..." = "Sending message in background...";
+"Sending message..." = "Sending message...";
 
 // MARK: - Fallback Text
 "User Name" = "User Name";

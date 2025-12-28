@@ -524,6 +524,7 @@
 // MARK: - Chat Messages
 "Failed to send message" = "发送消息失败";
 "Sending message in background..." = "正在后台发送消息...";
+"Sending message..." = "正在发送消息...";
 
 // MARK: - Fallback Text
 "User Name" = "用户名";
