@@ -272,10 +272,10 @@ struct MediaGridView: View, Equatable {
                         let allLandscape = ar0 > 1 && ar1 > 1 && ar2 > 1
                         
                         if allPortrait {
-                            // All portrait: first (hero) takes 61.8% width on left (golden ratio)
+                            // All portrait: first (hero) takes full height on left, minimum golden ratio (61.8%)
                             // Right side: two images stacked vertically with heights divided proportionally
-                            let heroWidth = actualWidth * 0.618 - 1
-                            let sideWidth = actualWidth * 0.382 - 1
+                            let heroWidth = actualWidth * 0.618 - 1  // Golden ratio
+                            let sideWidth = actualWidth - heroWidth - 2
                             
                             // Calculate proportional heights for right-side images
                             let idealHeight1 = sideWidth / CGFloat(ar1)
@@ -331,10 +331,10 @@ struct MediaGridView: View, Equatable {
                                 }
                             }
                         } else if allLandscape {
-                            // All landscape: first (hero) takes 61.8% height on top (golden ratio)
+                            // All landscape: first (hero) takes full width on top, minimum golden ratio (61.8%)
                             // Bottom: two images side-by-side with widths divided proportionally
-                            let heroHeight = gridHeight * 0.618 - 1
-                            let bottomHeight = gridHeight * 0.382 - 1
+                            let heroHeight = gridHeight * 0.618 - 1  // Golden ratio
+                            let bottomHeight = gridHeight - heroHeight - 2
                             
                             // Calculate proportional widths for bottom images
                             let idealWidth1 = bottomHeight * CGFloat(ar1)
@@ -391,7 +391,7 @@ struct MediaGridView: View, Equatable {
                             }
                         } else if ar0 < 1 {
                             // Mixed: first is portrait (hero on left), others stacked on right
-                            // Divide width proportionally between left and right sections
+                            // Divide width proportionally, but cap hero at 50% of total area
                             let idealWidth0 = gridHeight * CGFloat(ar0)
                             let idealWidth1 = gridHeight * CGFloat(ar1)
                             let idealWidth2 = gridHeight * CGFloat(ar2)
@@ -399,8 +399,11 @@ struct MediaGridView: View, Equatable {
                             let rightIdealWidth = max(idealWidth1, idealWidth2) // Use max to ensure enough space
                             let totalIdealWidth = idealWidth0 + rightIdealWidth
                             
-                            let leftWidth = (actualWidth - 2) * (idealWidth0 / totalIdealWidth)
-                            let rightWidth = (actualWidth - 2) * (rightIdealWidth / totalIdealWidth)
+                            // Calculate proportional width, ensure hero is always >= golden ratio (61.8%)
+                            let proportionalLeftWidth = (actualWidth - 2) * (idealWidth0 / totalIdealWidth)
+                            let minLeftWidthGoldenRatio = actualWidth * 0.618 - 1
+                            let leftWidth = max(proportionalLeftWidth, minLeftWidthGoldenRatio)
+                            let rightWidth = actualWidth - leftWidth - 2
                             
                             // Calculate proportional heights for right-side images
                             let idealHeight1 = rightWidth / CGFloat(ar1)
@@ -455,7 +458,7 @@ struct MediaGridView: View, Equatable {
                             }
                         } else {
                             // Mixed: first is landscape (hero on top), others side-by-side on bottom
-                            // Divide height proportionally between top and bottom sections
+                            // Divide height proportionally, but cap hero at 50% of total area
                             let idealHeight0 = actualWidth / CGFloat(ar0)
                             let idealHeight1 = actualWidth / CGFloat(ar1)
                             let idealHeight2 = actualWidth / CGFloat(ar2)
@@ -463,8 +466,11 @@ struct MediaGridView: View, Equatable {
                             let bottomIdealHeight = max(idealHeight1, idealHeight2) // Use max to ensure enough space
                             let totalIdealHeight = idealHeight0 + bottomIdealHeight
                             
-                            let topHeight = (gridHeight - 2) * (idealHeight0 / totalIdealHeight)
-                            let bottomHeight = (gridHeight - 2) * (bottomIdealHeight / totalIdealHeight)
+                            // Calculate proportional height, ensure hero is always >= golden ratio (61.8%)
+                            let proportionalTopHeight = (gridHeight - 2) * (idealHeight0 / totalIdealHeight)
+                            let minTopHeightGoldenRatio = gridHeight * 0.618 - 1
+                            let topHeight = max(proportionalTopHeight, minTopHeightGoldenRatio)
+                            let bottomHeight = gridHeight - topHeight - 2
                             
                             // Calculate proportional widths for bottom images
                             let idealWidth1 = bottomHeight * CGFloat(ar1)
