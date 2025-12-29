@@ -1589,14 +1589,14 @@ final class HproseInstance: ObservableObject {
     /// - Parameter attemptNumber: Internal parameter to track retry attempts (1 or 2)
     /// - Returns: A healthy provider IP address, or nil if none found
     /// - Throws: Error only after both attempts fail
-    func getProviderIP(_ mid: String) async throws -> String? {
+    func getProviderIP(_ mid: String, v4Only: Bool = false) async throws -> String? {
         // Safety check: never try to get provider IP for GUEST_ID
         if mid == Constants.GUEST_ID {
             print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
         }
         
-        let providerIP = await _getProviderIP(mid)
+        let providerIP = await _getProviderIP(mid, v4Only: v4Only)
         if (providerIP != nil) {
             return providerIP
         }
@@ -1605,7 +1605,7 @@ final class HproseInstance: ObservableObject {
             guard let entryIP = try await findEntryIP() else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
             }
-            return await _getProviderIP(mid, hproseClient: clientPool.getClientByIP(for: entryIP))
+            return await _getProviderIP(mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
         } else {
             guard let appUserClient = appUser.hproseClient else {
                 print("ERROR: [getProviderIP] appUser.hproseClient is nil")
@@ -1615,11 +1615,11 @@ final class HproseInstance: ObservableObject {
                 guard let entryIP = try await findEntryIP() else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
                 }
-                let ip = await _getProviderIP(appUser.mid, hproseClient: clientPool.getClientByIP(for: entryIP))
+                let ip = await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
                 if let ip = ip {
                     appUser.baseUrl = URL(string: "http://\(ip)")
                 }
-                return await _getProviderIP(mid)
+                return await _getProviderIP(mid, v4Only: v4Only)
             }
             // Server is healthy but initial lookup returned nil - return nil
             // This allows caller to handle "provider not found" case
@@ -1629,6 +1629,7 @@ final class HproseInstance: ObservableObject {
     
     private func _getProviderIP(
         _ mid: MimeiId,
+        v4Only: Bool = false,
         hproseClient: HproseClient? = HproseInstance.shared.appUser.hproseClient
     ) async -> String? {
         let entry = "get_provider_ips"
@@ -1636,7 +1637,8 @@ final class HproseInstance: ObservableObject {
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "mid": mid
+            "mid": mid,
+            "v4only": v4Only ? "true" : "false"
         ]
         
         guard let hproseClient = hproseClient else {
@@ -6678,13 +6680,13 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Find IP addresses of given nodeId
-    func getHostIP(_ nodeId: String, v4Only: String = "false") async -> String? {
+    func getHostIP(_ nodeId: String, v4Only: Bool = false) async -> String? {
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "nodeid": nodeId,
-            "v4only": v4Only
+            "v4only": v4Only ? "true" : "false"
         ]
         let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: ["get_node_ip", params])
         guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
