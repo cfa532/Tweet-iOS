@@ -264,22 +264,25 @@ struct MediaBrowserView: View {
                                 Spacer()
                             }
                             Spacer()
-                            HStack {
-                                TweetActionButtonsView(
-                                    tweet: currentTweet,
-                                    isInDetailView: true,
-                                    isFullScreen: true,
-                                    currentMediaIndex: currentIndex,
-                                    onShareVisibilityChange: { isVisible in
-                                        // Forward share visibility changes to outer view
-                                        onShareVisibilityChange(isVisible)
-                                    }
-                                )
-                                .environment(\.colorScheme, .dark)
-                                .tint(.white)
+                            // Hide action buttons for chat messages
+                            if !currentTweet.mid.hasPrefix("chat_") {
+                                HStack {
+                                    TweetActionButtonsView(
+                                        tweet: currentTweet,
+                                        isInDetailView: true,
+                                        isFullScreen: true,
+                                        currentMediaIndex: currentIndex,
+                                        onShareVisibilityChange: { isVisible in
+                                            // Forward share visibility changes to outer view
+                                            onShareVisibilityChange(isVisible)
+                                        }
+                                    )
+                                    .environment(\.colorScheme, .dark)
+                                    .tint(.white)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 60)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 60)
                         }
                         .transition(.opacity)
                     }
