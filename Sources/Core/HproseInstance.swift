@@ -1323,7 +1323,8 @@ final class HproseInstance: ObservableObject {
                 
                 // Check if the response is an error object (network failure case)
                 if let error = rawResponse as? Error {
-                    print("ERROR: [\(logPrefix)] Network error during get_user: userId: \(user.mid), error: \(error.localizedDescription)")
+                    let nsError = error as NSError
+                    print("ERROR: [\(logPrefix)] Network error during get_user: userId: \(user.mid), domain: \(nsError.domain), code: \(nsError.code)")
                     throw error
                 }
                 
@@ -1388,7 +1389,8 @@ final class HproseInstance: ObservableObject {
                 throw HproseError.userNotFound(userId: user.mid, reason: "User returned null twice")
             } catch {
                 lastError = error
-                print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), error: \(error.localizedDescription)")
+                let nsError = error as NSError
+                print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
                 
                 if skipRetryAndBlacklist {
                     throw error
@@ -1778,7 +1780,15 @@ final class HproseInstance: ObservableObject {
                 }
             }
         } catch {
-            print("DEBUG: [isServerHealthy] ❌ HEAD request error for \(baseURLString): \(error.localizedDescription)")
+            // Check if this is a cancellation (normal when faster IP found)
+            let nsError = error as NSError
+            let isCancellation = nsError.code == NSURLErrorCancelled
+            
+            if isCancellation {
+                print("DEBUG: [isServerHealthy] ⏭️  HEAD request cancelled for \(baseURLString) (faster IP found)")
+            } else {
+                print("DEBUG: [isServerHealthy] ❌ HEAD request error for \(baseURLString): domain=\(nsError.domain), code=\(nsError.code)")
+            }
         }
         
         return false
@@ -3677,7 +3687,8 @@ final class HproseInstance: ObservableObject {
                     return false
                 }
             } catch {
-                print("Cloud drive service unavailable - using MP4 fallback (\(error.localizedDescription))")
+                let nsError = error as NSError
+                print("Cloud drive service unavailable - using MP4 fallback (domain: \(nsError.domain), code: \(nsError.code))")
                 return false
             }
         }
@@ -4988,7 +4999,8 @@ final class HproseInstance: ObservableObject {
                             print("ERROR: Chunk \(chunkCount) upload failed - timeout")
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload timed out. Please try again.", comment: "Timeout error")])
                         default:
-                            print("ERROR: Chunk \(chunkCount) upload failed - network error: \(error.localizedDescription)")
+                            let nsError = error as NSError
+                            print("ERROR: Chunk \(chunkCount) upload failed - network error: domain: \(nsError.domain), code: \(nsError.code)")
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Network error: %@", comment: "Network error"), ErrorMessageHelper.userFriendlyMessage(from: error))])
                         }
                     } else {
@@ -6388,7 +6400,8 @@ final class HproseInstance: ObservableObject {
                 do {
                     _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
                 } catch {
-                    print("DEBUG: [registerUser] Failed to follow alphaId \(alphaId): \(error.localizedDescription)")
+                    let nsError = error as NSError
+                    print("DEBUG: [registerUser] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code)")
                     // Continue with other users even if one fails
                 }
             }
