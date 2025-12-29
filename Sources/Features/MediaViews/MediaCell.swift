@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVFoundation
+import Combine
 
 // Global video visibility manager
 class VideoVisibilityManager: ObservableObject {
@@ -41,6 +42,7 @@ struct MediaCell: View, Equatable {
     @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
     @State private var shouldAutoPlay = false // Track if video should autoplay
+    @State private var effectiveBaseUrl: URL // Reactive baseUrl that updates when author's baseUrl changes
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
@@ -53,6 +55,12 @@ struct MediaCell: View, Equatable {
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
         self.isEmbedded = isEmbedded
+        
+        // Initialize effectiveBaseUrl with fallback chain
+        let initialBaseUrl = parentTweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
+        self._effectiveBaseUrl = State(initialValue: initialBaseUrl)
         
         // Initialize shouldAutoPlay based on initial conditions
         if let attachments = parentTweet.attachments,
@@ -84,21 +92,26 @@ struct MediaCell: View, Equatable {
         return attachments[attachmentIndex]
     }
     
-    private var baseUrl: URL {
-        // Use author's baseUrl if available, otherwise use appUser's baseUrl
-        // If both are nil, use real IP from HproseInstance (resolved at app start)
-        return parentTweet.author?.baseUrl 
-            ?? HproseInstance.shared.appUser.baseUrl 
-            ?? HproseInstance.baseUrl
-    }
-    
     private var isVideoAttachment: Bool {
         return attachment.type == .video || attachment.type == .hls_video
     }
     
+    /// Update effectiveBaseUrl based on current author's baseUrl
+    private func updateEffectiveBaseUrl() {
+        let newBaseUrl = parentTweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
+        
+        // Only update if changed to avoid unnecessary view updates
+        if effectiveBaseUrl != newBaseUrl {
+            print("DEBUG: [MediaCell] BaseUrl updated for video \(attachment.mid): \(effectiveBaseUrl.absoluteString) -> \(newBaseUrl.absoluteString)")
+            effectiveBaseUrl = newBaseUrl
+        }
+    }
+    
     var body: some View {
         Group {
-            if let url = attachment.getUrl(baseUrl) {
+            if let url = attachment.getUrl(effectiveBaseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
                     // MediaGrid already sets fixed frame - content should fill parent naturally
@@ -175,6 +188,9 @@ struct MediaCell: View, Equatable {
             // onAppear fires when any portion of the view becomes visible
             isVisible = true
             
+            // Update effectiveBaseUrl in case author's baseUrl has been resolved since init
+            updateEffectiveBaseUrl()
+            
             // For video attachments, update autoplay state based on current conditions
             if isVideoAttachment {
                 if isEmbedded {
@@ -218,9 +234,14 @@ struct MediaCell: View, Equatable {
             cancelPreloadTask()
             
             // Cancel any pending image loads to prevent memory leaks
-            GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(baseUrl.absoluteString)")
+            GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(effectiveBaseUrl.absoluteString)")
         }
         .onChange(of: isVisible) { _, newValue in
+            // Update effectiveBaseUrl when becoming visible (author may have been resolved)
+            if newValue {
+                updateEffectiveBaseUrl()
+            }
+            
             // Update autoplay state when visibility changes for video attachments
             if isVideoAttachment && newValue {
                 if isEmbedded {
@@ -245,11 +266,26 @@ struct MediaCell: View, Equatable {
         }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Update effectiveBaseUrl when app becomes active (author may have been resolved)
+            updateEffectiveBaseUrl()
+            
             // Restore video state when app becomes active
             if isVideoAttachment {
                 // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
                 // Grid-level debouncing handles video preloading
                 // Individual cells just track visibility for playback
+            }
+        }
+        
+        // CRITICAL FIX: Monitor user updates to catch when author's baseUrl is resolved
+        // This fixes the race condition where author.baseUrl is nil when cell loads,
+        // but gets resolved shortly after by background fetchUser task
+        .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
+            // Check if the updated user is this tweet's author
+            if let userId = notification.userInfo?["userId"] as? String,
+               userId == parentTweet.authorId {
+                // Author was updated, refresh effective baseUrl
+                updateEffectiveBaseUrl()
             }
         }
         
@@ -353,7 +389,7 @@ struct MediaCell: View, Equatable {
     }
     
     private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { 
+        guard let url = attachment.getUrl(effectiveBaseUrl) else { 
             // If no URL, ensure isLoading is false
             isLoading = false
             return 
@@ -372,10 +408,10 @@ struct MediaCell: View, Equatable {
         
         // Use normal priority for grid images (they're visible but not as critical as detail view)
         GlobalImageLoadManager.shared.loadImageNormalPriority(
-            id: "\(attachment.mid)_\(baseUrl.absoluteString)",
+            id: "\(attachment.mid)_\(effectiveBaseUrl.absoluteString)",
             url: url,
             attachment: attachment,
-            baseUrl: baseUrl
+            baseUrl: effectiveBaseUrl
         ) { loadedImage in
             // Completion is already @MainActor, so state updates will happen on main thread
             // Use Task to ensure SwiftUI view updates properly
@@ -468,7 +504,7 @@ struct MediaCell: View, Equatable {
         // Clear all caches and force reload by toggling shouldLoadVideo
         print("🔄 [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
-        if let url = attachment.getUrl(baseUrl) {
+        if let url = attachment.getUrl(effectiveBaseUrl) {
             // Clear player cache
             SharedAssetCache.shared.removeInvalidPlayer(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
             
