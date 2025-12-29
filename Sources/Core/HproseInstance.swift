@@ -1277,10 +1277,6 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Checks if two normalized IPs represent a redirect loop
-    private func isRedirectLoop(currentIp: String, newIp: String) -> Bool {
-        return currentIp == newIp && !currentIp.isEmpty
-    }
-    
     /// Performs the complete user update flow with retry logic
     /// This is the main workhorse method that handles retries and redirects
     private func performUserUpdate(_ user: User, maxRetries: Int, skipRetryAndBlacklist: Bool, logPrefix: String) async throws -> User {
@@ -1292,7 +1288,6 @@ final class HproseInstance: ObservableObject {
         let forceFreshIP = originalBaseUrl == nil || originalBaseUrl?.isEmpty == true
         
         var lastError: Error?
-        var failedRedirectIP: String? = nil  // Track failed redirect IP to avoid retry loop
         
         for attempt in 1...maxRetries {
             do {
@@ -1312,7 +1307,7 @@ final class HproseInstance: ObservableObject {
                 let params: [String: Any] = [
                     "aid": appId,
                     "ver": "last",
-                    "version": "v2",
+                    "version": "v3",
                     "userid": user.mid
                 ]
                 
@@ -1338,35 +1333,62 @@ final class HproseInstance: ObservableObject {
                 let response = try Self.unwrapV2Response(rawResponse)
                 
                 // Process the response
-                let success = try await processUserDataResponse(user: user, response: response as Any, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params, failedRedirectIP: failedRedirectIP)
+                let success = try await processUserDataResponse(user: user, response: response as Any, skipRetryAndBlacklist: skipRetryAndBlacklist)
                 
                 if success {
                     return user
                 }
+                
+                // If we get here, response was null - retry with fresh providerIP
+                print("DEBUG: [\(logPrefix)] NULL RESPONSE - clearing baseUrl and retrying with fresh providerIP for userId: \(user.mid)")
+                user.baseUrl = nil
+                
+                // Resolve fresh provider IP
+                guard let providerIP = try await getProviderIP(user.mid) else {
+                    print("ERROR: [\(logPrefix)] Failed to get providerIP after null response for userId: \(user.mid)")
+                    if !skipRetryAndBlacklist {
+                        blackList.recordFailure(user.mid)
+                    }
+                    throw HproseError.noResponse(userId: user.mid)
+                }
+                
+                if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                    await applyBaseUrlIfNeeded(user, url: url, reason: "null response retry")
+                }
+                
+                // Retry the request with new baseUrl
+                guard let retryClient = user.hproseClient else {
+                    print("ERROR: [\(logPrefix)] No hprose client after null response retry for userId: \(user.mid)")
+                    if !skipRetryAndBlacklist {
+                        blackList.recordFailure(user.mid)
+                    }
+                    throw HproseError.noClient(userId: user.mid)
+                }
+                
+                guard let retryRawResponse = retryClient.invoke("runMApp", withArgs: [entry, params]) else {
+                    print("ERROR: [\(logPrefix)] No response on null response retry for userId: \(user.mid)")
+                    if !skipRetryAndBlacklist {
+                        blackList.recordFailure(user.mid)
+                    }
+                    throw HproseError.noResponse(userId: user.mid)
+                }
+                
+                let retryResponse = try Self.unwrapV2Response(retryRawResponse)
+                let retrySuccess = try await processUserDataResponse(user: user, response: retryResponse as Any, skipRetryAndBlacklist: skipRetryAndBlacklist)
+                
+                if retrySuccess {
+                    return user
+                }
+                
+                // Second null response - add to blacklist
+                print("ERROR: [\(logPrefix)] SECOND NULL RESPONSE after retry for userId: \(user.mid), adding to blacklist")
+                if !skipRetryAndBlacklist {
+                    blackList.recordFailure(user.mid)
+                }
+                throw HproseError.userNotFound(userId: user.mid, reason: "User returned null twice")
             } catch {
                 lastError = error
                 print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), error: \(error.localizedDescription)")
-                
-                // Check if this is a redirect loop error - DON'T RETRY
-                if let hproseError = error as? HproseError {
-                    if case .redirectLoop = hproseError {
-                        print("ERROR: [\(logPrefix)] REDIRECT LOOP DETECTED, stopping retries immediately for userId: \(user.mid)")
-                        // Don't add to long-term blacklist, short-term cooldown is enough
-                        throw error
-                    }
-                }
-                
-                // Check if error mentions redirect to capture the failed redirect IP
-                if let errorMessage = (error as NSError?)?.localizedDescription,
-                   errorMessage.contains("redirectIP:") {
-                    // Extract failed redirect IP from error message if available
-                    // This helps prevent retrying the same failing redirect
-                    if let range = errorMessage.range(of: "redirectIP: "),
-                       let endRange = errorMessage[range.upperBound...].range(of: ",") {
-                        failedRedirectIP = String(errorMessage[range.upperBound..<endRange.lowerBound])
-                        print("DEBUG: [\(logPrefix)] Captured failed redirect IP: \(failedRedirectIP ?? "nil") to avoid retry loop")
-                    }
-                }
                 
                 if skipRetryAndBlacklist {
                     throw error
@@ -1389,13 +1411,8 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Processes user data response from server
-    /// Returns true if successful, throws exception otherwise
-    private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool, entry: String, params: [String: Any], failedRedirectIP: String?) async throws -> Bool {
-        // Handle string response (redirect)
-        if let redirectIP = response as? String {
-            return try await handleRedirectAndRetry(user: user, providerIP: redirectIP.trimmingCharacters(in: .whitespacesAndNewlines), entry: entry, params: params, skipRetryAndBlacklist: skipRetryAndBlacklist, failedRedirectIP: failedRedirectIP)
-        }
-        
+    /// Returns true if successful, false if null (needs retry), throws exception for errors
+    private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool) async throws -> Bool {
         // Handle dictionary response (user data)
         if let userDict = response as? [String: Any] {
             if !skipRetryAndBlacklist {
@@ -1412,117 +1429,16 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // Handle nil response
+        // Handle nil response - return false to indicate retry needed
         if response is NSNull {
-            print("ERROR: [processUserDataResponse] NULL RESPONSE: userId: \(user.mid)")
-            throw HproseError.noResponse(userId: user.mid)
+            print("DEBUG: [processUserDataResponse] NULL RESPONSE: userId: \(user.mid), will retry with fresh providerIP")
+            return false
         }
         
         // Unexpected response type
         print("ERROR: [processUserDataResponse] UNEXPECTED RESPONSE TYPE: userId: \(user.mid), type: \(type(of: response))")
         throw HproseError.unexpectedResponse(response: response)
     }
-    
-    /// Handles redirect response and retries the request
-    private func handleRedirectAndRetry(user: User, providerIP: String, entry: String, params: [String: Any], skipRetryAndBlacklist: Bool, failedRedirectIP: String?) async throws -> Bool {
-        print("DEBUG: [handleRedirectAndRetry] PROVIDER IP RECEIVED: userId: \(user.mid), providerIP: \(providerIP)")
-        
-        let normalizedRedirectIp = normalizeIpFromUrl(providerIP)
-        let normalizedCurrentIp = normalizeIpFromUrl(user.baseUrl?.absoluteString ?? "")
-        
-        // Check if this redirect IP already failed in a previous attempt
-        if let failedIP = failedRedirectIP {
-            let normalizedFailedIp = normalizeIpFromUrl(failedIP)
-            if normalizedRedirectIp == normalizedFailedIp {
-                print("ERROR: [handleRedirectAndRetry] Refusing to follow redirect to IP that already failed: \(providerIP)")
-                print("ERROR: [handleRedirectAndRetry] User data unavailable - redirect loop detected")
-                
-                throw HproseError.redirectLoop(ip: providerIP)
-            }
-        }
-        
-        if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedRedirectIp) {
-            print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected to same IP:port: \(providerIP) (current: \(user.baseUrl?.absoluteString ?? "nil"))")
-            print("ERROR: [handleRedirectAndRetry] User is unavailable")
-            
-            // Add to long-term blacklist for repeated failures over time
-            if !skipRetryAndBlacklist {
-                blackList.recordFailure(user.mid)
-            }
-            
-            throw HproseError.redirectLoop(ip: providerIP)
-        }
-        
-        // Update baseUrl and retry
-        if let redirectURL = URL(string: ensureHttpPrefix(providerIP)) {
-            await applyBaseUrlIfNeeded(user, url: redirectURL, reason: "redirect")
-        }
-        
-        // Retry with new baseUrl
-        guard let hproseClient = user.hproseClient else {
-            throw HproseError.noClient(userId: user.mid)
-        }
-        
-        guard let retryRawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
-            throw HproseError.noResponse(userId: user.mid)
-        }
-        
-        // Check if the response is an error object (network failure case)
-        if let error = retryRawResponse as? Error {
-            print("ERROR: [handleRedirectAndRetry] Network error after redirect: userId: \(user.mid), redirectIP: \(providerIP), error: \(error.localizedDescription)")
-            // Include redirectIP in error message so retry logic can capture and avoid it
-            let enrichedError = NSError(
-                domain: (error as NSError).domain,
-                code: (error as NSError).code,
-                userInfo: (error as NSError).userInfo.merging([
-                    NSLocalizedDescriptionKey: "\(error.localizedDescription) redirectIP: \(providerIP),"
-                ]) { _, new in new }
-            )
-            throw enrichedError
-        }
-        
-        let retryResponse = try Self.unwrapV2Response(retryRawResponse)
-        
-        // Handle second response
-        if let newIpAddress = retryResponse as? String {
-            let trimmedNewIp = newIpAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-            let newNormalizedIp = normalizeIpFromUrl(trimmedNewIp)
-            
-            if isRedirectLoop(currentIp: newNormalizedIp, newIp: normalizedRedirectIp) {
-                print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected server returned same IP:port: \(trimmedNewIp)")
-                print("ERROR: [handleRedirectAndRetry] User is unavailable - adding to blacklist")
-                
-                // Add user to blacklist since they redirect to the same IP (unavailable)
-                if !skipRetryAndBlacklist {
-                    blackList.recordFailure(user.mid)
-                }
-                
-                throw HproseError.userNotFound(userId: user.mid, reason: "The user is unavailable (redirect loop)")
-            }
-            
-            print("ERROR: [handleRedirectAndRetry] USER NOT FOUND AFTER REDIRECT: userId: \(user.mid), second IP returned: \(trimmedNewIp)")
-            
-            // Add user to blacklist since multiple redirects indicate unavailability
-            if !skipRetryAndBlacklist {
-                blackList.recordFailure(user.mid)
-            }
-            
-            throw HproseError.userNotFound(userId: user.mid, reason: "The user is unavailable (multiple redirects)")
-        }
-        
-        if let userDict = retryResponse as? [String: Any] {
-            return try await processUserDataResponse(user: user, response: userDict, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params, failedRedirectIP: nil)
-        }
-        
-        if retryResponse is NSNull {
-            print("ERROR: [handleRedirectAndRetry] NULL RESPONSE AFTER REDIRECT: userId: \(user.mid)")
-            throw HproseError.noResponse(userId: user.mid)
-        }
-        
-        print("ERROR: [handleRedirectAndRetry] UNEXPECTED RESPONSE TYPE AFTER REDIRECT: userId: \(user.mid), type: \(type(of: retryResponse))")
-        throw HproseError.unexpectedResponse(response: retryResponse as Any)
-    }
-    
     /// Resolves and updates user's baseUrl (for first attempt or retries)
     private func resolveAndUpdateBaseUrl(
         user: User,
@@ -1540,17 +1456,9 @@ final class HproseInstance: ObservableObject {
         
         // Resolve fresh IP
         if attempt > 1 {
-            // Retry attempts: check for redirect loop before resolving
+            // Retry attempts: resolve provider IP
             guard let providerIP = try await getProviderIP(user.mid) else {
                 throw HproseError.noResponse(userId: user.mid)
-            }
-            
-            let normalizedProviderIp = normalizeIpFromUrl(providerIP)
-            let normalizedCurrentIp = normalizeIpFromUrl(user.baseUrl?.absoluteString ?? "")
-            
-            if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedProviderIp) {
-                print("ERROR: [resolveAndUpdateBaseUrl] REDIRECT LOOP DETECTED on retry - resolved IP:port (\(providerIP)) same as current IP:port (\(user.baseUrl?.absoluteString ?? "nil"))")
-                throw HproseError.redirectLoop(ip: providerIP)
             }
             
             if let url = URL(string: ensureHttpPrefix(providerIP)) {
@@ -1937,7 +1845,6 @@ final class HproseInstance: ObservableObject {
     private enum HproseError: LocalizedError {
         case noClient(userId: String)
         case noResponse(userId: String)
-        case redirectLoop(ip: String)
         case userNotFound(userId: String, reason: String)
         case unexpectedResponse(response: Any)
         
@@ -1947,8 +1854,6 @@ final class HproseInstance: ObservableObject {
                 return "No hprose client available for user: \(userId)"
             case .noResponse(let userId):
                 return "No response from server for user: \(userId)"
-            case .redirectLoop(let ip):
-                return "Redirect loop detected - redirected to same IP: \(ip)"
             case .userNotFound(let userId, let reason):
                 return "User \(userId) not found: \(reason)"
             case .unexpectedResponse(let response):
@@ -1957,14 +1862,7 @@ final class HproseInstance: ObservableObject {
         }
         
         var nsError: NSError {
-            let code: Int
-            switch self {
-            case .redirectLoop:
-                code = -2
-            default:
-                code = -1
-            }
-            return NSError(domain: "HproseClient", code: code, userInfo: [
+            return NSError(domain: "HproseClient", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: errorDescription ?? "Unknown error"
             ])
         }
