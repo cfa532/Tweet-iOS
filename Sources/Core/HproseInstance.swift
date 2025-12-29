@@ -4930,7 +4930,6 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Upload regular (non-video) files via hproseClient
         /// IPFS doesn't care about file types - they're all data blobs
         static func uploadRegularFile(
             data: Data,
