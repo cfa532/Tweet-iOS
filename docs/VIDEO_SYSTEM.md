@@ -1,7 +1,7 @@
 # Video System - Complete Documentation
 
-**Last Updated:** November 9, 2025  
-**Status:** ✅ Production (Unified Architecture + Slow Network Auto-Resume)
+**Last Updated:** December 29, 2025  
+**Status:** ✅ Production (Unified Architecture + Seek Failure Recovery)
 
 ---
 
@@ -458,6 +458,35 @@ func handleBackgroundTransition() {
 - Max 8-12 connections per host
 - Reset on background/foreground transition
 - Prevents stale connections
+
+### Seek Failure Recovery
+
+**Problem:** AVPlayer's seek operation fails after background transitions, but cached data is still good.
+
+**Solution (Dec 2025):** Differentiate seek failures from load failures:
+
+```swift
+// Detect seek failure in completion handler
+cachedState.player.seek(to: cachedState.time) { [weak self] finished in
+    if !finished {
+        // Recreate player WITHOUT clearing disk cache
+        VideoStateCache.shared.clearCache(for: self.mid)
+        SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
+        self.player = nil
+        self.setupPlayer()  // Reuses disk cache
+    }
+}
+```
+
+**Progressive Cache Clearing:**
+- **Retry 1-2:** Keep disk cache (might be seek issue)
+- **Retry 3+:** Clear disk cache (might be corruption)
+
+**Performance:**
+- Before: Seek fails → cache cleared → 6MB re-download → 5-10s delay
+- After: Seek fails → player recreated → instant from cache → 100ms delay
+
+**See:** `docs/fixes/SEEK_FAILURE_RECOVERY_FIX.md`
 
 ---
 

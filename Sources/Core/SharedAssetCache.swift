@@ -547,6 +547,9 @@ class SharedAssetCache: ObservableObject {
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
         
+        // CRITICAL: Clear disk cache status so retry doesn't think there's cached content
+        diskCacheStatus.removeValue(forKey: mediaID)
+        
         // Cancel any pending loading tasks
         if let task = loadingTasks.removeValue(forKey: mediaID) {
             task.cancel()

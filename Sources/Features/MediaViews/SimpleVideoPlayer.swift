@@ -3389,11 +3389,31 @@ struct SimpleVideoPlayer: View {
             // If player is at end or has invalid position, reset to beginning
             if isAtEnd || currentTime.seconds < 0 {
                 NSLog("DEBUG: [VIDEO CACHE] Player at end or invalid position - resetting to beginning")
-                cachedState.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                let videoMid = self.mid
+                cachedState.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if !finished {
+                        NSLog("⚠️ [VIDEO CACHE] Seek to start failed for \(videoMid) - player may be broken")
+                        Task { @MainActor in
+                            // If even seek to zero fails, player is likely broken - clear cache
+                            VideoStateCache.shared.clearCache(for: videoMid)
+                        }
+                    }
+                }
             } else if cachedState.time.seconds > 0 {
                 // If we have a cached position, seek to it
                 NSLog("DEBUG: [VIDEO CACHE] Seeking to cached position: \(cachedState.time.seconds)s for fullscreen")
-                cachedState.player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero)
+                let videoMid = self.mid
+                let seekTime = cachedState.time.seconds
+                cachedState.player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if !finished {
+                        // Seek to saved position failed - just start from beginning instead
+                        NSLog("⚠️ [VIDEO CACHE] Seek to \(seekTime)s failed for \(videoMid) - starting from beginning")
+                        Task { @MainActor in
+                            VideoStateCache.shared.clearCache(for: videoMid)
+                            cachedState.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                        }
+                    }
+                }
             }
             
             // Spinner should remain visible until the player actually has data ready
@@ -3413,13 +3433,29 @@ struct SimpleVideoPlayer: View {
             
             // Use seek with tolerance for better reliability
             let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+            let videoMid = self.mid
             cachedState.player.seek(to: cachedState.time, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
                 if finished {
                     // Don't auto-play here - let KVO handlers handle it (same as first time)
                     // KVO handlers will fire when ready and check VideoManager via checkPlaybackConditions
-                    NSLog("DEBUG: [VIDEO CACHE] Seek completed for \(self.mid), waiting for KVO handlers (same as first time)")
+                    NSLog("DEBUG: [VIDEO CACHE] Seek completed for \(videoMid), waiting for KVO handlers (same as first time)")
                 } else {
-                    NSLog("DEBUG: [VIDEO CACHE] ⚠️ Seek did not finish for \(self.mid)")
+                    // CRITICAL: Seek failed (common after background transitions)
+                    // Instead of recreating, just start from beginning - much faster!
+                    NSLog("⚠️ [VIDEO CACHE] Seek to \(cachedState.time.seconds)s failed for \(videoMid) - starting from beginning instead")
+                    Task { @MainActor in
+                        // Clear cached position so we start fresh
+                        VideoStateCache.shared.clearCache(for: videoMid)
+                        
+                        // Seek to beginning - this should succeed even if position seek failed
+                        cachedState.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { seekToZeroFinished in
+                            if seekToZeroFinished {
+                                NSLog("✅ [VIDEO CACHE] Successfully reset to beginning for \(videoMid)")
+                            } else {
+                                NSLog("❌ [VIDEO CACHE] Even seek to zero failed for \(videoMid) - player may be broken, will recreate on next attempt")
+                            }
+                        }
+                    }
                 }
             }
             
@@ -3991,6 +4027,9 @@ struct SimpleVideoPlayer: View {
     private func cleanupFailedPlayer() {
         NSLog("DEBUG: [VIDEO CLEANUP] Cleaning up failed player for \(self.mid)")
         
+        // CRITICAL: Clear VideoStateCache first - this is checked FIRST in setupPlayer()
+        VideoStateCache.shared.clearCache(for: self.mid)
+        
         // Remove from shared cache to free memory
         SharedAssetCache.shared.clearPlayerForMediaID(self.mid)
         
@@ -4040,10 +4079,20 @@ struct SimpleVideoPlayer: View {
         VideoStateCache.shared.clearCache(for: mid)
         SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
         
-        Task.detached {
-            await MainActor.run {
-                SharedAssetCache.shared.clearAssetCache(for: self.mid)
+        // CRITICAL: Only clear disk cache after multiple failures
+        // First failure might be temporary (seek issue, network glitch, etc.)
+        // Clearing disk cache forces expensive network refetch
+        if retryAttempts >= 2 {
+            // Multiple failures - clear everything including disk cache
+            print("DEBUG: [VIDEO ERROR] Multiple failures (\(retryAttempts + 1)) - clearing disk cache for \(mid)")
+            Task.detached {
+                await MainActor.run {
+                    SharedAssetCache.shared.clearAssetCache(for: self.mid)
+                }
             }
+        } else {
+            // First retry - keep disk cache, might just be a temporary issue
+            print("DEBUG: [VIDEO ERROR] First retry - keeping disk cache for \(mid)")
         }
         
         // Apply strategy
@@ -4135,6 +4184,13 @@ struct SimpleVideoPlayer: View {
         // For MediaCell mode, ensure mute state is correct and prevent any view updates
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
+        }
+        
+        // CRITICAL: Check disableAutoRestart before calling callback
+        // If disabled, video should stay paused at end (no loop, no advance to next)
+        if disableAutoRestart {
+            print("🎬 [VIDEO FINISHED] Video finished for \(mid) - autoRestart disabled, staying paused at end")
+            return
         }
         
         // CRITICAL: For MediaCell sequential playback, call callback to advance to next video
