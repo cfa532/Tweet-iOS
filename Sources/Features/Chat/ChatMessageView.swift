@@ -438,16 +438,20 @@ struct ChatImageThumbnail: View {
         // Create a minimal Tweet object for MediaBrowserView using singletons
         let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? "")
         let mockAuthor = User.getInstance(mid: authorId)
-        // Update author properties if needed
-        if mockAuthor.baseUrl != baseUrl {
-            mockAuthor.baseUrl = baseUrl
-        }
-        if isFromCurrentUser {
-            mockAuthor.name = HproseInstance.shared.appUser.name
-            mockAuthor.avatar = HproseInstance.shared.appUser.avatar
-        } else if let senderUser = senderUser {
-            mockAuthor.name = senderUser.name
-            mockAuthor.avatar = senderUser.avatar
+        
+        // Defer property updates to avoid "Publishing changes from within view updates" warning
+        DispatchQueue.main.async {
+            // Update author properties if needed
+            if mockAuthor.baseUrl != self.baseUrl {
+                mockAuthor.baseUrl = self.baseUrl
+            }
+            if self.isFromCurrentUser {
+                mockAuthor.name = HproseInstance.shared.appUser.name
+                mockAuthor.avatar = HproseInstance.shared.appUser.avatar
+            } else if let senderUser = self.senderUser {
+                mockAuthor.name = senderUser.name
+                mockAuthor.avatar = senderUser.avatar
+            }
         }
         
         return Tweet.getInstance(
@@ -471,6 +475,7 @@ struct ChatVideoPlayer: View {
     let receiptId: String
     let shouldPlayVideo: Bool
 
+    @ObservedObject private var muteState = MuteState.shared
     @State private var showFullScreen = false
     @State private var isPlaying = false  // Button state synced with actual player state
     @State private var userInteracted = false  // Track if user manually interacted with playback
@@ -517,7 +522,7 @@ struct ChatVideoPlayer: View {
                                 loopOnCompletion: false,
                                 videoAspectRatio: videoAR,
                                 showNativeControls: false,
-                                isMuted: MuteState.shared.isMuted,
+                                isMuted: muteState.isMuted,
                                 onVideoTap: {
                                     // This is handled by the overlay below
                                 },
@@ -548,38 +553,39 @@ struct ChatVideoPlayer: View {
                                 .onTapGesture {
                                     showFullScreen = true
                                 }
+                            
+                            // Bottom overlay with play and mute buttons (LAST = on top)
+                            VStack {
+                                Spacer()
+                                HStack {
+                                    // Play/Pause button
+                                    Button {
+                                        userInteracted = true
+                                        videoFinished = false
+                                        isPlaying.toggle()
+                                    } label: {
+                                        ZStack {
+                                            Circle()
+                                                .fill(Color.black.opacity(0.5))
+                                                .frame(width: 32, height: 32)
+                                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                                .font(.system(size: 24))
+                                                .foregroundColor(.white)
+                                        }
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                    .padding(.leading, 8)
+                                    .padding(.bottom, 8)
 
-                             // Bottom overlay with play and mute buttons
-                             VStack {
-                                 Spacer()
-                                 HStack {
-                                     // Play/Pause button
-                                     Button {
-                                         userInteracted = true
-                                         videoFinished = false
-                                         isPlaying.toggle()
-                                     } label: {
-                                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                             .font(.system(size: 24))
-                                             .foregroundColor(.white)
-                                             .background(
-                                                 Circle()
-                                                     .fill(Color.black.opacity(0.3))
-                                                     .frame(width: 32, height: 32)
-                                             )
-                                     }
-                                     .buttonStyle(PlainButtonStyle())
-                                     .padding(.leading, 8)
-                                     .padding(.bottom, 8)
+                                    Spacer()
 
-                                     Spacer()
-
-                                     // Mute button
-                                     MuteButton()
-                                         .padding(.trailing, 8)
-                                         .padding(.bottom, 8)
-                                 }
-                             }
+                                    // Mute button
+                                    MuteButton()
+                                        .padding(.trailing, 8)
+                                        .padding(.bottom, 8)
+                                }
+                            }
+                            .frame(width: Self.maxWidth, height: gridHeight, alignment: .bottomLeading)
                         }
                     )
                 .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ChatVideoShouldPlay"))) { notification in

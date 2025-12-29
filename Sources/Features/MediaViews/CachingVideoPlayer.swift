@@ -178,6 +178,9 @@ struct CachingVideoPlayer: View {
                 player?.pause()
             }
         }
+        .onChange(of: isMuted) { _, muted in
+            player?.isMuted = muted
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             handleWillResignActive()
         }
