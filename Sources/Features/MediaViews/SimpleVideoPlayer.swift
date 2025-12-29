@@ -3123,7 +3123,8 @@ struct SimpleVideoPlayer: View {
         // NORMAL FLOW: Check VideoStateCache for shared player (MediaCell can read/write, MediaBrowser can only read)
         // MediaBrowser can read from VideoStateCache for performance (reuse MediaCell's player), but won't write to it
         // TweetDetail has its own path above and doesn't use VideoStateCache at all
-        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+        // CRITICAL: Skip VideoStateCache during error retries to prevent infinite loops with broken cached players
+        if retryAttempts == 0, let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             NSLog("DEBUG: [VIDEO CACHE] ✅ Found shared player for \(mid) in \(mode) mode")
             
             // Apply mute state based on current mode
@@ -3136,6 +3137,8 @@ struct SimpleVideoPlayer: View {
             restoreFromCache(cachedState)
             // loadingState will be set to .loaded in restoreFromCache
             return
+        } else if retryAttempts > 0 {
+            NSLog("DEBUG: [VIDEO RETRY] Skipping VideoStateCache check during retry #\(retryAttempts) for \(mid) - will load fresh")
         }
         
         // SECOND: Check if we have cached content for this tweet/media.
