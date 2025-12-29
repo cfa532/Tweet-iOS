@@ -6592,6 +6592,7 @@ final class HproseInstance: ObservableObject {
     
     /// Find IP addresses of given nodeId
     func getHostIP(_ nodeId: String, v4Only: Bool = false) async -> String? {
+        let entry = "get_node_ips"
         let params = [
             "aid": appId,
             "ver": "last",
@@ -6599,17 +6600,103 @@ final class HproseInstance: ObservableObject {
             "nodeid": nodeId,
             "v4only": v4Only ? "true" : "false"
         ]
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: ["get_node_ip", params])
-        guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
+        
+        guard let hproseClient = appUser.hproseClient else {
+            print("DEBUG: [getHostIP] No hprose client available")
             return nil
         }
         
-        if let stringResponse = unwrappedResponse as? String {
-            return stringResponse
-        } else if let dictResponse = unwrappedResponse as? [String: Any] {
-            return dictResponse["data"] as? String
+        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
+        guard let response = rawResponse else {
+            print("DEBUG: [getHostIP] No response from server.")
+            return nil
         }
         
+        // Unwrap v2 response
+        let unwrappedResponse: Any?
+        do {
+            unwrappedResponse = try Self.unwrapV2Response(response)
+        } catch {
+            let nsError = error as NSError
+            print("DEBUG: [getHostIP] Error unwrapping v2 response: domain: \(nsError.domain), code: \(nsError.code)")
+            return nil
+        }
+        
+        if let ipList = unwrappedResponse as? [String] {
+            // Filter and trim IP addresses
+            let ipAddresses = ipList
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            
+            print("DEBUG: [getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
+            
+            // Test IPs in pairs (batches of 2) with 10-second timeout
+            let batchSize = 2
+            for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, ipAddresses.count)
+                let batch = Array(ipAddresses[batchStart..<batchEnd])
+                
+                print("DEBUG: [getHostIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
+                
+                // Test this batch in parallel - return as soon as first IP responds successfully
+                let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
+                    for (index, ip) in batch.enumerated() {
+                        let absoluteIndex = batchStart + index + 1
+                        group.addTask {
+                            // Check for cancellation before starting
+                            if Task.isCancelled {
+                                return nil
+                            }
+                            
+                            print("DEBUG: [getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
+                            
+                            let client = self.clientPool.getClientByIP(for: ip)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
+                            self.clientPool.releaseClient(client, for: ip)
+                            
+                            // Check for cancellation after health check
+                            if Task.isCancelled {
+                                return nil
+                            }
+                            
+                            if isHealthy {
+                                print("DEBUG: [getHostIP] ✅ IP test PASSED: \(ip)")
+                            } else {
+                                print("DEBUG: [getHostIP] ❌ IP test FAILED: \(ip)")
+                            }
+                            
+                            return (ip, isHealthy)
+                        }
+                    }
+                    
+                    // Return IMMEDIATELY when first healthy IP is found
+                    for await result in group {
+                        if let (ip, isHealthy) = result, isHealthy {
+                            print("DEBUG: [getHostIP] Found healthy node IP: \(ip) - returning immediately")
+                            group.cancelAll()  // Cancel remaining checks in this batch
+                            return ip as String?
+                        }
+                    }
+                    return nil as String?
+                }
+                
+                // If we found a healthy IP in this batch, return it
+                if let ip = healthyIP {
+                    return ip
+                }
+            }
+            
+            // If no healthy IP found in any batch, return first IP as fallback
+            // Health checks can give false negatives, so try the first IP anyway
+            if !ipAddresses.isEmpty {
+                print("DEBUG: [getHostIP] All health checks failed for \(ipAddresses.count) IP(s), but returning first IP anyway: \(ipAddresses[0])")
+                return ipAddresses[0]
+            }
+            
+            print("DEBUG: [getHostIP] No IPs available in response")
+            return nil
+        }
+        print("DEBUG: [getHostIP] Invalid IpList response format")
         return nil
     }
     
