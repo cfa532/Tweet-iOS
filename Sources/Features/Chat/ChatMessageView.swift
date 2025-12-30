@@ -480,6 +480,7 @@ struct ChatVideoPlayer: View {
     @State private var isPlaying = false  // Button state synced with actual player state
     @State private var userInteracted = false  // Track if user manually interacted with playback
     @State private var videoFinished = false  // Track if video finished naturally
+    @State private var isLoading = true  // Track video loading state
     
     // Cache expensive calculations
     private static let maxWidth = UIScreen.main.bounds.width * 0.7
@@ -536,12 +537,26 @@ struct ChatVideoPlayer: View {
                             if !userInteracted {
                                 isPlaying = actualIsPlaying
                             }
+                            // Hide loading spinner once video starts playing
+                            if actualIsPlaying {
+                                isLoading = false
+                            }
                         }
                     )
                     .id(attachment.mid)
                     .aspectRatio(videoAR, contentMode: .fill)
                     .frame(width: Self.maxWidth, height: gridHeight)
                     .clipped()
+                    .onAppear {
+                        isLoading = true
+                        // Hide loading spinner after a reasonable timeout
+                        Task {
+                            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                            await MainActor.run {
+                                isLoading = false
+                            }
+                        }
+                    }
 
                     // Clear overlay to capture taps for full-screen
                     Color.clear
@@ -549,6 +564,17 @@ struct ChatVideoPlayer: View {
                         .onTapGesture {
                             showFullScreen = true
                         }
+                    
+                    // Loading spinner overlay (shows while video is loading)
+                    if isLoading {
+                        Color.black.opacity(0.3)
+                            .overlay(
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(1.2)
+                            )
+                            .frame(width: Self.maxWidth, height: gridHeight)
+                    }
                     
                     // Bottom overlay with play and mute buttons (LAST = on top)
                     VStack {
@@ -616,6 +642,18 @@ struct ChatVideoPlayer: View {
                         userInteracted = false
                         // Reset finished flag for fresh context
                         videoFinished = false
+                        // Reset loading state
+                        isLoading = false
+                    } else {
+                        // When chat becomes visible again, show loading spinner
+                        isLoading = true
+                        // Hide loading spinner after timeout
+                        Task {
+                            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                            await MainActor.run {
+                                isLoading = false
+                            }
+                        }
                     }
                 }
                 .fullScreenCover(isPresented: $showFullScreen, onDismiss: {

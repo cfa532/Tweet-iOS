@@ -179,33 +179,66 @@ struct ChatListScreen: View {
     // MARK: - Followings Loading
     
     private func loadFollowings() async {
+        // Don't reload if we already have followings cached
+        guard followingUsers.isEmpty else {
+            print("[ChatListScreen] Followings already loaded, skipping reload")
+            return
+        }
+        
         isLoadingFollowings = true
-        do {
-            // Get current user's followings
-            let followingIds = try await hproseInstance.getListByType(
-                user: hproseInstance.appUser,
-                entry: .FOLLOWING
-            )
-            
-            // Fetch user objects for each following ID
-            var fetchedUsers: [User] = []
-            for userId in followingIds {
-                if let user = try await hproseInstance.fetchUser(userId) {
-                    // Ignore invalid users without username
-                    if user.username != nil {
-                        fetchedUsers.append(user)
-                    }
+        
+        // Try to get following IDs from cached appUser first (instant, no network call)
+        var followingIds = hproseInstance.appUser.followingList ?? []
+        
+        // If cache is empty, fetch from server
+        if followingIds.isEmpty {
+            do {
+                followingIds = try await hproseInstance.getListByType(
+                    user: hproseInstance.appUser,
+                    entry: .FOLLOWING
+                )
+                print("[ChatListScreen] Fetched \(followingIds.count) following IDs from server")
+            } catch {
+                print("[ChatListScreen] Error fetching followings from server: \(error)")
+                await MainActor.run {
+                    isLoadingFollowings = false
                 }
+                return
             }
-            
+        } else {
+            print("[ChatListScreen] Using \(followingIds.count) cached following IDs")
+        }
+        
+        guard !followingIds.isEmpty else {
             await MainActor.run {
-                followingUsers = fetchedUsers
                 isLoadingFollowings = false
             }
-        } catch {
-            await MainActor.run {
-                print("[ChatListScreen] Error loading followings: \(error)")
-                isLoadingFollowings = false
+            return
+        }
+        
+        // Use singleton pattern - get users instantly from cache, refresh in background
+        var users: [User] = []
+        for userId in followingIds {
+            let user = User.getInstance(mid: userId)
+            // Only include users with valid data
+            if user.username != nil {
+                users.append(user)
+            }
+        }
+        
+        await MainActor.run {
+            self.followingUsers = users
+            self.isLoadingFollowings = false
+        }
+        
+        // Refresh user data in background if any users are missing data
+        let instance = hproseInstance
+        Task.detached(priority: .background) {
+            for userId in followingIds {
+                let user = User.getInstance(mid: userId)
+                if user.username == nil {
+                    _ = try? await instance.fetchUser(userId)
+                }
             }
         }
     }
@@ -228,10 +261,10 @@ struct FollowingsListForChat: View {
                     Image(systemName: "person.2")
                         .font(.system(size: 48))
                         .foregroundColor(.gray)
-                    Text(LocalizedStringKey("No followings found"))
+                    Text(NSLocalizedString("No followings found", comment: "Empty followings list message"))
                         .font(.headline)
                         .foregroundColor(.gray)
-                    Text(LocalizedStringKey("Follow some users to start chatting"))
+                    Text(NSLocalizedString("Follow some users to start chatting", comment: "Empty followings instruction"))
                         .font(.caption)
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.center)
@@ -240,32 +273,7 @@ struct FollowingsListForChat: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(followingUsers) { user in
-                    NavigationLink(value: user.mid) {
-                        HStack {
-                            Avatar(user: user, size: 40)
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text("\(user.name ?? "")@\(user.username ?? "")")
-                                        .font(.headline)
-                                        .foregroundColor(.primary)
-                                    Spacer()
-                                }
-                                
-                                if let profile = user.profile, !profile.isEmpty {
-                                    Text(profile)
-                                        .font(.body)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(2)
-                                }
-                            }
-                            
-                            Image(systemName: "message")
-                                .foregroundColor(.blue)
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        .padding(.vertical, 4)
-                    }
+                    FollowingRowForChat(user: user)
                 }
             }
         }
@@ -279,47 +287,92 @@ struct FollowingsListForChat: View {
     }
 }
 
+// Separate row view for better performance
+struct FollowingRowForChat: View {
+    let user: User
+    
+    var body: some View {
+        NavigationLink(value: user.mid) {
+            HStack {
+                Avatar(user: user, size: 40)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        if let username = user.username {
+                            Text("\(user.name ?? "")@\(username)")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                        } else {
+                            Text(NSLocalizedString("Loading...", comment: "Loading message"))
+                                .font(.headline)
+                                .foregroundColor(.gray)
+                        }
+                        Spacer()
+                    }
+                    
+                    if let profile = user.profile, !profile.isEmpty {
+                        Text(profile)
+                            .font(.body)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                
+                Image(systemName: "message")
+                    .foregroundColor(.blue)
+                    .font(.system(size: 16, weight: .medium))
+            }
+            .padding(.vertical, 4)
+        }
+    }
+}
+
 struct ChatSessionRow: View {
     let session: ChatSession
-    @State private var user: User?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @StateObject private var chatSessionManager = ChatSessionManager.shared
+    
+    // Initialize with cached singleton immediately (synchronous, instant)
+    @State private var user: User
+    @State private var isLoading = false
+    
+    init(session: ChatSession) {
+        self.session = session
+        // Get cached user singleton synchronously - this is instant and doesn't block
+        _user = State(initialValue: User.getInstance(mid: session.receiptId))
+    }
     
     var body: some View {
         NavigationLink(value: session.receiptId) {
             HStack(alignment: .top, spacing: 12) {
-                // User Avatar
-                if let user = user {
-                    Avatar(user: user, size: 44)
-                } else {
-                    Circle()
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(width: 44, height: 44)
-                        .overlay(
-                            Image(systemName: "person")
-                                .foregroundColor(.gray)
-                        )
-                }
+                // User Avatar - always show immediately from cached singleton
+                Avatar(user: user, size: 44)
                 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         // Name and Handle on one line
-                        if let user = user {
+                        if let username = user.username {
                             HStack(spacing: 0) {
                                 Text(user.name ?? "")
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundColor(.primary)
-                                Text("@\(user.username ?? "")")
+                                Text("@\(username)")
                                     .font(.system(size: 16, weight: .regular))
                                     .foregroundColor(.secondary)
                             }
                             .lineLimit(1)
                             .truncationMode(.tail)
                         } else {
-                            Text(NSLocalizedString("Loading...", comment: "Loading message"))
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(.gray)
-                                .lineLimit(1)
+                            HStack(spacing: 4) {
+                                Text(NSLocalizedString("Loading...", comment: "Loading message"))
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.gray)
+                                    .lineLimit(1)
+                                if isLoading {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                }
+                            }
                         }
                         
                         Spacer()
@@ -346,8 +399,24 @@ struct ChatSessionRow: View {
             }
             .padding(.vertical, 8)
         }
-        .task {
-            user = try? await hproseInstance.fetchUser(session.receiptId)
+        .onAppear {
+            // If user data is missing, fetch it in background and update the view
+            if user.username == nil || user.baseUrl == nil {
+                isLoading = true
+                Task(priority: .userInitiated) {
+                    // Fetch user data
+                    if let freshUser = try? await hproseInstance.fetchUser(session.receiptId) {
+                        await MainActor.run {
+                            self.user = freshUser
+                            self.isLoading = false
+                        }
+                    } else {
+                        await MainActor.run {
+                            self.isLoading = false
+                        }
+                    }
+                }
+            }
         }
     }
     
