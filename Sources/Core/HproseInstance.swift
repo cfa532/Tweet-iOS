@@ -1191,29 +1191,16 @@ final class HproseInstance: ObservableObject {
             // Get or create a User instance for this userId
             let user = User.getInstance(mid: userId)
             
-            // Determine the base URL to use for fetching user data
-            let finalBaseUrl: String
-            if baseUrl.isEmpty {
-                // No baseUrl provided, so resolve it from the provider IP service
-                if let providerIP = try await getProviderIP(userId) {
-                    // Ensure the IP has the proper http:// prefix
-                    finalBaseUrl = ensureHttpPrefix(providerIP)
-                } else {
-                    // Cannot proceed without a valid baseUrl - provider IP resolution failed
-                    print("DEBUG: [fetchUser] Cannot fetch user \(userId): no valid baseUrl available")
-                    return nil
+            // Apply the provided baseUrl to the user object if not empty
+            // If baseUrl is empty, performUserUpdate will handle IP resolution via resolveAndUpdateBaseUrl
+            if !baseUrl.isEmpty {
+                if let url = URL(string: baseUrl) {
+                    await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser initial setup")
                 }
-            } else {
-                // Use the provided baseUrl directly
-                finalBaseUrl = baseUrl
-            }
-            
-            // Apply the resolved baseUrl to the user object if valid
-            if let url = URL(string: finalBaseUrl) {
-                await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser initial setup")
             }
             
             // Perform the actual user data fetch with retry logic and error handling
+            // This will handle IP resolution if baseUrl was empty
             return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser")
         } catch {
             // Catch and log any exceptions during the fetch process
@@ -1340,53 +1327,23 @@ final class HproseInstance: ObservableObject {
                     return user
                 }
                 
-                // If we get here, response was null - retry with fresh providerIP
-                print("DEBUG: [\(logPrefix)] NULL RESPONSE - clearing baseUrl and retrying with fresh providerIP for userId: \(user.mid)")
+                // If we get here, response was null - clear baseUrl and let retry loop handle it
+                print("DEBUG: [\(logPrefix)] NULL RESPONSE for userId: \(user.mid) on attempt \(attempt)/\(maxRetries)")
                 user.baseUrl = nil
                 
-                // Resolve fresh provider IP
-                guard let providerIP = try await getProviderIP(user.mid) else {
-                    print("ERROR: [\(logPrefix)] Failed to get providerIP after null response for userId: \(user.mid)")
+                // If this was the last attempt, fail
+                if attempt >= maxRetries {
+                    print("ERROR: [\(logPrefix)] NULL RESPONSE on final attempt for userId: \(user.mid), adding to blacklist")
                     if !skipRetryAndBlacklist {
                         blackList.recordFailure(user.mid)
                     }
-                    throw HproseError.noResponse(userId: user.mid)
+                    throw HproseError.userNotFound(userId: user.mid, reason: "User returned null after \(maxRetries) attempts")
                 }
                 
-                if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                    await applyBaseUrlIfNeeded(user, url: url, reason: "null response retry")
-                }
-                
-                // Retry the request with new baseUrl
-                guard let retryClient = user.hproseClient else {
-                    print("ERROR: [\(logPrefix)] No hprose client after null response retry for userId: \(user.mid)")
-                    if !skipRetryAndBlacklist {
-                        blackList.recordFailure(user.mid)
-                    }
-                    throw HproseError.noClient(userId: user.mid)
-                }
-                
-                guard let retryRawResponse = retryClient.invoke("runMApp", withArgs: [entry, params]) else {
-                    print("ERROR: [\(logPrefix)] No response on null response retry for userId: \(user.mid)")
-                    if !skipRetryAndBlacklist {
-                        blackList.recordFailure(user.mid)
-                    }
-                    throw HproseError.noResponse(userId: user.mid)
-                }
-                
-                let retryResponse = try Self.unwrapV2Response(retryRawResponse)
-                let retrySuccess = try await processUserDataResponse(user: user, response: retryResponse as Any, skipRetryAndBlacklist: skipRetryAndBlacklist)
-                
-                if retrySuccess {
-                    return user
-                }
-                
-                // Second null response - add to blacklist
-                print("ERROR: [\(logPrefix)] SECOND NULL RESPONSE after retry for userId: \(user.mid), adding to blacklist")
-                if !skipRetryAndBlacklist {
-                    blackList.recordFailure(user.mid)
-                }
-                throw HproseError.userNotFound(userId: user.mid, reason: "User returned null twice")
+                // Otherwise, continue to next attempt - resolveAndUpdateBaseUrl will get fresh IP
+                print("DEBUG: [\(logPrefix)] Will retry with fresh providerIP on next attempt")
+                lastError = HproseError.userNotFound(userId: user.mid, reason: "Null response")
+                continue
             } catch {
                 lastError = error
                 let nsError = error as NSError
@@ -1464,17 +1421,38 @@ final class HproseInstance: ObservableObject {
                userHostIds.count > 1,
                appUserHostIds.count > 1,
                userHostIds[1] == appUserHostIds[1] {
-                // User is on the same node as appUser, use appUser's baseUrl
-                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User \(user.mid) is on same node as appUser (hostIds[1]: \(userHostIds[1])), using appUser's baseUrl")
-                if let appUserBaseUrl = appUser.baseUrl {
-                    await applyBaseUrlIfNeeded(user, url: appUserBaseUrl, reason: "same node as appUser")
+                // User is on the same node as appUser, check if appUser's baseUrl is healthy
+                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User \(user.mid) is on same node as appUser (hostIds[1]: \(userHostIds[1]))")
+                
+                if let appUserBaseUrl = appUser.baseUrl,
+                   let appUserClient = appUser.hproseClient,
+                   await isServerHealthy(appUserClient) {
+                    // appUser's baseUrl is healthy, reuse it
+                    print("DEBUG: [resolveAndUpdateBaseUrl] appUser's baseUrl is healthy, using it for user \(user.mid)")
+                    await applyBaseUrlIfNeeded(user, url: appUserBaseUrl, reason: "same node as appUser (healthy)")
                 } else {
-                    print("WARNING: [resolveAndUpdateBaseUrl] User on same node but appUser has no baseUrl, resolving provider IP")
-                    guard let providerIP = try await getProviderIP(user.mid) else {
-                        throw HproseError.noResponse(userId: user.mid)
-                    }
-                    if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                        await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
+                    // appUser's baseUrl is missing or unhealthy - refresh it FIRST
+                    print("WARNING: [resolveAndUpdateBaseUrl] appUser's baseUrl is missing or unhealthy, refreshing appUser before lookup for user \(user.mid)")
+                    
+                    do {
+                        try await refreshAppUser()
+                        
+                        // Now getProviderIP will use the refreshed appUser (no redundant health check!)
+                        guard let providerIP = try await getProviderIP(user.mid) else {
+                            throw HproseError.noResponse(userId: user.mid)
+                        }
+                        if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                            await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
+                        }
+                    } catch {
+                        // If refresh fails, still try getProviderIP as last resort
+                        print("ERROR: [resolveAndUpdateBaseUrl] Failed to refresh appUser, trying getProviderIP anyway: \(error)")
+                        guard let providerIP = try await getProviderIP(user.mid) else {
+                            throw HproseError.noResponse(userId: user.mid)
+                        }
+                        if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                            await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
+                        }
                     }
                 }
             } else {
@@ -1515,6 +1493,28 @@ final class HproseInstance: ObservableObject {
     
 
     
+    /// Refreshes appUser by discovering entry IP and re-initializing
+    /// This is used when appUser's baseUrl is detected as unhealthy
+    /// - Throws: Error if entry IP discovery or appUser IP resolution fails
+    private func refreshAppUser() async throws {
+        print("DEBUG: [refreshAppUser] Refreshing appUser via entry IP discovery")
+        
+        guard let entryIP = try await findEntryIP() else {
+            throw NSError(domain: "HproseClient", code: -1, 
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to find entry IP for appUser refresh"])
+        }
+        
+        let ip = await _getProviderIP(appUser.mid, v4Only: false, 
+                                      hproseClient: clientPool.getClientByIP(for: entryIP))
+        if let ip = ip {
+            appUser.baseUrl = URL(string: "http://\(ip)")
+            print("DEBUG: [refreshAppUser] appUser refreshed with new IP: \(ip)")
+        } else {
+            throw NSError(domain: "HproseClient", code: -1,
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to get appUser IP from entry"])
+        }
+    }
+    
     /// Get provider IP for a user with health checking and fallback retry
     /// - Parameter mid: User's member ID
     /// - Parameter attemptNumber: Internal parameter to track retry attempts (1 or 2)
@@ -1543,6 +1543,8 @@ final class HproseInstance: ObservableObject {
                 return nil
             }
             if (await isServerHealthy(appUserClient) != true) {
+                // appUser's server is unhealthy, re-initialize via entry IP
+                print("DEBUG: [getProviderIP] appUser's server unhealthy, re-initializing via entry IP")
                 guard let entryIP = try await findEntryIP() else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
                 }
@@ -1552,9 +1554,23 @@ final class HproseInstance: ObservableObject {
                 }
                 return await _getProviderIP(mid, v4Only: v4Only)
             }
-            // Server is healthy but initial lookup returned nil - return nil
-            // This allows caller to handle "provider not found" case
-            return nil
+            
+            // Server is healthy but initial lookup returned nil
+            // This could mean the user is on a different node - try entry IP as fallback
+            print("DEBUG: [getProviderIP] Initial lookup failed for \(mid) but appUser server healthy, trying entry IP fallback")
+            guard let entryIP = try await findEntryIP() else {
+                print("ERROR: [getProviderIP] Entry IP discovery also failed for \(mid)")
+                return nil
+            }
+            
+            // Try lookup via entry IP
+            let fallbackIP = await _getProviderIP(mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
+            if fallbackIP != nil {
+                print("DEBUG: [getProviderIP] Entry IP fallback succeeded for \(mid)")
+            } else {
+                print("DEBUG: [getProviderIP] Entry IP fallback also returned nil for \(mid)")
+            }
+            return fallbackIP
         }
     }
     
