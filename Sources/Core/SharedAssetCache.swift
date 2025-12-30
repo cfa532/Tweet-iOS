@@ -124,8 +124,16 @@ class SharedAssetCache: ObservableObject {
         for key in expiredKeys {
             // PERFORMANCE FIX: Pause players before removing
             if let player = playerCache[key] {
+                // Check if player is paused with content before removing
+                let isPausedWithContent = player.rate == 0.0 && player.currentItem != nil
+                
                 player.pause()
-                player.replaceCurrentItem(with: nil)
+                
+                // Only remove the item if it wasn't already paused with content
+                // This prevents black screens on finished videos that are still visible
+                if !isPausedWithContent {
+                    player.replaceCurrentItem(with: nil)
+                }
             }
             
             assetCache.removeValue(forKey: key)
@@ -1139,9 +1147,16 @@ class SharedAssetCache: ObservableObject {
             
             for key in keysToRemove {
                 if let player = playerCache[key] {
-                    // Pause and clear player item immediately
+                    // Check if player is paused with content before removing
+                    let isPausedWithContent = player.rate == 0.0 && player.currentItem != nil
+                    
                     player.pause()
-                    player.replaceCurrentItem(with: nil)
+                    
+                    // Only remove the item if it wasn't already paused with content
+                    // This prevents black screens on finished videos that are still visible
+                    if !isPausedWithContent {
+                        player.replaceCurrentItem(with: nil)
+                    }
                     print("DEBUG: [SharedAssetCache] Removed LRU player: \(key)")
                 }
                 playerCache.removeValue(forKey: key)
@@ -1163,8 +1178,17 @@ class SharedAssetCache: ObservableObject {
         if !inactiveKeys.isEmpty {
             for key in inactiveKeys {
                 if let player = playerCache[key] {
+                    // Check if player is paused BEFORE calling pause()
+                    // If paused with content, keep the item to prevent black screens on finished videos
+                    let isPausedWithContent = player.rate == 0.0 && player.currentItem != nil
+                    
                     player.pause()
-                    player.replaceCurrentItem(with: nil)
+                    
+                    // Only remove the item if it wasn't already paused with content
+                    // This prevents black screens on finished videos that are still visible
+                    if !isPausedWithContent {
+                        player.replaceCurrentItem(with: nil)
+                    }
                 }
                 playerCache.removeValue(forKey: key)
                 cacheTimestamps.removeValue(forKey: key)

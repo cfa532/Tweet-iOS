@@ -14,6 +14,22 @@ struct SettingsView: View {
     @State private var isCleaningCache = false
     @State private var showCacheCleanedAlert = false
     
+    private var currentServerIP: String {
+        // Extract IP from appUser's baseUrl
+        if let baseUrl = hproseInstance.appUser.baseUrl?.absoluteString {
+            // Remove protocol and path to get just the IP:port
+            let urlString = baseUrl
+                .replacingOccurrences(of: "http://", with: "")
+                .replacingOccurrences(of: "https://", with: "")
+            // Remove any trailing path
+            if let firstSlash = urlString.firstIndex(of: "/") {
+                return String(urlString[..<firstSlash])
+            }
+            return urlString
+        }
+        return NSLocalizedString("Not connected", comment: "Server IP not available")
+    }
+    
     var body: some View {
         NavigationView {
             List {
@@ -53,6 +69,13 @@ struct SettingsView: View {
                         Spacer()
                         Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
                             .foregroundColor(.gray)
+                    }
+                    
+                    HStack {
+                        Text(LocalizedStringKey("Server IP"))
+                        Spacer()
+                        Text(currentServerIP)
+                            .foregroundColor(.secondary)
                     }
                 }
             }

@@ -6374,37 +6374,75 @@ final class HproseInstance: ObservableObject {
         hostId: String? = nil,
         cloudDrivePort: Int = 0
     ) async throws -> Bool {
+        print("DEBUG: [registerUser] Starting registration")
+        print("DEBUG: [registerUser] hostId parameter: \(hostId ?? "nil")")
+        
         var hosts: [String]? = nil
         if let hostId = hostId, !hostId.isEmpty {
             hosts = [hostId]
+            print("DEBUG: [registerUser] Setting hosts to [\(hostId)]")
+        } else {
+            print("DEBUG: [registerUser] No hostId provided, hosts will be nil")
         }
+        
         let newUser = User(mid: appUser.mid, name: alias, username: username, password: password,
                            profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
+        print("DEBUG: [registerUser] Created User object with hostIds: \(newUser.hostIds ?? [])")
+        
         let entry = "register"
         
         // Configure encoder to use milliseconds for timestamps
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         
+        let userJsonData = try encoder.encode(newUser)
+        let userJsonString = String(data: userJsonData, encoding: .utf8) ?? ""
+        print("DEBUG: [registerUser] Encoded user JSON: \(userJsonString)")
+        
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "user": String(data: try encoder.encode(newUser), encoding: .utf8) ?? ""
+            "user": userJsonString
         ]
         
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        // Use the current appUser's client for all backend calls
+        guard let client = appUser.hproseClient else {
+            print("DEBUG: [registerUser] ERROR: appUser.hproseClient is nil")
+            print("DEBUG: [registerUser] appUser.baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized. Please check your connection.", comment: "Client initialization error")])
+        }
+        let targetUrl = appUser.baseUrl?.absoluteString ?? "unknown"
+        
+        print("DEBUG: [registerUser] Sending registration request to server")
+        print("DEBUG: [registerUser] Using target URL: \(targetUrl)")
+        
+        let unwrappedResponse: Any
+        do {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            print("DEBUG: [registerUser] Raw response received: \(String(describing: rawResponse))")
+            
+            unwrappedResponse = try Self.unwrapV2Response(rawResponse) as Any
+            print("DEBUG: [registerUser] Unwrapped response: \(unwrappedResponse)")
+        } catch {
+            print("DEBUG: [registerUser] ERROR: Exception during API call: \(error)")
+            print("DEBUG: [registerUser] Error details: \(error.localizedDescription)")
+            throw error
+        }
         
         guard let response = unwrappedResponse as? [String: Any] else {
+            print("DEBUG: [registerUser] ERROR: Response is not a dictionary")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
         // v2 format: {success: true, user: <parsed user object>}
         guard let success = response["success"] as? Bool else {
+            print("DEBUG: [registerUser] ERROR: 'success' field not found in response")
+            print("DEBUG: [registerUser] Response keys: \(response.keys)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
+        print("DEBUG: [registerUser] Registration success status: \(success)")
         if success {
             // Extract the newly created user's ID from the response
             guard let userDict = response["user"] as? [String: Any],
@@ -6428,6 +6466,8 @@ final class HproseInstance: ObservableObject {
             return true
         } else {
             let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")
+            print("DEBUG: [registerUser] ERROR: Registration failed with message: \(message)")
+            print("DEBUG: [registerUser] Full response: \(response)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
         }
     }
