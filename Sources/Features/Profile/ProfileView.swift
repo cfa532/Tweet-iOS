@@ -10,7 +10,6 @@ struct ProfileView: View {
     
     /// Navigation state
     @State private var selectedTweetForNavigation: Tweet? = nil
-    @State private var selectedTweetFromBookmarksFavorites: Tweet? = nil // Separate state for tweets from bookmarks/favorites
     @State private var selectedUserForNavigation: User? = nil
     @State private var userListDestination: UserListDestination? = nil
     
@@ -29,10 +28,6 @@ struct ProfileView: View {
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
     @State private var pinnedTweetIds: Set<String> = []
-    
-    /// Bookmarks and favorites tweets state
-    @State private var bookmarksTweets: [Tweet] = []
-    @State private var favoritesTweets: [Tweet] = []
     
     /// Indicates if avatar is currently being uploaded
     @State private var isUploadingAvatar = false
@@ -110,12 +105,10 @@ struct ProfileView: View {
                                     navigationPath.append(userListDestination!)
                                 },
                                 onBookmarksTap: {
-                                    bookmarksTweets.removeAll() // Clear previous data
                                     let destination = TweetListDestination(userId: user.mid, listType: .BOOKMARKS)
                                     navigationPath.append(destination)
                                 },
                                 onFavoritesTap: {
-                                    favoritesTweets.removeAll() // Clear previous data
                                     let destination = TweetListDestination(userId: user.mid, listType: .FAVORITES)
                                     navigationPath.append(destination)
                                 }
@@ -324,49 +317,6 @@ struct ProfileView: View {
                 }
             }
         }
-        .navigationDestination(for: UserListDestination.self) { destination in
-            UserListView(
-                title: userListTitle(for: destination),
-                userFetcher: { page, size in
-                    // Only fetch all IDs once when page is 0
-                    if page == 0 {
-                        let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
-                        // Get the user instance from destination.userId
-                        let targetUser = User.getInstance(mid: destination.userId)
-                        let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-                        // Update user properties on main thread to avoid publishing changes from background thread
-                        await MainActor.run {
-                            if destination.listType == .FOLLOWER {
-                                targetUser.fansList = ids
-                            } else {
-                                targetUser.followingList = ids
-                            }
-                        }
-                        return ids
-                    } else {
-                        let targetUser = User.getInstance(mid: destination.userId)
-                        return if destination.listType == .FOLLOWER {
-                            targetUser.fansList ?? []
-                        } else {
-                            targetUser.followingList ?? []
-                        }
-                    }
-                },
-                navigationPath: $navigationPath,
-                onFollowToggle: { user in
-                    Task {
-                        await handleToggleFollowing(for: user)
-                    }
-                }
-            )
-        }
-        .navigationDestination(for: TweetListDestination.self) { destination in
-            print("🔵 [ProfileView] navigationDestination(TweetListDestination) TRIGGERED - type: \(destination.listType), userId: \(destination.userId)")
-            return bookmarksOrFavoritesListView(for: destination)
-        }
-        .navigationDestination(for: CommentNavigation.self) { commentNav in
-            CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
-        }
         .navigationDestination(item: $selectedTweetForNavigation) { tweet in
             // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
             if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
@@ -387,38 +337,6 @@ struct ProfileView: View {
         }
         .onChange(of: navigationPath.count) { oldCount, newCount in
             print("🟣 [ProfileView] navigationPath.count changed from \(oldCount) to \(newCount) - user: \(user.username ?? "nil")")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Add tweet to bookmarks list if it's not already there
-                if !bookmarksTweets.contains(where: { $0.mid == tweet.mid }) {
-                    bookmarksTweets.insert(tweet, at: 0)
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bookmarkRemoved)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Remove tweet from bookmarks list
-                bookmarksTweets.removeAll { $0.mid == tweet.mid }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .favoriteAdded)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Add tweet to favorites list if it's not already there
-                if !favoritesTweets.contains(where: { $0.mid == tweet.mid }) {
-                    favoritesTweets.insert(tweet, at: 0)
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .favoriteRemoved)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Remove tweet from favorites list
-                favoritesTweets.removeAll { $0.mid == tweet.mid }
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
             if let deletedTweetId = notification.userInfo?["tweetId"] as? String {
@@ -797,119 +715,6 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Helper Methods
-    private func userListTitle(for destination: UserListDestination) -> String {
-        let isDestinationAppUser = destination.userId == hproseInstance.appUser.mid
-        if isDestinationAppUser {
-            return destination.listType == .FOLLOWER 
-                ? NSLocalizedString("Your Fans", comment: "Your fans title")
-                : NSLocalizedString("Your Followings", comment: "Your followings title")
-        } else {
-            let targetUser = User.getInstance(mid: destination.userId)
-            let displayName: String
-            if let name = targetUser.name, !name.isEmpty {
-                displayName = name
-            } else if let username = targetUser.username {
-                displayName = username
-            } else {
-                displayName = NSLocalizedString("Noone", comment: "No one")
-            }
-            let titleKey = destination.listType == .FOLLOWER ? "Fans@%@" : "Followings@%@"
-            return String(format: NSLocalizedString(titleKey, comment: "User list title"), displayName)
-        }
-    }
-    
-    @ViewBuilder
-    private func bookmarksOrFavoritesListView(for destination: TweetListDestination) -> some View {
-        let targetUser = User.getInstance(mid: destination.userId)
-        let isTargetAppUser = destination.userId == hproseInstance.appUser.mid
-        
-        if destination.listType == .BOOKMARKS {
-            TweetListView(
-                title: isTargetAppUser 
-                    ? NSLocalizedString("Your Bookmarks", comment: "Your bookmarks title")
-                    : NSLocalizedString("Bookmarks", comment: "Bookmarks title"),
-                tweets: $bookmarksTweets,
-                tweetFetcher: { page, size, isFromCache in
-                    print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache)")
-                    if isFromCache {
-                        // For bookmarks/favorites, we don't cache, so return empty array
-                        print("DEBUG: [ProfileView] Cache requested for bookmarks, returning empty array")
-                        return []
-                    } else {
-                        let tweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: .BOOKMARKS, pageNumber: page, pageSize: size)
-                        print("DEBUG: [ProfileView] Got \(tweets.count) bookmarks tweets, valid: \(tweets.compactMap { $0 }.count)")
-                        return tweets
-                    }
-                },
-                rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        showDeleteButton: isTargetAppUser,
-                        onAvatarTap: { tappedUser in
-                            print("🔴 [ProfileView-Bookmarks] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
-                            selectedUserForNavigation = tappedUser
-                        },
-                        onTap: { selectedTweet in
-                            selectedTweetFromBookmarksFavorites = selectedTweet
-                        }
-                    )
-                }
-            )
-            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
-                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-                    CommentDetailViewWithParent(comment: tweet)
-                } else {
-                    // This is a regular tweet or quote tweet, show TweetDetailView
-                    TweetDetailView(tweet: tweet)
-                }
-            }
-        } else {
-            TweetListView(
-                title: isTargetAppUser 
-                    ? NSLocalizedString("Your Favorites", comment: "Your favorites title")
-                    : NSLocalizedString("Favorites", comment: "Favorites title"),
-                tweets: $favoritesTweets,
-                tweetFetcher: { page, size, isFromCache in
-                    print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache)")
-                    if isFromCache {
-                        // For favorites, we don't cache, so return empty array
-                        print("DEBUG: [ProfileView] Cache requested for favorites, returning empty array")
-                        return []
-                    } else {
-                        let tweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: .FAVORITES, pageNumber: page, pageSize: size)
-                        print("DEBUG: [ProfileView] Got \(tweets.count) favorites tweets, valid: \(tweets.compactMap { $0 }.count)")
-                        return tweets
-                    }
-                },
-                rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        showDeleteButton: isTargetAppUser,
-                        onAvatarTap: { tappedUser in
-                            print("🔴 [ProfileView-Favorites] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
-                            selectedUserForNavigation = tappedUser
-                        },
-                        onTap: { selectedTweet in
-                            selectedTweetFromBookmarksFavorites = selectedTweet
-                        }
-                    )
-                }
-            )
-            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
-                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-                    CommentDetailViewWithParent(comment: tweet)
-                } else {
-                    // This is a regular tweet or quote tweet, show TweetDetailView
-                    TweetDetailView(tweet: tweet)
-                }
-            }
-        }
-    }
 }
 
 enum UserListType {

@@ -93,6 +93,12 @@ struct HomeView: View {
                 onReturnToHome?()
             }, navigationPath: $navigationPath)
         }
+        .navigationDestination(for: UserListDestination.self) { destination in
+            UserListDestinationView(destination: destination, navigationPath: $navigationPath)
+        }
+        .navigationDestination(for: TweetListDestination.self) { destination in
+            TweetListDestinationView(destination: destination, navigationPath: $navigationPath)
+        }
         .navigationDestination(for: CommentNavigation.self) { commentNav in
             CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
         }
@@ -189,6 +195,131 @@ struct HomeView: View {
             }
             onNavigationVisibilityChanged?(true)
             lastSignificantDelta = delta
+        }
+    }
+}
+
+// MARK: - Navigation Destination Views
+// These wrapper views handle navigation destinations at the root level to avoid conflicts
+// when multiple ProfileViews are nested in the navigation stack
+
+struct UserListDestinationView: View {
+    let destination: UserListDestination
+    @Binding var navigationPath: NavigationPath
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    var body: some View {
+        UserListView(
+            title: userListTitle(for: destination),
+            userFetcher: { page, size in
+                // Only fetch all IDs once when page is 0
+                if page == 0 {
+                    let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                    let targetUser = User.getInstance(mid: destination.userId)
+                    let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
+                    // Update user properties on main thread
+                    await MainActor.run {
+                        if destination.listType == .FOLLOWER {
+                            targetUser.fansList = ids
+                        } else {
+                            targetUser.followingList = ids
+                        }
+                    }
+                    return ids
+                } else {
+                    let targetUser = User.getInstance(mid: destination.userId)
+                    return if destination.listType == .FOLLOWER {
+                        targetUser.fansList ?? []
+                    } else {
+                        targetUser.followingList ?? []
+                    }
+                }
+            },
+            navigationPath: $navigationPath,
+            onFollowToggle: { user in
+                Task {
+                    await handleToggleFollowing(for: user)
+                }
+            }
+        )
+    }
+    
+    private func userListTitle(for destination: UserListDestination) -> String {
+        let targetUser = User.getInstance(mid: destination.userId)
+        let displayName = targetUser.name ?? targetUser.username ?? NSLocalizedString("Noone", comment: "No one")
+        let titleKey = destination.listType == .FOLLOWER ? "Fans@%@" : "Followings@%@"
+        return String(format: NSLocalizedString(titleKey, comment: "User list title"), displayName)
+    }
+    
+    private func handleToggleFollowing(for user: User) async {
+        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+            // Update app user's followingList based on the result
+            if ret {
+                // User is now following - add to followingList
+                if hproseInstance.appUser.followingList == nil {
+                    hproseInstance.appUser.followingList = []
+                }
+                if !hproseInstance.appUser.followingList!.contains(user.mid) {
+                    hproseInstance.appUser.followingList!.append(user.mid)
+                }
+            } else {
+                // User is no longer following - remove from followingList
+                hproseInstance.appUser.followingList?.removeAll { $0 == user.mid }
+            }
+        }
+    }
+}
+
+struct TweetListDestinationView: View {
+    let destination: TweetListDestination
+    @Binding var navigationPath: NavigationPath
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var tweets: [Tweet] = []
+    
+    var body: some View {
+        let targetUser = User.getInstance(mid: destination.userId)
+        let isTargetAppUser = destination.userId == hproseInstance.appUser.mid
+        
+        TweetListView(
+            title: listTitle(isAppUser: isTargetAppUser),
+            tweets: $tweets,
+            tweetFetcher: { page, size, isFromCache in
+                print("DEBUG: [TweetListDestinationView] Fetching \(destination.listType) - page: \(page), size: \(size), isFromCache: \(isFromCache)")
+                if isFromCache {
+                    // For bookmarks/favorites, we don't cache, so return empty array
+                    return []
+                } else {
+                    let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
+                    let fetchedTweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: tweetType, pageNumber: page, pageSize: size)
+                    print("DEBUG: [TweetListDestinationView] Got \(fetchedTweets.count) \(destination.listType) tweets")
+                    return fetchedTweets
+                }
+            },
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    showDeleteButton: isTargetAppUser,
+                    onAvatarTap: { tappedUser in
+                        print("🔴 [TweetListDestinationView] Avatar tapped - user: \(tappedUser.username ?? "nil")")
+                        navigationPath.append(tappedUser)
+                    },
+                    onTap: { tappedTweet in
+                        navigationPath.append(tappedTweet)
+                    }
+                )
+            }
+        )
+    }
+    
+    private func listTitle(isAppUser: Bool) -> String {
+        if destination.listType == .BOOKMARKS {
+            return isAppUser 
+                ? NSLocalizedString("Your Bookmarks", comment: "Your bookmarks title")
+                : NSLocalizedString("Bookmarks", comment: "Bookmarks title")
+        } else {
+            return isAppUser 
+                ? NSLocalizedString("Your Favorites", comment: "Your favorites title")
+                : NSLocalizedString("Favorites", comment: "Favorites title")
         }
     }
 }
