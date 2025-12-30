@@ -9,14 +9,12 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     
     /// Navigation state
-    @State private var showTweetList = false
     @State private var selectedTweetForNavigation: Tweet? = nil
     @State private var selectedTweetFromBookmarksFavorites: Tweet? = nil // Separate state for tweets from bookmarks/favorites
     @State private var selectedUserForNavigation: User? = nil
     @State private var userListDestination: UserListDestination? = nil
     
     @State private var userListType: UserListType = .FOLLOWER
-    @State private var tweetListType: TweetListType = .BOOKMARKS
     
     /// UI state
     @State private var showEditSheet = false
@@ -112,14 +110,14 @@ struct ProfileView: View {
                                     navigationPath.append(userListDestination!)
                                 },
                                 onBookmarksTap: {
-                                    tweetListType = .BOOKMARKS
                                     bookmarksTweets.removeAll() // Clear previous data
-                                    showTweetList = true
+                                    let destination = TweetListDestination(userId: user.mid, listType: .BOOKMARKS)
+                                    navigationPath.append(destination)
                                 },
                                 onFavoritesTap: {
-                                    tweetListType = .FAVORITES
                                     favoritesTweets.removeAll() // Clear previous data
-                                    showTweetList = true
+                                    let destination = TweetListDestination(userId: user.mid, listType: .FAVORITES)
+                                    navigationPath.append(destination)
                                 }
                             )
                             .padding(.horizontal, -16)
@@ -362,9 +360,9 @@ struct ProfileView: View {
                 }
             )
         }
-        .navigationDestination(isPresented: $showTweetList) {
-            print("🔵 [ProfileView] navigationDestination(showTweetList) TRIGGERED - type: \(tweetListType), user: \(user.username ?? "nil")")
-            return bookmarksOrFavoritesListView()
+        .navigationDestination(for: TweetListDestination.self) { destination in
+            print("🔵 [ProfileView] navigationDestination(TweetListDestination) TRIGGERED - type: \(destination.listType), userId: \(destination.userId)")
+            return bookmarksOrFavoritesListView(for: destination)
         }
         .navigationDestination(for: CommentNavigation.self) { commentNav in
             CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
@@ -381,24 +379,11 @@ struct ProfileView: View {
         }
         .navigationDestination(item: $selectedUserForNavigation) { user in
             print("🟢 [ProfileView] navigationDestination(selectedUser) TRIGGERED - navigating to user: \(user.username ?? "nil"), mid: \(user.mid)")
-            print("🟢 [ProfileView] Current showTweetList value: \(showTweetList)")
             // Navigate to user's profile when avatar is tapped from favorites/bookmarks
             return ProfileView(user: user, onLogout: onLogout, navigationPath: $navigationPath)
                 .onAppear {
                     print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
                 }
-        }
-        .onChange(of: selectedUserForNavigation) { oldValue, newValue in
-            print("🟡 [ProfileView] selectedUserForNavigation changed from \(oldValue?.username ?? "nil") to \(newValue?.username ?? "nil")")
-            print("🟡 [ProfileView] Current showTweetList: \(showTweetList), will set to false")
-            // When navigating to a user profile, dismiss the favorites/bookmarks list
-            if newValue != nil {
-                showTweetList = false
-                print("🟡 [ProfileView] Set showTweetList = false")
-            }
-        }
-        .onChange(of: showTweetList) { oldValue, newValue in
-            print("🟠 [ProfileView] showTweetList changed from \(oldValue) to \(newValue) - user: \(user.username ?? "nil")")
         }
         .onChange(of: navigationPath.count) { oldCount, newCount in
             print("🟣 [ProfileView] navigationPath.count changed from \(oldCount) to \(newCount) - user: \(user.username ?? "nil")")
@@ -835,10 +820,13 @@ struct ProfileView: View {
     }
     
     @ViewBuilder
-    private func bookmarksOrFavoritesListView() -> some View {
-        if tweetListType == .BOOKMARKS {
+    private func bookmarksOrFavoritesListView(for destination: TweetListDestination) -> some View {
+        let targetUser = User.getInstance(mid: destination.userId)
+        let isTargetAppUser = destination.userId == hproseInstance.appUser.mid
+        
+        if destination.listType == .BOOKMARKS {
             TweetListView(
-                title: isAppUser 
+                title: isTargetAppUser 
                     ? NSLocalizedString("Your Bookmarks", comment: "Your bookmarks title")
                     : NSLocalizedString("Bookmarks", comment: "Bookmarks title"),
                 tweets: $bookmarksTweets,
@@ -849,7 +837,7 @@ struct ProfileView: View {
                         print("DEBUG: [ProfileView] Cache requested for bookmarks, returning empty array")
                         return []
                     } else {
-                        let tweets = try await hproseInstance.getUserTweetsByType(user: user, type: .BOOKMARKS, pageNumber: page, pageSize: size)
+                        let tweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: .BOOKMARKS, pageNumber: page, pageSize: size)
                         print("DEBUG: [ProfileView] Got \(tweets.count) bookmarks tweets, valid: \(tweets.compactMap { $0 }.count)")
                         return tweets
                     }
@@ -857,10 +845,9 @@ struct ProfileView: View {
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
-                        showDeleteButton: isAppUser,
+                        showDeleteButton: isTargetAppUser,
                         onAvatarTap: { tappedUser in
                             print("🔴 [ProfileView-Bookmarks] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
-                            print("🔴 [ProfileView-Bookmarks] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
                             selectedUserForNavigation = tappedUser
                         },
                         onTap: { selectedTweet in
@@ -879,22 +866,9 @@ struct ProfileView: View {
                     TweetDetailView(tweet: tweet)
                 }
             }
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showTweetList = false
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text(NSLocalizedString("Back", comment: "Back button"))
-                        }
-                    }
-                }
-            }
         } else {
             TweetListView(
-                title: isAppUser 
+                title: isTargetAppUser 
                     ? NSLocalizedString("Your Favorites", comment: "Your favorites title")
                     : NSLocalizedString("Favorites", comment: "Favorites title"),
                 tweets: $favoritesTweets,
@@ -905,7 +879,7 @@ struct ProfileView: View {
                         print("DEBUG: [ProfileView] Cache requested for favorites, returning empty array")
                         return []
                     } else {
-                        let tweets = try await hproseInstance.getUserTweetsByType(user: user, type: .FAVORITES, pageNumber: page, pageSize: size)
+                        let tweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: .FAVORITES, pageNumber: page, pageSize: size)
                         print("DEBUG: [ProfileView] Got \(tweets.count) favorites tweets, valid: \(tweets.compactMap { $0 }.count)")
                         return tweets
                     }
@@ -913,10 +887,9 @@ struct ProfileView: View {
                 rowView: { tweet in
                     TweetItemView(
                         tweet: tweet,
-                        showDeleteButton: isAppUser,
+                        showDeleteButton: isTargetAppUser,
                         onAvatarTap: { tappedUser in
                             print("🔴 [ProfileView-Favorites] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
-                            print("🔴 [ProfileView-Favorites] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
                             selectedUserForNavigation = tappedUser
                         },
                         onTap: { selectedTweet in
@@ -933,19 +906,6 @@ struct ProfileView: View {
                 } else {
                     // This is a regular tweet or quote tweet, show TweetDetailView
                     TweetDetailView(tweet: tweet)
-                }
-            }
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showTweetList = false
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text(NSLocalizedString("Back", comment: "Back button"))
-                        }
-                    }
                 }
             }
         }
@@ -957,7 +917,13 @@ enum UserListType {
     case FOLLOWING
 }
 
-enum TweetListType {
+enum TweetListType: Hashable {
     case BOOKMARKS
     case FAVORITES
+}
+
+// Navigation destination for tweet lists (bookmarks/favorites)
+struct TweetListDestination: Hashable {
+    let userId: String
+    let listType: TweetListType
 } 
