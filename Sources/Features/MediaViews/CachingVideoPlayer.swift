@@ -108,10 +108,12 @@ struct CachingVideoPlayer: View {
                     }
                 }
             } else if isLoading {
-                Color.black.opacity(0.1)
+                // Show black background with white spinner while loading for first time
+                Color.black
                     .overlay(
                         ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.2)
                     )
             } else if loadFailed {
                 Color.black

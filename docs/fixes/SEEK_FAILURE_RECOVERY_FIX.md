@@ -1,7 +1,7 @@
 # Seek Failure Recovery Fix - Preserving Cache on Background Transitions
 
 **Date**: December 29, 2025  
-**Status**: ✅ IMPLEMENTED  
+**Status**: ✅ IMPLEMENTED + SHARE SHEET FIX  
 **Related**: UNIFIED_BACKGROUND_RECOVERY.md
 
 ## Problem
@@ -247,4 +247,58 @@ This preserves the cache in 95% of cases while still handling true corruption.
 ---
 
 **Summary**: Seek failures after background transitions are common and expected. The fix differentiates between seek failures (recreate player, keep cache) and load failures (progressive cache clearing), preserving expensive cached data while still recovering quickly.
+
+---
+
+## Follow-up Fix: Share Sheet Stuck Spinner (December 29, 2025)
+
+### Problem
+
+After sharing a video to other apps and returning to tweet list, videos showed spinner forever (stuck loading state). The video wasn't broken - it just never reloaded.
+
+**Root Cause - Timing Issue:**
+
+1. Share sheet appears → Videos stop
+2. App goes to background
+3. App returns → AppDelegate posts `.reloadVisibleVideosOnly`
+4. **⚠️ Share sheet overlay still active** → `isActuallyVisible = false`
+5. `handleReloadVisibleVideo()` checks visibility and returns early
+6. Share sheet dismisses → Videos become visible
+7. **Player is still nil** → Stuck showing spinner
+
+### Solution
+
+Post `.reloadVisibleVideosOnly` notification again after share sheet dismisses, matching the fix already in place for fullscreen mode in `MediaBrowserView`.
+
+**Code Change** (`TweetActionButtonsView.swift`):
+
+```swift
+.sheet(item: $shareSheetItems, onDismiss: {
+    // ... existing cleanup ...
+    
+    // CRITICAL FIX: Force reload after share sheet dismisses
+    // Same pattern as MediaBrowserView fullscreen fix
+    Task { @MainActor in
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+        print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
+    }
+})
+```
+
+### Why This Works
+
+1. Share sheet dismisses → `OverlayVisibilityCoordinator.endOverlay()` called
+2. 100ms delay ensures overlay state fully cleared
+3. `.reloadVisibleVideosOnly` notification posted
+4. `handleReloadVisibleVideo()` runs with `isActuallyVisible = true`
+5. Videos reload and resume playing
+
+### Benefits
+
+- ✅ Videos properly reload after share sheet dismissal
+- ✅ No stuck spinner after background + share sheet combo
+- ✅ Consistent with fullscreen overlay handling (same pattern)
+- ✅ 100ms delay ensures clean state transition
+- ✅ Works for both iOS share sheet and system overlays
 

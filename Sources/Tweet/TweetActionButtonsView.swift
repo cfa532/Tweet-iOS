@@ -560,6 +560,19 @@ struct TweetActionButtonsView: View {
             print("DEBUG: [SHARE] Sheet dismissed, state cleared")
             onShareVisibilityChange?(false)
             OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+            
+            // CRITICAL FIX: Force reload of visible videos after dismissing share sheet
+            // This handles the case where app returned from background while share sheet was active:
+            // 1. Background recovery posted .reloadVisibleVideosOnly
+            // 2. But MediaCell didn't reload because isActuallyVisible=false (share overlay active)
+            // 3. Now that share sheet is dismissed, MediaCell is visible but has nil player (stuck spinner)
+            // Solution: Post reload notification again after overlay ends (same as MediaBrowserView)
+            Task { @MainActor in
+                // Small delay to ensure overlay state is fully updated
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
+            }
         }) { sheetData in
             let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
             onShareVisibilityChange?(true)

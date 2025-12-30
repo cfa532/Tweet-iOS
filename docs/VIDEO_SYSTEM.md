@@ -463,30 +463,52 @@ func handleBackgroundTransition() {
 
 **Problem:** AVPlayer's seek operation fails after background transitions, but cached data is still good.
 
-**Solution (Dec 2025):** Differentiate seek failures from load failures:
+**Solution (Dec 2025):** When seek fails, fallback to playing from beginning instead of recreating player:
 
 ```swift
 // Detect seek failure in completion handler
-cachedState.player.seek(to: cachedState.time) { [weak self] finished in
+let videoMid = self.mid
+cachedState.player.seek(to: cachedState.time) { finished in
     if !finished {
-        // Recreate player WITHOUT clearing disk cache
-        VideoStateCache.shared.clearCache(for: self.mid)
-        SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
-        self.player = nil
-        self.setupPlayer()  // Reuses disk cache
+        // Fallback: Clear cached position and seek to beginning
+        VideoStateCache.shared.clearCache(for: videoMid)
+        cachedState.player.seek(to: .zero)  // Start from beginning
     }
 }
 ```
 
-**Progressive Cache Clearing:**
+**Progressive Cache Clearing (on load errors):**
 - **Retry 1-2:** Keep disk cache (might be seek issue)
 - **Retry 3+:** Clear disk cache (might be corruption)
 
 **Performance:**
 - Before: Seek fails → cache cleared → 6MB re-download → 5-10s delay
-- After: Seek fails → player recreated → instant from cache → 100ms delay
+- After: Seek fails → restart from beginning → instant → <50ms delay
 
 **See:** `docs/fixes/SEEK_FAILURE_RECOVERY_FIX.md`
+
+### Share Sheet Recovery (Dec 2025)
+
+**Problem:** After sharing video to other apps, returning shows stuck spinner.
+
+**Root Cause:** When app returns from background, `.reloadVisibleVideosOnly` notification fires while share sheet overlay is still active, so `isActuallyVisible = false` and videos don't reload.
+
+**Solution:** Post `.reloadVisibleVideosOnly` again after share sheet dismisses (same pattern as fullscreen mode):
+
+```swift
+.sheet(item: $shareSheetItems, onDismiss: {
+    // ... cleanup ...
+    Task { @MainActor in
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+    }
+})
+```
+
+**Benefits:**
+- ✅ Videos reload after share sheet closes
+- ✅ Consistent with fullscreen overlay handling
+- ✅ 100ms delay ensures overlay state fully cleared
 
 ---
 
