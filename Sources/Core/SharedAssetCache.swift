@@ -113,12 +113,6 @@ class SharedAssetCache: ObservableObject {
         memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             Task { @MainActor in
                 self.checkMemoryPressure()
-                
-                // Also log cache statistics periodically for monitoring
-                let stats = self.getCacheStats()
-                if stats.playerCount > 5 || stats.assetCount > 10 {
-                    print("DEBUG: [SharedAssetCache] Cache stats - Players: \(stats.playerCount)/\(self.maxPlayerCacheSize), Assets: \(stats.assetCount)/\(self.maxCacheSize)")
-                }
             }
         }
     }

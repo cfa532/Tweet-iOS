@@ -167,7 +167,6 @@ DEBUG: [VIDEO CACHE] Removed old cached player for {mid} due to cache size limit
 DEBUG: [SharedAssetCache] Cleaned up {N} expired items
 DEBUG: [SharedAssetCache] Removed LRU player: {key}
 DEBUG: [SharedAssetCache] Removed {N} inactive players (>5min old)
-DEBUG: [SharedAssetCache] Cache stats - Players: {N}/10, Assets: {N}/20
 ```
 
 ## Related Files
