@@ -359,7 +359,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Get cached asset or create new one
-    @MainActor func getAsset(for url: URL, tweetId: String? = nil) async throws -> AVAsset {
+    @MainActor func getAsset(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVAsset {
         guard let mediaID = extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
@@ -393,11 +393,22 @@ class SharedAssetCache: ObservableObject {
         
         // Create new loading task
         let task = Task<AVAsset, Error> {
-            let resolvedURL = await resolveHLSURL(url)
+            // Determine if this is HLS based on MediaType
+            let isHLSVideo: Bool
+            if let mediaType = mediaType {
+                isHLSVideo = (mediaType == .hls_video)
+                print("DEBUG: [SHARED ASSET CACHE] Using MediaType for getAsset - mediaType: \(mediaType.rawValue), isHLSVideo: \(isHLSVideo)")
+            } else {
+                // Fallback: check URL if MediaType not provided
+                isHLSVideo = url.absoluteString.hasSuffix(".m3u8")
+                print("DEBUG: [SHARED ASSET CACHE] No MediaType provided, using URL-based detection: \(isHLSVideo)")
+            }
             
-            // Determine if this is HLS or progressive based on resolved URL
             let asset: AVAsset
-            if resolvedURL.pathExtension == "m3u8" || resolvedURL.absoluteString.contains("/master.m3u8") || resolvedURL.absoluteString.contains("/playlist.m3u8") {
+            if isHLSVideo {
+                // Resolve HLS URL (master.m3u8 or playlist.m3u8)
+                let resolvedURL = await resolveHLSURL(url)
+                
                 // For HLS videos, use CachingPlayerItem which handles LocalHTTPServer
                 LocalHTTPServer.shared.start()
                 
@@ -414,14 +425,19 @@ class SharedAssetCache: ObservableObject {
                 // For progressive videos, use LocalHTTPServer for IP-independent caching
                 LocalHTTPServer.shared.start()
                 
+                // Remove query parameters for cleaner URL
+                var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                components?.query = nil
+                let cleanURL = components?.url ?? url
+                
                 // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
-                let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: resolvedURL)
+                let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
                 
                 asset = AVURLAsset(url: localURL)
                 print("DEBUG: [SHARED ASSET CACHE] Created AVURLAsset with LocalHTTPServer for progressive video")
                 print("DEBUG: [SHARED ASSET CACHE]   MediaID: \(mediaID)")
                 print("DEBUG: [SHARED ASSET CACHE]   Local URL: \(localURL.absoluteString)")
-                print("DEBUG: [SHARED ASSET CACHE]   Real URL: \(resolvedURL.absoluteString)")
+                print("DEBUG: [SHARED ASSET CACHE]   Real URL: \(cleanURL.absoluteString)")
             }
             
             // Cache the asset

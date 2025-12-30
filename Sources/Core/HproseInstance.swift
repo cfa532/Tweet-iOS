@@ -1458,13 +1458,34 @@ final class HproseInstance: ObservableObject {
         
         // Resolve fresh IP
         if attempt > 1 {
-            // Retry attempts: resolve provider IP
-            guard let providerIP = try await getProviderIP(user.mid) else {
-                throw HproseError.noResponse(userId: user.mid)
-            }
-            
-            if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
+            // Retry attempts: check if user is on same node as appUser
+            if let userHostIds = user.hostIds,
+               let appUserHostIds = appUser.hostIds,
+               userHostIds.count > 1,
+               appUserHostIds.count > 1,
+               userHostIds[1] == appUserHostIds[1] {
+                // User is on the same node as appUser, use appUser's baseUrl
+                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User \(user.mid) is on same node as appUser (hostIds[1]: \(userHostIds[1])), using appUser's baseUrl")
+                if let appUserBaseUrl = appUser.baseUrl {
+                    await applyBaseUrlIfNeeded(user, url: appUserBaseUrl, reason: "same node as appUser")
+                } else {
+                    print("WARNING: [resolveAndUpdateBaseUrl] User on same node but appUser has no baseUrl, resolving provider IP")
+                    guard let providerIP = try await getProviderIP(user.mid) else {
+                        throw HproseError.noResponse(userId: user.mid)
+                    }
+                    if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                        await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
+                    }
+                }
+            } else {
+                // User is on a different node, resolve provider IP
+                guard let providerIP = try await getProviderIP(user.mid) else {
+                    throw HproseError.noResponse(userId: user.mid)
+                }
+                
+                if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                    await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
+                }
             }
         } else {
             // First attempt with fresh IP

@@ -613,7 +613,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // No cached player - load video asynchronously
         Task.detached(priority: .userInitiated) {
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweetId)
+                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweetId, mediaType: mediaType)
                 let playerItem = await AVPlayerItem(asset: asset)
                 
                 await MainActor.run {

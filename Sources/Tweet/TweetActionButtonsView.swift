@@ -903,7 +903,8 @@ struct TweetActionButtonsView: View {
         
         // Fallback: use asset loading if no cached player
         do {
-            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid)
+            let mediaType: MediaType = isHLS ? .hls_video : .video
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid, mediaType: mediaType)
             
             // Load duration and tracks to ensure video is ready
             async let durationLoad = asset.load(.duration)
