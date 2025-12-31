@@ -1480,9 +1480,10 @@ final class HproseInstance: ObservableObject {
             await applyBaseUrlIfNeeded(user, url: url, reason: "from getProviderIP (\(reason))")
             
             // Update pool with new IP (replaces old IP list)
-            if let hostIds = user.hostIds, !hostIds.isEmpty {
-                let nodeMid = hostIds.count > 1 ? hostIds[1] : hostIds[0]
-                NodePool.shared.updateNodeIP(nodeMid: nodeMid, newIP: providerIP)
+            // Only track access node (hostIds[1]) for read operations
+            if let hostIds = user.hostIds, hostIds.count > 1 {
+                let accessNodeMid = hostIds[1]
+                NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: providerIP)
             }
         }
         

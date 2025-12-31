@@ -62,64 +62,49 @@ class NodePool {
     // MARK: - Public Methods
     
     /// Check if user's current IP is valid in the pool
-    /// Returns true if the user's baseUrl matches any IP in the user's node
+    /// Only checks access node (hostIds[1]) - the node we read data from
     func isUserIPValid(for user: User) -> Bool {
         guard let baseUrlString = user.baseUrl?.absoluteString,
               let hostIds = user.hostIds,
-              !hostIds.isEmpty else {
+              hostIds.count > 1 else {
             return false
         }
         
         return queue.sync {
             let normalizedUserIP = NodeInfo.normalizeIP(baseUrlString)
+            let accessNodeMid = hostIds[1]
             
-            // Check access node (hostIds[1]) first
-            if hostIds.count > 1 {
-                let accessNodeMid = hostIds[1]
-                if let node = nodes[accessNodeMid], node.hasIP(normalizedUserIP) {
-                    print("DEBUG: [NodePool] ✅ User IP validated against access node \(accessNodeMid)")
+            if let node = nodes[accessNodeMid] {
+                if node.hasIP(normalizedUserIP) {
+                    print("DEBUG: [NodePool] ✅ User IP \(normalizedUserIP) found in access node \(accessNodeMid)")
                     return true
+                } else {
+                    print("DEBUG: [NodePool] ⚠️ User IP \(normalizedUserIP) not in access node \(accessNodeMid)'s IP list (has \(node.ips.count) IPs)")
                 }
+            } else {
+                print("DEBUG: [NodePool] Access node \(accessNodeMid) not in pool yet")
             }
             
-            // Check writable host (hostIds[0])
-            let writableNodeMid = hostIds[0]
-            if let node = nodes[writableNodeMid], node.hasIP(normalizedUserIP) {
-                print("DEBUG: [NodePool] ✅ User IP validated against writable node \(writableNodeMid)")
-                return true
-            }
-            
-            print("DEBUG: [NodePool] ⚠️ User IP \(normalizedUserIP) not found in pool")
             return false
         }
     }
     
-    /// Get a valid IP from the user's node in the pool
-    /// Prefers access node (hostIds[1]), then writable host (hostIds[0])
+    /// Get a valid IP from the user's access node in the pool
+    /// Only uses access node (hostIds[1]) - the node we read data from
     func getIPFromNode(for user: User) -> String? {
-        guard let hostIds = user.hostIds, !hostIds.isEmpty else {
-            print("DEBUG: [NodePool] User has no hostIds")
+        guard let hostIds = user.hostIds, hostIds.count > 1 else {
+            print("DEBUG: [NodePool] User has no access node (hostIds[1])")
             return nil
         }
         
         return queue.sync {
-            // First try: User's access node (hostIds[1])
-            if hostIds.count > 1 {
-                let accessNodeMid = hostIds[1]
-                if let node = nodes[accessNodeMid], let ip = node.getPreferredIP() {
-                    print("DEBUG: [NodePool] Using IP from access node \(accessNodeMid): \(ip)")
-                    return ip
-                }
-            }
-            
-            // Second try: User's writable host (hostIds[0])
-            let writableNodeMid = hostIds[0]
-            if let node = nodes[writableNodeMid], let ip = node.getPreferredIP() {
-                print("DEBUG: [NodePool] Using IP from writable node \(writableNodeMid): \(ip)")
+            let accessNodeMid = hostIds[1]
+            if let node = nodes[accessNodeMid], let ip = node.getPreferredIP() {
+                print("DEBUG: [NodePool] Using IP from access node \(accessNodeMid): \(ip)")
                 return ip
             }
             
-            print("DEBUG: [NodePool] No valid IP found in user's nodes")
+            print("DEBUG: [NodePool] Access node \(accessNodeMid) not in pool or has no IPs")
             return nil
         }
     }
@@ -180,25 +165,17 @@ class NodePool {
     }
     
     /// Update node info from user's hostIds after successful fetch
-    /// Adds IPs to nodes without replacing existing ones
+    /// Only tracks access node (hostIds[1]) - the node we read data from
     func updateFromUser(_ user: User) {
         guard let baseUrlString = user.baseUrl?.absoluteString,
               let hostIds = user.hostIds,
-              !hostIds.isEmpty else {
+              hostIds.count > 1 else {
             return
         }
         
         let normalizedIP = NodeInfo.normalizeIP(baseUrlString)
-        
-        // Update access node (hostIds[1]) if present
-        if hostIds.count > 1 {
-            let accessNodeMid = hostIds[1]
-            addIPToNode(nodeMid: accessNodeMid, ip: normalizedIP)
-        }
-        
-        // Also track writable node (hostIds[0])
-        let writableNodeMid = hostIds[0]
-        addIPToNode(nodeMid: writableNodeMid, ip: normalizedIP)
+        let accessNodeMid = hostIds[1]
+        addIPToNode(nodeMid: accessNodeMid, ip: normalizedIP)
     }
     
     /// Get pool statistics for debugging

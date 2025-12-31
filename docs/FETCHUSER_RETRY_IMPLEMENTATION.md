@@ -488,11 +488,14 @@ Detect and handle `CancellationError` early in the catch block:
 
 ### Overview
 The `User` object has a `hostIds` array:
-- **Item 0**: Writable host (single source of truth for user data)
-- **Item 1**: Access node (where user data was last accessed)
+- **Item 0**: Writable host (for WRITE operations - posting tweets, updating profile)
+- **Item 1**: Access node (for READ operations - viewing user data, loading profiles)
 - Backend keeps user objects in sync across nodes
 
-**Key Principle**: The NodePool is the authoritative source for node IPs. Nodes persist indefinitely and maintain arrays of valid IPs (IPv4 and IPv6).
+**Key Principle**: 
+- The NodePool **only tracks hostIds[1]** (access node) for read operations
+- hostIds[0] (writable host) is not the pool's concern - only used for write operations
+- Nodes persist indefinitely and maintain arrays of valid IPs (IPv4 and IPv6)
 
 ### Architecture
 
@@ -524,10 +527,10 @@ class NodePool {
    }
    ```
 
-2. **Get IP from user's node in pool**
+2. **Get IP from user's access node in pool**
    ```swift
    if let poolIP = NodePool.shared.getIPFromNode(for: user) {
-       // Use IP from pool (prefers access node, then writable host)
+       // Use IP from pool (uses access node - hostIds[1])
        user.baseUrl = URL(string: poolIP)
    }
    ```
@@ -537,9 +540,9 @@ class NodePool {
    // Fetch failed, resolve fresh IP
    let newIP = try await getProviderIP(user.mid)
    
-   // Success: Replace node's IP list with new IP
-   if let nodeMid = user.hostIds?[1] ?? user.hostIds?[0] {
-       NodePool.shared.updateNodeIP(nodeMid: nodeMid, newIP: newIP)
+   // Success: Replace access node's IP list with new IP
+   if let accessNodeMid = user.hostIds?[1] {
+       NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: newIP)
    }
    ```
 
@@ -563,8 +566,8 @@ class NodePool {
    - On failure and re-resolution, replaces node's IP list
 
 3. **Smart Routing**
-   - Prefers user's access node (hostIds[1])
-   - Falls back to writable host (hostIds[0])
+   - Only uses access node (hostIds[1]) for read operations
+   - hostIds[0] (writable host) not tracked in pool - only for writes
    - IPv4 preferred over IPv6 for better compatibility
 
 #### Key Features
