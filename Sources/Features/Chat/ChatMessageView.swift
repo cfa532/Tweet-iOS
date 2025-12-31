@@ -508,6 +508,7 @@ struct ChatVideoPlayer: View {
     @State private var userInteracted = false  // Track if user manually interacted with playback
     @State private var videoFinished = false  // Track if video finished naturally
     @State private var isLoading = true  // Track video loading state
+    @State private var hasValidUrl = false  // Track if URL is available
     
     // Cache expensive calculations
     private static let maxWidth = UIScreen.main.bounds.width * 0.7
@@ -532,9 +533,17 @@ struct ChatVideoPlayer: View {
         Self.maxWidth / gridAspectRatio
     }
     
+    // Check if mid is a temporary UUID (36 chars) vs real CID (46+ chars for IPFS)
+    private var isTemporaryMid: Bool {
+        // UUIDs are 36 characters, real CIDs are typically 46+ characters
+        // Also check if it looks like a UUID format (contains hyphens)
+        attachment.mid.count <= 36 || attachment.mid.contains("-")
+    }
+    
     var body: some View {
         Group {
-            if let url = attachment.getUrl(baseUrl) {
+            // Check if we have a valid mid (not temporary UUID) and baseUrl before trying to get URL
+            if !attachment.mid.isEmpty && !isTemporaryMid, let url = attachment.getUrl(baseUrl) {
 
                 // Video container with rounded corners
                 ZStack {
@@ -575,6 +584,7 @@ struct ChatVideoPlayer: View {
                     .frame(width: Self.maxWidth, height: gridHeight)
                     .clipped()
                     .onAppear {
+                        hasValidUrl = true
                         isLoading = true
                         // Hide loading spinner after a reasonable timeout
                         Task {
@@ -582,6 +592,13 @@ struct ChatVideoPlayer: View {
                             await MainActor.run {
                                 isLoading = false
                             }
+                        }
+                    }
+                    .onChange(of: attachment.mid) { oldMid, newMid in
+                        // If mid was empty and now has a value, URL should be available
+                        if oldMid.isEmpty && !newMid.isEmpty {
+                            hasValidUrl = true
+                            print("DEBUG: [ChatVideoPlayer] Attachment mid updated from empty to \(newMid)")
                         }
                     }
 
@@ -704,14 +721,31 @@ struct ChatVideoPlayer: View {
                     )
                 }
             } else {
-                // Fallback if no URL
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray6))
-                    .frame(width: 200, height: 150)
-                    .overlay(
-                        Image(systemName: "video")
-                            .foregroundColor(.gray)
-                    )
+                // Show loading state if mid is empty, temporary UUID, or URL unavailable
+                if attachment.mid.isEmpty || isTemporaryMid {
+                    // Video is still being processed/uploaded - show loading indicator
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.systemGray6))
+                        .frame(width: Self.maxWidth, height: gridHeight)
+                        .overlay(
+                            VStack(spacing: 8) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .gray))
+                                Text("Processing video...")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                        )
+                } else {
+                    // Fallback if URL construction failed (shouldn't happen normally)
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.systemGray6))
+                        .frame(width: Self.maxWidth, height: gridHeight)
+                        .overlay(
+                            Image(systemName: "video.slash")
+                                .foregroundColor(.gray)
+                        )
+                }
             }
         }
     }
