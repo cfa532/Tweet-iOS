@@ -30,6 +30,17 @@ final class HproseInstance: ObservableObject {
     private var ipCache: [String: IPCacheEntry] = [:]
     private let ipCacheLock = NSLock()
     
+    // Dedicated URLSession for health checks with optimized connection pool
+    private lazy var healthCheckSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 20  // Allow many parallel health checks
+        config.timeoutIntervalForRequest = 5.0     // Fast fail for health checks
+        config.timeoutIntervalForResource = 10.0
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil  // No caching for health checks
+        return URLSession(configuration: config)
+    }()
+    
     /// The domain to use for sharing links
     var domainToShare: String {
         get {
@@ -1554,8 +1565,8 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
             
-            // Test IPs in pairs (batches of 2) with 10-second timeout
-            let batchSize = 2
+            // Test IPs in batches of 4 for faster discovery during high load
+            let batchSize = 4
             for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])
@@ -1739,7 +1750,7 @@ final class HproseInstance: ObservableObject {
         request.httpMethod = "HEAD"
         
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await healthCheckSession.data(for: request)
             
             if let httpResponse = response as? HTTPURLResponse {
                 let isHealthy = (200...299).contains(httpResponse.statusCode)
@@ -6644,8 +6655,8 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
             
-            // Test IPs in pairs (batches of 2) with 10-second timeout
-            let batchSize = 2
+            // Test IPs in batches of 4 for faster discovery during high load
+            let batchSize = 4
             for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])

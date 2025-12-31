@@ -207,8 +207,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         let config = URLSessionConfiguration.default
         
-        // Connection pool settings for slow networks
-        config.httpMaximumConnectionsPerHost = 12  // Increased from 6 for better network utilization
+        // Connection pool settings for high load scenarios
+        config.httpMaximumConnectionsPerHost = 20  // Increased for better concurrent request handling
         config.timeoutIntervalForRequest = 90     // 90 seconds per request (slow network!)
         config.timeoutIntervalForResource = 300   // 5 minutes total
         
@@ -221,7 +221,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         let pool = URLSession(configuration: config)
         _connectionPool = pool
-        NSLog("DEBUG: [LocalHTTPServer] Connection pool initialized with max 12 connections per host")
+        NSLog("DEBUG: [LocalHTTPServer] Connection pool initialized with max 20 connections per host")
         return pool
     }
     
