@@ -6,6 +6,14 @@ struct UserListDestination: Hashable {
     let listType: UserListType
 }
 
+// Preference key to track content height
+private struct ContentHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 @available(iOS 16.0, *)
 struct UserListView: View {
     // MARK: - Properties
@@ -20,8 +28,11 @@ struct UserListView: View {
     @State private var isLoadingMore: Bool = false
     @State private var hasMoreUsers: Bool = true
     @State private var currentPage: Int = 0
-    private let pageSize: Int = 4
+    private let pageSize: Int = 5  // Reduced for better server load distribution
     @State private var errorMessage: String? = nil
+    @State private var contentHeight: CGFloat = 0
+    @State private var screenHeight: CGFloat = 0
+    @State private var needsMoreContent: Bool = true
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
     @State private var currentLoadIndex: Int = 0 // Track which user we're currently trying to load
@@ -47,56 +58,84 @@ struct UserListView: View {
     
     // MARK: - Body
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    Color.clear.frame(height: 0).id("top")
-                    ForEach(displayedUserIds, id: \.self) { userId in
-                        UserRowView(
-                            userId: userId,
-                            cancellationToken: cancellationToken,
-                            onFollowToggle: onFollowToggle,
-                            onTap: { selectedUser in
-                                navigationPath.append(selectedUser)
-                            },
-                            onLoadFailed: { failedUserId in
-                                // Remove failed user from both lists
-                                displayedUserIds.removeAll { $0 == failedUserId }
-                                allUserIds.removeAll { $0 == failedUserId }
-                                
-                                // Try to load the next user to fill the gap
-                                Task {
-                                    await loadNextUserToFillGap()
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        Color.clear.frame(height: 0).id("top")
+                        ForEach(displayedUserIds, id: \.self) { userId in
+                            UserRowView(
+                                userId: userId,
+                                cancellationToken: cancellationToken,
+                                onFollowToggle: onFollowToggle,
+                                onTap: { selectedUser in
+                                    navigationPath.append(selectedUser)
+                                },
+                                onLoadFailed: { failedUserId in
+                                    // Remove failed user from both lists
+                                    displayedUserIds.removeAll { $0 == failedUserId }
+                                    allUserIds.removeAll { $0 == failedUserId }
+                                    
+                                    // Try to load the next user to fill the gap
+                                    Task {
+                                        await loadNextUserToFillGap()
+                                    }
                                 }
-                            }
-                        )
-                        .id(userId)
+                            )
+                            .id(userId)
+                        }
+                        if isLoading {
+                            ProgressView()
+                                .padding()
+                        } else if hasMoreUsers && !isLoadingMore {
+                            ProgressView()
+                                .padding()
+                                .onAppear {
+                                    loadMoreUsers()
+                                }
+                        } else if isLoadingMore {
+                            ProgressView()
+                                .padding()
+                        }
+                        
+                        // Hidden view to measure content height
+                        Color.clear
+                            .frame(height: 1)
+                            .background(
+                                GeometryReader { contentGeometry in
+                                    Color.clear.preference(
+                                        key: ContentHeightPreferenceKey.self,
+                                        value: contentGeometry.frame(in: .named("scroll")).maxY
+                                    )
+                                }
+                            )
                     }
-                    if isLoading {
-                        ProgressView()
-                            .padding()
-                    } else if hasMoreUsers && !isLoadingMore {
-                        ProgressView()
-                            .padding()
-                            .onAppear {
-                                loadMoreUsers()
-                            }
-                    } else if isLoadingMore {
-                        ProgressView()
-                            .padding()
+                    .safeAreaInset(edge: .bottom) {
+                        Color.clear.frame(height: 60)
                     }
                 }
-                .safeAreaInset(edge: .bottom) {
-                    Color.clear.frame(height: 60)
+                .coordinateSpace(name: "scroll")
+                .refreshable {
+                    await refreshUsers()
                 }
-            }
-            .refreshable {
-                await refreshUsers()
-            }
-            .onAppear {
-                if allUserIds.isEmpty {
-                    Task {
-                        await refreshUsers()
+                .onAppear {
+                    screenHeight = geometry.size.height
+                    if allUserIds.isEmpty {
+                        Task {
+                            await refreshUsers()
+                        }
+                    }
+                }
+                .onPreferenceChange(ContentHeightPreferenceKey.self) { newHeight in
+                    contentHeight = newHeight
+                    // Auto-load more if screen isn't filled and we have more users
+                    if !isLoading && !isLoadingMore && hasMoreUsers {
+                        let needsFilling = contentHeight < screenHeight * 1.2 // 20% buffer
+                        if needsFilling && needsMoreContent {
+                            Task {
+                                await loadMoreToFillScreen()
+                            }
+                        }
                     }
                 }
             }
@@ -224,5 +263,27 @@ struct UserListView: View {
         
         // Add a small delay for smooth visual feedback
         try? await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
+    }
+    
+    // MARK: - Screen Filling
+    /// Automatically loads more users until the screen is filled
+    private func loadMoreToFillScreen() async {
+        guard hasMoreUsers, !isLoadingMore, !isLoading else { return }
+        
+        print("DEBUG: [UserListView] Auto-loading more to fill screen (content: \(contentHeight), screen: \(screenHeight))")
+        
+        // Temporarily disable auto-fill to prevent infinite loop
+        await MainActor.run {
+            needsMoreContent = false
+        }
+        
+        // Load next batch
+        await loadMoreUsers()
+        
+        // Re-enable after a short delay to allow UI to update
+        try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
+        await MainActor.run {
+            needsMoreContent = true
+        }
     }
 }

@@ -448,3 +448,189 @@ The simplified retry pattern leverages `getProviderIP()`'s built-in intelligence
 
 This pattern should be used as a reference for any similar distributed system operations that require intelligent failover and health checking.
 
+## Issue 1 Fix: CancellationError Handling
+
+### Problem
+When user lists load many users simultaneously (e.g., followers screen with 30+ users), if the user navigates away quickly, ongoing fetch tasks get cancelled. Previously, `CancellationError` was logged as a failure and counted toward retry attempts:
+
+```
+ERROR: [fetchUser] USER UPDATE FAILED: userId: GNBqYVYBAbn0N2YBO5CNq1sE-Rv, attempt: 1/2
+DEBUG: [fetchUser] Exception in fetchUser: userId: GNBqYVYBAbn0N2YBO5CNq1sE-Rv, error: CancellationError()
+⚠️ [UserRowView] fetchUser failed after retries - removing row
+```
+
+### Solution
+Detect and handle `CancellationError` early in the catch block:
+- Don't log as ERROR (use DEBUG instead)
+- Don't retry (propagate immediately)
+- Don't add to blacklist
+- Don't increment failure counters
+
+```swift
+} catch {
+    // Handle cancellation specially - don't log as failure, don't retry
+    if error is CancellationError {
+        print("DEBUG: [\(logPrefix)] Fetch cancelled for userId: \(user.mid), attempt: \(attempt)/\(maxRetries)")
+        throw error // Propagate cancellation immediately
+    }
+    
+    // ... rest of error handling for real failures
+}
+```
+
+### Benefits
+- Cleaner logs (no false ERROR messages)
+- Faster cancellation (no retry delays)
+- Better UX (cancelled fetches don't pollute blacklist)
+- Accurate failure metrics (only real failures counted)
+
+## NodePool Architecture: Persistent Authoritative Source
+
+### Overview
+The `User` object has a `hostIds` array:
+- **Item 0**: Writable host (single source of truth for user data)
+- **Item 1**: Access node (where user data was last accessed)
+- Backend keeps user objects in sync across nodes
+
+**Key Principle**: The NodePool is the authoritative source for node IPs. Nodes persist indefinitely and maintain arrays of valid IPs (IPv4 and IPv6).
+
+### Architecture
+
+```swift
+/// Persistent pool of nodes with multiple IP addresses
+class NodePool {
+    private var nodes: [String: NodeInfo] = [:]  // [nodeMID: NodeInfo]
+    
+    struct NodeInfo {
+        let mid: String       // Node MID
+        var ips: [String]     // Array of valid IPs (IPv4 and IPv6)
+        var lastUpdate: Date  // When IPs were last updated
+        
+        func hasIP(_ ip: String) -> Bool
+        func getPreferredIP() -> String?  // Prefers IPv4 over IPv6
+    }
+}
+```
+
+### Access Flow
+
+**Before accessing any user resource:**
+
+1. **Validate user's IP against pool**
+   ```swift
+   if NodePool.shared.isUserIPValid(for: user) {
+       // User's baseUrl is in pool, proceed with access
+       return
+   }
+   ```
+
+2. **Get IP from user's node in pool**
+   ```swift
+   if let poolIP = NodePool.shared.getIPFromNode(for: user) {
+       // Use IP from pool (prefers access node, then writable host)
+       user.baseUrl = URL(string: poolIP)
+   }
+   ```
+
+3. **On failure: Re-resolve and update pool**
+   ```swift
+   // Fetch failed, resolve fresh IP
+   let newIP = try await getProviderIP(user.mid)
+   
+   // Success: Replace node's IP list with new IP
+   if let nodeMid = user.hostIds?[1] ?? user.hostIds?[0] {
+       NodePool.shared.updateNodeIP(nodeMid: nodeMid, newIP: newIP)
+   }
+   ```
+
+### Implementation Status: ✅ COMPLETE
+
+#### What Was Implemented
+
+1. **NodePool Class** (`Sources/Core/NodePool.swift`)
+   - Persistent storage (no pruning)
+   - Multiple IPs per node (IPv4 and IPv6)
+   - Thread-safe operations with concurrent dispatch queue
+   - IP validation: `isUserIPValid(for:)`
+   - IP retrieval: `getIPFromNode(for:)`
+   - IP updates: `updateNodeIP(nodeMid:newIP:)` replaces IP list
+   - IP additions: `addIPToNode(nodeMid:ip:)` adds to existing list
+
+2. **Integration with fetchUser Flow**
+   - `resolveAndUpdateBaseUrl` validates user IP against pool first
+   - If not in pool, gets IP from pool before calling `getProviderIP`
+   - On successful fetch, calls `updateFromUser` to add IPs to pool
+   - On failure and re-resolution, replaces node's IP list
+
+3. **Smart Routing**
+   - Prefers user's access node (hostIds[1])
+   - Falls back to writable host (hostIds[0])
+   - IPv4 preferred over IPv6 for better compatibility
+
+#### Key Features
+
+```swift
+// 1. Validate before access
+if NodePool.shared.isUserIPValid(for: user) {
+    // Proceed - user's IP is in pool
+} else {
+    // Get fresh IP from pool or re-resolve
+}
+
+// 2. Get IP from user's node
+if let ip = NodePool.shared.getIPFromNode(for: user) {
+    user.baseUrl = URL(string: "http://\(ip)")
+}
+
+// 3. Update pool on re-resolution (replaces IP list)
+NodePool.shared.updateNodeIP(nodeMid: nodeMid, newIP: newIP)
+
+// 4. Add discovered IPs (doesn't replace)
+NodePool.shared.updateFromUser(user)
+```
+
+#### Benefits Realized
+
+- 🏆 **Authoritative source**: Pool is more reliable than user's cached IP
+- ⚡ **Reduced latency**: Validation is instant (no network call)
+- 🌐 **Multi-IP support**: Each node can have IPv4 and IPv6 addresses
+- 🔄 **Self-correcting**: Failed IPs trigger re-resolution and pool update
+- 💾 **Persistent**: Nodes never pruned, knowledge accumulates over time
+- 🎯 **Smart routing**: Respects backend's hostIds architecture
+
+### Example Flow
+
+**First fetch for a user:**
+```
+1. User has baseUrl: http://[240e:...]:8081
+2. Check pool → not found
+3. Get IP from pool → not found (pool empty)
+4. Call getProviderIP → returns 125.229.161.122:8080
+5. Fetch succeeds
+6. updateNodeIP → pool now has node with [125.229.161.122:8080]
+```
+
+**Subsequent fetch:**
+```
+1. User has baseUrl: http://125.229.161.122:8080
+2. Check pool → found! ✅
+3. Proceed immediately (no getProviderIP call)
+```
+
+**Failed access:**
+```
+1. User has baseUrl: http://old-ip:8080
+2. Check pool → not found (IP changed)
+3. Get IP from pool → returns 125.229.161.122:8080
+4. Fetch succeeds
+5. addIPToNode → pool now has [old-ip:8080, 125.229.161.122:8080]
+```
+
+**Failed access + re-resolution:**
+```
+1. Fetch fails with IP from pool
+2. Call getProviderIP → returns new-ip:8080
+3. Fetch succeeds
+4. updateNodeIP → pool IP list REPLACED: [new-ip:8080]
+```
+

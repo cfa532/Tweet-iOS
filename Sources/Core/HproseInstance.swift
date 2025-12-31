@@ -1368,6 +1368,12 @@ final class HproseInstance: ObservableObject {
                 lastError = HproseError.userNotFound(userId: user.mid, reason: "Null response")
                 continue
             } catch {
+                // Handle cancellation specially - don't log as failure, don't retry
+                if error is CancellationError {
+                    print("DEBUG: [\(logPrefix)] Fetch cancelled for userId: \(user.mid), attempt: \(attempt)/\(maxRetries)")
+                    throw error // Propagate cancellation immediately
+                }
+                
                 lastError = error
                 let nsError = error as NSError
                 print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
@@ -1404,6 +1410,8 @@ final class HproseInstance: ObservableObject {
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false)
             
             if isValidUserData(user) {
+                // Update NodePool with successful access
+                NodePool.shared.updateFromUser(user)
                 return true
             } else {
                 print("ERROR: [processUserDataResponse] INVALID USER DATA: userId: \(user.mid), mid: \(user.mid), username: \(user.username ?? "nil")")
@@ -1431,45 +1439,55 @@ final class HproseInstance: ObservableObject {
         hasExpired: Bool,
         originalBaseUrl: String?
     ) async throws {
+        // On first attempt with existing baseUrl, validate against pool
         if attempt == 1 && !forceFreshIP && userHasBaseUrl && !(user.baseUrl?.absoluteString.isEmpty ?? true) {
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using user's existing baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid) (hasExpired: \(hasExpired))")
-            return
+            // Check if user's current IP is valid in the pool
+            if NodePool.shared.isUserIPValid(for: user) {
+                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User's baseUrl validated in pool: \(user.baseUrl?.absoluteString ?? "nil")")
+                return
+            } else {
+                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User's baseUrl NOT in pool, will get IP from pool")
+            }
         }
         
-        // Resolve fresh IP
-        if attempt > 1 {
-            // Retry attempts: resolve provider IP (getProviderIP handles appUser health internally)
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid) (retry)")
-            guard let providerIP = try await getProviderIP(user.mid) else {
-                throw HproseError.noResponse(userId: user.mid)
+        // Try to get IP from user's node in the pool
+        if let poolIP = NodePool.shared.getIPFromNode(for: user) {
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using IP from pool for userId: \(user.mid): \(poolIP)")
+            if let url = URL(string: ensureHttpPrefix(poolIP)) {
+                await applyBaseUrlIfNeeded(user, url: url, reason: "from NodePool")
+                return
             }
-            
-            if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
-            }
+        }
+        
+        // Fallback: resolve fresh IP via getProviderIP
+        let reason: String
+        if originalBaseUrl == nil || originalBaseUrl?.isEmpty == true {
+            reason = "no cached baseUrl"
+        } else if hasExpired {
+            reason = "cache expired"
+        } else if attempt > 1 {
+            reason = "retry after failure"
         } else {
-            // First attempt with fresh IP
-            let reason: String
-            if originalBaseUrl == nil || originalBaseUrl?.isEmpty == true {
-                reason = "forcing fresh IP resolution (baseUrl param empty)"
-            } else if hasExpired {
-                reason = "forcing fresh IP resolution (user cache expired, baseUrl also considered expired)"
-            } else {
-                reason = "no baseUrl"
-            }
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid), old baseUrl: \(user.baseUrl?.absoluteString ?? "nil"), reason: \(reason)")
+            reason = "not in pool"
+        }
+        
+        print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Calling getProviderIP for userId: \(user.mid), reason: \(reason)")
+        guard let providerIP = try await getProviderIP(user.mid) else {
+            throw HproseError.noResponse(userId: user.mid)
+        }
+        
+        if let url = URL(string: ensureHttpPrefix(providerIP)) {
+            await applyBaseUrlIfNeeded(user, url: url, reason: "from getProviderIP (\(reason))")
             
-            guard let providerIP = try await getProviderIP(user.mid) else {
-                throw HproseError.noResponse(userId: user.mid)
+            // Update pool with new IP (replaces old IP list)
+            if let hostIds = user.hostIds, !hostIds.isEmpty {
+                let nodeMid = hostIds.count > 1 ? hostIds[1] : hostIds[0]
+                NodePool.shared.updateNodeIP(nodeMid: nodeMid, newIP: providerIP)
             }
-            
-            if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                await applyBaseUrlIfNeeded(user, url: url, reason: "initial resolution")
-            }
-            
-            if user.hproseClient == nil {
-                print("ERROR: [resolveAndUpdateBaseUrl] hproseClient is null after setting baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
-            }
+        }
+        
+        if user.hproseClient == nil {
+            print("ERROR: [resolveAndUpdateBaseUrl] hproseClient is null after setting baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
         }
     }
     

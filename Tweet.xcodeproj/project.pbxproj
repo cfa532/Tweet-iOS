@@ -86,6 +86,7 @@
 		46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34ACF2E8E8A0100C83177 /* InfoPlist.strings */; };
 		46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34AC92E8E8A0100C83177 /* InfoPlist.strings */; };
 		46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 46A34AC62E8E8A0100C83177 /* InfoPlist.strings */; };
+		46A73E3C2F04C76D001310E5 /* NodePool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A73E3B2F04C76D001310E5 /* NodePool.swift */; };
 		46A8F6842E52BDDC0050F4A0 /* ProfileEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */; };
 		46B03D832E4755D9000E08DF /* SingletonVideoManagers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */; };
 		46B03D852E486D3B000E08DF /* MuteState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D842E486D36000E08DF /* MuteState.swift */; };
@@ -222,6 +223,7 @@
 		46A34AC52E8E8A0100C83177 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = InfoPlist.strings; sourceTree = "<group>"; };
 		46A34AC82E8E8A0100C83177 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = InfoPlist.strings; sourceTree = "<group>"; };
 		46A34ACE2E8E8A0100C83177 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = InfoPlist.strings; sourceTree = "<group>"; };
+		46A73E3B2F04C76D001310E5 /* NodePool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodePool.swift; sourceTree = "<group>"; };
 		46A8F6832E52BDDC0050F4A0 /* ProfileEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditView.swift; sourceTree = "<group>"; };
 		46B03D822E4755D9000E08DF /* SingletonVideoManagers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingletonVideoManagers.swift; sourceTree = "<group>"; };
 		46B03D842E486D36000E08DF /* MuteState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuteState.swift; sourceTree = "<group>"; };
@@ -358,6 +360,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				46A73E3B2F04C76D001310E5 /* NodePool.swift */,
 				AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */,
 				466E00932E7023460068D968 /* MemoryWarningManager.swift */,
 				468F19F02E6074A30085BFE5 /* AudioSessionManager.swift */,
@@ -811,6 +814,7 @@
 				4608E2DB2DD5CA640051A92D /* VideoConversionService.swift in Sources */,
 				4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */,
 				46DEEPLINK2E00000000000001 /* DeeplinkManager.swift in Sources */,
+				46A73E3C2F04C76D001310E5 /* NodePool.swift in Sources */,
 				461438232E403EAB002D1B22 /* ChatMessageView.swift in Sources */,
 				468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */,
 				468F19F12E6074A30085BFE5 /* AudioSessionManager.swift in Sources */,
