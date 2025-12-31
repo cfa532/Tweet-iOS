@@ -8,7 +8,7 @@ class HproseClientPool {
     private let maxClientsPerURL: Int
     private let lock = NSLock()
     
-    init(maxClientsPerURL: Int = 5) {
+    init(maxClientsPerURL: Int = 8) {
         self.maxClientsPerURL = maxClientsPerURL
     }
     

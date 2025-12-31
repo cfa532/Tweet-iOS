@@ -30,17 +30,6 @@ final class HproseInstance: ObservableObject {
     private var ipCache: [String: IPCacheEntry] = [:]
     private let ipCacheLock = NSLock()
     
-    // Dedicated URLSession for health checks with optimized connection pool
-    private lazy var healthCheckSession: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.httpMaximumConnectionsPerHost = 20  // Allow many parallel health checks
-        config.timeoutIntervalForRequest = 5.0     // Fast fail for health checks
-        config.timeoutIntervalForResource = 10.0
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.urlCache = nil  // No caching for health checks
-        return URLSession(configuration: config)
-    }()
-    
     /// The domain to use for sharing links
     var domainToShare: String {
         get {
@@ -1766,9 +1755,10 @@ final class HproseInstance: ObservableObject {
         // Perform HTTP HEAD request to base URL (test server, not service endpoint)
         var request = URLRequest(url: baseURL, timeoutInterval: 5.0)
         request.httpMethod = "HEAD"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         
         do {
-            let (_, response) = try await healthCheckSession.data(for: request)
+            let (_, response) = try await URLSession.shared.data(for: request)
             
             if let httpResponse = response as? HTTPURLResponse {
                 let isHealthy = (200...299).contains(httpResponse.statusCode)

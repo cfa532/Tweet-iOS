@@ -637,3 +637,144 @@ NodePool.shared.updateFromUser(user)
 4. updateNodeIP → pool IP list REPLACED: [new-ip:8080]
 ```
 
+## Resource Management: Foreground Recovery
+
+### Problem
+When the app goes to background for an extended period (especially with overlays like share sheets or detail views active), iOS can reclaim memory by releasing resources:
+- **Images**: `UIImage` objects released from memory
+- **Videos**: `AVPlayerItem` objects released by the system
+
+When the app returns to foreground, these resources remain nil and don't automatically reload because:
+- `.onAppear` doesn't fire again (views are still "visible")
+- Share sheet or detail view is still active
+- Users see blank images or stuck video spinners
+
+### Solution: Foreground Notification Observers
+
+Each image-displaying view now sets up a notification observer to detect foreground return and reload released resources.
+
+#### Implementation Pattern
+
+**1. Add State Variable**
+```swift
+@State private var foregroundObserver: NSObjectProtocol? = nil
+```
+
+**2. Setup in `.onAppear`**
+```swift
+.onAppear {
+    // ... existing load logic ...
+    setupForegroundObserver()
+}
+```
+
+**3. Cleanup in `.onDisappear`**
+```swift
+.onDisappear {
+    // Clean up observer
+    if let observer = foregroundObserver {
+        NotificationCenter.default.removeObserver(observer)
+        foregroundObserver = nil
+    }
+}
+```
+
+**4. Observer Implementation**
+```swift
+private func setupForegroundObserver() {
+    guard attachment.type == .image else { return }
+    guard foregroundObserver == nil else { return } // Avoid duplicates
+    
+    foregroundObserver = NotificationCenter.default.addObserver(
+        forName: UIApplication.willEnterForegroundNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        // Only reload if image was released
+        guard self.image == nil else { return }
+        
+        print("DEBUG: [View] App returned to foreground, image released - reloading")
+        self.loadImage()
+    }
+}
+```
+
+**Important**: Do NOT use `[weak self]` capture list - SwiftUI Views are structs (value types), not classes, and cannot be captured weakly. The observer is properly cleaned up in `.onDisappear`, preventing memory leaks.
+
+#### Views Implementing Resource Reloading
+
+1. **MediaCell** (`Sources/Features/MediaViews/MediaCell.swift`)
+   - Tweet list images
+   - Only reloads if cell is visible: `guard self.isVisible, self.image == nil`
+
+2. **DetailMediaCell** (`Sources/Tweet/TweetDetailView.swift`)
+   - Full-size detail view images
+   - Reloads for visible detail images
+
+3. **ChatImageThumbnail** (`Sources/Features/Chat/ChatMessageView.swift`)
+   - Chat message images
+   - Reloads released thumbnails
+
+4. **TweetActionButtonsView** (`Sources/Tweet/TweetActionButtonsView.swift`)
+   - Share sheet preview images
+   - Only regenerates if share sheet is active: `guard self.shareSheetItems != nil`
+   - Regenerates preview and updates share sheet with new items
+
+#### Video Recovery
+
+Videos already have comprehensive foreground recovery through:
+- `SimpleVideoPlayer.recoverFromBackground()` - Detects broken players, reloads if needed
+- `FullScreenVideoManager` / `DetailVideoManager` - Singleton managers handle app lifecycle
+- Delayed health checks - Catches players that appear healthy but are actually broken
+
+Videos don't need the observer pattern because:
+- They have active playback state that needs continuous monitoring
+- Recovery is more complex (state restoration, seek positions, playback status)
+- Singleton managers already listen to app lifecycle notifications
+
+### Example Scenario: Share Sheet Recovery
+
+**Sequence:**
+```
+1. User taps share button
+   - Preview image generated
+   - Share sheet opens
+
+2. User switches to another app (long background)
+   - iOS reclaims memory
+   - Preview image released (image = nil)
+   - Share sheet still active
+
+3. User returns to app
+   - willEnterForegroundNotification fires
+   - Observer detects shareSheetItems != nil
+   - Observer checks attachmentPreviewImage == nil
+   - Regenerates preview
+   - Updates share sheet with new items
+
+4. User completes share
+   - Share sheet dismissed
+   - Observer cleaned up in onDisappear
+```
+
+### Benefits
+
+- ✅ **Seamless UX**: Images reload automatically, no user action needed
+- ✅ **Efficient**: Only reloads if resource was actually released (`image == nil`)
+- ✅ **Context-aware**: Share sheet only reloads if still active
+- ✅ **No memory leaks**: Observers properly cleaned up in view lifecycle
+- ✅ **Works with overlays**: Share sheets, detail views, login sheets all handled
+
+### Testing
+
+To test resource recovery:
+1. Open app with image-heavy content
+2. Open share sheet (for preview testing)
+3. Switch to another app
+4. Wait 5+ minutes (or use Xcode memory pressure)
+5. Return to app
+6. Verify images reload automatically
+7. Verify share sheet preview regenerates
+
+This ensures users never see blank images or broken share sheets after returning from background.
+

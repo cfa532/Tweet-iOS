@@ -311,14 +311,52 @@ extension ChatCacheManager {
         }
     }
     
+    // MARK: - Media Cleanup
+    
+    /// Delete media files associated with a chat message
+    private func deleteMediaForChatMessage(_ message: ChatMessage) {
+        guard let attachments = message.attachments else { return }
+        
+        var mediaIds: [String] = []
+        for attachment in attachments {
+            mediaIds.append(attachment.mid)
+        }
+        
+        if mediaIds.isEmpty { return }
+        
+        print("DEBUG: [ChatCacheManager] Deleting \(mediaIds.count) media files for chat message \(message.id)")
+        
+        // Delete from SharedAssetCache (videos/audio) on main actor
+        Task { @MainActor in
+            for mediaId in mediaIds {
+                SharedAssetCache.shared.clearAssetCache(for: mediaId)
+            }
+        }
+        
+        // Delete from ImageCacheManager (images)
+        for mediaId in mediaIds {
+            ImageCacheManager.shared.clearCache(for: mediaId)
+        }
+    }
+    
     // MARK: - Clear All Cache
     func clearAllCache() {
+        print("DEBUG: [ChatCacheManager] Manual cache clear - clearing all chat messages and their media")
+        
         context.performAndWait {
-            // Delete all chat messages
+            // Delete all chat messages AND their media
             let messageRequest: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
             if let allMessages = try? context.fetch(messageRequest) {
-                for message in allMessages {
-                    context.delete(message)
+                print("DEBUG: [ChatCacheManager] Clearing \(allMessages.count) chat messages and their media")
+                
+                for cdMessage in allMessages {
+                    // Delete associated media files
+                    if let chatMessage = convertToChatMessage(cdMessage) {
+                        deleteMediaForChatMessage(chatMessage)
+                    }
+                    
+                    // Delete message from CoreData
+                    context.delete(cdMessage)
                 }
             }
             
@@ -332,6 +370,8 @@ extension ChatCacheManager {
             
             try? context.save()
         }
+        
+        print("✅ [ChatCacheManager] Chat cache clear complete")
     }
     
     /// Clear only memory cache (for memory management)
