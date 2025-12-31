@@ -37,6 +37,7 @@ struct UserListView: View {
     @State private var loadMoreTask: Task<Void, Never>?
     @State private var currentLoadIndex: Int = 0 // Track which user we're currently trying to load
     @State private var cancellationToken: UUID = UUID() // Token to cancel all UserRowView tasks
+    @State private var isAutoFilling: Bool = false // Prevent multiple auto-fill operations
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var navigationPath: NavigationPath
@@ -129,7 +130,7 @@ struct UserListView: View {
                 .onPreferenceChange(ContentHeightPreferenceKey.self) { newHeight in
                     contentHeight = newHeight
                     // Auto-load more if screen isn't filled and we have more users
-                    if !isLoading && !isLoadingMore && hasMoreUsers {
+                    if !isLoading && !isLoadingMore && !isAutoFilling && hasMoreUsers {
                         let needsFilling = contentHeight < screenHeight * 1.2 // 20% buffer
                         if needsFilling && needsMoreContent {
                             Task {
@@ -238,14 +239,14 @@ struct UserListView: View {
     
     // MARK: - Batch Loading
     private func loadBatch(_ userIds: [String]) async {
-        // Add all users to displayed list at once for faster loading
+        // Add all users to displayed list at once
         await MainActor.run {
             displayedUserIds.append(contentsOf: userIds)
             currentLoadIndex += userIds.count
         }
         
-        // Add a small delay for smooth visual feedback
-        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms delay
+        // Wait for batch to render and start loading before continuing
+        try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
     }
     
     // MARK: - Gap Filling
@@ -268,22 +269,24 @@ struct UserListView: View {
     // MARK: - Screen Filling
     /// Automatically loads more users until the screen is filled
     private func loadMoreToFillScreen() async {
-        guard hasMoreUsers, !isLoadingMore, !isLoading else { return }
+        guard hasMoreUsers, !isLoadingMore, !isLoading, !isAutoFilling else { return }
         
         print("DEBUG: [UserListView] Auto-loading more to fill screen (content: \(contentHeight), screen: \(screenHeight))")
         
-        // Temporarily disable auto-fill to prevent infinite loop
+        // Set auto-filling flag to prevent concurrent operations
         await MainActor.run {
+            isAutoFilling = true
             needsMoreContent = false
         }
         
         // Load next batch
         await loadMoreUsers()
         
-        // Re-enable after a short delay to allow UI to update
-        try? await Task.sleep(nanoseconds: 500_000_000) // 500ms delay
+        // Re-enable after a delay to allow UI to update and measure new content height
+        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay to allow UI to settle
         await MainActor.run {
             needsMoreContent = true
+            isAutoFilling = false
         }
     }
 }
