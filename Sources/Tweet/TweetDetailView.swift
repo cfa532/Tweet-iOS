@@ -49,6 +49,7 @@ struct DetailMediaCell: View {
     @State private var loading = false
     let showMuteButton: Bool
     @State private var hasRestoredPosition = false // Track if we've restored position
+    @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
@@ -179,6 +180,9 @@ struct DetailMediaCell: View {
                 print("DEBUG: [DetailMediaCell] Starting image load for attachment \(attachmentIndex)")
                 loadImage()
             }
+            
+            // Setup foreground observer to reload resources if released during background
+            setupForegroundObserver()
         }
         .onDisappear {
             // For videos in detail view, post notification to save state
@@ -193,8 +197,35 @@ struct DetailMediaCell: View {
                     ]
                 )
             }
+            
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
         }
 
+    }
+    
+    /// Setup observer to detect foreground return and reload image if released
+    private func setupForegroundObserver() {
+        // Only setup for image attachments
+        guard attachment.type == .image else { return }
+        
+        // Avoid duplicate observers
+        guard foregroundObserver == nil else { return }
+        
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only reload if image was released
+            guard self.image == nil, self.attachment.type == .image else { return }
+            
+            print("DEBUG: [DetailMediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
+            self.loadImage()
+        }
     }
     
     private func loadImage() {

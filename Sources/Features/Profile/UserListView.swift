@@ -280,7 +280,7 @@ struct UserListView: View {
         }
         
         // Load next batch
-        await loadMoreUsers()
+        loadMoreUsers()
         
         // Re-enable after a delay to allow UI to update and measure new content height
         try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay to allow UI to settle

@@ -43,6 +43,7 @@ struct MediaCell: View, Equatable {
     @State private var isOpeningFullScreen = false
     @State private var shouldAutoPlay = false // Track if video should autoplay
     @State private var effectiveBaseUrl: URL // Reactive baseUrl that updates when author's baseUrl changes
+    @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
@@ -224,6 +225,9 @@ struct MediaCell: View, Equatable {
             
             // Grid-level debouncing handles video preloading
             // Individual cells just track visibility for playback
+            
+            // Setup foreground observer to reload resources if released during background
+            setupForegroundObserver()
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
@@ -235,6 +239,12 @@ struct MediaCell: View, Equatable {
             
             // Cancel any pending image loads to prevent memory leaks
             GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(effectiveBaseUrl.absoluteString)")
+            
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
         }
         .onChange(of: isVisible) { _, newValue in
             // Update effectiveBaseUrl when becoming visible (author may have been resolved)
@@ -385,6 +395,27 @@ struct MediaCell: View, Equatable {
         default:
             // Documents are handled by DocumentAttachmentsView
             return
+        }
+    }
+    
+    /// Setup observer to detect foreground return and reload image if released
+    private func setupForegroundObserver() {
+        // Only setup for image attachments
+        guard attachment.type == .image else { return }
+        
+        // Avoid duplicate observers
+        guard foregroundObserver == nil else { return }
+        
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only reload if cell is visible and image was released
+            guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
+            
+            print("DEBUG: [MediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
+            self.loadImage()
         }
     }
     

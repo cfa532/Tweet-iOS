@@ -124,6 +124,7 @@ struct TweetActionButtonsView: View {
     @State private var attachmentPreviewImage: UIImage? = nil
     @State private var isPreparingShare = false
     @State private var shareSheetItems: ShareSheetData? = nil
+    @State private var foregroundObserver: NSObjectProtocol? = nil
     // Removed: @State private var hasPreloadedPreview = false - no longer needed since preloading is disabled
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -631,6 +632,16 @@ struct TweetActionButtonsView: View {
             // DISABLED: Preload attachment preview causes UI freezing when many video tweets are visible
             // Preview will be generated on-demand when share button is tapped instead
             // preloadAttachmentPreview()
+            
+            // Setup foreground observer to reload resources if they were released during background
+            setupForegroundObserver()
+        }
+        .onDisappear {
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
         }
     }
 
@@ -669,6 +680,45 @@ struct TweetActionButtonsView: View {
             return appUserBase
         }
         return URL(string: AppConfig.baseUrl)
+    }
+    
+    /// Setup observer to detect foreground return and reload resources if released
+    private func setupForegroundObserver() {
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only reload if share sheet is currently active
+            guard self.shareSheetItems != nil else { return }
+            
+            print("DEBUG: [SHARE] App returned to foreground with share sheet active - checking resources")
+            
+            // Check if preview image was released by system
+            Task { @MainActor in
+                // If preview image is nil but we had one before (share sheet is showing), regenerate it
+                if self.attachmentPreviewImage == nil {
+                    print("DEBUG: [SHARE] Preview image was released - regenerating")
+                    self.isPreparingShare = true
+                    
+                    let preview = await self.loadAttachmentPreviewImage()
+                    
+                    self.attachmentPreviewImage = preview
+                    self.isPreparingShare = false
+                    
+                    // Update share sheet items with new preview
+                    if preview != nil {
+                        let items = self.shareActivityItems()
+                        self.shareSheetItems = ShareSheetData(items: items)
+                        print("DEBUG: [SHARE] Preview regenerated and share sheet updated")
+                    } else {
+                        print("DEBUG: [SHARE] Failed to regenerate preview")
+                    }
+                } else {
+                    print("DEBUG: [SHARE] Preview image still present - no reload needed")
+                }
+            }
+        }
     }
     
     private func loadAttachmentPreviewImage() async -> UIImage? {

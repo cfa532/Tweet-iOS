@@ -262,6 +262,7 @@ struct ChatImageThumbnail: View {
     @State private var showFullScreen = false
     @State private var image: UIImage?
     @State private var isLoading = false
+    @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
     
     private var baseUrl: URL {
         if isFromCurrentUser {
@@ -285,6 +286,16 @@ struct ChatImageThumbnail: View {
             // Load image if not already loaded
             if image == nil {
                 loadImage()
+            }
+            
+            // Setup foreground observer to reload resources if released during background
+            setupForegroundObserver()
+        }
+        .onDisappear {
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
             }
         }
         .fullScreenCover(isPresented: $showFullScreen) {
@@ -407,7 +418,23 @@ struct ChatImageThumbnail: View {
             )
     }
     
-
+    /// Setup observer to detect foreground return and reload image if released
+    private func setupForegroundObserver() {
+        // Avoid duplicate observers
+        guard foregroundObserver == nil else { return }
+        
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only reload if image was released
+            guard self.image == nil else { return }
+            
+            print("DEBUG: [ChatImageThumbnail] App returned to foreground, image released - reloading: \(self.attachment.mid)")
+            self.loadImage()
+        }
+    }
     
     private func loadImage() {
         guard let url = attachment.getUrl(baseUrl) else { return }
