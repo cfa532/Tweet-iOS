@@ -1410,8 +1410,13 @@ final class HproseInstance: ObservableObject {
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false)
             
             if isValidUserData(user) {
-                // Update NodePool with successful access
-                NodePool.shared.updateFromUser(user)
+                // Update NodePool with successful access (replace IP list with working IP)
+                if let baseUrlString = user.baseUrl?.absoluteString,
+                   let hostIds = user.hostIds, hostIds.count > 1 {
+                    let accessNodeMid = hostIds[1]
+                    NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString)
+                    print("DEBUG: [processUserDataResponse] ✅ Updated pool: node \(accessNodeMid) now has working IP")
+                }
                 return true
             } else {
                 print("ERROR: [processUserDataResponse] INVALID USER DATA: userId: \(user.mid), mid: \(user.mid), username: \(user.username ?? "nil")")
@@ -1478,13 +1483,7 @@ final class HproseInstance: ObservableObject {
         
         if let url = URL(string: ensureHttpPrefix(providerIP)) {
             await applyBaseUrlIfNeeded(user, url: url, reason: "from getProviderIP (\(reason))")
-            
-            // Update pool with new IP (replaces old IP list)
-            // Only track access node (hostIds[1]) for read operations
-            if let hostIds = user.hostIds, hostIds.count > 1 {
-                let accessNodeMid = hostIds[1]
-                NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: providerIP)
-            }
+            // Note: Pool will be updated in processUserDataResponse after successful fetch
         }
         
         if user.hproseClient == nil {
