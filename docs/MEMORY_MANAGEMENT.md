@@ -1,6 +1,6 @@
 # Memory Management System
 
-**Last Updated:** October 28, 2025  
+**Last Updated:** December 29, 2025  
 **Status:** Active
 
 ## Overview
@@ -515,7 +515,54 @@ private func performEmergencyCleanup() {
 - Clear tweet cache
 - Clear chat cache
 
-### 5. LRU (Least Recently Used) Eviction
+### 5. Manual Cache Cleanup (Settings)
+
+**Trigger:** User taps "Clear Media Cache" in Settings
+
+**Location:** `Sources/Screens/Settings.swift` → `cleanupCache()`
+
+**Complete Cleanup Flow:**
+```swift
+// 1. Clear all tweets and their media
+TweetCacheManager.shared.manualClearAllCache()
+  // - Deletes all tweets from CoreData
+  // - For each tweet: deletes associated media (images/videos)
+  // - Clears tweet access times
+  // - Final sweep: SharedAssetCache.clearAllCaches() + ImageCacheManager.clearAllCache()
+
+// 2. Clear all chat messages and their media
+ChatCacheManager.shared.clearAllCache()
+  // - Deletes all chat messages from CoreData
+  // - For each message: deletes associated media (images/videos) via deleteMediaForChatMessage()
+  // - Deletes all chat sessions
+
+// 3. Clear all video cache files from disk
+await CachingPlayerItem.clearAllCache()
+  // - Removes .m3u8 files and segment files
+
+// 4. Clear all memory caches
+await MainActor.run {
+  VideoStateCache.shared.clearAllCache()      // Video playback states
+  DetailVideoManager.shared.clearCurrentVideo() // Current video
+}
+
+// 5. Reinitialize app entry
+await hproseInstance.initAppEntry()
+```
+
+**What Gets Cleared:**
+- ✅ All tweets (CoreData + memory)
+- ✅ All tweet media (images + videos from disk)
+- ✅ All chat messages (CoreData)
+- ✅ All chat message media (images + videos from disk) **[FIXED: Now properly clears media]**
+- ✅ All video cache files (.m3u8, segments)
+- ✅ All video playback states
+- ✅ All image memory and disk caches
+- ✅ All video player instances
+
+**Note:** This is a complete wipe - all cached content is removed. The app will re-fetch from server on next use.
+
+### 6. LRU (Least Recently Used) Eviction
 
 **Used by:** SharedAssetCache, ImageCacheManager
 

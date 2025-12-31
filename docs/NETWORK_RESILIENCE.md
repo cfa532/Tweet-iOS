@@ -1,5 +1,8 @@
 # Network Resilience & Caching Strategy
 
+**Last Updated:** December 29, 2025  
+**Status:** Active
+
 ## Overview
 
 The Tweet-iOS app is designed to work seamlessly in challenging network environments through a comprehensive caching strategy and server-friendly network handling. This document outlines the implementation details and best practices.
@@ -648,6 +651,116 @@ private func cacheIP(_ ip: String) {
 DEBUG: [IPCache] Cache HIT for IP: 192.168.1.100 (age: 127s)
 DEBUG: [isServerHealthy] ✅ HEAD request succeeded: http://192.168.1.100/webapi/ (status: 200)
 DEBUG: [IPCache] Cached IP: 192.168.1.100
+```
+
+---
+
+## 🔌 Connection Pooling Strategy (December 2025)
+
+### Overview
+
+The app uses a unified connection pooling strategy managed by URLSession, with specialized pools for different request types. All artificial throttling limits have been removed to let URLSession's built-in connection management handle concurrency efficiently.
+
+### Architecture
+
+**Unified Connection Management:**
+- **URLSession.shared**: Primary connection pool for all HTTP requests
+  - Default: ~6 connections per host
+  - Automatic connection reuse and lifecycle management
+  - Handles images, videos, health checks, and general downloads
+
+**Specialized Pools:**
+- **HproseClientPool**: API calls only (`/webapi/` endpoint)
+  - 8 clients per URL (configurable)
+  - Thread-safe client reuse
+  - Separate from HTTP downloads
+
+### Connection Limits by Type
+
+| Request Type | Pool | Limit | Notes |
+|--------------|------|-------|-------|
+| **API Calls** | HproseClientPool | 8 per URL | RPC client pool, not HTTP connections |
+| **Images** | URLSession.shared | ~6 per host | No artificial throttling (removed `imageDownloadGate`) |
+| **Videos** | URLSession.shared | ~6 per host | No artificial throttling |
+| **Health Checks** | URLSession.shared | ~6 per host | No separate pool (removed `healthCheckSession`) |
+
+### Recent Changes (December 2025)
+
+**Removed Artificial Throttling:**
+1. **ImageDownloadGate** - Removed 3 concurrent download limit
+   - Images now use `URLSession.shared` directly
+   - URLSession manages connection pooling automatically
+   - Better utilization of available bandwidth
+
+2. **healthCheckSession** - Removed dedicated 20-connection pool
+   - Health checks now use `URLSession.shared`
+   - Consistent with other network requests
+   - URLSession's default pool is sufficient
+
+**Why These Changes:**
+- URLSession already manages connections efficiently
+- Multiple layers of throttling were redundant
+- Better performance with fewer artificial constraints
+- Simpler, more maintainable code
+
+### Implementation Details
+
+**Image Downloads:**
+```swift
+// OLD (removed):
+private let maxConcurrentImageDownloads = 3
+private let imageDownloadGate: ImageDownloadGate
+return try await self.withImageDownloadSlot { ... }
+
+// NEW (current):
+// Direct URLSession usage - no artificial limits
+let (tempURL, response) = try await URLSession.shared.download(for: request)
+```
+
+**Health Checks:**
+```swift
+// OLD (removed):
+private lazy var healthCheckSession: URLSession = {
+    let config = URLSessionConfiguration.default
+    config.httpMaximumConnectionsPerHost = 20
+    return URLSession(configuration: config)
+}()
+
+// NEW (current):
+var request = URLRequest(url: baseURL, timeoutInterval: 5.0)
+request.httpMethod = "HEAD"
+request.cachePolicy = .reloadIgnoringLocalCacheData
+let (_, response) = try await URLSession.shared.data(for: request)
+```
+
+**HproseClientPool (unchanged):**
+```swift
+class HproseClientPool {
+    private let maxClientsPerURL: Int = 8  // For API calls only
+    
+    func getClientByIP(for ip: String) -> HproseClient {
+        // Reuses existing clients or creates new ones
+        // Limits to 8 per URL for API endpoint
+    }
+}
+```
+
+### Benefits
+
+- ✅ **Simpler Architecture**: Fewer custom pools to maintain
+- ✅ **Better Performance**: URLSession optimizes connections automatically
+- ✅ **Consistent Behavior**: All HTTP requests use same pool
+- ✅ **Reduced Complexity**: Removed ~50 lines of throttling code
+- ✅ **Efficient Resource Use**: URLSession manages connections optimally
+
+### Total Concurrent Capacity
+
+With the unified approach:
+- **API Calls**: 8 clients per URL (HproseClientPool)
+- **Media Downloads**: ~6 connections per host (URLSession default)
+- **Total**: Efficiently managed by URLSession across all hosts
+
+This provides sufficient capacity for typical usage while preventing connection exhaustion.
 DEBUG: [_getProviderIP] Found healthy provider IP: 192.168.1.100 - returning immediately
 DEBUG: [IPCache] Cleaned up 3 expired entries
 DEBUG: [IPCache] Cache EXPIRED for IP: 192.168.1.100

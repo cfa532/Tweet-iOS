@@ -1,6 +1,6 @@
 # Tweet-iOS Documentation Index
 
-**Last Updated:** November 14, 2025
+**Last Updated:** December 29, 2025
 
 ---
 
@@ -138,6 +138,20 @@ All main documents should include:
 ---
 
 ## 🔄 Recent Updates
+
+### December 29, 2025
+- ✅ **Connection Pooling Simplification**: Removed artificial throttling limits
+  - **Removed**: `ImageDownloadGate` (3 concurrent limit) - images now use URLSession.shared directly
+  - **Removed**: `healthCheckSession` (20-connection pool) - health checks now use URLSession.shared
+  - **Result**: Simpler architecture, better performance, consistent connection management
+  - **Files**: `ImageCacheManager.swift`, `HproseInstance.swift`
+  - 📄 Updated [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) - Added connection pooling section
+- ✅ **Cache Cleanup Fix**: Chat message media now properly cleared
+  - **Fixed**: `ChatCacheManager.clearAllCache()` now deletes media attachments (images/videos)
+  - **Implementation**: Added `deleteMediaForChatMessage()` helper matching tweet cleanup pattern
+  - **Result**: Complete cache cleanup when user taps "Clear Media Cache" in Settings
+  - **Files**: `ChatCacheManager.swift`, `Settings.swift`
+  - 📄 Updated [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md) - Added manual cache cleanup section
 
 ### December 2025
 - ✅ **HLS Conversion Algorithm Documentation**: Complete documentation of video conversion pipeline
