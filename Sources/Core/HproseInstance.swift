@@ -523,18 +523,30 @@ final class HproseInstance: ObservableObject {
                     }
                 }
             } else {
-                print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
-                let user = User.getInstance(mid: Constants.GUEST_ID)
+                // Fetch failed but user is logged in - use cached appUser data
+                // DO NOT log out user just because their IPs are temporarily unreachable
+                print("⚠️ [INIT] fetchUser failed but user is logged in - using cached appUser data")
+                print("⚠️ [INIT] User \(appUser.mid) will use cached data until network recovers")
+                
                 await MainActor.run {
-                    user.baseUrl = URL(string: "http://\(entryIP)")
-                    user.followingList = Gadget.getAlphaIds()
-                    _appUserId = user.mid
+                    // appUser is already loaded from cache in initializeAppUser()
+                    // Just set entry IP as fallback and mark initialization as complete
+                    if appUser.baseUrl == nil {
+                        appUser.baseUrl = URL(string: "http://\(entryIP)")
+                    }
                     
-                    // App is now initialized since appUser has IP address
+                    // Ensure followings list has at least alphaIds
+                    if appUser.followingList?.isEmpty ?? true {
+                        appUser.followingList = Gadget.getAlphaIds()
+                    }
+                    
                     isInitializationComplete = true
+                    
+                    // Notify UI that app is ready (will use cached data)
+                    NotificationCenter.default.post(name: .appUserReady, object: nil)
                 }
-                await fetchAlphaIdUserForGuest()
-                print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
+                
+                print("✅ [INIT] App initialized with cached data - network will retry in background")
             }
         } else {
             let user = User.getInstance(mid: Constants.GUEST_ID)
@@ -1415,55 +1427,14 @@ final class HproseInstance: ObservableObject {
         
         // Resolve fresh IP
         if attempt > 1 {
-            // Retry attempts: check if user is on same node as appUser
-            if let userHostIds = user.hostIds,
-               let appUserHostIds = appUser.hostIds,
-               userHostIds.count > 1,
-               appUserHostIds.count > 1,
-               userHostIds[1] == appUserHostIds[1] {
-                // User is on the same node as appUser, check if appUser's baseUrl is healthy
-                print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User \(user.mid) is on same node as appUser (hostIds[1]: \(userHostIds[1]))")
-                
-                if let appUserBaseUrl = appUser.baseUrl,
-                   let appUserClient = appUser.hproseClient,
-                   await isServerHealthy(appUserClient) {
-                    // appUser's baseUrl is healthy, reuse it
-                    print("DEBUG: [resolveAndUpdateBaseUrl] appUser's baseUrl is healthy, using it for user \(user.mid)")
-                    await applyBaseUrlIfNeeded(user, url: appUserBaseUrl, reason: "same node as appUser (healthy)")
-                } else {
-                    // appUser's baseUrl is missing or unhealthy - refresh it FIRST
-                    print("WARNING: [resolveAndUpdateBaseUrl] appUser's baseUrl is missing or unhealthy, refreshing appUser before lookup for user \(user.mid)")
-                    
-                    do {
-                        try await refreshAppUser()
-                        
-                        // Now getProviderIP will use the refreshed appUser (no redundant health check!)
-                        guard let providerIP = try await getProviderIP(user.mid) else {
-                            throw HproseError.noResponse(userId: user.mid)
-                        }
-                        if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                            await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
-                        }
-                    } catch {
-                        // If refresh fails, still try getProviderIP as last resort
-                        print("ERROR: [resolveAndUpdateBaseUrl] Failed to refresh appUser, trying getProviderIP anyway: \(error)")
-                        guard let providerIP = try await getProviderIP(user.mid) else {
-                            throw HproseError.noResponse(userId: user.mid)
-                        }
-                        if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                            await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
-                        }
-                    }
-                }
-            } else {
-                // User is on a different node, resolve provider IP
-                guard let providerIP = try await getProviderIP(user.mid) else {
-                    throw HproseError.noResponse(userId: user.mid)
-                }
-                
-                if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                    await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
-                }
+            // Retry attempts: resolve provider IP (getProviderIP handles appUser health internally)
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid) (retry)")
+            guard let providerIP = try await getProviderIP(user.mid) else {
+                throw HproseError.noResponse(userId: user.mid)
+            }
+            
+            if let url = URL(string: ensureHttpPrefix(providerIP)) {
+                await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
             }
         } else {
             // First attempt with fresh IP
@@ -1492,28 +1463,6 @@ final class HproseInstance: ObservableObject {
     }
     
 
-    
-    /// Refreshes appUser by discovering entry IP and re-initializing
-    /// This is used when appUser's baseUrl is detected as unhealthy
-    /// - Throws: Error if entry IP discovery or appUser IP resolution fails
-    private func refreshAppUser() async throws {
-        print("DEBUG: [refreshAppUser] Refreshing appUser via entry IP discovery")
-        
-        guard let entryIP = try await findEntryIP() else {
-            throw NSError(domain: "HproseClient", code: -1, 
-                         userInfo: [NSLocalizedDescriptionKey: "Failed to find entry IP for appUser refresh"])
-        }
-        
-        let ip = await _getProviderIP(appUser.mid, v4Only: false, 
-                                      hproseClient: clientPool.getClientByIP(for: entryIP))
-        if let ip = ip {
-            appUser.baseUrl = URL(string: "http://\(ip)")
-            print("DEBUG: [refreshAppUser] appUser refreshed with new IP: \(ip)")
-        } else {
-            throw NSError(domain: "HproseClient", code: -1,
-                         userInfo: [NSLocalizedDescriptionKey: "Failed to get appUser IP from entry"])
-        }
-    }
     
     /// Get provider IP for a user with health checking and fallback retry
     /// - Parameter mid: User's member ID
@@ -1555,22 +1504,11 @@ final class HproseInstance: ObservableObject {
                 return await _getProviderIP(mid, v4Only: v4Only)
             }
             
-            // Server is healthy but initial lookup returned nil
-            // This could mean the user is on a different node - try entry IP as fallback
-            print("DEBUG: [getProviderIP] Initial lookup failed for \(mid) but appUser server healthy, trying entry IP fallback")
-            guard let entryIP = try await findEntryIP() else {
-                print("ERROR: [getProviderIP] Entry IP discovery also failed for \(mid)")
-                return nil
-            }
-            
-            // Try lookup via entry IP
-            let fallbackIP = await _getProviderIP(mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
-            if fallbackIP != nil {
-                print("DEBUG: [getProviderIP] Entry IP fallback succeeded for \(mid)")
-            } else {
-                print("DEBUG: [getProviderIP] Entry IP fallback also returned nil for \(mid)")
-            }
-            return fallbackIP
+            // AppUser server is healthy but initial lookup returned nil
+            // This means appUser server responded but all IPs for this user failed health checks
+            // Entry IP would return the same unhealthy IPs, so no point trying it
+            print("DEBUG: [getProviderIP] Initial lookup failed for \(mid) and appUser server is healthy - all user IPs are unhealthy")
+            return nil
         }
     }
     
@@ -1672,11 +1610,11 @@ final class HproseInstance: ObservableObject {
                 }
             }
             
-            // If no healthy IP found in any batch, return first IP as fallback
-            // Health checks can give false negatives, so try the first IP anyway
+            // If no healthy IP found in any batch, return nil to trigger entry IP fallback
+            // getProviderIP() will try via entry IP, and if that fails too, it can try the first IP as last resort
             if !ipAddresses.isEmpty {
-                print("DEBUG: [_getProviderIP] All health checks failed for \(ipAddresses.count) IP(s), but returning first IP anyway: \(ipAddresses[0])")
-                return ipAddresses[0]
+                print("DEBUG: [_getProviderIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil to trigger fallback")
+                return nil
             }
             
             print("DEBUG: [_getProviderIP] No IPs available in response")
@@ -6762,11 +6700,11 @@ final class HproseInstance: ObservableObject {
                 }
             }
             
-            // If no healthy IP found in any batch, return first IP as fallback
-            // Health checks can give false negatives, so try the first IP anyway
+            // If no healthy IP found in any batch, return nil
+            // The caller should handle the nil case appropriately
             if !ipAddresses.isEmpty {
-                print("DEBUG: [getHostIP] All health checks failed for \(ipAddresses.count) IP(s), but returning first IP anyway: \(ipAddresses[0])")
-                return ipAddresses[0]
+                print("DEBUG: [getHostIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil")
+                return nil
             }
             
             print("DEBUG: [getHostIP] No IPs available in response")
