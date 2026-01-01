@@ -8,6 +8,10 @@ struct ProfileView: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
+    /// Track users that have been resynced this app session to avoid redundant long-running operations
+    private static var resyncedUsersThisSession: Set<String> = []
+    private static let resyncLock = NSLock()
+    
     /// Navigation state
     @State private var selectedTweetForNavigation: Tweet? = nil
     @State private var selectedUserForNavigation: User? = nil
@@ -23,7 +27,6 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
-    @State private var profileRefreshCounter = 0
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -95,17 +98,16 @@ struct ProfileView: View {
                 toolbarContent
             }
             .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
-            .task(id: profileRefreshCounter) {
-                await refreshProfileData()
-            }
-            .onAppear {
-                if didLoad {
-                    profileRefreshCounter += 1
+            .task(id: user.mid) {
+                // Only fetch if this is the first load for this user
+                if !didLoad {
+                    await refreshProfileData()
+                    didLoad = true
                 }
             }
             .onChange(of: user.mid) { _, _ in
+                // Reset didLoad when user changes so the new user's data is fetched
                 didLoad = false
-                profileRefreshCounter += 1
             }
             .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
                 if let _ = notification.userInfo?["tweetId"] as? String,
@@ -636,17 +638,30 @@ struct ProfileView: View {
         await refreshPinnedTweets()
         
         // Resync user data on server in background (long-running operation)
+        // Only run once per app session per user to avoid redundant expensive operations
         let userId = user.mid
-        Task.detached {
-            do {
-                let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
-                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
-                
-                TweetCacheManager.shared.saveUser(resyncedUser)
-                print("DEBUG: [ProfileView] Saved resynced user to cache")
-            } catch {
-                print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+        let shouldResync = Self.resyncLock.withLock {
+            if Self.resyncedUsersThisSession.contains(userId) {
+                return false
             }
+            Self.resyncedUsersThisSession.insert(userId)
+            return true
+        }
+        
+        if shouldResync {
+            Task.detached {
+                do {
+                    let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
+                    print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
+                    
+                    TweetCacheManager.shared.saveUser(resyncedUser)
+                    print("DEBUG: [ProfileView] Saved resynced user to cache")
+                } catch {
+                    print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+                }
+            }
+        } else {
+            print("DEBUG: [ProfileView] Skipping resync for user \(userId) - already resynced this session")
         }
     }
     
