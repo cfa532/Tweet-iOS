@@ -778,3 +778,48 @@ To test resource recovery:
 
 This ensures users never see blank images or broken share sheets after returning from background.
 
+## Profile Backend Call Optimization
+
+### Overview
+ProfileView has been optimized to eliminate redundant `get_user` backend calls that were occurring when users opened profile screens.
+
+### Changes Implemented
+
+#### 1. Fixed Double Trigger Issue
+The view lifecycle was causing `.task` to trigger twice:
+- Once when view appeared
+- Again when `profileRefreshCounter` was incremented in `.onAppear`
+
+**Solution:**
+- Changed `.task(id:)` from `profileRefreshCounter` to `user.mid`
+- Added guard to only fetch if `!didLoad`
+- Simplified state management
+
+#### 2. Session-Based Resync Optimization
+`resyncUser()` is a long-running operation that updates server-side state. It now only runs once per app session per user.
+
+**Implementation:**
+```swift
+private static var resyncedUsersThisSession: Set<String> = []
+private static let resyncLock = NSLock()
+```
+
+**Benefits:**
+- First profile view per session: Calls `get_user` + `resync_user`
+- Subsequent views: Only calls `get_user` (fast refresh)
+- ~50% reduction in backend calls for frequently viewed profiles
+
+### Results
+- **Before**: 2+ backend calls per profile view
+- **After**: 1-2 backend calls (2 only on first view per session)
+
+### Documentation
+For complete details on the profile optimization, see:
+- `docs/fixes/PROFILE_BACKEND_CALL_OPTIMIZATION.md` - Comprehensive iOS and Android optimization guide
+
+### Integration with fetchUser
+The ProfileView optimization works seamlessly with the `fetchUser` retry logic:
+- ProfileView controls WHEN to fetch (lifecycle management)
+- `fetchUser` controls HOW to fetch (retry logic, health checks, failover)
+- Clear separation of concerns ensures maintainable code
+

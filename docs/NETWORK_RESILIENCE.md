@@ -912,6 +912,115 @@ print("IP Cache Hit Rate: \(cacheStats.hitRate)%")
 5. **Reliable Experience**: No crashes from network issues
 6. **Server-Friendly**: App doesn't overload servers
 
+## 🎯 Profile Backend Call Optimization
+
+### Overview
+
+ProfileView has been optimized to eliminate redundant backend calls when users open profile screens. This reduces network traffic and improves responsiveness.
+
+### The Problem
+
+**Before optimization:**
+- Opening a profile triggered 2+ `get_user` backend calls
+- View lifecycle issues caused duplicate fetches
+- `resyncUser()` (long-running operation) ran on every profile view
+- Unnecessary server load and slower performance
+
+### The Solution
+
+#### 1. Fixed Double Trigger Issue
+
+**Root Cause:**
+```swift
+// OLD: Caused double triggering
+.task(id: profileRefreshCounter) {
+    await refreshProfileData()
+}
+.onAppear {
+    if didLoad {
+        profileRefreshCounter += 1  // Triggers .task again!
+    }
+}
+```
+
+**Fix:**
+```swift
+// NEW: Only fetches once per user
+.task(id: user.mid) {
+    if !didLoad {
+        await refreshProfileData()
+        didLoad = true
+    }
+}
+.onChange(of: user.mid) { _, _ in
+    didLoad = false
+}
+```
+
+#### 2. Session-Based Resync Optimization
+
+`resyncUser()` is a long-running backend operation that updates server-side state. Now it only runs once per app session per user.
+
+**Implementation:**
+```swift
+private static var resyncedUsersThisSession: Set<String> = []
+private static let resyncLock = NSLock()
+
+// Check before running expensive resync
+let shouldResync = Self.resyncLock.withLock {
+    if Self.resyncedUsersThisSession.contains(userId) {
+        return false
+    }
+    Self.resyncedUsersThisSession.insert(userId)
+    return true
+}
+```
+
+**Behavior:**
+- **First view (per session)**: `get_user` + `resync_user` (2 calls)
+- **Subsequent views**: `get_user` only (1 call)
+
+### Results
+
+| Scenario | Before | After | Improvement |
+|----------|--------|-------|-------------|
+| First profile view | 2+ calls | 2 calls | Lifecycle fixed |
+| Subsequent views | 2+ calls | 1 call | 50% reduction |
+| Server load | High | Low | 50% average reduction |
+
+### Benefits
+
+1. **Reduced Network Traffic**: ~50% fewer backend calls
+2. **Faster Loading**: Quick `get_user` instead of slow `resync_user` on repeat views
+3. **Better Server Health**: Less load on backend infrastructure
+4. **Improved UX**: More responsive profile navigation
+5. **Battery Efficiency**: Fewer network operations
+
+### Integration with Network Resilience
+
+The profile optimization complements existing network resilience features:
+
+- **Works with `fetchUser` retry logic**: Lifecycle determines WHEN to fetch, `fetchUser` determines HOW
+- **Leverages cache**: Returns cached data while refreshing in background
+- **Respects blacklist**: Avoids fetching blacklisted users
+- **NodePool integration**: Uses optimized IP routing
+- **Error handling**: Graceful degradation on network failures
+
+### Testing
+
+To verify the optimization:
+
+1. **Enable debug logging**
+2. **Open a user profile** → Check logs for 2 backend calls (get_user + resync_user)
+3. **Navigate away and back** → Check logs for 1 backend call (get_user only)
+4. **Look for**: `"Skipping resync for user X - already resynced this session"`
+
+### Documentation
+
+For complete implementation details, see:
+- `docs/fixes/PROFILE_BACKEND_CALL_OPTIMIZATION.md` - Comprehensive optimization guide (iOS & Android)
+- `docs/FETCHUSER_RETRY_IMPLEMENTATION.md` - Integration with fetchUser retry logic
+
 ## 🔮 Future Enhancements
 
 ### Planned Features
@@ -921,6 +1030,7 @@ print("IP Cache Hit Rate: \(cacheStats.hitRate)%")
 3. **Compression**: Reduce cache storage requirements
 4. **Analytics**: Better monitoring of cache performance
 5. **Smart Prefetching**: Intelligent content preloading
+6. **Profile Cache TTL**: Implement smart expiration for profile data
 
 ### Advanced Network Handling
 
