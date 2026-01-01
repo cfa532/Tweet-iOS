@@ -71,11 +71,13 @@ struct SettingsView: View {
                             .foregroundColor(.gray)
                     }
                     
-                    HStack {
-                        Text(LocalizedStringKey("Server IP"))
-                        Spacer()
-                        Text(currentServerIP)
-                            .foregroundColor(.secondary)
+                    if hproseInstance.appUser.isGuest {
+                        HStack {
+                            Text(LocalizedStringKey("Server IP"))
+                            Spacer()
+                            Text(currentServerIP)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }

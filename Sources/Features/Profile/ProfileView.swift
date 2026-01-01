@@ -612,7 +612,18 @@ struct ProfileView: View {
         // Fetch fresh user data from server
         do {
             let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
-            print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
+            if let userData = refreshedUser {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                if let jsonData = try? encoder.encode(userData),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server\n\(jsonString)")
+                } else {
+                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - \(userData)")
+                }
+            } else {
+                print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - returned nil")
+            }
             
             if let refreshedUser = refreshedUser {
                 TweetCacheManager.shared.saveUser(refreshedUser)
