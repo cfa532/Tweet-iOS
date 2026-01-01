@@ -6393,8 +6393,6 @@ final class HproseInstance: ObservableObject {
         let unwrappedResponse: Any
         do {
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            print("DEBUG: [registerUser] Raw response received: \(String(describing: rawResponse))")
-            
             unwrappedResponse = try Self.unwrapV2Response(rawResponse) as Any
             print("DEBUG: [registerUser] Unwrapped response: \(unwrappedResponse)")
         } catch {
@@ -6426,16 +6424,37 @@ final class HproseInstance: ObservableObject {
             }
             
             // Make the newly registered user follow each user in getAlphaIds()
+            // Run this in a detached task so we can return success immediately
             let alphaIds = Gadget.getAlphaIds()
-            for alphaId in alphaIds {
-                do {
-                    _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
-                } catch {
-                    let nsError = error as NSError
-                    print("DEBUG: [registerUser] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code)")
-                    // Continue with other users even if one fails
+            print("DEBUG: [registerUser] Starting background auto-follow for \(alphaIds.count) alpha user(s): \(alphaIds)")
+            
+            Task.detached { [weak self] in
+                guard let self = self else { return }
+                
+                for alphaId in alphaIds {
+                    do {
+                        // First verify the alphaId user exists before attempting to follow
+                        print("DEBUG: [registerUser:background] Checking if alphaId user exists: \(alphaId)")
+                        guard let _ = try await self.fetchUser(alphaId, forceRefresh: false) else {
+                            print("DEBUG: [registerUser:background] AlphaId user \(alphaId) not found, skipping auto-follow")
+                            continue
+                        }
+                        
+                        print("DEBUG: [registerUser:background] AlphaId user exists, attempting to follow: \(alphaId)")
+                        _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
+                        print("DEBUG: [registerUser:background] Successfully followed alphaId: \(alphaId)")
+                    } catch {
+                        let nsError = error as NSError
+                        print("DEBUG: [registerUser:background] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code), description: \(error.localizedDescription)")
+                        // Continue with other users even if one fails
+                    }
                 }
+                
+                print("DEBUG: [registerUser:background] Auto-follow process completed")
             }
+            
+            // Return success immediately without waiting for auto-follow to complete
+            print("DEBUG: [registerUser] Returning success immediately, auto-follow running in background")
             return true
         } else {
             let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")

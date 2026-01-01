@@ -101,7 +101,7 @@ struct ProfileView: View {
             .task(id: user.mid) {
                 // Only fetch if this is the first load for this user
                 if !didLoad {
-                    await refreshProfileData()
+                await refreshProfileData()
                     didLoad = true
                 }
             }
@@ -649,16 +649,16 @@ struct ProfileView: View {
         }
         
         if shouldResync {
-            Task.detached {
-                do {
-                    let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
-                    print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
-                    
-                    TweetCacheManager.shared.saveUser(resyncedUser)
-                    print("DEBUG: [ProfileView] Saved resynced user to cache")
-                } catch {
-                    print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
-                }
+        Task.detached {
+            do {
+                let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
+                print("DEBUG: [ProfileView] Successfully resynced user \(userId) on server")
+                
+                TweetCacheManager.shared.saveUser(resyncedUser)
+                print("DEBUG: [ProfileView] Saved resynced user to cache")
+            } catch {
+                print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
+            }
             }
         } else {
             print("DEBUG: [ProfileView] Skipping resync for user \(userId) - already resynced this session")
