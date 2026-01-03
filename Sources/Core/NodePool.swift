@@ -109,6 +109,20 @@ class NodePool {
         }
     }
     
+    /// Get a valid IP for a specific node by nodeMid
+    /// Can be used for any node (writable host, access node, etc.)
+    func getIPForNode(nodeMid: String) -> String? {
+        return queue.sync {
+            if let node = nodes[nodeMid], let ip = node.getPreferredIP() {
+                print("DEBUG: [NodePool] Using IP from node \(nodeMid): \(ip)")
+                return ip
+            }
+            
+            print("DEBUG: [NodePool] Node \(nodeMid) not in pool or has no IPs")
+            return nil
+        }
+    }
+    
     /// Update node in pool with new IP (replaces entire IP list)
     /// Called after successfully resolving a new IP for a user
     func updateNodeIP(nodeMid: String, newIP: String) {

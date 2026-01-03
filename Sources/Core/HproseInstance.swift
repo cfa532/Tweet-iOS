@@ -3595,13 +3595,49 @@ final class HproseInstance: ObservableObject {
             // Log memory usage before upload
             VideoConversionService.shared.logMemoryUsage("before HLS upload")
 
-            // Upload compressed HLS to server
-            let jobId = try await MediaProcessor.uploadCompressedHLS(
-                compressedURL: compressedURL,
-                fileName: "\(originalFileName)_hls.zip",
-                referenceId: referenceId,
-                appUser: appUser
-            )
+            // Upload compressed HLS to server with retry logic
+            var lastError: Error?
+            var jobId: String?
+            let maxRetries = 2
+            
+            for attempt in 1...maxRetries {
+                do {
+                    // Resolve writableUrl (may use cached or resolve fresh)
+                    _ = try await appUser.resolveWritableUrl()
+                    print("DEBUG: [HLS Upload] Attempt \(attempt)/\(maxRetries) - writableUrl: \(appUser.writableUrl?.absoluteString ?? "nil")")
+                    
+                    jobId = try await MediaProcessor.uploadCompressedHLS(
+                        compressedURL: compressedURL,
+                        fileName: "\(originalFileName)_hls.zip",
+                        referenceId: referenceId,
+                        appUser: appUser
+                    )
+                    break // Success - exit retry loop
+                    
+                } catch let error {
+                    lastError = error
+                    let nsError = error as NSError
+                    print("ERROR: [HLS Upload] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
+                    
+                    if attempt >= maxRetries {
+                        print("ERROR: [HLS Upload] All retry attempts exhausted")
+                        throw error
+                    }
+                    
+                    // Clear cached writableUrl to force fresh resolution on retry
+                    await MainActor.run {
+                        print("DEBUG: [HLS Upload] Clearing writableUrl to force fresh IP resolution on retry")
+                        appUser.writableUrl = nil
+                    }
+                    
+                    // Small delay before retry
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                }
+            }
+            
+            guard let jobId = jobId else {
+                throw lastError ?? NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "HLS upload failed"])
+            }
 
             // Force memory cleanup after upload
             autoreleasepool {}
@@ -4799,12 +4835,66 @@ final class HproseInstance: ObservableObject {
         ) async throws -> (MimeiFileType?, String?) {
             print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
             
-            // Always resolve writableUrl to ensure we have the correct IP address
-            let writableUrl = try await appUser.resolveWritableUrl()
-            guard let writableUrl = writableUrl else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
+            // Retry logic: Try with cached/pooled IP first, retry with fresh IP if it fails
+            var lastError: Error?
+            let maxRetries = 2
+            
+            for attempt in 1...maxRetries {
+                do {
+                    // Resolve writableUrl (may use NodePool cache or resolve fresh)
+                    let writableUrl = try await appUser.resolveWritableUrl()
+                    print("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl?.absoluteString ?? "nil")")
+                    
+                    guard let writableUrl = writableUrl else {
+                        throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
+                    }
+                    
+                    // Try to upload with current writableUrl
+                    return try await performBackendVideoUpload(
+                        data: data,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        noResample: noResample,
+                        writableUrl: writableUrl,
+                        appUser: appUser,
+                        progressCallback: progressCallback
+                    )
+                    
+                } catch let error {
+                    lastError = error
+                    let nsError = error as NSError
+                    print("ERROR: [Backend Conversion] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
+                    
+                    if attempt >= maxRetries {
+                        print("ERROR: [Backend Conversion] All retry attempts exhausted")
+                        throw error
+                    }
+                    
+                    // Clear cached writableUrl to force fresh resolution on retry
+                    await MainActor.run {
+                        print("DEBUG: [Backend Conversion] Clearing writableUrl to force fresh IP resolution on retry")
+                        appUser.writableUrl = nil
+                    }
+                    
+                    // Small delay before retry
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                }
             }
             
+            // Should never reach here, but throw last error if we do
+            throw lastError ?? NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Backend video conversion upload failed"])
+        }
+        
+        /// Performs the actual backend video upload
+        private func performBackendVideoUpload(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            noResample: Bool,
+            writableUrl: URL,
+            appUser: User,
+            progressCallback: ((String, Int) -> Void)?
+        ) async throws -> (MimeiFileType?, String?) {
             // Get host from writableUrl - no fallback, must succeed
             guard let host = writableUrl.host else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
@@ -4941,10 +5031,64 @@ final class HproseInstance: ObservableObject {
         ) async throws -> MimeiFileType {
             print("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
-            _ = try await appUser.resolveWritableUrl()
-            guard let uploadClient = appUser.uploadClient else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
+            // Retry logic: Try with cached/pooled IP first, retry with fresh IP if it fails
+            var lastError: Error?
+            let maxRetries = 2
+            
+            for attempt in 1...maxRetries {
+                do {
+                    // Resolve writable URL (may use NodePool cache or resolve fresh)
+                    let writableUrl = try await appUser.resolveWritableUrl()
+                    print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl?.absoluteString ?? "nil")")
+                    
+                    guard let uploadClient = appUser.uploadClient else {
+                        throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
+                    }
+                    
+                    // Try to upload with current writableUrl
+                    return try await performUpload(
+                        data: data,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        mediaType: mediaType,
+                        uploadClient: uploadClient,
+                        appId: appId
+                    )
+                    
+                } catch let error as NSError {
+                    lastError = error
+                    print("ERROR: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) failed - domain: \(error.domain), code: \(error.code)")
+                    
+                    // If this was the last attempt, throw the error
+                    if attempt >= maxRetries {
+                        print("ERROR: [uploadRegularFile] All retry attempts exhausted")
+                        throw error
+                    }
+                    
+                    // On first failure, clear cached writableUrl to force fresh resolution
+                    await MainActor.run {
+                        print("DEBUG: [uploadRegularFile] Clearing cached writableUrl to force fresh IP resolution on retry")
+                        appUser.writableUrl = nil
+                    }
+                    
+                    // Small delay before retry
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                }
             }
+            
+            // Should never reach here, but throw last error if we do
+            throw lastError ?? NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload failed"])
+        }
+        
+        /// Performs the actual upload with the given client
+        private static func performUpload(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            mediaType: MediaType,
+            uploadClient: HproseClient,
+            appId: String
+        ) async throws -> MimeiFileType {
             
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
