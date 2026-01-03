@@ -25,7 +25,11 @@ struct ChatListScreen: View {
         chatSessionManager.chatSessions
             .filter { $0.userId == HproseInstance.shared.appUser.mid }
             .filter { 
-                // Filter out sessions with nil or empty message content
+                // Always show sessions with unread messages (hasNews: true)
+                if $0.hasNews {
+                    return true
+                }
+                // Filter out sessions with nil or empty message content (only if already read)
                 guard let content = $0.lastMessage.content else { return false }
                 return !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
@@ -123,11 +127,16 @@ struct ChatListScreen: View {
                 
                 // Clear badge count when chat list is opened
                 DispatchQueue.main.async {
+                    // Clear system badge (app icon)
                     UNUserNotificationCenter.current().setBadgeCount(0) { error in
                         if let error = error {
                             print("[ChatListScreen] Error clearing badge count: \(error)")
                         }
                     }
+                    
+                    // Clear internal unread count by marking all sessions as read
+                    ChatSessionManager.shared.markAllMessagesAsRead()
+                    print("[ChatListScreen] Cleared all unread message badges")
                 }
             }
             .onDisappear {

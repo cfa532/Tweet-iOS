@@ -363,19 +363,8 @@ class ChatSessionManager: ObservableObject {
         let appState = UIApplication.shared.applicationState
         print("[ChatSessionManager] 📱 App state: \(appState.rawValue) (0=active, 1=inactive, 2=background)")
         guard appState == .background || appState == .inactive else {
-            print("[ChatSessionManager] ⚠️ App is in foreground, skipping notification for message: \(message.id)")
-            // Still update badge even when app is in foreground
-            currentBadgeCount += 1
-            let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
-            DispatchQueue.main.async {
-                UNUserNotificationCenter.current().setBadgeCount(newBadge) { error in
-                    if let error = error {
-                        print("[ChatSessionManager] Error setting badge count: \(error)")
-                    } else {
-                        print("[ChatSessionManager] Updated badge count to: \(newBadge > 9 ? "N" : "\(newBadge)")")
-                    }
-                }
-            }
+            print("[ChatSessionManager] ⚠️ App is in foreground, skipping notification and badge update for message: \(message.id)")
+            // Don't update badge when app is in foreground - user can already see messages
             return
         }
 
@@ -387,8 +376,8 @@ class ChatSessionManager: ObservableObject {
         let settings = await center.notificationSettings()
         print("[ChatSessionManager] 🔔 Notification permission status: \(settings.authorizationStatus.rawValue) (0=notDetermined, 1=denied, 2=authorized, 3=provisional, 4=ephemeral)")
         guard settings.authorizationStatus == .authorized else {
-            print("[ChatSessionManager] ⚠️ No notification permission, skipping notification")
-            // Still update badge even without permission
+            print("[ChatSessionManager] ⚠️ No notification permission, updating badge only")
+            // Update badge even without notification permission (app is in background)
             currentBadgeCount += 1
             let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
             DispatchQueue.main.async {
