@@ -155,7 +155,13 @@ class UploadProgressManager: ObservableObject {
         isUploading = true
         uploadType = type
         currentStage = .preparing
-            stageMessage = NSLocalizedString("Preparing upload... Please stay on this screen", comment: "Upload stage with video warning")
+        
+        // Show stronger warning for video uploads
+        if hasVideos {
+            stageMessage = NSLocalizedString("Preparing video upload... Please keep the app in foreground", comment: "Video upload warning")
+        } else {
+            stageMessage = NSLocalizedString("Preparing upload... Please stay on this screen", comment: "Upload stage")
+        }
 
         progress = 0.0
         detailedProgress = ""
