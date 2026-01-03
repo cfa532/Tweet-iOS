@@ -174,6 +174,7 @@ struct ChatScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 8) {
+                    // Load more indicator at TOP (for loading older messages)
                     if hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
                         if isLoadingMore {
                             HStack {
@@ -191,6 +192,7 @@ struct ChatScreen: View {
                         }
                     }
 
+                    // Messages in chronological order (oldest to newest)
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                         if index > 0 {
                             let timeDiff = message.timestamp - messages[index - 1].timestamp
@@ -201,8 +203,8 @@ struct ChatScreen: View {
 
                         ChatMessageView(
                             message: message,
-                            allMessages: messages, // Pass the entire array for stable computation
-                            currentIndex: index,   // Pass the index for stable computation
+                            allMessages: messages,
+                            currentIndex: index,
                             isChatScreenVisible: isChatScreenVisible,
                             receiptId: receiptId,
                             onResendMessage: { failedMessage in
@@ -211,9 +213,15 @@ struct ChatScreen: View {
                         )
                         .id(message.id)
                     }
+                    
+                    // Bottom anchor for initial scroll
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottomAnchor")
                 }
                 .padding()
             }
+            .defaultScrollAnchor(.bottom)
             .onChange(of: shouldScrollToBottom) { _, newValue in
                 guard newValue, let lastMessage = messages.last else { return }
 
@@ -228,21 +236,14 @@ struct ChatScreen: View {
                 shouldAnimateScroll = true
             }
             .onChange(of: keyboardHeight) { _, newHeight in
-                if let lastMessage = messages.last {
+                // Scroll to bottom when keyboard appears
+                if newHeight > 0, let lastMessage = messages.last {
                     withAnimation(.easeOut(duration: 0.25)) {
                         proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
                 }
             }
             .navigationBarHidden(true)
-            .onChange(of: messagesLoaded) { _, loaded in
-                guard loaded, let lastMessage = messages.last else { return }
-                
-                // Simple: always scroll to bottom when messages load
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                }
-            }
             .onAppear {
                 DispatchQueue.main.async {
                     UNUserNotificationCenter.current().setBadgeCount(0) { error in
@@ -702,24 +703,18 @@ struct ChatScreen: View {
         await MainActor.run {
             allCachedMessages = sortedMessages
             
-            // Load only the most recent 20 messages initially
-            currentOffset = max(0, sortedMessages.count - 20)
-            let initialMessages = Array(sortedMessages.suffix(20))
+            // Load only the most recent 10 messages initially for faster display
+            currentOffset = max(0, sortedMessages.count - 10)
+            let initialMessages = Array(sortedMessages.suffix(10))
             messages = initialMessages
             hasMoreMessages = currentOffset > 0
             isLoadMoreEnabled = false
             
             print("[ChatScreen] Loaded \(initialMessages.count) initial messages from cache (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
             
-            // Scroll to bottom after messages are set
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                shouldAnimateScroll = false
-                shouldScrollToBottom = true
-                
-                // Allow loading older messages only after initial scroll completes
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    isLoadMoreEnabled = true
-                }
+            // Enable load more after a short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                isLoadMoreEnabled = true
             }
         }
         
