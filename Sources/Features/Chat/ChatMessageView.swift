@@ -287,7 +287,7 @@ struct ChatImageThumbnail: View {
             if image == nil {
                 loadImage()
             }
-            
+
             // Setup foreground observer to reload resources if released during background
             setupForegroundObserver()
         }
@@ -297,6 +297,11 @@ struct ChatImageThumbnail: View {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
             }
+        }
+        .onChange(of: baseUrl) { _, newBaseUrl in
+            // Reload image when baseUrl changes (e.g., when senderUser loads)
+            print("DEBUG: [ChatImageThumbnail] baseUrl changed, reloading image for \(attachment.mid)")
+            loadImage()
         }
         .fullScreenCover(isPresented: $showFullScreen) {
             // Use MediaBrowserView for full-screen viewing (same as MediaCell)
@@ -697,6 +702,23 @@ struct ChatVideoPlayer: View {
                             await MainActor.run {
                                 isLoading = false
                             }
+                        }
+                    }
+                }
+                .onChange(of: baseUrl) { _, newBaseUrl in
+                    // When baseUrl changes (e.g., when senderUser loads), force recreation of video player
+                    // by resetting hasValidUrl and loading state
+                    print("DEBUG: [ChatVideoPlayer] baseUrl changed for \(attachment.mid), forcing video reload")
+                    hasValidUrl = attachment.getUrl(newBaseUrl) != nil
+                    isLoading = true
+                    // Reset playback state
+                    isPlaying = false
+                    userInteracted = false
+                    videoFinished = false
+                    Task {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                        await MainActor.run {
+                            isLoading = false
                         }
                     }
                 }

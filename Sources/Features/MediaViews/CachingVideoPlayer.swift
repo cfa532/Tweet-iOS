@@ -143,12 +143,19 @@ struct CachingVideoPlayer: View {
         }
         .onChange(of: isVisible) { _, visible in
             if visible {
-                // When view becomes visible, check if player needs recovery
-                if player != nil && isPlayerBroken() {
-                    print("DEBUG: [CachingVideoPlayer] Player is broken when becoming visible for \(mid), recovering...")
-                    recoverFromBackground()
-                } else if visible && autoPlay {
-                    player?.play()
+                // When view becomes visible, always attempt recovery to ensure video works properly
+                // Videos that have been scrolled out of view may need recovery even if they appear healthy
+                print("DEBUG: [CachingVideoPlayer] View became visible for \(mid), attempting recovery...")
+                recoverFromBackground()
+
+                // If autoPlay is enabled, start playing after recovery
+                if autoPlay {
+                    // Small delay to allow recovery to complete
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if self.isVisible { // Double-check we're still visible
+                            self.player?.play()
+                        }
+                    }
                 }
             } else {
                 player?.pause()
