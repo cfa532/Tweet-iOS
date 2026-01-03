@@ -653,18 +653,24 @@ struct ChatVideoContainer: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
         )
-        .task {
-            // Load the player asynchronously
+        .onAppear {
+            // Load the player asynchronously without blocking
             if player == nil {
-                player = await ChatVideoManager.shared.getOrCreateVideoPlayer(
-                    messageId: messageId,
-                    attachment: attachment,
-                    isFromCurrentUser: isFromCurrentUser,
-                    senderUser: senderUser,
-                    isChatScreenVisible: isChatScreenVisible,
-                    receiptId: receiptId
-                )
-                isLoading = false
+                Task {
+                    let loadedPlayer = await ChatVideoManager.shared.getOrCreateVideoPlayer(
+                        messageId: messageId,
+                        attachment: attachment,
+                        isFromCurrentUser: isFromCurrentUser,
+                        senderUser: senderUser,
+                        isChatScreenVisible: isChatScreenVisible,
+                        receiptId: receiptId
+                    )
+                    
+                    await MainActor.run {
+                        player = loadedPlayer
+                        isLoading = false
+                    }
+                }
             }
         }
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
