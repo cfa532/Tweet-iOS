@@ -28,6 +28,10 @@
 ### Algorithms & Performance
 | Document | Description | Status |
 |----------|-------------|--------|
+| [**NODEPOOL_STRATEGY.md**](./NODEPOOL_STRATEGY.md) | **NEW:** Human-friendly guide to NodePool: Trust vs Verify strategies for `fetchUser` and `getHostIP` | ✅ Production |
+| [**NODEPOOL_QUICK_REFERENCE.md**](./NODEPOOL_QUICK_REFERENCE.md) | **NEW:** One-page cheat sheet for NodePool usage, patterns, and debugging | ✅ Production |
+| [**FETCHUSER_RETRY_IMPLEMENTATION.md**](./FETCHUSER_RETRY_IMPLEMENTATION.md) | fetchUser architecture with NodePool integration, retry logic, and error handling | ✅ Production |
+| [**GETPROVIDERIP_FLOW.md**](./GETPROVIDERIP_FLOW.md) | IP resolution flow with health checking and fallback logic | ✅ Production |
 | [**HLS_CONVERSION_ALGORITHM.md**](./HLS_CONVERSION_ALGORITHM.md) | Complete HLS video conversion pipeline: normalization, routing, variant creation | ✅ Production |
 | [**IMAGE_ZOOM_ALGORITHM.md**](./IMAGE_ZOOM_ALGORITHM.md) | Image zoom and pan gestures | ✅ Production |
 | [**TWEET_MEMORY_CACHE_ALGORITHM.md**](./TWEET_MEMORY_CACHE_ALGORITHM.md) | Tweet caching and memory management | ✅ Production |
@@ -42,6 +46,7 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
+| [**NODEPOOL_STRATEGY.md**](./NODEPOOL_STRATEGY.md) | **NEW**: NodePool optimization with trust (fetchUser) vs verify (getHostIP) strategies, automatic cleanup, self-healing | Jan 2026 |
 | [**fixes/LAYOUT_STABILITY_IMPROVEMENTS.md**](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) | **COMPREHENSIVE**: All layout stability mechanisms - retweet placeholders, scroll debouncing, GeometryReader removal, fixed sizes, drawing groups | Dec 2025 |
 | [**fixes/CACHE_KEY_MIGRATION_DEC_2025.md**](./fixes/CACHE_KEY_MIGRATION_DEC_2025.md) | Cache key migration from "main_feed" to appUser.mid with persistence across logouts | Dec 2025 |
 | [**fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md**](./fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md) | Context-aware sharing: IP-based URLs for Vue HashHistory, accurate video screenshots from detail view | Nov 14, 2025 |

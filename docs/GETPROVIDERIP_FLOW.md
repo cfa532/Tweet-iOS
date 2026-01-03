@@ -3,6 +3,10 @@
 ## Overview
 `getProviderIP(userId)` is responsible for finding a healthy IP address for any user with intelligent fallback logic.
 
+> **📚 Related Documentation**: 
+> - [NODEPOOL_STRATEGY.md](NODEPOOL_STRATEGY.md) - Human-friendly guide on NodePool usage
+> - [FETCHUSER_RETRY_IMPLEMENTATION.md](FETCHUSER_RETRY_IMPLEMENTATION.md) - fetchUser architecture and retry logic
+
 ## Complete Flow Diagram
 
 ```

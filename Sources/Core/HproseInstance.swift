@@ -1341,6 +1341,15 @@ final class HproseInstance: ObservableObject {
                 
                 // If we get here, response was null - clear baseUrl and let retry loop handle it
                 print("DEBUG: [\(logPrefix)] NULL RESPONSE for userId: \(user.mid) on attempt \(attempt)/\(maxRetries)")
+                
+                // Remove unhealthy node from pool (null response indicates node issue)
+                if let baseUrlString = user.baseUrl?.absoluteString,
+                   let hostIds = user.hostIds, hostIds.count > 1 {
+                    let accessNodeMid = hostIds[1]
+                    print("DEBUG: [\(logPrefix)] Removing node \(accessNodeMid) from pool after null response")
+                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+                }
+                
                 user.baseUrl = nil
                 
                 // If this was the last attempt, fail
@@ -1367,6 +1376,14 @@ final class HproseInstance: ObservableObject {
                 let nsError = error as NSError
                 print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
                 
+                // Remove unhealthy node from pool if this is a network/connection error
+                if let baseUrlString = user.baseUrl?.absoluteString,
+                   let hostIds = user.hostIds, hostIds.count > 1 {
+                    let accessNodeMid = hostIds[1]
+                    print("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failure")
+                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+                }
+                
                 if skipRetryAndBlacklist {
                     throw error
                 }
@@ -1379,8 +1396,14 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // All retries failed
+        // All retries failed - remove node from pool
         print("ERROR: [\(logPrefix)] ALL RETRIES FAILED: userId: \(user.mid), maxRetries: \(maxRetries)")
+        if let baseUrlString = user.baseUrl?.absoluteString,
+           let hostIds = user.hostIds, hostIds.count > 1 {
+            let accessNodeMid = hostIds[1]
+            print("DEBUG: [\(logPrefix)] Removing failed node \(accessNodeMid) from pool after all retries failed")
+            NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+        }
         if !skipRetryAndBlacklist {
             blackList.recordFailure(user.mid)
         }
@@ -1400,11 +1423,12 @@ final class HproseInstance: ObservableObject {
             
             if isValidUserData(user) {
                 // Update NodePool with successful access (replace IP list with working IP)
+                // Only update access node (hostIds[1]) since that's what we resolved during fetchUser
                 if let baseUrlString = user.baseUrl?.absoluteString,
                    let hostIds = user.hostIds, hostIds.count > 1 {
                     let accessNodeMid = hostIds[1]
                     NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString)
-                    print("DEBUG: [processUserDataResponse] ✅ Updated pool: node \(accessNodeMid) now has working IP")
+                    print("DEBUG: [processUserDataResponse] ✅ Updated pool: access node \(accessNodeMid) now has working IP")
                 }
                 return true
             } else {
@@ -1434,19 +1458,21 @@ final class HproseInstance: ObservableObject {
         originalBaseUrl: String?
     ) async throws {
         // First attempt logic with NodePool integration
+        // On first attempt, if user has baseUrl or node in pool, trust it and use directly
         if attempt == 1 && !forceFreshIP && userHasBaseUrl && !(user.baseUrl?.absoluteString.isEmpty ?? true) {
             // Try to get IP from user's node in pool (indexed by nodeId)
             if let poolIP = NodePool.shared.getIPFromNode(for: user) {
-                // User's node is in pool - use any IP from the list
+                // TRUST the pooled IP - use it directly without health check
+                // If it's bad, retry logic will handle it and update the pool
                 if let url = URL(string: ensureHttpPrefix(poolIP)) {
-                    await applyBaseUrlIfNeeded(user, url: url, reason: "from NodePool")
-                    print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using IP from NodePool for user's node: \(poolIP) for userId: \(user.mid)")
+                    await applyBaseUrlIfNeeded(user, url: url, reason: "from NodePool (trusted)")
+                    print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using trusted IP from NodePool: \(poolIP) for userId: \(user.mid)")
                     return
                 }
             }
             
-            // User's node not in pool - use user's baseUrl
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User's node not in pool, using user.baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
+            // User's node not in pool - use user's existing baseUrl (also trusted)
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User's node not in pool, using existing baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
             return
         }
         
@@ -6791,8 +6817,101 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected server response"])
     }
     
-    /// Find IP addresses of given nodeId
+    /// Find IP addresses of given nodeId with retry and appUser health checking
+    /// - Parameters:
+    ///   - nodeId: The node ID to resolve IPs for
+    ///   - v4Only: Whether to request IPv4 addresses only
+    /// - Returns: A healthy IP address for the node, or nil if none found
     func getHostIP(_ nodeId: String, v4Only: Bool = false) async -> String? {
+        print("DEBUG: [getHostIP] Resolving IPs for node \(nodeId)")
+        
+        // Step 0: Check NodePool first for cached IP
+        if let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
+            print("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
+            
+            // Test if pooled IP is still healthy
+            let client = clientPool.getClientByIP(for: pooledIP)
+            let isHealthy = await isServerHealthyWithTimeout(client, timeout: 10.0)
+            clientPool.releaseClient(client, for: pooledIP)
+            
+            if isHealthy {
+                print("DEBUG: [getHostIP] ✅ Pooled IP \(pooledIP) is healthy, using it")
+                return pooledIP
+            } else {
+                print("DEBUG: [getHostIP] ❌ Pooled IP \(pooledIP) is unhealthy, removing from pool")
+                NodePool.shared.removeIPFromNode(nodeMid: nodeId, ip: pooledIP)
+            }
+        }
+        
+        print("DEBUG: [getHostIP] Attempt 1: Resolving IPs from API for node \(nodeId)")
+        
+        // First attempt with current appUser client
+        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
+            NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+            print("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP")
+            return ip
+        }
+        
+        print("DEBUG: [getHostIP] Attempt 1 failed, checking appUser health...")
+        
+        // First attempt failed - check if appUser is healthy
+        guard let appUserClient = appUser.hproseClient else {
+            print("DEBUG: [getHostIP] No appUser client available, cannot retry")
+            return nil
+        }
+        
+        let isAppUserHealthy = await isServerHealthyWithTimeout(appUserClient, timeout: 10.0)
+        
+        if isAppUserHealthy {
+            // AppUser is healthy but still couldn't get IPs - node might not exist
+            print("DEBUG: [getHostIP] AppUser is healthy but node IPs not found - node may not exist")
+            return nil
+        }
+        
+        // AppUser is unhealthy - refresh it and retry
+        print("DEBUG: [getHostIP] ⚠️ AppUser is unhealthy, refreshing via entry IP...")
+        
+        do {
+            guard let entryIP = try await findEntryIP() else {
+                print("DEBUG: [getHostIP] Failed to find entry IP for appUser refresh")
+                return nil
+            }
+            
+            print("DEBUG: [getHostIP] Using entry IP to refresh appUser: \(entryIP)")
+            
+            // Refresh appUser's IP via entry
+            if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP)) {
+                await applyBaseUrlIfNeeded(appUser, url: URL(string: "http://\(newAppUserIP)")!, reason: "getHostIP appUser refresh")
+                print("DEBUG: [getHostIP] ✅ AppUser refreshed with new IP: \(newAppUserIP)")
+            } else {
+                print("DEBUG: [getHostIP] Failed to refresh appUser IP")
+                return nil
+            }
+            
+            // Retry with refreshed appUser
+            print("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
+            if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
+                NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+                print("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
+                return ip
+            }
+            
+            print("DEBUG: [getHostIP] Attempt 2 also failed, node IPs not resolvable")
+            return nil
+            
+        } catch {
+            print("DEBUG: [getHostIP] Error during appUser refresh: \(error)")
+            return nil
+        }
+    }
+    
+    /// Internal helper that performs the actual IP resolution and health checking
+    /// - Parameters:
+    ///   - nodeId: The node ID to resolve IPs for
+    ///   - v4Only: Whether to request IPv4 addresses only
+    ///   - hproseClient: The Hprose client to use for the API call
+    /// - Returns: A healthy IP address for the node, or nil if none found
+    private func _getHostIP(_ nodeId: String, v4Only: Bool = false, hproseClient: HproseClient?) async -> String? {
         let entry = "get_node_ips"
         let params = [
             "aid": appId,
@@ -6802,14 +6921,14 @@ final class HproseInstance: ObservableObject {
             "v4only": v4Only ? "true" : "false"
         ]
         
-        guard let hproseClient = appUser.hproseClient else {
-            print("DEBUG: [getHostIP] No hprose client available")
+        guard let hproseClient = hproseClient else {
+            print("DEBUG: [_getHostIP] No hprose client available")
             return nil
         }
         
         let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
         guard let response = rawResponse else {
-            print("DEBUG: [getHostIP] No response from server.")
+            print("DEBUG: [_getHostIP] No response from server.")
             return nil
         }
         
@@ -6819,7 +6938,7 @@ final class HproseInstance: ObservableObject {
             unwrappedResponse = try Self.unwrapV2Response(response)
         } catch {
             let nsError = error as NSError
-            print("DEBUG: [getHostIP] Error unwrapping v2 response: domain: \(nsError.domain), code: \(nsError.code)")
+            print("DEBUG: [_getHostIP] Error unwrapping v2 response: domain: \(nsError.domain), code: \(nsError.code)")
             return nil
         }
         
@@ -6829,7 +6948,7 @@ final class HproseInstance: ObservableObject {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             
-            print("DEBUG: [getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
+            print("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
             
             // Test IPs in batches of 4 for faster discovery during high load
             let batchSize = 4
@@ -6837,7 +6956,7 @@ final class HproseInstance: ObservableObject {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])
                 
-                print("DEBUG: [getHostIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
+                print("DEBUG: [_getHostIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
                 
                 // Test this batch in parallel - return as soon as first IP responds successfully
                 let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
@@ -6849,7 +6968,7 @@ final class HproseInstance: ObservableObject {
                                 return nil
                             }
                             
-                            print("DEBUG: [getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
+                            print("DEBUG: [_getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let client = self.clientPool.getClientByIP(for: ip)
                             let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
@@ -6861,9 +6980,9 @@ final class HproseInstance: ObservableObject {
                             }
                             
                             if isHealthy {
-                                print("DEBUG: [getHostIP] ✅ IP test PASSED: \(ip)")
+                                print("DEBUG: [_getHostIP] ✅ IP test PASSED: \(ip)")
                             } else {
-                                print("DEBUG: [getHostIP] ❌ IP test FAILED: \(ip)")
+                                print("DEBUG: [_getHostIP] ❌ IP test FAILED: \(ip)")
                             }
                             
                             return (ip, isHealthy)
@@ -6873,7 +6992,7 @@ final class HproseInstance: ObservableObject {
                     // Return IMMEDIATELY when first healthy IP is found
                     for await result in group {
                         if let (ip, isHealthy) = result, isHealthy {
-                            print("DEBUG: [getHostIP] Found healthy node IP: \(ip) - returning immediately")
+                            print("DEBUG: [_getHostIP] Found healthy node IP: \(ip) - returning immediately")
                             group.cancelAll()  // Cancel remaining checks in this batch
                             return ip as String?
                         }
@@ -6890,14 +7009,14 @@ final class HproseInstance: ObservableObject {
             // If no healthy IP found in any batch, return nil
             // The caller should handle the nil case appropriately
             if !ipAddresses.isEmpty {
-                print("DEBUG: [getHostIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil")
+                print("DEBUG: [_getHostIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil")
                 return nil
             }
             
-            print("DEBUG: [getHostIP] No IPs available in response")
+            print("DEBUG: [_getHostIP] No IPs available in response")
             return nil
         }
-        print("DEBUG: [getHostIP] Invalid IpList response format")
+        print("DEBUG: [_getHostIP] Invalid IpList response format")
         return nil
     }
     

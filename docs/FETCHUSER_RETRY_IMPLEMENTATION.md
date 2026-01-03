@@ -4,6 +4,8 @@
 
 This document describes the architecture and implementation pattern for `fetchUser` with intelligent retry logic, IP resolution, and server health checking. This pattern ensures resilient user data fetching across distributed backend nodes with automatic failover.
 
+> **📚 Related Documentation**: See [NODEPOOL_STRATEGY.md](NODEPOOL_STRATEGY.md) for a human-friendly guide on NodePool usage and the difference between `fetchUser` (trust strategy) and `getHostIP` (verify strategy).
+
 ## Key Design Principles
 
 ### 1. **Single Source of Truth for Health Checking**
@@ -21,9 +23,19 @@ fetchUser()                    → Entry point, cache checking, deduplication
 
 ### 3. **Progressive Fallback Strategy**
 1. Use cached data if available and fresh
-2. Use existing user.baseUrl on first attempt
-3. On retry, resolve fresh IP via `getProviderIP()`
-4. `getProviderIP()` internally handles appUser health checks
+2. Check NodePool for trusted IP (first attempt)
+3. Use existing user.baseUrl on first attempt
+4. On retry, resolve fresh IP via `getProviderIP()`
+5. `getProviderIP()` internally handles appUser health checks
+
+### 4. **NodePool Integration (Trust Strategy)**
+- **First Attempt**: Trust pooled IPs without health check (speed optimization)
+- **On Failure**: Remove unhealthy node from pool automatically
+- **On Success**: Add/update working IP to pool for future use
+- **Retry Attempts**: Resolve fresh IP when pooled IP fails
+- **Self-Healing**: Pool automatically maintains only healthy IPs
+
+> 📖 For detailed NodePool strategy explanation, see [NODEPOOL_STRATEGY.md](NODEPOOL_STRATEGY.md)
 
 ## Architecture
 

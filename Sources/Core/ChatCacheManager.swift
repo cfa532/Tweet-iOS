@@ -193,6 +193,26 @@ extension ChatCacheManager {
                 }
             }
             
+            // IMPORTANT: Associate the message with its chat session for cascade delete to work
+            // Find the chat session and link this message to it
+            let sessionRequest: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
+            // The message needs to be linked to the session based on the conversation
+            // A message belongs to a session where either:
+            // - userId matches authorId and receiptId matches receiptId, OR
+            // - userId matches receiptId and receiptId matches authorId (for received messages)
+            let userId = message.authorId
+            let partnerId = message.receiptId
+            
+            // Try to find session where current user is the userId and partner is receiptId
+            sessionRequest.predicate = NSPredicate(
+                format: "(userId == %@ AND receiptId == %@) OR (userId == %@ AND receiptId == %@)",
+                userId, partnerId, partnerId, userId
+            )
+            
+            if let cdSession = try? context.fetch(sessionRequest).first {
+                cdMessage.session = cdSession
+            }
+            
             try? context.save()
         }
     }

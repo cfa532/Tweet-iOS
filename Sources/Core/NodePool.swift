@@ -192,6 +192,41 @@ class NodePool {
         addIPToNode(nodeMid: accessNodeMid, ip: normalizedIP)
     }
     
+    /// Remove a node from the pool (e.g., when discovered to be unhealthy)
+    /// - Parameter nodeMid: The node ID to remove
+    func removeNode(nodeMid: String) {
+        queue.async(flags: .barrier) {
+            if self.nodes.removeValue(forKey: nodeMid) != nil {
+                print("DEBUG: [NodePool] ❌ Removed unhealthy node \(nodeMid) from pool")
+            }
+        }
+    }
+    
+    /// Remove a specific IP from a node's IP list
+    /// If the node has no IPs left after removal, the node is removed from the pool
+    /// - Parameters:
+    ///   - nodeMid: The node ID
+    ///   - ip: The IP address to remove
+    func removeIPFromNode(nodeMid: String, ip: String) {
+        queue.async(flags: .barrier) {
+            let normalizedIP = NodeInfo.normalizeIP(ip)
+            
+            if var node = self.nodes[nodeMid] {
+                node.ips.removeAll { NodeInfo.normalizeIP($0) == normalizedIP }
+                
+                if node.ips.isEmpty {
+                    // No IPs left, remove the entire node
+                    self.nodes.removeValue(forKey: nodeMid)
+                    print("DEBUG: [NodePool] ❌ Removed node \(nodeMid) from pool (no IPs left)")
+                } else {
+                    // Still has other IPs, update the node
+                    self.nodes[nodeMid] = node
+                    print("DEBUG: [NodePool] 🗑️ Removed IP \(normalizedIP) from node \(nodeMid) (remaining: \(node.ips.count))")
+                }
+            }
+        }
+    }
+    
     /// Get pool statistics for debugging
     func getStats() -> (total: Int, totalIPs: Int) {
         return queue.sync {

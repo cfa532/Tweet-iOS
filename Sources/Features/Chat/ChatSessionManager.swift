@@ -15,6 +15,9 @@ class ChatSessionManager: ObservableObject {
 
     // Track which messages have already been notified to prevent duplicates
     private var notifiedMessageIds: Set<String> = []
+    
+    // Track deleted sessions to prevent them from being recreated by checkBackendForNewMessages
+    private var deletedSessionIds: Set<String> = []
 
     private let chatCacheManager = ChatCacheManager.shared
     private let hproseInstance = HproseInstance.shared
@@ -92,6 +95,12 @@ class ChatSessionManager: ObservableObject {
                 
                 // Update or create chat sessions (only add new ones, don't overwrite existing)
                 for (partnerId, messages) in messagesByPartner {
+                    // Skip if this session was explicitly deleted by the user
+                    if deletedSessionIds.contains(partnerId) {
+                        print("[ChatSessionManager] Skipping session creation for \(partnerId) - user deleted this session")
+                        continue
+                    }
+                    
                     // Use the last message from the array (newest message)
                     if let lastMessage = messages.last {
                         // Check if session already exists using the other party's ID
@@ -182,6 +191,13 @@ class ChatSessionManager: ObservableObject {
                 otherPartyId = message.authorId
             }
             
+            // If this session was previously deleted, remove it from the deleted set
+            // since the user is now starting a new conversation
+            if deletedSessionIds.contains(otherPartyId) {
+                deletedSessionIds.remove(otherPartyId)
+                print("[ChatSessionManager] Removed \(otherPartyId) from deleted sessions - starting new conversation")
+            }
+            
             if let existingIndex = chatSessions.firstIndex(where: { session in
                 session.receiptId == otherPartyId
             }) {
@@ -254,13 +270,26 @@ class ChatSessionManager: ObservableObject {
     
     /// Remove a chat session and all associated messages
     func removeChatSession(receiptId: MimeiId) {
-        // Remove the chat session from Core Data (this will cascade delete messages)
-        chatCacheManager.deleteChatSessionByReceiptId(userId: hproseInstance.appUser.mid, receiptId: receiptId)
+        let userId = hproseInstance.appUser.mid
+        
+        // First, explicitly delete all messages for this conversation
+        // This handles both linked and orphaned messages
+        chatCacheManager.deleteMessagesForConversation(authorId: userId, receiptId: receiptId)
+        print("[ChatSessionManager] Deleted messages for conversation between \(userId) and \(receiptId)")
+        
+        // Then remove the chat session from Core Data
+        chatCacheManager.deleteChatSessionByReceiptId(userId: userId, receiptId: receiptId)
         
         // Remove from local array
         chatSessions.removeAll { $0.receiptId == receiptId }
         
-        print("[ChatSessionManager] Removed chat session and messages for \(receiptId)")
+        // Mark this session as deleted to prevent recreation from backend messages
+        deletedSessionIds.insert(receiptId)
+        
+        // Update unread count after deletion
+        updateUnreadMessageCount()
+        
+        print("[ChatSessionManager] Removed chat session and all messages for \(receiptId), marked as deleted")
     }
     
     /// Clear all chat sessions

@@ -20,17 +20,26 @@ struct ChatListScreen: View {
         self.onChatNavigate = onChatNavigate
     }
     
+    // Computed property for filtered and sorted sessions
+    private var currentUserSessions: [ChatSession] {
+        chatSessionManager.chatSessions
+            .filter { $0.userId == HproseInstance.shared.appUser.mid }
+            .filter { 
+                // Filter out sessions with nil or empty message content
+                guard let content = $0.lastMessage.content else { return false }
+                return !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            .sorted(by: { $0.timestamp > $1.timestamp })
+    }
+    
     var body: some View {
         VStack {
-                let currentUserSessions = chatSessionManager.chatSessions.filter { $0.userId == HproseInstance.shared.appUser.mid }
                 if currentUserSessions.isEmpty {
-                    // Show followings list when no chats exist
+                    // Show followings list when no chats exist or all messages are empty
                     FollowingsListForChat(followingUsers: followingUsers, isLoadingFollowings: isLoadingFollowings)
                 } else {
                     List {
-                        ForEach(chatSessionManager.chatSessions
-                            .filter { $0.userId == HproseInstance.shared.appUser.mid }
-                            .sorted(by: { $0.timestamp > $1.timestamp })) { session in
+                        ForEach(currentUserSessions) { session in
                             ChatSessionRow(session: session)
                         }
                         .onDelete(perform: deleteChatSession)
@@ -93,6 +102,14 @@ struct ChatListScreen: View {
                     await loadChatSessions()
                     // Also load followings when no chats exist
                     await loadFollowings()
+                }
+            }
+            .onChange(of: currentUserSessions.isEmpty) { oldValue, newValue in
+                // When sessions become empty, load followings to show the empty state
+                if newValue && followingUsers.isEmpty {
+                    Task {
+                        await loadFollowings()
+                    }
                 }
             }
             .onAppear {
@@ -159,8 +176,12 @@ struct ChatListScreen: View {
     // MARK: - Chat Session Management
     
     private func deleteChatSession(offsets: IndexSet) {
+        // Get the filtered sessions array
+        let sessions = currentUserSessions
+        
         for index in offsets {
-            let session = chatSessionManager.chatSessions[index]
+            // Use the index from the filtered array, not the full array
+            let session = sessions[index]
             sessionToDelete = session
             showDeleteConfirmation = true
         }
@@ -216,14 +237,12 @@ struct ChatListScreen: View {
             return
         }
         
-        // Use singleton pattern - get users instantly from cache, refresh in background
+        // Use singleton pattern - get users instantly from cache
+        // Include ALL users, even without username (they'll be fetched)
         var users: [User] = []
         for userId in followingIds {
             let user = User.getInstance(mid: userId)
-            // Only include users with valid data
-            if user.username != nil {
-                users.append(user)
-            }
+            users.append(user)
         }
         
         await MainActor.run {
@@ -231,14 +250,11 @@ struct ChatListScreen: View {
             self.isLoadingFollowings = false
         }
         
-        // Refresh user data in background if any users are missing data
+        // Refresh user data in background for all users to ensure data is fresh
         let instance = hproseInstance
         Task.detached(priority: .background) {
             for userId in followingIds {
-                let user = User.getInstance(mid: userId)
-                if user.username == nil {
-                    _ = try? await instance.fetchUser(userId)
-                }
+                _ = try? await instance.fetchUser(userId)
             }
         }
     }
@@ -292,37 +308,34 @@ struct FollowingRowForChat: View {
     let user: User
     
     var body: some View {
-        NavigationLink(value: user.mid) {
-            HStack {
-                Avatar(user: user, size: 40)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        if let username = user.username {
+        // Only show the row if user data is already loaded (has username)
+        if let username = user.username {
+            NavigationLink(value: user.mid) {
+                HStack {
+                    Avatar(user: user, size: 40)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
                             Text("\(user.name ?? "")@\(username)")
                                 .font(.headline)
                                 .foregroundColor(.primary)
-                        } else {
-                            Text(NSLocalizedString("Loading...", comment: "Loading message"))
-                                .font(.headline)
-                                .foregroundColor(.gray)
+                            Spacer()
                         }
-                        Spacer()
+                        
+                        if let profile = user.profile, !profile.isEmpty {
+                            Text(profile)
+                                .font(.body)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
                     }
                     
-                    if let profile = user.profile, !profile.isEmpty {
-                        Text(profile)
-                            .font(.body)
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                    }
+                    Image(systemName: "message")
+                        .foregroundColor(.blue)
+                        .font(.system(size: 16, weight: .medium))
                 }
-                
-                Image(systemName: "message")
-                    .foregroundColor(.blue)
-                    .font(.system(size: 16, weight: .medium))
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
         }
     }
 }
