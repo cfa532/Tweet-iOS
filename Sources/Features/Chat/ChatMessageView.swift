@@ -542,6 +542,7 @@ struct ChatVideoContainer: View {
     @State private var showFullScreen = false
     @State private var isPlaying = false
     @State private var isLoading = true
+    @State private var videoCompletionObserver: NSObjectProtocol?
     @ObservedObject private var muteState = MuteState.shared
 
     // Cache expensive calculations
@@ -575,10 +576,14 @@ struct ChatVideoContainer: View {
                             player.play()
                             isPlaying = true
                         }
+                        
+                        // Observe video completion
+                        setupVideoCompletionObserver(for: player)
                     }
                     .onDisappear {
                         player.pause()
                         isPlaying = false
+                        removeVideoCompletionObserver()
                     }
             } else {
                 // Loading placeholder
@@ -683,6 +688,31 @@ struct ChatVideoContainer: View {
                 tweet: tempTweet,
                 initialIndex: 0
             )
+        }
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func setupVideoCompletionObserver(for player: AVPlayer) {
+        // Remove existing observer if any
+        removeVideoCompletionObserver()
+        
+        // Observe when video finishes playing
+        videoCompletionObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { _ in
+            // Video finished, update play button to show play icon
+            isPlaying = false
+            print("DEBUG: [ChatVideoContainer] Video finished for \(attachment.mid), resetting play button")
+        }
+    }
+    
+    private func removeVideoCompletionObserver() {
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
         }
     }
 }
