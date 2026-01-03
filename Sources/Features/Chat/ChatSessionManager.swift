@@ -152,8 +152,6 @@ class ChatSessionManager: ObservableObject {
                 
                 // Update unread message count
                 updateUnreadMessageCount()
-            } else {
-                print("[ChatSessionManager] No new messages found")
             }
         } catch {
             print("[ChatSessionManager] Error checking backend for new messages: \(error)")

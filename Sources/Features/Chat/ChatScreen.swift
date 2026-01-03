@@ -51,6 +51,7 @@ struct ChatScreen: View {
 
     // Scroll position persistence
     @State private var messagesLoaded = false
+    @State private var scrollProxy: ScrollViewProxy?
 
     // Update visible videos in the video manager
     private func updateVisibleVideos() {
@@ -106,6 +107,7 @@ struct ChatScreen: View {
                 await loadUser()
                 await loadMessages()
                 messagesLoaded = true  // Trigger scroll restoration
+                
                 startPeriodicMessageRefresh()
                 startVisibilityCheckTimer()
                 print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
@@ -114,9 +116,6 @@ struct ChatScreen: View {
                 print("[ChatScreen] Screen disappearing - stopping all videos")
                 isChatScreenVisible = false
                 messagesLoaded = false  // Reset for next appearance
-
-                // Scroll position is already saved by message onAppear callbacks
-                // No need to save again here
 
                 ChatVideoManager.shared.setChatVisibility(receiptId: receiptId, isVisible: false)
                 ChatVideoManager.shared.unregisterChatSession(receiptId: receiptId)
@@ -191,6 +190,23 @@ struct ChatScreen: View {
                                 }
                         }
                     }
+                    
+                    // Show "No more messages" indicator at the top when reached the beginning
+                    if !hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 4) {
+                                Text("•  •  •")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(LocalizedStringKey("No more messages"))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 12)
+                            Spacer()
+                        }
+                    }
 
                     // Messages in chronological order (oldest to newest)
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
@@ -245,6 +261,9 @@ struct ChatScreen: View {
             }
             .navigationBarHidden(true)
             .onAppear {
+                // Store the scroll proxy for later use
+                scrollProxy = proxy
+                
                 DispatchQueue.main.async {
                     UNUserNotificationCenter.current().setBadgeCount(0) { error in
                         if let error = error {
@@ -400,6 +419,7 @@ struct ChatScreen: View {
                 chatRepository.addMessagesToCoreData([sentMessage])
                 shouldAnimateScroll = true
                 shouldScrollToBottom = true
+                
                 Task {
                     await chatSessionManager.updateOrCreateChatSession(
                         senderId: receiptId,
@@ -713,7 +733,7 @@ struct ChatScreen: View {
             print("[ChatScreen] Loaded \(initialMessages.count) initial messages from cache (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
             
             // Enable load more after a short delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 isLoadMoreEnabled = true
             }
         }
@@ -776,6 +796,9 @@ struct ChatScreen: View {
         
         isLoadingMore = true
         
+        // Capture the first visible message to restore scroll position
+        let anchorMessageId = messages.first?.id
+        
         Task {
             await MainActor.run {
                 // Calculate how many more messages to load
@@ -798,6 +821,13 @@ struct ChatScreen: View {
                 print("[ChatScreen] Loaded \(messagesToLoad) more messages (offset: \(currentOffset), total: \(messages.count), hasMore: \(hasMoreMessages))")
                 
                 isLoadingMore = false
+                
+                // Restore scroll position to the anchor message after a brief delay
+                if let anchorId = anchorMessageId, let proxy = scrollProxy {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        proxy.scrollTo(anchorId, anchor: .top)
+                    }
+                }
             }
         }
     }
@@ -813,7 +843,6 @@ struct ChatScreen: View {
             print("[ChatScreen] Ignoring message with invalid chatSessionId: \(message.id)")
         }
         
-        print("[ChatScreen] Message validation for \(message.id): sessionId=\(message.chatSessionId), isValid=\(isValidSessionId)")
         return isValidSessionId
     }
     

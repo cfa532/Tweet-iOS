@@ -431,6 +431,7 @@
 "Received" = "受信済み";
 "Yesterday" = "昨日";
 "%@ %@" = "%@ %@";
+"No more messages" = "これ以上メッセージはありません";
 
 // MARK: - Video Player
 "Failed to load video" = "動画の読み込みに失敗しました";

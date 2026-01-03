@@ -488,6 +488,7 @@
 "Received" = "Received";
 "Yesterday" = "Yesterday";
 "%@ %@" = "%@ %@";
+"No more messages" = "No more messages";
 
 // MARK: - Video Player
 "Failed to load video" = "Failed to load video";

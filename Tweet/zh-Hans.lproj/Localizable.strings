@@ -480,6 +480,7 @@
 "Received" = "已接收";
 "Yesterday" = "昨天";
 "%@ %@" = "%@ %@";
+"No more messages" = "没有更多消息了";
 
 // MARK: - Video Player
 "Failed to load video" = "视频加载失败";
