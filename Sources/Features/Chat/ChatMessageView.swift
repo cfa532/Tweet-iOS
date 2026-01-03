@@ -9,6 +9,7 @@ import SwiftUI
 import AVKit
 import SDWebImageSwiftUI
 import QuickLook
+import Combine
 
 // MARK: - Chat Message View
 
@@ -543,6 +544,7 @@ struct ChatVideoContainer: View {
     @State private var isPlaying = false
     @State private var isLoading = true
     @State private var videoCompletionObserver: NSObjectProtocol?
+    @State private var cancellables = Set<AnyCancellable>()
     @ObservedObject private var muteState = MuteState.shared
 
     // Cache expensive calculations
@@ -585,18 +587,34 @@ struct ChatVideoContainer: View {
                         isPlaying = false
                         removeVideoCompletionObserver()
                     }
+                
+                // Show loading spinner overlay while video is loading
+                if isLoading {
+                    Color.black.opacity(0.5)
+                        .overlay(
+                            VStack(spacing: 12) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(1.5)
+                                Text("Loading video...")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                            }
+                        )
+                }
             } else {
-                // Loading placeholder
+                // Loading placeholder (before player is created)
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray6))
+                    .fill(Color(.systemGray5))
                     .frame(width: Self.maxWidth, height: gridHeight)
                     .overlay(
-                        VStack(spacing: 8) {
+                        VStack(spacing: 12) {
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle(tint: .gray))
+                                .scaleEffect(1.5)
                             Text("Loading video...")
                                 .font(.caption)
-                                .foregroundColor(.gray)
+                                .foregroundColor(.secondary)
                         }
                     )
             }
@@ -668,7 +686,20 @@ struct ChatVideoContainer: View {
                     
                     await MainActor.run {
                         player = loadedPlayer
-                        isLoading = false
+                        
+                        // Check if player is already ready to play
+                        if let playerItem = loadedPlayer?.currentItem {
+                            if playerItem.status == .readyToPlay {
+                                // Hide loading spinner immediately if already ready
+                                isLoading = false
+                            } else {
+                                // Observe player item status to hide spinner when ready
+                                setupPlayerReadyObserver(for: playerItem)
+                            }
+                        } else {
+                            // No player item, hide spinner
+                            isLoading = false
+                        }
                     }
                 }
             }
@@ -720,6 +751,26 @@ struct ChatVideoContainer: View {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
         }
+    }
+    
+    private func setupPlayerReadyObserver(for playerItem: AVPlayerItem) {
+        // Observe player item status to hide loading spinner when ready
+        playerItem.publisher(for: \.status)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak playerItem] status in
+                guard playerItem != nil else { return }
+                
+                if status == .readyToPlay {
+                    // Hide loading spinner once video is ready
+                    isLoading = false
+                    print("DEBUG: [ChatVideoContainer] Video ready for \(attachment.mid)")
+                } else if status == .failed {
+                    // Hide spinner on failure too
+                    isLoading = false
+                    print("DEBUG: [ChatVideoContainer] Video failed to load for \(attachment.mid)")
+                }
+            }
+            .store(in: &cancellables)
     }
 }
 
