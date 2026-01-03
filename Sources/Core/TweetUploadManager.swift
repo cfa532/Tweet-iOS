@@ -96,25 +96,31 @@ class TweetUploadManager {
     
     /// Schedule a tweet upload with persistence and retry
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        // Cancel any existing upload task
-        cancelCurrentUpload()
+        // Check if any items contain videos
+        let hasVideos = itemData.contains { item in
+            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+        }
         
-        currentUploadTask = Task(priority: .high) {
-            // Note: Upload dialog is already shown by the caller (ComposeTweetView)
-            // before prepareItemData, so we don't call startUpload here
-            await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
-            currentUploadTask = nil
+        // Use upload queue to prevent concurrent upload conflicts
+        Task { @MainActor in
+            UploadProgressManager.shared.enqueueUpload(type: "tweet", hasVideos: hasVideos) {
+                await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
+            }
         }
     }
     
     /// Schedule a chat message upload
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
-        Task(priority: .high) {
-            // Start progress tracking on main thread
-            await MainActor.run {
-                UploadProgressManager.shared.startUpload(type: "chat")
+        // Check if any items contain videos
+        let hasVideos = itemData.contains { item in
+            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+        }
+        
+        // Use upload queue to prevent concurrent upload conflicts
+        Task { @MainActor in
+            UploadProgressManager.shared.enqueueUpload(type: "chat", hasVideos: hasVideos) {
+                await self.uploadChatMessageWithPersistenceAndRetry(message: message, itemData: itemData)
             }
-            await self.uploadChatMessageWithPersistenceAndRetry(message: message, itemData: itemData)
         }
     }
     
@@ -125,11 +131,27 @@ class TweetUploadManager {
         itemData: [PendingTweetUpload.ItemData],
         isQuoting: Bool = false
     ) {
-        Task(priority: .high) {
-            // Start progress tracking on main thread
-            await MainActor.run {
-                UploadProgressManager.shared.startUpload(type: "comment")
+        // Check if any items contain videos
+        let hasVideos = itemData.contains { item in
+            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+        }
+        
+        // Use upload queue to prevent concurrent upload conflicts
+        Task { @MainActor in
+            UploadProgressManager.shared.enqueueUpload(type: "comment", hasVideos: hasVideos) {
+                await self.uploadCommentWithRetry(comment: comment, to: tweet, itemData: itemData, isQuoting: isQuoting)
             }
+        }
+    }
+    
+    /// Internal method to upload comment (called by queue)
+    private func uploadCommentWithRetry(
+        comment: Tweet,
+        to tweet: Tweet,
+        itemData: [PendingTweetUpload.ItemData],
+        isQuoting: Bool = false
+    ) async {
+        Task(priority: .high) {
             
             do {                
                 // Update progress: uploading attachments

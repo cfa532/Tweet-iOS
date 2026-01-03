@@ -39,6 +39,17 @@ class UploadProgressManager: ObservableObject {
     // This prevents video player cache clearing during intensive processing
     var isProcessingVideo: Bool = false
     
+    // CRITICAL: Upload queue to prevent concurrent uploads from interfering
+    private var uploadQueue: [QueuedUpload] = []
+    private var isProcessingQueue: Bool = false
+    
+    struct QueuedUpload {
+        let id: UUID = UUID()
+        let type: String
+        let hasVideos: Bool
+        let execute: () async throws -> Void
+    }
+    
     private init() {
         setupBackgroundObserver()
     }
@@ -55,6 +66,13 @@ class UploadProgressManager: ObservableObject {
                 if self.isUploading {
                     self.wasBackgrounded = true
                     print("⚠️ [UploadProgress] App backgrounded during upload")
+                    
+                    // CRITICAL: Clear video processing flag immediately to allow video player cleanup
+                    // Video players need to release resources when backgrounding
+                    if self.isProcessingVideo {
+                        print("⚠️ [UploadProgress] Clearing video processing flag on background")
+                        self.isProcessingVideo = false
+                    }
                 }
             }
         }
@@ -77,6 +95,59 @@ class UploadProgressManager: ObservableObject {
                     self.wasBackgrounded = false
                 }
             }
+        }
+    }
+    
+    /// Enqueue an upload to be processed (prevents concurrent upload conflicts)
+    func enqueueUpload(type: String, hasVideos: Bool = false, execute: @escaping () async throws -> Void) {
+        let upload = QueuedUpload(type: type, hasVideos: hasVideos, execute: execute)
+        
+        uploadQueue.append(upload)
+        print("📥 [UploadQueue] Enqueued \(type) upload (queue size: \(uploadQueue.count))")
+        
+        // Start processing queue if not already processing
+        if !isProcessingQueue {
+            Task {
+                await processUploadQueue()
+            }
+        }
+    }
+    
+    /// Process uploads one at a time from the queue
+    private func processUploadQueue() async {
+        guard !isProcessingQueue else {
+            print("⚠️ [UploadQueue] Already processing queue")
+            return
+        }
+        
+        isProcessingQueue = true
+        
+        while !uploadQueue.isEmpty {
+            let upload = uploadQueue.removeFirst()
+            print("📤 [UploadQueue] Processing \(upload.type) upload (remaining: \(uploadQueue.count))")
+            
+            // Start this upload
+            startUpload(type: upload.type, hasVideos: upload.hasVideos)
+            
+            do {
+                try await upload.execute()
+                print("✅ [UploadQueue] \(upload.type) upload completed")
+            } catch {
+                print("❌ [UploadQueue] \(upload.type) upload failed: \(error)")
+                // Error handling is done by the upload execute function
+            }
+        }
+        
+        isProcessingQueue = false
+        print("✅ [UploadQueue] Queue processing completed")
+    }
+    
+    /// Cancel all queued uploads (but not the current one)
+    func cancelQueuedUploads() {
+        let cancelledCount = uploadQueue.count
+        uploadQueue.removeAll()
+        if cancelledCount > 0 {
+            print("🛑 [UploadQueue] Cancelled \(cancelledCount) queued upload(s)")
         }
     }
     
@@ -207,8 +278,27 @@ class UploadProgressManager: ObservableObject {
     
     private func handleBackgroundInterruption() {
         // If still uploading after backgrounding, it likely failed
-        // The upload manager will detect the actual failure
-        print("⚠️ [UploadProgress] Detected potential upload interruption")
+        // Clean up state to prevent video player issues
+        print("⚠️ [UploadProgress] Detected upload interruption - cleaning up state")
+        
+        // Re-enable auto-lock
+        UIApplication.shared.isIdleTimerDisabled = false
+        
+        // Restore user interaction
+        unblockUserInteraction()
+        
+        // CRITICAL: Clear video processing flag to allow video player recovery
+        isProcessingVideo = false
+        
+        // Reset upload state
+        currentStage = .failed
+        stageMessage = NSLocalizedString("Upload interrupted", comment: "Upload interrupted")
+        progress = 0.0
+        isUploading = false
+        uploadType = ""
+        detailedProgress = ""
+        
+        print("✅ [UploadProgress] State cleaned up after interruption")
     }
 
     private func blockUserInteraction() {

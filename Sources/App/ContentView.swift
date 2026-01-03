@@ -427,23 +427,26 @@ struct ContentView: View {
     
     private func retryPendingUpload(_ upload: TweetUploadManager.PendingTweetUpload) {
         Task {
-            // Determine upload type
+            // Determine upload type and check for videos
             let uploadType = upload.tweet.originalTweetId != nil ? "comment" : "tweet"
-            
-            // Start progress tracking (shows dialog in foreground)
-            await MainActor.run {
-                UploadProgressManager.shared.startUpload(type: uploadType)
+            let hasVideos = upload.itemData.contains { item in
+                item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
             }
             
-            // Retry the upload using the upload manager
-            // If there's an existing video job ID, it will check status and poll
-            // If not, it will re-upload attachments in foreground (with dialog visible)
-            await hproseInstance.uploadManager.uploadTweetWithPersistenceAndRetry(
-                tweet: upload.tweet,
-                itemData: upload.itemData,
-                retryCount: upload.retryCount,
-                videoJobId: upload.videoJobId
-            )
+            // Use upload queue for retry (prevents conflicts with other uploads)
+            await MainActor.run {
+                UploadProgressManager.shared.enqueueUpload(type: uploadType, hasVideos: hasVideos) {
+                    // Retry the upload using the upload manager
+                    // If there's an existing video job ID, it will check status and poll
+                    // If not, it will re-upload attachments in foreground (with dialog visible)
+                    await self.hproseInstance.uploadManager.uploadTweetWithPersistenceAndRetry(
+                        tweet: upload.tweet,
+                        itemData: upload.itemData,
+                        retryCount: upload.retryCount,
+                        videoJobId: upload.videoJobId
+                    )
+                }
+            }
         }
     }
     

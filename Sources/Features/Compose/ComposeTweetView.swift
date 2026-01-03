@@ -67,8 +67,8 @@ struct ComposeTweetView: View {
                         let selectedDocuments = viewModel.selectedDocuments
                         let isPrivate = viewModel.isPrivate
                         
-                        // Show upload dialog IMMEDIATELY before any heavy work
-                        UploadProgressManager.shared.startUpload(type: "tweet")
+                        // Note: Upload dialog is now shown by the upload queue
+                        // No need to call startUpload here - scheduleTweetUpload handles it
                         
                         viewModel.clearForm()
                         dismiss()
