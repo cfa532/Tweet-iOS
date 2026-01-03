@@ -14,13 +14,42 @@ import QuickLook
 
 struct ChatMessageView: View {
     let message: ChatMessage
-    let isFromCurrentUser: Bool
-    let isLastMessage: Bool
-    let isLastFromSender: Bool
-    let showTimestamp: Bool
+    let allMessages: [ChatMessage] // Stable reference to compute properties
+    let currentIndex: Int          // Stable index to compute properties
     let isChatScreenVisible: Bool
     let receiptId: String
     let onResendMessage: ((ChatMessage) -> Void)?
+
+    // Computed properties based on stable data
+    private var isFromCurrentUser: Bool {
+        message.authorId == HproseInstance.shared.appUser.mid
+    }
+
+    private var isLastMessage: Bool {
+        currentIndex == allMessages.count - 1
+    }
+
+    private var isLastFromSender: Bool {
+        isLastMessageFromSender(index: currentIndex, messages: allMessages)
+    }
+
+    private var showTimestamp: Bool {
+        isLastFromSender
+    }
+
+    private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
+        guard index < messages.count else { return false }
+        let currentMessage = messages[index]
+        let currentSenderId = currentMessage.authorId
+
+        // Check if this is the last message from this sender
+        for i in (index + 1)..<messages.count {
+            if messages[i].authorId == currentSenderId {
+                return false // Found a later message from the same sender
+            }
+        }
+        return true // No later messages from this sender
+    }
     @State private var receiptUser: User?
     
     var body: some View {
@@ -82,13 +111,14 @@ struct ChatMessageView: View {
                                     senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
                                 )
                             } else if attachment.type == .video || attachment.type == .hls_video {
-                                ChatVideoPlayer(
+                                // Display the video player with chat-specific UI
+                                ChatVideoContainer(
+                                    messageId: message.id,
                                     attachment: attachment,
                                     isFromCurrentUser: isFromCurrentUser,
                                     senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser,
                                     isChatScreenVisible: isChatScreenVisible,
-                                    receiptId: receiptId,
-                                    shouldPlayVideo: ChatVideoManager.shared.shouldPlayVideo(mid: attachment.mid, receiptId: receiptId)
+                                    receiptId: receiptId
                                 )
                             } else {
                                 // Document attachments - use DocumentAttachmentsView
@@ -497,278 +527,162 @@ struct ChatImageThumbnail: View {
     }
 }
 
-// MARK: - Chat Video Player
 
-struct ChatVideoPlayer: View {
+// MARK: - Chat Video Container
+
+struct ChatVideoContainer: View {
+    let messageId: String
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     let senderUser: User?
     let isChatScreenVisible: Bool
     let receiptId: String
-    let shouldPlayVideo: Bool
 
-    @ObservedObject private var muteState = MuteState.shared
+    @State private var player: AVPlayer?
     @State private var showFullScreen = false
-    @State private var isPlaying = false  // Button state synced with actual player state
-    @State private var userInteracted = false  // Track if user manually interacted with playback
-    @State private var videoFinished = false  // Track if video finished naturally
-    @State private var isLoading = true  // Track video loading state
-    @State private var hasValidUrl = false  // Track if URL is available
-    
+    @State private var isPlaying = false
+    @State private var isLoading = true
+    @ObservedObject private var muteState = MuteState.shared
+
     // Cache expensive calculations
     private static let maxWidth = UIScreen.main.bounds.width * 0.7
-    
-    private var baseUrl: URL {
-        if isFromCurrentUser {
-            return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
-        } else {
-            return senderUser?.baseUrl ?? HproseInstance.baseUrl
-        }
-    }
-    
+
     private var videoAR: CGFloat {
         CGFloat(attachment.aspectRatio ?? 1.0)
     }
-    
+
     private var gridAspectRatio: CGFloat {
         videoAR < 0.9 ? 0.9 : videoAR
     }
-    
+
     private var gridHeight: CGFloat {
         Self.maxWidth / gridAspectRatio
     }
-    
-    // Check if mid is a temporary UUID (36 chars) vs real CID (46+ chars for IPFS)
-    private var isTemporaryMid: Bool {
-        // UUIDs are 36 characters, real CIDs are typically 46+ characters
-        // Also check if it looks like a UUID format (contains hyphens)
-        attachment.mid.count <= 36 || attachment.mid.contains("-")
-    }
-    
-    var body: some View {
-        Group {
-            // Check if we have a valid mid (not temporary UUID) and baseUrl before trying to get URL
-            if !attachment.mid.isEmpty && !isTemporaryMid, let url = attachment.getUrl(baseUrl) {
 
-                // Video container with rounded corners
-                ZStack {
-                    CachingVideoPlayer(
-                        url: url,
-                        mid: attachment.mid,
-                        isVisible: !showFullScreen && shouldPlayVideo,
-                        mediaType: attachment.type,
-                        autoPlay: isPlaying,
-                        loopOnCompletion: false,
-                        videoAspectRatio: videoAR,
-                        showNativeControls: false,
-                        isMuted: muteState.isMuted,
-                        onVideoTap: {
-                            // This is handled by the overlay below
-                        },
-                        onVideoFinished: {
-                            isPlaying = false
-                            userInteracted = false
-                            videoFinished = true
-                        },
-                        onManualRestart: {
-                            videoFinished = false
-                            print("DEBUG: [ChatVideoPlayer] Manual restart completed for \(attachment.mid)")
-                        },
-                        onPlaybackStateChanged: { actualIsPlaying in
-                            if !userInteracted {
-                                isPlaying = actualIsPlaying
-                            }
-                            // Hide loading spinner once video starts playing
-                            if actualIsPlaying {
-                                isLoading = false
-                            }
-                        }
-                    )
-                    .id(attachment.mid)
+    var body: some View {
+        ZStack {
+            if let player = player {
+                // Video player view
+                VideoPlayer(player: player)
                     .aspectRatio(videoAR, contentMode: .fill)
                     .frame(width: Self.maxWidth, height: gridHeight)
                     .clipped()
                     .onAppear {
-                        hasValidUrl = true
-                        isLoading = true
-                        // Hide loading spinner after a reasonable timeout
-                        Task {
-                            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                            await MainActor.run {
-                                isLoading = false
-                            }
+                        player.isMuted = muteState.isMuted
+                        // Determine if video should play based on visibility
+                        let shouldPlay = ChatVideoManager.shared.shouldPlayVideo(mid: attachment.mid, receiptId: receiptId)
+                        if shouldPlay && isChatScreenVisible {
+                            player.play()
+                            isPlaying = true
                         }
                     }
-                    .onChange(of: attachment.mid) { oldMid, newMid in
-                        // If mid was empty and now has a value, URL should be available
-                        if oldMid.isEmpty && !newMid.isEmpty {
-                            hasValidUrl = true
-                            print("DEBUG: [ChatVideoPlayer] Attachment mid updated from empty to \(newMid)")
-                        }
-                    }
-
-                    // Clear overlay to capture taps for full-screen
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            showFullScreen = true
-                        }
-                    
-                    // Loading spinner overlay (shows while video is loading)
-                    if isLoading {
-                        Color.black.opacity(0.3)
-                            .overlay(
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(1.2)
-                            )
-                            .frame(width: Self.maxWidth, height: gridHeight)
-                    }
-                    
-                    // Bottom overlay with play and mute buttons (LAST = on top)
-                    VStack {
-                        Spacer()
-                        HStack {
-                            // Play/Pause button
-                            Button {
-                                userInteracted = true
-                                videoFinished = false
-                                isPlaying.toggle()
-                            } label: {
-                                ZStack {
-                                    Circle()
-                                        .fill(Color.black.opacity(0.5))
-                                        .frame(width: 32, height: 32)
-                                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                        .font(.system(size: 24))
-                                        .foregroundColor(.white)
-                                }
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .padding(.leading, 8)
-                            .padding(.bottom, 8)
-
-                            Spacer()
-
-                            // Mute button
-                            MuteButton()
-                                .padding(.trailing, 8)
-                                .padding(.bottom, 8)
-                        }
-                    }
-                    .frame(width: Self.maxWidth, height: gridHeight, alignment: .bottomLeading)
-                }
-                .frame(width: Self.maxWidth, height: gridHeight)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
-                )
-                .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ChatVideoShouldPlay"))) { notification in
-                    guard let userInfo = notification.userInfo,
-                          let videoMid = userInfo["videoMid"] as? String,
-                          let notificationReceiptId = userInfo["receiptId"] as? String,
-                          let shouldPlay = userInfo["shouldPlay"] as? Bool,
-                          videoMid == attachment.mid,
-                          notificationReceiptId == receiptId else {
-                        return
-                    }
-
-                    // Only update playback state based on manager's decision if user hasn't manually interacted
-                    // For automatic visibility-based control, don't restart videos that finished naturally
-                    if !userInteracted {
-                        if !videoFinished {
-                            isPlaying = shouldPlay
-                        }
-                    }
-                }
-                .onChange(of: isChatScreenVisible) { _, visible in
-                    if !visible {
-                        // Stop playing when chat screen becomes invisible
+                    .onDisappear {
+                        player.pause()
                         isPlaying = false
-                        // Reset user interaction flag when chat becomes invisible
-                        userInteracted = false
-                        // Reset finished flag for fresh context
-                        videoFinished = false
-                        // Reset loading state
-                        isLoading = false
-                    } else {
-                        // When chat becomes visible again, show loading spinner
-                        isLoading = true
-                        // Hide loading spinner after timeout
-                        Task {
-                            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                            await MainActor.run {
-                                isLoading = false
-                            }
-                        }
                     }
-                }
-                .onChange(of: baseUrl) { _, newBaseUrl in
-                    // When baseUrl changes (e.g., when senderUser loads), force recreation of video player
-                    // by resetting hasValidUrl and loading state
-                    print("DEBUG: [ChatVideoPlayer] baseUrl changed for \(attachment.mid), forcing video reload")
-                    hasValidUrl = attachment.getUrl(newBaseUrl) != nil
-                    isLoading = true
-                    // Reset playback state
-                    isPlaying = false
-                    userInteracted = false
-                    videoFinished = false
-                    Task {
-                        try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                        await MainActor.run {
-                            isLoading = false
-                        }
-                    }
-                }
-                .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
-                    // Resume playing when returning from fullscreen
-                    isPlaying = true
-                }) {
-                    // Create a temporary tweet-like structure for the video using singleton
-                    let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? Constants.GUEST_ID)
-                    let videoAuthor = User.getInstance(mid: authorId)
-                    let tempTweet = Tweet.getInstance(
-                        mid: "chat_video_\(attachment.mid)",
-                        authorId: authorId,
-                        content: "",
-                        author: videoAuthor,
-                        attachments: [attachment]
-                    )
-
-                    MediaBrowserView(
-                        tweet: tempTweet,
-                        initialIndex: 0
-                    )
-                }
             } else {
-                // Show loading state if mid is empty, temporary UUID, or URL unavailable
-                if attachment.mid.isEmpty || isTemporaryMid {
-                    // Video is still being processed/uploaded - show loading indicator
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(.systemGray6))
-                        .frame(width: Self.maxWidth, height: gridHeight)
-                        .overlay(
-                            VStack(spacing: 8) {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .gray))
-                                Text("Processing video...")
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
-                            }
-                        )
-                } else {
-                    // Fallback if URL construction failed (shouldn't happen normally)
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(.systemGray6))
-                        .frame(width: Self.maxWidth, height: gridHeight)
-                        .overlay(
-                            Image(systemName: "video.slash")
+                // Loading placeholder
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(.systemGray6))
+                    .frame(width: Self.maxWidth, height: gridHeight)
+                    .overlay(
+                        VStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .gray))
+                            Text("Loading video...")
+                                .font(.caption)
                                 .foregroundColor(.gray)
-                        )
+                        }
+                    )
+            }
+
+            // Clear overlay to capture taps for full-screen
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showFullScreen = true
+                }
+
+            // Bottom overlay with play and mute buttons
+            VStack {
+                Spacer()
+                HStack {
+                    // Play/Pause button
+                    Button {
+                        guard let player = player else { return }
+                        if isPlaying {
+                            player.pause()
+                        } else {
+                            player.play()
+                        }
+                        isPlaying.toggle()
+                    } label: {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.5))
+                                .frame(width: 32, height: 32)
+                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 24))
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.leading, 8)
+                    .padding(.bottom, 8)
+                    .disabled(player == nil)
+
+                    Spacer()
+
+                    // Mute button
+                    MuteButton()
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 8)
                 }
             }
+            .frame(width: Self.maxWidth, height: gridHeight, alignment: .bottomLeading)
+        }
+        .frame(width: Self.maxWidth, height: gridHeight)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.gray.opacity(0.3), lineWidth: 0.5)
+        )
+        .task {
+            // Load the player asynchronously
+            if player == nil {
+                player = await ChatVideoManager.shared.getOrCreateVideoPlayer(
+                    messageId: messageId,
+                    attachment: attachment,
+                    isFromCurrentUser: isFromCurrentUser,
+                    senderUser: senderUser,
+                    isChatScreenVisible: isChatScreenVisible,
+                    receiptId: receiptId
+                )
+                isLoading = false
+            }
+        }
+        .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
+            // Resume playing when returning from fullscreen
+            if let player = player, isPlaying {
+                player.play()
+            }
+        }) {
+            // Create a temporary tweet-like structure for the video
+            let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? HproseInstance.shared.appUser.mid)
+            let videoAuthor = User.getInstance(mid: authorId)
+            let tempTweet = Tweet.getInstance(
+                mid: "chat_video_\(attachment.mid)",
+                authorId: authorId,
+                content: "",
+                author: videoAuthor,
+                attachments: [attachment]
+            )
+
+            MediaBrowserView(
+                tweet: tempTweet,
+                initialIndex: 0
+            )
         }
     }
 }

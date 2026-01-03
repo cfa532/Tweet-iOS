@@ -19,6 +19,7 @@ struct CachingVideoPlayer: View {
     let videoAspectRatio: CGFloat
     let showNativeControls: Bool
     let isMuted: Bool
+    let startTime: Double?
     let onVideoTap: (() -> Void)?
     let onVideoFinished: (() -> Void)?
     let onManualRestart: (() -> Void)?
@@ -48,6 +49,7 @@ struct CachingVideoPlayer: View {
         videoAspectRatio: CGFloat = 16.0/9.0,
         showNativeControls: Bool = true,
         isMuted: Bool = false,
+        startTime: Double? = nil,
         onVideoTap: (() -> Void)? = nil,
         onVideoFinished: (() -> Void)? = nil,
         onManualRestart: (() -> Void)? = nil,
@@ -62,6 +64,7 @@ struct CachingVideoPlayer: View {
         self.videoAspectRatio = videoAspectRatio
         self.showNativeControls = showNativeControls
         self.isMuted = isMuted
+        self.startTime = startTime
         self.onVideoTap = onVideoTap
         self.onVideoFinished = onVideoFinished
         self.onManualRestart = onManualRestart
@@ -143,6 +146,20 @@ struct CachingVideoPlayer: View {
         }
         .onChange(of: isVisible) { _, visible in
             if visible {
+                // CRITICAL FIX: Restore buffering settings when video becomes visible again
+                // This allows videos to buffer properly when they come back into view
+                if let playerItem = player?.currentItem {
+                    if let cachingPlayerItem = playerItem as? CachingPlayerItem {
+                        cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Restore normal buffering
+                        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible video: \(mid)")
+                    } else {
+                        // For progressive videos, restore buffer duration
+                        playerItem.preferredForwardBufferDuration = 30.0
+                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible progressive video: \(mid)")
+                    }
+                }
+
                 // When view becomes visible, always attempt recovery to ensure video works properly
                 // Videos that have been scrolled out of view may need recovery even if they appear healthy
                 print("DEBUG: [CachingVideoPlayer] View became visible for \(mid), attempting recovery...")
@@ -229,7 +246,15 @@ struct CachingVideoPlayer: View {
                             onReadyToPlay: { [weak newPlayer] in
                                 DispatchQueue.main.async {
                                     self.isLoading = false
-                                    if self.autoPlay && self.isVisible {
+
+                                    // Seek to start time if provided
+                                    if let startTime = self.startTime, startTime > 0 {
+                                        newPlayer?.seek(to: CMTime(seconds: startTime, preferredTimescale: 600)) { finished in
+                                            if finished && self.autoPlay && self.isVisible {
+                                                newPlayer?.play()
+                                            }
+                                        }
+                                    } else if self.autoPlay && self.isVisible {
                                         newPlayer?.play()
                                     }
                                 }

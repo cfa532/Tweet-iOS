@@ -1902,6 +1902,9 @@ class ChatVideoManager: ObservableObject {
     // Current visible videos per chat session
     private var visibleVideos: [String: Set<String>] = [:] // Key: receiptId, Value: Set of video mids
 
+    // Global video player storage for chat videos - store AVPlayer directly
+    private var chatVideoPlayers: [String: AVPlayer] = [:] // Key: messageId, Value: AVPlayer instance
+
     /// State for a specific chat session's videos
     struct ChatSessionVideoState {
         var playingVideos: Set<String> = [] // mids of videos currently playing
@@ -2008,6 +2011,58 @@ class ChatVideoManager: ObservableObject {
             return false
         }
         return sessionState.playingVideos.contains(mid)
+    }
+
+    /// Get or create a video player for a chat message
+    func getOrCreateVideoPlayer(
+        messageId: String,
+        attachment: MimeiFileType,
+        isFromCurrentUser: Bool,
+        senderUser: User?,
+        isChatScreenVisible: Bool,
+        receiptId: String
+    ) async -> AVPlayer? {
+        if let existingPlayer = chatVideoPlayers[messageId] {
+            return existingPlayer
+        }
+
+        // Get the base URL for the video
+        let baseUrl: URL = {
+            if isFromCurrentUser {
+                return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+            } else {
+                return senderUser?.baseUrl ?? HproseInstance.baseUrl
+            }
+        }()
+
+        // Get the video URL
+        guard let url = attachment.getUrl(baseUrl) else {
+            return nil
+        }
+
+        do {
+            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaType: attachment.type)
+            chatVideoPlayers[messageId] = player
+            return player
+        } catch {
+            print("DEBUG: [ChatVideoManager] Failed to create player for \(messageId): \(error)")
+            return nil
+        }
+    }
+
+    /// Remove a video player for a message
+    func removeVideoPlayer(messageId: String) {
+        chatVideoPlayers.removeValue(forKey: messageId)
+    }
+
+    /// Clean up all video players for a chat session
+    func cleanupChatSession(receiptId: String) {
+        // Remove all players for messages in this session
+        chatVideoPlayers = chatVideoPlayers.filter { messageId, _ in
+            // For now, just keep all players since we don't track which belong to which session
+            // This could be optimized later if needed
+            true
+        }
     }
 
     // MARK: - Private Methods

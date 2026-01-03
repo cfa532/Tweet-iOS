@@ -201,10 +201,8 @@ struct ChatScreen: View {
 
                         ChatMessageView(
                             message: message,
-                            isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
-                            isLastMessage: index == messages.count - 1,
-                            isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
-                            showTimestamp: isLastMessageFromSender(index: index, messages: messages),
+                            allMessages: messages, // Pass the entire array for stable computation
+                            currentIndex: index,   // Pass the index for stable computation
                             isChatScreenVisible: isChatScreenVisible,
                             receiptId: receiptId,
                             onResendMessage: { failedMessage in
