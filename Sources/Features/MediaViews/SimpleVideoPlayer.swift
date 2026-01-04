@@ -930,7 +930,18 @@ struct SimpleVideoPlayer: View {
                 print("DEBUG: [VIDEO APPEAR] loadingState stuck at .loading, resetting to .idle")
                 loadingState = .idle
             }
-            setupPlayer()
+            
+            // PERFORMANCE: Add small delay for MediaCell to let scroll settle
+            // Detail/fullscreen modes start immediately (user is focused on them)
+            if mode == .mediaCell {
+                Task {
+                    try? await Task.sleep(nanoseconds: 150_000_000) // 150ms delay
+                    guard self.player == nil, self.shouldLoadVideo, self.isVisible else { return }
+                    setupPlayer()
+                }
+            } else {
+                setupPlayer()
+            }
         } else if player != nil && loadingState.isLoaded && !hasInitialized {
             // Player exists and is loaded - mark as initialized
             hasInitialized = true
@@ -3011,6 +3022,7 @@ struct SimpleVideoPlayer: View {
             }
             
             // No cached player - load fresh
+            // Use .userInitiated for detail view (not in scrolling feed, user is focused on this video)
             Task.detached(priority: .userInitiated) {
                 NSLog("DEBUG: [VIDEO SETUP] Task started for \(mid) (no cached player)")
                 do {
@@ -3174,7 +3186,10 @@ struct SimpleVideoPlayer: View {
         
         // No shared player found, create a new one
         // loadingState is already set to .loading at the start of this function
-        Task.detached(priority: .userInitiated) {
+        // CRITICAL: Use .utility priority for MediaCell to prevent blocking scroll
+        // Detail/fullscreen can use higher priority since they're not in scrolling feed
+        let taskPriority: TaskPriority = (mode == .mediaCell) ? .utility : .userInitiated
+        Task.detached(priority: taskPriority) {
             do {
                 // Use shared cached player for all modes - simpler and more efficient
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
