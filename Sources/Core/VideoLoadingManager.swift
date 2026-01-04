@@ -21,6 +21,9 @@ class VideoLoadingManager: ObservableObject {
     // MARK: - State
     @Published private(set) var visibleTweetIds: Set<String> = []
     @Published private(set) var currentVisibleTweetIndex: Int = 0
+
+    // Startup phase management - prevents video operations during initial app launch
+    @Published private(set) var isInStartupPhase: Bool = true
     private var allTweetIds: [String] = []
     private var tweetsWithVideos: Set<String> = [] // Track which tweets contain media (video, audio, etc.)
     private var retweetToOriginalMap: [String: String] = [:] // Map retweet ID to original tweet ID
@@ -48,8 +51,21 @@ class VideoLoadingManager: ObservableObject {
     // MARK: - Public Methods
     
     /// Update the list of all tweet IDs (called when tweet list changes)
-    func updateTweetList(_ tweetIds: [String]) {
-        allTweetIds = tweetIds
+    func updateTweetList(_ tweetIds: [String]) async {
+        await MainActor.run {
+            allTweetIds = tweetIds
+        }
+    }
+
+    /// End the startup phase - allows video operations to proceed
+    func endStartupPhase() async {
+        await MainActor.run {
+            isInStartupPhase = false
+            print("DEBUG: [VideoLoadingManager] Startup phase ended - video operations now allowed")
+
+            // Post notification that startup phase has ended
+            NotificationCenter.default.post(name: .startupPhaseEnded, object: nil)
+        }
     }
     
     /// Register a tweet as containing videos or audio (or other loadable media)

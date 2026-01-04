@@ -88,6 +88,8 @@ extension Notification.Name {
     // MARK: - App Lifecycle
     /// Posted when the app becomes active (returns from background)
     static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
+    /// Posted when the app startup phase has ended and deferred operations can proceed
+    static let startupPhaseEnded = Notification.Name("StartupPhaseEnded")
     
     // MARK: - Cache Related
     /// Posted when all cache is cleared (manual or on signout) to trigger media reload

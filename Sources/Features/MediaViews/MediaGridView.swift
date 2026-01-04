@@ -5,7 +5,13 @@
 //  Created by Tomás Hongo on 2025/5/20.
 //
 
+@preconcurrency import Foundation
 import SwiftUI
+
+private final class ObserverHolder: @unchecked Sendable {
+    var observer: NSObjectProtocol?
+    init(_ observer: NSObjectProtocol?) { self.observer = observer }
+}
 import AVKit
 
 struct MediaGridView: View, Equatable {
@@ -86,7 +92,9 @@ struct MediaGridView: View, Equatable {
     
     private func onVideoFinished() {
         print("DEBUG: [MediaGridView] onVideoFinished called for tweet \(parentTweet.mid)")
-        videoManager.onVideoFinished(tweetId: parentTweet.mid)
+        Task {
+            await videoManager.onVideoFinished(tweetId: parentTweet.mid)
+        }
     }
     
     var body: some View {
@@ -652,7 +660,9 @@ struct MediaGridView: View, Equatable {
                     let needsReinit = videoManager.videoMids != videoMids || videoManager.videoMids.isEmpty
                     if needsReinit {
                         print("DEBUG: [MediaGridView] Re-initializing VideoManager on reappear for tweet \(parentTweet.mid)")
-                        videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                        Task {
+                            await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                        }
                     }
                 }
                 
@@ -682,7 +692,9 @@ struct MediaGridView: View, Equatable {
             // This preserves state when multiple MediaGrids exist during scrolling
             let isSwitchingVideoSet = videoManager.videoMids != videoMids && !videoManager.videoMids.isEmpty
             if isSwitchingVideoSet {
-                videoManager.stopSequentialPlayback()
+                Task {
+                    await videoManager.stopSequentialPlayback()
+                }
                 hasSetupSequentialPlayback = false // Reset flag when switching
             }
             
@@ -695,15 +707,38 @@ struct MediaGridView: View, Equatable {
                 print("DEBUG: [MediaGridView] onAppear for tweet \(parentTweet.mid): videoMids=\(videoMids), alreadySetup=\(alreadySetup), currentIndex=\(videoManager.currentVideoIndex)")
                 
                 if !alreadySetup && !hasSetupSequentialPlayback {
-                    videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
                     hasSetupSequentialPlayback = true
-                    print("DEBUG: [MediaGridView] ✅ Setup sequential playback for tweet \(parentTweet.mid), currentIndex after setup: \(videoManager.currentVideoIndex)")
-                    
-                    // If all videos were finished (saved index >= count), restart from beginning
-                    if videoManager.currentVideoIndex >= videoMids.count {
-                        videoManager.currentVideoIndex = 0
-                        videoManager.saveCurrentIndex(for: parentTweet.mid)
-                        print("DEBUG: [MediaGridView] Reset currentVideoIndex to 0 (was >= count)")
+
+                    // Defer video manager setup to avoid blocking main thread during startup
+                    Task.detached(priority: .background) {
+                        // Wait for startup phase to end before setting up video playback
+                        if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
+                            await withCheckedContinuation { continuation in
+                                let holder = ObserverHolder(nil)
+                                holder.observer = NotificationCenter.default.addObserver(
+                                    forName: .startupPhaseEnded,
+                                    object: nil,
+                                    queue: nil
+                                ) { _ in
+                                    if let observer = holder.observer {
+                                        NotificationCenter.default.removeObserver(observer)
+                                    }
+                                    continuation.resume()
+                                }
+                            }
+                        }
+
+                        await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                        await MainActor.run {
+                            print("DEBUG: [MediaGridView] ✅ Setup sequential playback for tweet \(parentTweet.mid), currentIndex after setup: \(videoManager.currentVideoIndex)")
+
+                            // If all videos were finished (saved index >= count), restart from beginning
+                            if videoManager.currentVideoIndex >= videoMids.count {
+                                videoManager.currentVideoIndex = 0
+                                videoManager.saveCurrentIndex(for: parentTweet.mid)
+                                print("DEBUG: [MediaGridView] Reset currentVideoIndex to 0 (was >= count)")
+                            }
+                        }
                     }
                 } else if alreadySetup {
                     // Already set up - mark as done to prevent future checks
@@ -720,7 +755,26 @@ struct MediaGridView: View, Equatable {
             if hasMedia {
                 // Register this tweet as containing media (videos or audio)
                 // This is important for tweets with multiple attachments to be tracked
-                videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                // Defer to background and wait for startup phase to end
+                Task.detached(priority: .background) {
+                    // Wait for startup phase to end before registering videos
+                    if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
+                        await withCheckedContinuation { continuation in
+                            let holder = ObserverHolder(nil)
+                            holder.observer = NotificationCenter.default.addObserver(
+                                forName: .startupPhaseEnded,
+                                object: nil,
+                                queue: nil
+                            ) { _ in
+                                if let observer = holder.observer {
+                                    NotificationCenter.default.removeObserver(observer)
+                                }
+                                continuation.resume()
+                            }
+                        }
+                    }
+                    await videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                }
                 
                 // Check if this tweet should load media based on VideoLoadingManager
                 // For embedded tweets, still check - if VideoLoadingManager says yes (e.g., it's the original

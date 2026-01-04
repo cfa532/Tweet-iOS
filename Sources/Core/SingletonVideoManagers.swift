@@ -253,7 +253,17 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     var hasRecoveredThisCycle = false
     
     func getPlayer() -> AVPlayer? {
+        ensurePlayerInitialized()
         return singletonPlayer
+    }
+
+    /// Ensure singleton player is initialized (called lazily)
+    private func ensurePlayerInitialized() {
+        guard singletonPlayer == nil else { return }
+        singletonPlayer = AVPlayer()
+        singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
+        singletonPlayer?.isMuted = false
+        print("DEBUG: [FullScreenVideoManager] ✅ Lazily initialized singleton player when first accessed")
     }
     
     func pausePlayer() {
@@ -270,7 +280,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             videoCompletionObserver = nil
         }
         singletonPlayer?.pause()
-        singletonPlayer = nil
+        // Don't nil out the player - keep it for reuse
         isPlaying = false
     }
     

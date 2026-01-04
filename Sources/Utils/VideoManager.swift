@@ -55,41 +55,44 @@ class VideoManager: ObservableObject {
         print("DEBUG: [VideoManager] Setup notification observers for cache cleanup")
     }
     
-    func setupSequentialPlayback(for mids: [String], tweetId: String? = nil) {
-        videoMids = mids
-        
-        // Check if we have saved state for this tweet
-        if let tweetId = tweetId, let savedState = Self.getSavedState(for: tweetId) {
-            // Check if the video sequence is the same
-            let isSameSequence = savedState.mids == mids
-            
-            if isSameSequence {
-                // Same sequence - restore saved index if valid
-                let savedIndex = savedState.index
-                if savedIndex >= 0 && savedIndex < mids.count {
-                    currentVideoIndex = savedIndex
-                    Self.updateLastAccess(for: tweetId)
-                    print("DEBUG: [VideoManager] Restored saved video index \(savedIndex) for tweet \(tweetId) (same sequence)")
+    func setupSequentialPlayback(for mids: [String], tweetId: String? = nil) async {
+        // Update published properties on main thread
+        await MainActor.run {
+            videoMids = mids
+
+            // Check if we have saved state for this tweet
+            if let tweetId = tweetId, let savedState = Self.getSavedState(for: tweetId) {
+                // Check if the video sequence is the same
+                let isSameSequence = savedState.mids == mids
+
+                if isSameSequence {
+                    // Same sequence - restore saved index if valid
+                    let savedIndex = savedState.index
+                    if savedIndex >= 0 && savedIndex < mids.count {
+                        currentVideoIndex = savedIndex
+                        Self.updateLastAccess(for: tweetId)
+                        print("DEBUG: [VideoManager] Restored saved video index \(savedIndex) for tweet \(tweetId) (same sequence)")
+                    } else {
+                        // Invalid saved index - start from beginning
+                        currentVideoIndex = 0
+                        Self.saveState(tweetId: tweetId, mids: mids, index: 0)
+                        print("DEBUG: [VideoManager] Invalid saved index, starting at index 0 for tweet \(tweetId)")
+                    }
                 } else {
-                    // Invalid saved index - start from beginning
+                    // Different sequence - reset to beginning and update cache
                     currentVideoIndex = 0
                     Self.saveState(tweetId: tweetId, mids: mids, index: 0)
-                    print("DEBUG: [VideoManager] Invalid saved index, starting at index 0 for tweet \(tweetId)")
+                    print("DEBUG: [VideoManager] Video sequence changed for tweet \(tweetId), resetting to index 0")
                 }
             } else {
-                // Different sequence - reset to beginning and update cache
+                // No saved state - first time or no tweet ID
                 currentVideoIndex = 0
-                Self.saveState(tweetId: tweetId, mids: mids, index: 0)
-                print("DEBUG: [VideoManager] Video sequence changed for tweet \(tweetId), resetting to index 0")
+                if let tweetId = tweetId {
+                    // Save initial state
+                    Self.saveState(tweetId: tweetId, mids: mids, index: 0)
+                }
+                print("DEBUG: [VideoManager] Setup sequential playback for \(mids.count) videos - starting at index 0")
             }
-        } else {
-            // No saved state - first time or no tweet ID
-            currentVideoIndex = 0
-            if let tweetId = tweetId {
-                // Save initial state
-                Self.saveState(tweetId: tweetId, mids: mids, index: 0)
-            }
-            print("DEBUG: [VideoManager] Setup sequential playback for \(mids.count) videos - starting at index 0")
         }
     }
     
@@ -167,44 +170,52 @@ class VideoManager: ObservableObject {
         print("DEBUG: [VideoManager] Pruned \(pruneCount) oldest video state entries (cache was \(currentSize), now \(tweetVideoStateCache.count))")
     }
     
-    func stopSequentialPlayback() {
-        videoMids = []
-        currentVideoIndex = -1
-    }
-    
-    func forceReset() {
-        guard !videoMids.isEmpty else { return }
-        currentVideoIndex = 0 // Force reset to first video
-        print("DEBUG: [VideoManager] FORCE RESET - Reset to first video at index 0")
-    }
-    
-    func restartSequentialPlayback() {
-        guard !videoMids.isEmpty else { return }
-        
-        currentVideoIndex = 0 // Reset to first video
-        print("DEBUG: [VideoManager] Restarted sequential playback from beginning")
-    }
-    
-    func onVideoFinished(tweetId: String? = nil) {
-        print("DEBUG: [VideoManager] onVideoFinished called - currentVideoIndex: \(currentVideoIndex), videoMids.count: \(videoMids.count), tweetId: \(tweetId ?? "nil")")
-        let nextIndex = currentVideoIndex + 1
-        if nextIndex < videoMids.count {
-            currentVideoIndex = nextIndex
-            print("DEBUG: [VideoManager] Video finished, moved to next video: \(nextIndex)")
-            // Save the new index
-            if let tweetId = tweetId {
-                saveCurrentIndex(for: tweetId)
-            }
-        } else {
-            // All videos finished, stop sequential playback
-            print("DEBUG: [VideoManager] All videos finished, stopping sequential playback")
-            // Clear saved state if all videos finished to free memory
-            if let tweetId = tweetId {
-                Self.clearSavedState(for: tweetId)
-            }
-            // Clear the state to stop any further playback
+    func stopSequentialPlayback() async {
+        await MainActor.run {
             videoMids = []
             currentVideoIndex = -1
+        }
+    }
+    
+    func forceReset() async {
+        guard !videoMids.isEmpty else { return }
+        await MainActor.run {
+            currentVideoIndex = 0 // Force reset to first video
+            print("DEBUG: [VideoManager] FORCE RESET - Reset to first video at index 0")
+        }
+    }
+    
+    func restartSequentialPlayback() async {
+        guard !videoMids.isEmpty else { return }
+
+        await MainActor.run {
+            currentVideoIndex = 0 // Reset to first video
+            print("DEBUG: [VideoManager] Restarted sequential playback from beginning")
+        }
+    }
+    
+    func onVideoFinished(tweetId: String? = nil) async {
+        await MainActor.run {
+            print("DEBUG: [VideoManager] onVideoFinished called - currentVideoIndex: \(currentVideoIndex), videoMids.count: \(videoMids.count), tweetId: \(tweetId ?? "nil")")
+            let nextIndex = currentVideoIndex + 1
+            if nextIndex < videoMids.count {
+                currentVideoIndex = nextIndex
+                print("DEBUG: [VideoManager] Video finished, moved to next video: \(nextIndex)")
+                // Save the new index
+                if let tweetId = tweetId {
+                    saveCurrentIndex(for: tweetId)
+                }
+            } else {
+                // All videos finished, stop sequential playback
+                print("DEBUG: [VideoManager] All videos finished, stopping sequential playback")
+                // Clear saved state if all videos finished to free memory
+                if let tweetId = tweetId {
+                    Self.clearSavedState(for: tweetId)
+                }
+                // Clear the state to stop any further playback
+                videoMids = []
+                currentVideoIndex = -1
+            }
         }
     }
     

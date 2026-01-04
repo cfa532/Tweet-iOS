@@ -1,3 +1,4 @@
+@preconcurrency import Foundation
 import SwiftUI
 
 struct TweetListNotification {
@@ -13,6 +14,11 @@ private struct TweetContentHeightPreferenceKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
+}
+
+private final class ObserverHolder: @unchecked Sendable {
+    var observer: NSObjectProtocol?
+    init(_ observer: NSObjectProtocol?) { self.observer = observer }
 }
 
 @available(iOS 16.0, *)
@@ -46,6 +52,7 @@ struct TweetListView<RowView: View>: View {
     @State private var contentHeight: CGFloat = 0
     @State private var screenHeight: CGFloat = 0
     @State private var needsMoreContent: Bool = true
+    @State private var startupTime: Date = Date()
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -245,11 +252,15 @@ struct TweetListView<RowView: View>: View {
                 .onPreferenceChange(TweetContentHeightPreferenceKey.self) { newHeight in
                     contentHeight = newHeight
                     // Auto-load more if screen isn't filled and we have more tweets
+                    // Only do this after startup phase to prevent excessive operations during initial load
                     if !isLoading && !isLoadingMore && hasMoreTweets && initialLoadComplete {
-                        let needsFilling = contentHeight < screenHeight * 1.2 // 20% buffer
-                        if needsFilling && needsMoreContent {
-                            Task {
-                                await loadMoreToFillScreen()
+                        Task {
+                            let inStartupPhase = await MainActor.run(body: { videoLoadingManager.isInStartupPhase })
+                            if !inStartupPhase {
+                                let needsFilling = contentHeight < screenHeight * 1.2 // 20% buffer
+                                if needsFilling && needsMoreContent {
+                                    await loadMoreToFillScreen()
+                                }
                             }
                         }
                     }
@@ -386,11 +397,16 @@ struct TweetListView<RowView: View>: View {
                     // Set hasMoreTweets based on cache - if we got a full page, there might be more
                     hasMoreTweets = tweetsFromCache.count >= pageSize
                     print("[TweetListView] Initial cache load: got \(tweetsFromCache.count) tweets, hasMoreTweets=\(hasMoreTweets)")
-                    
-                    // Update VideoLoadingManager with new tweet list
-                    let tweetIds = tweets.map { $0.mid }
-                    videoLoadingManager.updateTweetList(tweetIds)
-                    
+
+                    // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
+                    // Defer during initial startup to prevent hangs
+                    Task.detached(priority: .background) {
+                        // Wait 1 second after cache load before updating video manager
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+                        await self.videoLoadingManager.updateTweetList(tweetIds)
+                    }
+
                     // Don't mark as loaded yet - wait for server fetch to complete
                     // This prevents "No tweet yet" from showing prematurely if cached tweets
                     // are filtered out (e.g., pinned tweets) before server fetch completes
@@ -404,8 +420,33 @@ struct TweetListView<RowView: View>: View {
             }
 
             // Prewarm singleton players based on the first available cached video (best-effort).
-            await MainActor.run {
-                self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+            // Defer during initial startup to prevent hangs
+            Task.detached(priority: .background) {
+                // Wait for startup phase to end before prewarming videos
+                if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
+                    await withCheckedContinuation { continuation in
+                        let holder = ObserverHolder(nil)
+                        holder.observer = NotificationCenter.default.addObserver(
+                            forName: .startupPhaseEnded,
+                            object: nil,
+                            queue: nil
+                        ) { _ in
+                            if let observer = holder.observer {
+                                NotificationCenter.default.removeObserver(observer)
+                            }
+                            continuation.resume()
+                        }
+                    }
+                }
+                await MainActor.run {
+                    self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                }
+            }
+
+            // End startup phase after 3 seconds
+            Task.detached(priority: .background) {
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                await videoLoadingManager.endStartupPhase()
             }
             
             // Step 2: Load from server to get the most up-to-date data
@@ -448,18 +489,22 @@ struct TweetListView<RowView: View>: View {
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
                     
-                    // Update VideoLoadingManager with new tweet list
-                    let tweetIds = tweets.map { $0.mid }
-                    videoLoadingManager.updateTweetList(tweetIds)
-                } else {
-                    // Only clear if server returned no valid tweets AND we have no cached tweets
-                    if tweets.isEmpty {
-                        tweets = []
-                        hasMoreTweets = false
-                        
-                        // Update VideoLoadingManager with empty tweet list
-                        videoLoadingManager.updateTweetList([])
+                    // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
+                    Task.detached(priority: .background) {
+                        let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+                        await self.videoLoadingManager.updateTweetList(tweetIds)
+                    }
                     } else {
+                        // Only clear if server returned no valid tweets AND we have no cached tweets
+                        if tweets.isEmpty {
+                            tweets = []
+                            hasMoreTweets = false
+
+                            // Update VideoLoadingManager with empty tweet list (background task to avoid blocking)
+                            Task.detached(priority: .background) {
+                                await self.videoLoadingManager.updateTweetList([])
+                            }
+                        } else {
                         // Keep cached tweets if server returned no valid tweets
                         hasMoreTweets = false
                     }
@@ -549,16 +594,19 @@ struct TweetListView<RowView: View>: View {
                         print("[TweetListView] LoadMore cache: got full page (\(tweetsFromCache.count) >= \(pageSize)), setting hasMoreTweets=true")
                     }
                     
-                    // Update VideoLoadingManager with new tweet list
-                    let tweetIds = tweets.map { $0.mid }
-                    videoLoadingManager.updateTweetList(tweetIds)
-                    
+                    // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
+                    Task.detached(priority: .background) {
+                        let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+                        await self.videoLoadingManager.updateTweetList(tweetIds)
+                    }
+
                     // Clear loading state after minimum duration
                     isLoadingMore = false
                     loadingStartTime = nil
                     
                     // Restore scroll position to keep the last visible tweet above bottom bar
-                    if let lastTweetId = lastVisibleTweetIdBeforeLoad {
+                    // Only restore scroll position after startup phase to avoid unwanted scrolling during app launch
+                    if let lastTweetId = lastVisibleTweetIdBeforeLoad, !videoLoadingManager.isInStartupPhase {
                         print("[TweetListView] Restoring scroll position to tweet: \(lastTweetId)")
                         // Use a slight delay to ensure layout is complete
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -566,6 +614,10 @@ struct TweetListView<RowView: View>: View {
                                 scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
                             }
                         }
+                        lastVisibleTweetIdBeforeLoad = nil
+                    } else if let lastTweetId = lastVisibleTweetIdBeforeLoad, videoLoadingManager.isInStartupPhase {
+                        // During startup phase, just clear the captured tweet without scrolling
+                        print("[TweetListView] Skipping scroll restoration during startup phase for tweet: \(lastTweetId)")
                         lastVisibleTweetIdBeforeLoad = nil
                     }
                 }
@@ -592,13 +644,18 @@ struct TweetListView<RowView: View>: View {
                     loadingStartTime = nil
                     
                     // Restore scroll position even on error
-                    if let lastTweetId = lastVisibleTweetIdBeforeLoad {
+                    // Only restore scroll position after startup phase to avoid unwanted scrolling during app launch
+                    if let lastTweetId = lastVisibleTweetIdBeforeLoad, !videoLoadingManager.isInStartupPhase {
                         print("[TweetListView] Restoring scroll position after error to tweet: \(lastTweetId)")
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             withAnimation(.easeOut(duration: 0.25)) {
                                 scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
                             }
                         }
+                        lastVisibleTweetIdBeforeLoad = nil
+                    } else if let lastTweetId = lastVisibleTweetIdBeforeLoad, videoLoadingManager.isInStartupPhase {
+                        // During startup phase, just clear the captured tweet without scrolling
+                        print("[TweetListView] Skipping scroll restoration during startup phase after error for tweet: \(lastTweetId)")
                         lastVisibleTweetIdBeforeLoad = nil
                     }
                 }
@@ -654,12 +711,14 @@ struct TweetListView<RowView: View>: View {
                 tweets.mergeTweets(validServerTweets)
             }
             
-            // Update VideoLoadingManager with new tweet list
-            let tweetIds = tweets.map { $0.mid }
-            videoLoadingManager.updateTweetList(tweetIds)
-            
+            // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
+            Task.detached(priority: .background) {
+                let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+                await self.videoLoadingManager.updateTweetList(tweetIds)
+            }
+
             currentPage = page
-            
+
             // Set hasMoreTweets based on whether we got a full page
             // If we got a full page, there might be more tweets
             if tweetsFromServer.count >= pageSize {
@@ -669,12 +728,20 @@ struct TweetListView<RowView: View>: View {
                 hasMoreTweets = false
                 print("[TweetListView] Got partial page (\(tweetsFromServer.count) < \(pageSize)), setting hasMoreTweets=false")
             }
-            
+
             // Mark initial load as complete for page 0 only if we got valid tweets
             if page == 0 {
                 isLoading = false
                 initialLoadComplete = true
-                prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                // Prewarm video players in background to avoid blocking scroll gestures
+                // Defer during initial startup to prevent hangs
+                Task.detached(priority: .background) {
+                    // Wait 2 seconds after initial load before prewarming videos
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    await MainActor.run {
+                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                    }
+                }
             }
         } else if tweetsFromServer.count < pageSize {
             hasMoreTweets = false
@@ -682,7 +749,10 @@ struct TweetListView<RowView: View>: View {
             // Server returned fewer than pageSize tweets (or empty), so no more pages
             if page == 0 {
                 if tweets.isEmpty {
-                    videoLoadingManager.updateTweetList([])
+                    // Update VideoLoadingManager with empty tweet list (background task to avoid blocking)
+                    Task.detached(priority: .background) {
+                        await self.videoLoadingManager.updateTweetList([])
+                    }
                     isLoading = false
                     initialLoadComplete = true
                 } else {

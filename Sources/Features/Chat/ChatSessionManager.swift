@@ -1,17 +1,23 @@
-import Foundation
+@preconcurrency import Foundation
 import Combine
 import SwiftUI
+
+private final class ObserverHolder: @unchecked Sendable {
+    var observer: NSObjectProtocol?
+    init(_ observer: NSObjectProtocol?) { self.observer = observer }
+}
 
 // MARK: - Chat Session Manager
 @MainActor
 class ChatSessionManager: ObservableObject {
     static let shared = ChatSessionManager()
     
-    @Published var chatSessions: [ChatSession] = []
+    @Published private(set) var chatSessions: [ChatSession] = []
     @Published var unreadMessageCount: Int = 0
-    
+
     // Private property to track badge count since UNUserNotificationCenter doesn't provide a way to read it
     private var currentBadgeCount: Int = 0
+    private var sessionsLoaded: Bool = false
 
     // Track which messages have already been notified to prevent duplicates
     private var notifiedMessageIds: Set<String> = []
@@ -23,10 +29,18 @@ class ChatSessionManager: ObservableObject {
     private let hproseInstance = HproseInstance.shared
     
     private init() {
-        // Don't load sessions immediately - wait for user to be available
-        // Sessions will be loaded when the user is properly initialized
+        // Don't load sessions immediately - sessions will be loaded lazily when first accessed
     }
-    
+
+    /// Ensure chat sessions are loaded (called lazily when sessions are first accessed)
+    private func ensureSessionsLoaded() {
+        guard !sessionsLoaded else { return }
+        loadChatSessionsFromCoreData()
+        updateUnreadMessageCount()
+        sessionsLoaded = true
+        print("[ChatSessionManager] Lazily loaded chat sessions when first accessed")
+    }
+
     // MARK: - Core Data Methods
     
     /// Load chat sessions from Core Data
@@ -74,9 +88,31 @@ class ChatSessionManager: ObservableObject {
     
     /// Load sessions when user is properly initialized
     func loadSessionsWhenUserAvailable() {
-        loadChatSessionsFromCoreData()
-        updateUnreadMessageCount()
-        print("[ChatSessionManager] Loaded sessions after user initialization")
+        // Defer chat loading during startup phase to prevent main thread blocking
+        Task.detached(priority: .background) {
+            // Wait for startup phase to end before loading chat sessions
+            if await MainActor.run(body: { VideoLoadingManager.shared.isInStartupPhase }) {
+                await withCheckedContinuation { continuation in
+                    let holder = ObserverHolder(nil)
+                    holder.observer = NotificationCenter.default.addObserver(
+                        forName: .startupPhaseEnded,
+                        object: nil,
+                        queue: nil
+                    ) { _ in
+                        if let observer = holder.observer {
+                            NotificationCenter.default.removeObserver(observer)
+                        }
+                        continuation.resume()
+                    }
+                }
+            }
+
+            await MainActor.run {
+                self.loadChatSessionsFromCoreData()
+                self.updateUnreadMessageCount()
+                print("[ChatSessionManager] Loaded sessions after user initialization")
+            }
+        }
     }
     
     /// Check backend for new messages (for notification purposes only)
@@ -261,6 +297,7 @@ class ChatSessionManager: ObservableObject {
     
     /// Get chat session for a specific user
     func getChatSession(for receiptId: String) -> ChatSession? {
+        ensureSessionsLoaded()
         return chatSessions.first { session in
             session.receiptId == receiptId
         }
@@ -304,6 +341,7 @@ class ChatSessionManager: ObservableObject {
     
     /// Get unread message count
     func getUnreadMessageCount() -> Int {
+        ensureSessionsLoaded()
         return chatSessions.filter { $0.hasNews }.count
     }
     
@@ -340,6 +378,7 @@ class ChatSessionManager: ObservableObject {
     }
     
     func markAllMessagesAsRead() {
+        ensureSessionsLoaded()
         for session in chatSessions {
             if session.hasNews {
                 markSessionAsRead(receiptId: session.receiptId)
