@@ -3125,108 +3125,43 @@ struct SimpleVideoPlayer: View {
             NSLog("DEBUG: [VIDEO RETRY] Skipping VideoStateCache check during retry #\(retryAttempts) for \(mid) - will load fresh")
         }
         
-        // SECOND: Check if we have cached content for this tweet/media.
-        // Cache is keyed ONLY by mid (video attachment mediaID).
-        let tweetIdForCaching = mid
-        let hasCachedContent =
-            SharedAssetCache.shared.hasCachedContent(for: tweetIdForCaching) ||
-            SharedAssetCache.shared.hasCachedContent(for: mid)
-        
-        if hasCachedContent {
-            NSLog("DEBUG: [VIDEO SETUP] Tweet \(mid) has cached content, loading from cache in mode \(mode)")
-            
-            // Try async loading from cache
-            Task.detached(priority: .userInitiated) {
-                NSLog("DEBUG: [VIDEO SETUP] Starting async Task to load player from cache for \(mid) in mode \(mode)")
-                do {
-                    NSLog("DEBUG: [VIDEO SETUP] Calling getOrCreatePlayer for \(mid)")
-                    // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                    let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
-                    NSLog("DEBUG: [VIDEO SETUP] getOrCreatePlayer returned successfully for \(mid)")
-                    
-                    // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
-                    // This prevents any brief moment where the player might start with wrong audio state
-                    if await MainActor.run(body: { self.mode }) == .mediaCell {
-                        let muteState = await MainActor.run { MuteState.shared.isMuted }
-                        newPlayer.isMuted = muteState
-                        NSLog("🔇 [PLAYER MUTE] Applied global mute state for MediaCell - isMuted: \(muteState) for \(mid)")
-                    } else {
-                        newPlayer.isMuted = false
-                        NSLog("🔊 [PLAYER MUTE] Unmuted for fullscreen/detail mode - isMuted: false for \(mid)")
-                    }
-                    
-                    await MainActor.run {
-                        // Double-check and reapply mute state for safety
-                        if self.mode == .mediaCell {
-                            newPlayer.isMuted = MuteState.shared.isMuted
-                        } else {
-                            newPlayer.isMuted = false
-                        }
-                        self.configurePlayer(newPlayer)
-                    }
-                } catch {
-                    await MainActor.run {
-                        print("DEBUG: [VIDEO SETUP] Failed to load from cache for \(mid): \(error)")
-                        self.handleError(strategy: .loadFailure)
-                    }
-                }
-            }
-            return
-        }
-        
-        // For fullscreen mode, always allow setup regardless of shouldLoadVideo
-        if mode == .mediaBrowser {
-            print("DEBUG: [VIDEO SETUP] Fullscreen mode - forcing player setup regardless of shouldLoadVideo for \(mid)")
-        } else {
-            // For MediaCell mode, respect shouldLoadVideo setting
-            guard shouldLoadVideo else {
-                print("DEBUG: [VIDEO SETUP] Loading disabled for \(mid) and no cache available, skipping setup")
-                loadingState = .idle  // Reset loading state since we're not loading
-                return
-            }
-        }
-        
-        // No shared player found, create a new one
-        // loadingState is already set to .loading at the start of this function
-        // CRITICAL: Use .utility priority for MediaCell to prevent blocking scroll
-        // Detail/fullscreen can use higher priority since they're not in scrolling feed
-        let taskPriority: TaskPriority = (mode == .mediaCell) ? .utility : .userInitiated
-        Task.detached(priority: taskPriority) {
+        // SECOND: Always try async loading - SharedAssetCache handles cache vs network internally
+        // This avoids synchronous file system operations on the main thread during scrolling
+        Task.detached(priority: .userInitiated) {
             do {
-                // Use shared cached player for all modes - simpler and more efficient
+                NSLog("DEBUG: [VIDEO SETUP] Starting async Task to load player for \(mid) in mode \(mode)")
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
-                
-                
+                NSLog("DEBUG: [VIDEO SETUP] getOrCreatePlayer returned successfully for \(mid)")
+
                 // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
                 // This prevents any brief moment where the player might start with wrong audio state
                 if await MainActor.run(body: { self.mode }) == .mediaCell {
                     let muteState = await MainActor.run { MuteState.shared.isMuted }
                     newPlayer.isMuted = muteState
+                    NSLog("🔇 [PLAYER MUTE] Applied global mute state for MediaCell - isMuted: \(muteState) for \(mid)")
                 } else {
                     newPlayer.isMuted = false
-                    NSLog("DEBUG: [VIDEO SETUP] Unmuted immediately after player creation for fullscreen/detail")
+                    NSLog("🔊 [PLAYER MUTE] Unmuted for fullscreen/detail mode - isMuted: false for \(mid)")
                 }
-                
+
                 await MainActor.run {
                     // Double-check and reapply mute state for safety
                     if self.mode == .mediaCell {
                         newPlayer.isMuted = MuteState.shared.isMuted
-                        NSLog("🔇 [PLAYER MUTE] Re-applied mute state on MainActor for MediaCell - isMuted: \(MuteState.shared.isMuted) for \(mid)")
                     } else {
                         newPlayer.isMuted = false
-                        NSLog("🔊 [PLAYER MUTE] Re-applied unmute on MainActor for fullscreen/detail - isMuted: false for \(mid)")
                     }
                     self.configurePlayer(newPlayer)
                 }
             } catch {
                 await MainActor.run {
                     print("DEBUG: [VIDEO SETUP] Failed to setup player for \(mid): \(error)")
-                    NSLog("ERROR: [SimpleVideoPlayer] Failed to setup player for \(mid): \(error)")
                     self.handleError(strategy: .loadFailure)
                 }
             }
         }
+        return
     }
     
     private func restoreFromCache(_ cachedState: (player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool)) {
