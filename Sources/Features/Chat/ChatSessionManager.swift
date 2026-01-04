@@ -86,34 +86,6 @@ class ChatSessionManager: ObservableObject {
         print("[ChatSessionManager] Force reloaded chat sessions from Core Data")
     }
     
-    /// Load sessions when user is properly initialized
-    func loadSessionsWhenUserAvailable() {
-        // Defer chat loading during startup phase to prevent main thread blocking
-        Task.detached(priority: .background) {
-            // Wait for startup phase to end before loading chat sessions
-            if await MainActor.run(body: { VideoLoadingManager.shared.isInStartupPhase }) {
-                await withCheckedContinuation { continuation in
-                    let holder = ObserverHolder(nil)
-                    holder.observer = NotificationCenter.default.addObserver(
-                        forName: .startupPhaseEnded,
-                        object: nil,
-                        queue: nil
-                    ) { _ in
-                        if let observer = holder.observer {
-                            NotificationCenter.default.removeObserver(observer)
-                        }
-                        continuation.resume()
-                    }
-                }
-            }
-
-            await MainActor.run {
-                self.loadChatSessionsFromCoreData()
-                self.updateUnreadMessageCount()
-                print("[ChatSessionManager] Loaded sessions after user initialization")
-            }
-        }
-    }
     
     /// Check backend for new messages (for notification purposes only)
     /// - Parameter suppressNotifications: If true, only updates badge, doesn't trigger notifications

@@ -711,6 +711,8 @@ struct MediaGridView: View, Equatable {
 
                     // Defer video manager setup to avoid blocking main thread during startup
                     Task.detached(priority: .background) {
+                        // Small delay to stagger operations when startup phase ends
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
                         // Wait for startup phase to end before setting up video playback
                         if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
                             await withCheckedContinuation { continuation in
@@ -757,6 +759,8 @@ struct MediaGridView: View, Equatable {
                 // This is important for tweets with multiple attachments to be tracked
                 // Defer to background and wait for startup phase to end
                 Task.detached(priority: .background) {
+                    // Small delay to stagger operations when startup phase ends
+                    try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
                     // Wait for startup phase to end before registering videos
                     if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
                         await withCheckedContinuation { continuation in
