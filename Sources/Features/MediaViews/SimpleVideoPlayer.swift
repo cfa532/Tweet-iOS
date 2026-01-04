@@ -590,7 +590,7 @@ struct SimpleVideoPlayer: View {
     /// Runs on background thread to avoid blocking UI
     @MainActor
     private func startPlaybackWatchdogIfNeeded(player: AVPlayer, reason: String) {
-        // VERY SELECTIVE: Only MediaCell with autoplay (like original)
+        // VERY SELECTIVE: Only MediaCell with autoplay
         // Other modes rely on existing recovery mechanisms
         guard mode == .mediaCell else { return }
         guard isVisible, shouldLoadVideo, currentAutoPlay else { return }
@@ -603,36 +603,55 @@ struct SimpleVideoPlayer: View {
         let baselineTime = player.currentTime().seconds
         let baselinePlayer = player
         let capturedMid = self.mid
+        let visibilityCheckTime = Date() // Capture when watchdog started
 
-        // Use Task (not Task.detached) to inherit current actor context more efficiently
-        playbackWatchdogTask = Task {
-            // Sleep (async, won't block)
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+        // SCROLL-FRIENDLY: Use Task.detached with utility priority
+        // This ensures watchdog runs on background thread and never blocks main thread
+        playbackWatchdogTask = Task.detached(priority: .utility) {
+            // CRITICAL: Wait 5 seconds before first check
+            // This ensures watchdog never fires during normal scrolling
+            // Only videos that user stops to watch will be monitored
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
 
-            // Quick check - if player is different or gone, exit early
-            guard self.player === baselinePlayer, let player = self.player else { return }
-            guard self.isVisible, self.isActuallyVisible else { return }
-            
-            // Check if stuck (same as original logic)
-            let nowTime = player.currentTime().seconds
-            let progressed = baselineTime.isFinite && nowTime.isFinite ? (nowTime > baselineTime + 0.2) : (player.rate > 0)
-            
-            if player.rate > 0 || player.timeControlStatus == .playing || progressed {
-                return // Healthy
+            // Check if video is still visible and stable (been visible for 5+ seconds)
+            // This prevents false positives from videos that scroll by quickly
+            let isStillVisible = await MainActor.run {
+                guard self.player === baselinePlayer, let _ = self.player else { return false }
+                guard self.isVisible, self.isActuallyVisible else { return false }
+                
+                // Ensure video has been visible continuously for at least 5 seconds
+                // If it became visible recently, it means view was recreated (scrolling) - skip check
+                return Date().timeIntervalSince(visibilityCheckTime) >= 4.5
             }
             
-            guard let item = player.currentItem else { return }
+            guard isStillVisible else { return }
             
-            let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            let bufferEmpty = item.isPlaybackBufferEmpty
-            let notLikelyToKeepUp = !item.isPlaybackLikelyToKeepUp
+            // Now perform actual health check (still off main thread where possible)
+            let isBroken = await MainActor.run {
+                guard let player = self.player, let item = player.currentItem else { return false }
+                
+                // Check if stuck (same logic as before)
+                let nowTime = player.currentTime().seconds
+                let progressed = baselineTime.isFinite && nowTime.isFinite ? (nowTime > baselineTime + 0.2) : (player.rate > 0)
+                
+                if player.rate > 0 || player.timeControlStatus == .playing || progressed {
+                    return false // Healthy
+                }
+                
+                let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                let bufferEmpty = item.isPlaybackBufferEmpty
+                let notLikelyToKeepUp = !item.isPlaybackLikelyToKeepUp
+                
+                return waiting || bufferEmpty || notLikelyToKeepUp
+            }
             
-            guard waiting || bufferEmpty || notLikelyToKeepUp else { return }
-            
-            // Stuck - recreate
-            NSLog("⚠️ [WATCHDOG] Playback stuck for \(capturedMid), forcing reload")
-            self.recreatePlayer(reason: "stuckPlayback", mid: capturedMid)
+            if isBroken {
+                NSLog("⚠️ [WATCHDOG] Playback stuck for \(capturedMid), forcing reload")
+                await MainActor.run {
+                    self.recreatePlayer(reason: "stuckPlayback", mid: capturedMid)
+                }
+            }
         }
     }
     
