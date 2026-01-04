@@ -15,14 +15,12 @@ enum Constants {
     static let LOCAL_HOST = "http://127.0.0.1"
     
     // Cache Configuration
-    static let MAX_ASSET_CACHE_SIZE = 20 // Maximum number of cached assets (reduced from 30)
-    static let MAX_PLAYER_CACHE_SIZE = 10 // Maximum number of cached players (reduced from 25)
+    static let MAX_ASSET_CACHE_SIZE = 30 // Maximum number of cached assets
+    static let MAX_PLAYER_CACHE_SIZE = 25 // Maximum number of cached players
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 600 // 10 minutes (reduced from 30 minutes)
-    static let MAX_VIDEO_FILE_CACHE_SIZE: Int64 = 50 * 1024 * 1024 // 50MB per video file
     
     // File Upload Limits
     static let MAX_FILE_SIZE = 512 * 1024 * 1024 // 512MB in bytes - applies to all file types
-    static let MAX_VIDEO_FILE_SIZE = MAX_FILE_SIZE // Keep for backward compatibility
     
     // Video Processing Thresholds
     static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 32 * 1024 * 1024  // 32MB

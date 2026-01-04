@@ -90,7 +90,6 @@ class SharedAssetCache: ObservableObject {
     private let maxCacheSize = Constants.MAX_ASSET_CACHE_SIZE
     private let maxPlayerCacheSize = Constants.MAX_PLAYER_CACHE_SIZE
     private let cacheExpirationInterval: TimeInterval = Constants.CACHE_EXPIRATION_SECONDS
-    private let maxVideoFileSize: Int64 = Constants.MAX_VIDEO_FILE_CACHE_SIZE
     
     // MARK: - Cache Persistence
     private let cacheMetadataKey = "SharedAssetCache_Metadata"
