@@ -586,73 +586,80 @@ struct SimpleVideoPlayer: View {
         return true
     }
 
-    /// Watchdog for the "spinner forever" case:
-    /// autoplay is approved + visible, but the player never advances time / stays waiting.
-    /// This can happen even when `loadingState` is already `.loaded`, so the existing loading-only
-    /// health checks won't fire.
+    /// Lightweight watchdog: only for stuck autoplay in MediaCell
+    /// Runs on background thread to avoid blocking UI
     @MainActor
     private func startPlaybackWatchdogIfNeeded(player: AVPlayer, reason: String) {
+        // VERY SELECTIVE: Only MediaCell with autoplay (like original)
+        // Other modes rely on existing recovery mechanisms
         guard mode == .mediaCell else { return }
-        guard isVisible, shouldLoadVideo else { return }
-        guard currentAutoPlay else { return }
-
-        // For sequential playback, only watchdog the approved video.
+        guard isVisible, shouldLoadVideo, currentAutoPlay else { return }
+        
         let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
         guard approved else { return }
 
-        // Cancel any previous watchdog for this view instance.
         playbackWatchdogTask?.cancel()
 
         let baselineTime = player.currentTime().seconds
-        let baselineIsFinite = baselineTime.isFinite
         let baselinePlayer = player
-        let baselinePlayerItem = player.currentItem
+        let capturedMid = self.mid
 
-        playbackWatchdogTask = Task { @MainActor in
-            // Give AVPlayer a moment to actually start.
-            try? await Task.sleep(nanoseconds: 2_500_000_000) // 2.5s
+        // Use Task (not Task.detached) to inherit current actor context more efficiently
+        playbackWatchdogTask = Task {
+            // Sleep (async, won't block)
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
 
-            // Still relevant?
-            guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { return }
-            guard self.shouldLoadVideo, self.currentAutoPlay else { return }
-            guard let currentPlayer = self.player, currentPlayer === baselinePlayer else { return }
-            guard let item = currentPlayer.currentItem else { return }
-
-            // If the item changed, let normal observers handle it.
-            if let baselineItem = baselinePlayerItem, baselineItem !== item {
-                return
+            // Quick check - if player is different or gone, exit early
+            guard self.player === baselinePlayer, let player = self.player else { return }
+            guard self.isVisible, self.isActuallyVisible else { return }
+            
+            // Check if stuck (same as original logic)
+            let nowTime = player.currentTime().seconds
+            let progressed = baselineTime.isFinite && nowTime.isFinite ? (nowTime > baselineTime + 0.2) : (player.rate > 0)
+            
+            if player.rate > 0 || player.timeControlStatus == .playing || progressed {
+                return // Healthy
             }
-
-            let nowTime = currentPlayer.currentTime().seconds
-            let progressed = baselineIsFinite && nowTime.isFinite ? (nowTime > baselineTime + 0.2) : (currentPlayer.rate > 0)
-
-            // If we're playing or advancing, we're good.
-            if currentPlayer.rate > 0 || currentPlayer.timeControlStatus == .playing || progressed {
-                return
-            }
-
-            // Only treat as stuck if we're waiting/empty/likely-to-keep-up says no.
-            let waiting = currentPlayer.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            
+            guard let item = player.currentItem else { return }
+            
+            let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
             let bufferEmpty = item.isPlaybackBufferEmpty
             let notLikelyToKeepUp = !item.isPlaybackLikelyToKeepUp
+            
             guard waiting || bufferEmpty || notLikelyToKeepUp else { return }
-
-            NSLog("⚠️ [WATCHDOG] Playback stuck after autoplay (reason: \(reason)) for \(self.mid). waiting=\(waiting), bufferEmpty=\(bufferEmpty), likely=\(!notLikelyToKeepUp). Forcing reload.")
-
-            // Keep UX smooth: capture a last frame so the cover can stay up.
-            self.captureLastFrameIfPossible(reason: "watchdogReload")
-
-            // Force a clean recreate like manual reset.
-            SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
-            currentPlayer.pause()
-            self.player = nil
-            self.loadingState = .idle
-            self.playbackState = .notStarted
-            // Don't force view recreation here; it causes visible flicker on foreground.
-            // If we need a layer refresh, we do it later *behind the recovery cover*.
-            self.setupPlayer()
+            
+            // Stuck - recreate
+            NSLog("⚠️ [WATCHDOG] Playback stuck for \(capturedMid), forcing reload")
+            self.recreatePlayer(reason: "stuckPlayback", mid: capturedMid)
         }
+    }
+    
+    /// Recreate player (called from background thread, hops to main)
+    @MainActor
+    private func recreatePlayer(reason: String, mid: String) {
+        guard self.mid == mid else { return } // Ensure still same video
+        
+        NSLog("🔄 [WATCHDOG] Recreating player for \(mid): \(reason)")
+        
+        captureLastFrameIfPossible(reason: "watchdog_\(reason)")
+        
+        SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+        VideoStateCache.shared.clearCache(for: mid)
+        
+        player?.pause()
+        player = nil
+        loadingState = .idle
+        playbackState = .notStarted
+        
+        if mode == .tweetDetail {
+            DetailVideoManager.shared.clearCurrentVideo()
+        } else if mode == .mediaBrowser {
+            FullScreenVideoManager.shared.clearSingletonPlayer()
+        }
+        
+        setupPlayer()
     }
 
     /// Foreground recovery UX: keep last-frame cover until we confirm frames are rendering.
