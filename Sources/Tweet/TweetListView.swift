@@ -803,27 +803,29 @@ struct TweetListContentView<RowView: View>: View {
                 .frame(maxWidth: .infinity)
                 .padding()
             } else {
-                // Show tweets
+                // Show tweets with LazyVStack for smooth scrolling
                 // Small spacer
                 Rectangle()
                     .fill(Color.clear)
                     .frame(height: 1)
                 
-                ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
-                    VStack(spacing: 0) {
-                        if index > 0 {
-                            Rectangle()
-                                .padding(.horizontal, 2)
-                                .frame(height: 0.5)
-                                .foregroundColor(Color(.systemGray).opacity(0.4))
-                        }
-                        rowView(tweet)
-                            // Add identity for view reuse
-                            .id("tweet_\(tweet.mid)")
-                            .onAppear {
-                                // Update VideoLoadingManager when tweet becomes visible
-                                videoLoadingManager.updateVisibleTweetIndex(index)
+                LazyVStack(spacing: 0, pinnedViews: []) {
+                    ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
+                        VStack(spacing: 0) {
+                            if index > 0 {
+                                Rectangle()
+                                    .padding(.horizontal, 2)
+                                    .frame(height: 0.5)
+                                    .foregroundColor(Color(.systemGray).opacity(0.4))
                             }
+                            rowView(tweet)
+                                // Add identity for view reuse
+                                .id("tweet_\(tweet.mid)")
+                                .onAppear {
+                                    // Update VideoLoadingManager when tweet becomes visible
+                                    videoLoadingManager.updateVisibleTweetIndex(index)
+                                }
+                        }
                     }
                 }
                 
