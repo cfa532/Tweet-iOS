@@ -1624,7 +1624,7 @@ final class HproseInstance: ObservableObject {
                             print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let client = self.clientPool.getClientByIP(for: ip)
-                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 5.0)
                             self.clientPool.releaseClient(client, for: ip)
                             
                             // Check for cancellation after health check
@@ -1822,9 +1822,9 @@ final class HproseInstance: ObservableObject {
     /// Checks if a server is healthy with a timeout
     /// - Parameters:
     ///   - hproseClient: The client to check
-    ///   - timeout: Timeout in seconds (default: 10)
+    ///   - timeout: Timeout in seconds (default: 5)
     /// - Returns: true if healthy within timeout, false otherwise
-    private func isServerHealthyWithTimeout(_ hproseClient: HproseClient, timeout: TimeInterval = 10.0) async -> Bool {
+    private func isServerHealthyWithTimeout(_ hproseClient: HproseClient, timeout: TimeInterval = 5.0) async -> Bool {
         // Check if already cancelled before starting
         if Task.isCancelled {
             return false
@@ -2014,7 +2014,7 @@ final class HproseInstance: ObservableObject {
         return try await retryOperation(maxRetries: 3) {
             print("DEBUG: [login] Creating client for baseUrl: \(baseUrl.absoluteString)")
             let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            newClient.timeout = 30.0  // 30 seconds (NSTimeInterval is in seconds, not milliseconds!)
+            newClient.timeout = 10.0  // 10 seconds (fast fail for slow servers)
             
             // Release client back to pool when done (no need to close)
             defer { 
@@ -6831,7 +6831,7 @@ final class HproseInstance: ObservableObject {
             
             // Test if pooled IP is still healthy
             let client = clientPool.getClientByIP(for: pooledIP)
-            let isHealthy = await isServerHealthyWithTimeout(client, timeout: 10.0)
+            let isHealthy = await isServerHealthyWithTimeout(client, timeout: 5.0)
             clientPool.releaseClient(client, for: pooledIP)
             
             if isHealthy {
@@ -6860,7 +6860,7 @@ final class HproseInstance: ObservableObject {
             return nil
         }
         
-        let isAppUserHealthy = await isServerHealthyWithTimeout(appUserClient, timeout: 10.0)
+        let isAppUserHealthy = await isServerHealthyWithTimeout(appUserClient, timeout: 5.0)
         
         if isAppUserHealthy {
             // AppUser is healthy but still couldn't get IPs - node might not exist
@@ -6971,7 +6971,7 @@ final class HproseInstance: ObservableObject {
                             print("DEBUG: [_getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
                             let client = self.clientPool.getClientByIP(for: ip)
-                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 10.0)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 5.0)
                             self.clientPool.releaseClient(client, for: ip)
                             
                             // Check for cancellation after health check

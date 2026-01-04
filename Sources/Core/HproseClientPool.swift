@@ -30,7 +30,7 @@ class HproseClientPool {
         
         // Create a new client
         let client = HproseHttpClient()
-        client.timeout = 10  // 10 seconds timeout for health checks
+        client.timeout = 5  // 5 seconds timeout for health checks (fast fail for bad servers)
         client.uri = urlString
         return client
     }
@@ -49,7 +49,7 @@ class HproseClientPool {
         
         // Create a new client
         let client = HproseHttpClient()
-        client.timeout = 10  // 10 seconds timeout for health checks
+        client.timeout = 5  // 5 seconds timeout for health checks (fast fail for bad servers)
         client.uri = urlString
         return client
     }

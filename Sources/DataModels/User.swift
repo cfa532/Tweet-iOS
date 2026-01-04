@@ -164,8 +164,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             
             let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
             
-            // Configure timeout for regular operations (5 minutes)
-            client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
+            // Configure timeout for regular operations (15 seconds - fast fail for bad servers)
+            client.timeout = 15000  // 15 seconds in milliseconds (detect slow servers quickly)
             
             return client
         }
@@ -179,8 +179,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             
             let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
             
-            // Configure timeout for upload operations (50 minutes for large uploads)
-            client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
+            // Configure timeout for upload operations (30 seconds to detect bad servers)
+            // Note: Actual file upload uses URLSession with 10-minute timeout (see HproseInstance.swift:4628)
+            client.timeout = 30000  // 30 seconds - fast fail for slow servers, URLSession handles actual upload
             
             return client
         }
