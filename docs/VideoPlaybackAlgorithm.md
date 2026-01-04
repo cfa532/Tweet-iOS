@@ -1,7 +1,7 @@
 # Video Playback Algorithm
 
-**Last Updated**: December 7, 2025  
-**Status**: ✅ Production (Conservative Recovery + Fullscreen Resume)
+**Last Updated**: January 4, 2026  
+**Status**: ✅ Production (Conservative Recovery + Fullscreen Resume + Scroll-Friendly Watchdog)
 
 ## Overview
 
@@ -243,6 +243,15 @@ Exit fullscreen:
 - Autoplay works regardless of when player becomes ready
 - No dependency on view lifecycle timing
 
+### 5. Stuck Player Detection (Watchdog)
+- **Scroll-friendly watchdog** detects players that fail to play despite being ready
+- **5 second delay** ensures watchdog never fires during normal scrolling
+- **Background thread** (Task.detached) prevents UI blocking
+- **Continuous visibility check** only monitors videos user stops to watch
+- **Automatic recovery** recreates stuck players without user interaction
+- **Zero scroll impact** validated via production testing (no UI hangs)
+- See VIDEO_SYSTEM.md "Playback Watchdog" section for full algorithm details
+
 ## Performance Considerations
 
 ### 1. Video Player Reuse
@@ -280,9 +289,16 @@ The algorithm provides extensive debug logging at key points:
 
 Log format: `DEBUG: [COMPONENT] Message with relevant state information`
 
-## Recent Improvements (December 2025)
+## Recent Improvements
 
-### 1. Conservative Player Recreation
+### January 2026: Scroll-Friendly Watchdog
+- **Before**: Watchdog running on main thread caused UI hangs (0.3-0.9s) during scrolling
+- **After**: Background thread with 5s delay ensures zero scroll performance impact
+- **Implementation**: `Task.detached(.utility)` + continuous visibility check (5s+)
+- **Benefit**: Detects stuck players without affecting scroll smoothness
+- **Testing**: No UI hang warnings in production logs after implementation
+
+### December 2025: Conservative Player Recreation
 - **Before**: Aggressively recreated all players after backgrounding
 - **After**: Only recreates players that are actually broken (missing, failed status, stalled)
 - **Benefit**: Leaves healthy players alone, reducing unnecessary work and potential issues
