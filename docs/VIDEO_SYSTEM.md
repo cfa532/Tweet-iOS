@@ -564,15 +564,17 @@ func shouldLoadVideo(for tweetId: String) -> Bool {
 
 ---
 
-## Playback Watchdog (Scroll-Friendly)
+## Playback Watchdog
 
 **Last Updated:** January 4, 2026  
 **Location:** `SimpleVideoPlayer.swift` - `startPlaybackWatchdogIfNeeded()`  
-**Status:** ✅ Production (Background Thread, Minimal UI Impact)
+**Status:** ❌ DISABLED (Causes scroll performance degradation)
 
-### Purpose
+> **IMPORTANT:** The watchdog has been **completely disabled** as of January 4, 2026 (later). Even with background thread execution and 5-second delays, the `await MainActor.run` state checks caused noticeable scroll UX degradation. The app now relies on existing error handling mechanisms (KVO observers, lifecycle methods, conservative recovery).
 
-Detects and recovers from "stuck" video players that fail to play despite being visible and having buffered data. The watchdog is designed to **never impact scroll performance** by only monitoring videos the user is actively watching.
+### Original Purpose (Historical)
+
+Detected and recovered from "stuck" video players that failed to play despite being visible and having buffered data. Designed to monitor videos without impacting scroll performance.
 
 ### Algorithm Overview
 

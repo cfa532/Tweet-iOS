@@ -590,69 +590,13 @@ struct SimpleVideoPlayer: View {
     /// Runs on background thread to avoid blocking UI
     @MainActor
     private func startPlaybackWatchdogIfNeeded(player: AVPlayer, reason: String) {
-        // VERY SELECTIVE: Only MediaCell with autoplay
-        // Other modes rely on existing recovery mechanisms
-        guard mode == .mediaCell else { return }
-        guard isVisible, shouldLoadVideo, currentAutoPlay else { return }
-        
-        let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
-        guard approved else { return }
-
-        playbackWatchdogTask?.cancel()
-
-        let baselineTime = player.currentTime().seconds
-        let baselinePlayer = player
-        let capturedMid = self.mid
-        let visibilityCheckTime = Date() // Capture when watchdog started
-
-        // SCROLL-FRIENDLY: Use Task.detached with utility priority
-        // This ensures watchdog runs on background thread and never blocks main thread
-        playbackWatchdogTask = Task.detached(priority: .utility) {
-            // CRITICAL: Wait 5 seconds before first check
-            // This ensures watchdog never fires during normal scrolling
-            // Only videos that user stops to watch will be monitored
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard !Task.isCancelled else { return }
-
-            // Check if video is still visible and stable (been visible for 5+ seconds)
-            // This prevents false positives from videos that scroll by quickly
-            let isStillVisible = await MainActor.run {
-                guard self.player === baselinePlayer, let _ = self.player else { return false }
-                guard self.isVisible, self.isActuallyVisible else { return false }
-                
-                // Ensure video has been visible continuously for at least 5 seconds
-                // If it became visible recently, it means view was recreated (scrolling) - skip check
-                return Date().timeIntervalSince(visibilityCheckTime) >= 4.5
-            }
-            
-            guard isStillVisible else { return }
-            
-            // Now perform actual health check (still off main thread where possible)
-            let isBroken = await MainActor.run {
-                guard let player = self.player, let item = player.currentItem else { return false }
-                
-                // Check if stuck (same logic as before)
-                let nowTime = player.currentTime().seconds
-                let progressed = baselineTime.isFinite && nowTime.isFinite ? (nowTime > baselineTime + 0.2) : (player.rate > 0)
-                
-                if player.rate > 0 || player.timeControlStatus == .playing || progressed {
-                    return false // Healthy
-                }
-                
-                let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                let bufferEmpty = item.isPlaybackBufferEmpty
-                let notLikelyToKeepUp = !item.isPlaybackLikelyToKeepUp
-                
-                return waiting || bufferEmpty || notLikelyToKeepUp
-            }
-            
-            if isBroken {
-                NSLog("⚠️ [WATCHDOG] Playback stuck for \(capturedMid), forcing reload")
-                await MainActor.run {
-                    self.recreatePlayer(reason: "stuckPlayback", mid: capturedMid)
-                }
-            }
-        }
+        // DISABLED: Watchdog causes scroll performance degradation even with background threads
+        // Relying on existing error handling mechanisms:
+        // 1. KVO observers detect failed/stalled items
+        // 2. onAppear/onDisappear lifecycle handles state transitions
+        // 3. Conservative recreatePlayer() for actually broken players
+        // 4. VideoManager handles sequential playback approval
+        return
     }
     
     /// Recreate player (called from background thread, hops to main)

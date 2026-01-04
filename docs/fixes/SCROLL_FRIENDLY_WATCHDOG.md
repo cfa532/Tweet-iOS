@@ -1,12 +1,47 @@
 # Scroll-Friendly Video Watchdog Implementation
 
 **Date:** January 4, 2026  
-**Status:** ✅ Production  
-**Impact:** Zero scroll performance degradation
+**Status:** ⚠️ DISABLED (January 4, 2026 - Later)  
+**Reason:** Even with background thread and 5s delay, watchdog still caused scroll UX degradation
+
+> **UPDATE:** The watchdog has been **disabled** because even the most optimized implementation (background thread, 5-second delay, continuous visibility checks) still caused noticeable scroll performance degradation. The app now relies on existing error handling mechanisms instead.
 
 ---
 
-## Problem Statement
+## Why Watchdog Was Disabled
+
+After multiple optimization attempts, the watchdog was **completely disabled** because:
+
+### Problem
+- Even with `Task.detached(priority: .utility)` (background thread)
+- Even with 5-second initial delay
+- Even with continuous visibility checks
+- The `await MainActor.run` calls for state inspection still caused **brief main thread hops**
+- These hops, multiplied across scrolling videos, created **noticeable scroll lag**
+
+### Root Cause
+- **Main thread hops are unavoidable** when checking player state (player properties are `@MainActor`)
+- During fast scrolling, **multiple videos** trigger watchdogs
+- Each watchdog makes **multiple state checks** via `await MainActor.run`
+- Accumulated main thread work = **degraded scroll UX**
+
+### Decision
+**Disable watchdog entirely** and rely on existing robust error handling:
+
+1. **KVO Observers** - Detect failed/stalled player items automatically
+2. **Lifecycle Methods** - `onAppear`/`onDisappear` handle state transitions
+3. **Conservative Recovery** - `recreatePlayer()` only recreates actually broken players
+4. **VideoManager** - Sequential playback approval prevents conflicts
+5. **User-Initiated Recovery** - User can scroll away and back to retry
+
+**Trade-off:** Occasional stuck videos (rare) vs smooth scrolling (critical UX)  
+**Winner:** Smooth scrolling 🎯
+
+---
+
+## Historical Context - What We Tried
+
+### Problem Statement (Original)
 
 ### Original Issue
 Video players occasionally get stuck in broken states (not playing despite being visible, having buffered data, and being approved by VideoManager). Previous watchdog implementations caused UI hangs during scrolling:
