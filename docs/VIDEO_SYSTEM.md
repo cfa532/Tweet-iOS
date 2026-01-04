@@ -1352,7 +1352,7 @@ func validateCache(for mediaID: String) -> Bool {
 ### Memory Usage
 
 **Typical:**
-- 5-10 cached players: ~50-100MB
+- 15-25 cached players: ~75-125MB
 - Background: Drops to ~30MB (players cleared)
 - Peak (loading): ~150MB
 

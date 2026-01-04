@@ -2,6 +2,16 @@
 
 ## 🎯 Recent Updates (January 2026)
 
+### Scroll-Friendly Video Watchdog
+- **Date:** January 4, 2026
+- **Impact:** Zero scroll performance impact with automatic broken player recovery
+- **Status:** ✅ Production
+
+**Documentation:**
+- 📘 `fixes/SCROLL_FRIENDLY_WATCHDOG.md` - **Main implementation guide**
+- 📹 `VIDEO_SYSTEM.md` - Updated with watchdog details
+- 🎬 `VideoPlaybackAlgorithm.md` - Updated with watchdog algorithm
+
 ### Profile Backend Call Optimization
 - **Date:** January 2026
 - **Impact:** ~50% reduction in backend calls for profile views
@@ -28,13 +38,12 @@
 - `MEMORY_MANAGEMENT.md` - Memory optimization
 
 ### Video System
-- `VIDEO_SYSTEM.md` - Video architecture overview
-- `VIDEO_PLAYER_ARCHITECTURE.md` - Player implementation details
+- **`VIDEO_SYSTEM.md`** ⭐ - Comprehensive video architecture (Updated Jan 2026)
+- **`VideoPlaybackAlgorithm.md`** - Playback algorithm details (Updated Jan 2026)
 - `HLS_VIDEO_IMPLEMENTATION.md` - HLS streaming
 - `HLS_CONVERSION_ALGORITHM.md` - Video conversion
-- `SIMPLEVIDEOPLAYER_INTEGRATION.md` - SimpleVideoPlayer usage
 - `COMPLETE_VIDEO_RESUME_SOLUTION.md` - Video playback resume
-- `FULLSCREEN_VIDEO_STATUS.md` - Full-screen video handling
+- **`fixes/SCROLL_FRIENDLY_WATCHDOG.md`** - Scroll-friendly watchdog (NEW Jan 2026)
 
 ### Features
 - `CHAT_AND_SEARCH_FEATURES.md` - Chat and search
@@ -113,10 +122,13 @@ Historical documentation is in the `archive/` directory (51 files).
 5. **`fixes/PROFILE_BACKEND_CALL_OPTIMIZATION.md`** - Profile optimization (NEW)
 
 ### Recently Updated
-1. **`IOS_PROFILE_OPTIMIZATION.md`** (Jan 2026) - NEW
-2. **`fixes/PROFILE_BACKEND_CALL_OPTIMIZATION.md`** (Jan 2026) - NEW
-3. **`FETCHUSER_RETRY_IMPLEMENTATION.md`** (Jan 2026) - Updated
-4. **`NETWORK_RESILIENCE.md`** (Jan 2026) - Updated
+1. **`fixes/SCROLL_FRIENDLY_WATCHDOG.md`** (Jan 4, 2026) - NEW
+2. **`VIDEO_SYSTEM.md`** (Jan 4, 2026) - Updated with watchdog
+3. **`VideoPlaybackAlgorithm.md`** (Jan 4, 2026) - Updated with watchdog
+4. **`IOS_PROFILE_OPTIMIZATION.md`** (Jan 2026) - NEW
+5. **`fixes/PROFILE_BACKEND_CALL_OPTIMIZATION.md`** (Jan 2026) - NEW
+6. **`FETCHUSER_RETRY_IMPLEMENTATION.md`** (Jan 2026) - Updated
+7. **`NETWORK_RESILIENCE.md`** (Jan 2026) - Updated
 
 ## 📊 Documentation Statistics
 
@@ -137,8 +149,9 @@ Historical documentation is in the `archive/` directory (51 files).
 - `GETPROVIDERIP_FLOW.md`
 
 **Video:**
-- `VIDEO_SYSTEM.md`
-- `VIDEO_PLAYER_ARCHITECTURE.md`
+- **`VIDEO_SYSTEM.md`** ⭐ (Comprehensive guide)
+- **`VideoPlaybackAlgorithm.md`**
+- **`fixes/SCROLL_FRIENDLY_WATCHDOG.md`** (NEW Jan 2026)
 - `HLS_VIDEO_IMPLEMENTATION.md`
 - `COMPLETE_VIDEO_RESUME_SOLUTION.md`
 
@@ -157,6 +170,9 @@ Historical documentation is in the `archive/` directory (51 files).
 ### By Date
 
 **January 2026:**
+- Scroll-Friendly Video Watchdog (Jan 4) ✅
+- Updated VIDEO_SYSTEM.md with watchdog (Jan 4)
+- Updated VideoPlaybackAlgorithm.md with watchdog (Jan 4)
 - Profile Backend Call Optimization (iOS & Android)
 - iOS Profile Optimization Quick Reference
 - Updated FETCHUSER_RETRY_IMPLEMENTATION.md

@@ -1,7 +1,10 @@
 # Video and Image Performance Optimization
 
 **Date:** December 27, 2025  
+**Status:** ⚠️ Partially Reverted (January 4, 2026)  
 **Issue:** System becomes very slow and non-responsive after browsing tweets with video attachments
+
+> **UPDATE (January 4, 2026):** `MAX_PLAYER_CACHE_SIZE` was increased back to 25 after determining that 10 was too restrictive and caused excessive player recreation overhead.
 
 ## Problem Analysis
 
