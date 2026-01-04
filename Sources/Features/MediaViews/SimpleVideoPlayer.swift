@@ -904,16 +904,18 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // For MediaCell mode, use existing logic but be less aggressive about failure detection
+        // For MediaCell mode, check if existing player is broken and needs recreation
         if let player = player, let playerItem = player.currentItem {
-            if playerItem.status == .failed && loadingState.hasFailed {
-                // Only trigger recovery if we've already marked this as failed
-                print("DEBUG: [VIDEO APPEAR] Player item is in failed state and already marked as failed for \(mid), triggering recovery")
+            // Check for various broken states
+            let isFailed = playerItem.status == .failed
+            let hasError = playerItem.error != nil || player.error != nil
+            let isStuckLoading = loadingState.isLoading && playerItem.status == .readyToPlay && !playerItem.loadedTimeRanges.isEmpty
+            
+            if isFailed || hasError || isStuckLoading {
+                print("⚠️ [VIDEO APPEAR] Detected broken player for \(mid): failed=\(isFailed), hasError=\(hasError), stuckLoading=\(isStuckLoading)")
+                print("DEBUG: [VIDEO APPEAR] Triggering recovery for broken player")
                 handleError(strategy: .loadFailure)
                 return
-            } else if playerItem.status == .failed {
-                // Player item is failed but not marked as failed yet - just log and continue
-                print("DEBUG: [VIDEO APPEAR] Player item is in failed state for \(mid), but not marked as failed yet - continuing")
             }
             
             // CRITICAL: If player is already loaded, mark as initialized to prevent recomposition
@@ -4128,9 +4130,19 @@ struct SimpleVideoPlayer: View {
             }
             
         case .manualReset, .networkRecovery:
+            // CRITICAL: For manual reset, completely clean up the broken player
+            // This ensures we don't reuse a broken cached player
+            print("DEBUG: [VIDEO ERROR] Manual reset - cleaning up broken player for \(mid)")
+            removePlayerObservers()
+            cleanupFailedPlayer()
+            
+            // Clear from all caches to force fresh load
+            SharedAssetCache.shared.clearAssetCache(for: mid)
+            
             playbackState = .notStarted
             loadingState = .idle  // Reset to idle - setupPlayer() will set to .loading
             retryAttempts = 0  // Reset retry counter on manual/network recovery
+            player = nil  // CRITICAL: Clear the broken player reference
             
             if shouldLoadVideo {
                 setupPlayer()
@@ -4235,54 +4247,75 @@ struct SimpleVideoPlayer: View {
     /// This catches edge cases where KVO observers don't fire properly with cached players
     @MainActor
     private func performPeriodicHealthCheck() async {
-        // Only run health check when in loading state
-        guard loadingState.isLoading else { return }
+        // Run health check when:
+        // 1. In loading state (stuck loading detection)
+        // 2. Player exists but might be broken (silent failure detection)
+        let shouldCheckLoading = loadingState.isLoading
+        let shouldCheckBroken = (player != nil && mode == .mediaCell)
+        
+        guard shouldCheckLoading || shouldCheckBroken else { return }
         
         // Wait 3 seconds before checking - gives KVO observers time to fire normally
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         
-        // Re-check loading state after sleep (might have changed)
-        guard loadingState.isLoading else { return }
-        
-        // Check if player is actually ready with buffered data
-        guard let player = player,
-              let playerItem = player.currentItem,
-              playerItem.status == .readyToPlay,
-              !playerItem.loadedTimeRanges.isEmpty else {
-            // Player not ready yet or no buffered data - this is expected, keep waiting
-            return
-        }
-        
-        // Calculate buffered duration
-        let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player)
-        
-        // If we have enough buffered data, fix the stuck loading state
-        if bufferedDuration >= firstFrameMinimumBuffer {
-            NSLog("⚠️ [HEALTH CHECK] LoadingState stuck at .loading but player is ready with \(String(format: "%.2f", bufferedDuration))s buffered - fixing for \(mid)")
-            loadingState = .loaded
-            retryAttempts = 0
-            if mode == .mediaCell {
-                hasInitialized = true
+        // CASE 1: Stuck loading state detection
+        if loadingState.isLoading {
+            // Check if player is actually ready with buffered data
+            guard let player = player,
+                  let playerItem = player.currentItem,
+                  playerItem.status == .readyToPlay,
+                  !playerItem.loadedTimeRanges.isEmpty else {
+                // Player not ready yet or no buffered data - this is expected, keep waiting
+                return
             }
             
-            // Check if video should be playing
-            if currentAutoPlay && isVisible {
-                let approved = mode == .mediaCell ? (videoManager?.shouldPlayVideo(for: mid) ?? false) : true
-                if approved && player.rate == 0 {
-                    if mode == .mediaCell {
-                        player.isMuted = MuteState.shared.isMuted
+            // Calculate buffered duration
+            let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player)
+            
+            // If we have enough buffered data, fix the stuck loading state
+            if bufferedDuration >= firstFrameMinimumBuffer {
+                NSLog("⚠️ [HEALTH CHECK] LoadingState stuck at .loading but player is ready with \(String(format: "%.2f", bufferedDuration))s buffered - fixing for \(mid)")
+                loadingState = .loaded
+                retryAttempts = 0
+                if mode == .mediaCell {
+                    hasInitialized = true
+                }
+                
+                // Check if video should be playing
+                if currentAutoPlay && isVisible {
+                    let approved = mode == .mediaCell ? (videoManager?.shouldPlayVideo(for: mid) ?? false) : true
+                    if approved && player.rate == 0 {
+                        if mode == .mediaCell {
+                            player.isMuted = MuteState.shared.isMuted
+                        }
+                        if mode == .mediaCell {
+                            playWithResumeIfNeeded(player)
+                        } else {
+                            player.play()
+                        }
+                        playbackState = .playing
+                        NSLog("▶️ [HEALTH CHECK] Started playback after fixing stuck state for \(mid)")
                     }
-                    if mode == .mediaCell {
-                        playWithResumeIfNeeded(player)
-                    } else {
-                        player.play()
-                    }
-                    playbackState = .playing
-                    NSLog("▶️ [HEALTH CHECK] Started playback after fixing stuck state for \(mid)")
+                }
+            } else {
+                NSLog("⏳ [HEALTH CHECK] Player ready but still buffering (\(String(format: "%.2f", bufferedDuration))s < \(String(format: "%.2f", firstFrameMinimumBuffer))s required) for \(mid)")
+            }
+        }
+        
+        // CASE 2: Silent broken player detection (for visible MediaCell videos only)
+        if mode == .mediaCell && isVisible {
+            guard let player = player, let playerItem = player.currentItem else { return }
+            
+            // Check for broken states that KVO might have missed
+            let isFailed = playerItem.status == .failed
+            let hasError = playerItem.error != nil || player.error != nil
+            
+            if isFailed || hasError {
+                NSLog("⚠️ [HEALTH CHECK] Detected silently broken player for \(mid) - triggering recovery")
+                await MainActor.run {
+                    self.handleError(strategy: .loadFailure)
                 }
             }
-        } else {
-            NSLog("⏳ [HEALTH CHECK] Player ready but still buffering (\(String(format: "%.2f", bufferedDuration))s < \(String(format: "%.2f", firstFrameMinimumBuffer))s required) for \(mid)")
         }
     }
     
