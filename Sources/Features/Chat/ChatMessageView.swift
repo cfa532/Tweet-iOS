@@ -675,6 +675,13 @@ struct ChatVideoContainer: View {
             // Load the player asynchronously without blocking
             if player == nil {
                 Task {
+                    // PERFORMANCE: Add 150ms delay to let scroll settle before loading video
+                    // This prevents video loading from competing with scroll rendering
+                    try? await Task.sleep(nanoseconds: 150_000_000) // 150ms delay
+                    
+                    // Check if still nil after delay (view might have disappeared)
+                    guard self.player == nil else { return }
+                    
                     let loadedPlayer = await ChatVideoManager.shared.getOrCreateVideoPlayer(
                         messageId: messageId,
                         attachment: attachment,
