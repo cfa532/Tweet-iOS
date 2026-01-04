@@ -709,16 +709,18 @@ struct MediaGridView: View, Equatable {
                 if !alreadySetup && !hasSetupSequentialPlayback {
                     hasSetupSequentialPlayback = true
 
-                    // Setup video playback when startup phase ends
-                    await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
-                    await MainActor.run {
-                        print("DEBUG: [MediaGridView] ✅ Setup sequential playback for tweet \(parentTweet.mid), currentIndex after setup: \(videoManager.currentVideoIndex)")
+                    // Defer video manager setup to avoid blocking main thread during startup
+                    Task.detached(priority: .background) {
+                        await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
+                        await MainActor.run {
+                            print("DEBUG: [MediaGridView] ✅ Setup sequential playback for tweet \(parentTweet.mid), currentIndex after setup: \(videoManager.currentVideoIndex)")
 
-                        // If all videos were finished (saved index >= count), restart from beginning
-                        if videoManager.currentVideoIndex >= videoMids.count {
-                            videoManager.currentVideoIndex = 0
-                            videoManager.saveCurrentIndex(for: parentTweet.mid)
-                            print("DEBUG: [MediaGridView] Reset currentVideoIndex to 0 (was >= count)")
+                            // If all videos were finished (saved index >= count), restart from beginning
+                            if videoManager.currentVideoIndex >= videoMids.count {
+                                videoManager.currentVideoIndex = 0
+                                videoManager.saveCurrentIndex(for: parentTweet.mid)
+                                print("DEBUG: [MediaGridView] Reset currentVideoIndex to 0 (was >= count)")
+                            }
                         }
                     }
                 } else if alreadySetup {
@@ -736,8 +738,10 @@ struct MediaGridView: View, Equatable {
             if hasMedia {
                 // Register this tweet as containing media (videos or audio)
                 // This is important for tweets with multiple attachments to be tracked
-                // Register tweet with video loading manager when startup phase ends
-                await videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                // Defer to background to avoid blocking main thread
+                Task.detached(priority: .background) {
+                    await videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
+                }
                 
                 // Check if this tweet should load media based on VideoLoadingManager
                 // For embedded tweets, still check - if VideoLoadingManager says yes (e.g., it's the original

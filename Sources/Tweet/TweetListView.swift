@@ -438,8 +438,11 @@ struct TweetListView<RowView: View>: View {
                         }
                     }
                 }
-                await MainActor.run {
-                    self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                // Defer prewarming to avoid overwhelming system when startup phase ends
+                Task.detached(priority: .background) {
+                    await MainActor.run {
+                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                    }
                 }
             }
 
