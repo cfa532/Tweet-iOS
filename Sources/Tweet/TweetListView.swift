@@ -438,12 +438,8 @@ struct TweetListView<RowView: View>: View {
                         }
                     }
                 }
-                // Delay prewarming to avoid overwhelming system when startup phase ends
-                Task.detached(priority: .background) {
-                    try? await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds delay
-                    await MainActor.run {
-                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
-                    }
+                await MainActor.run {
+                    self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
                 }
             }
 
