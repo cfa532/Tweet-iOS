@@ -190,7 +190,8 @@ struct TweetListView<RowView: View>: View {
                     hasMoreTweets: $hasMoreTweets,
                     isLoadingMore: isLoadingMore,
                     isLoading: isLoading,
-                    loadMoreTweets: { loadMoreTweets() }
+                    loadMoreTweets: { loadMoreTweets() },
+                    onScroll: onScroll
                 )
                 .onAppear {
                     screenHeight = geometry.size.height

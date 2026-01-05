@@ -21,6 +21,7 @@ class TweetTableViewController: UITableViewController {
     var loadMoreTweets: (() -> Void)?
     var rowViewBuilder: ((Tweet) -> AnyView)?
     var headerViewBuilder: (() -> AnyView)?
+    var onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     
     // Header hosting controller
     private var headerHostingController: UIHostingController<AnyView>?
@@ -30,6 +31,9 @@ class TweetTableViewController: UITableViewController {
     
     // Video playback coordinator
     private let videoCoordinator = VideoPlaybackCoordinator.shared
+    
+    // Scroll tracking for toolbar hiding
+    private var lastScrollOffset: CGFloat = 0
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -171,6 +175,19 @@ class TweetTableViewController: UITableViewController {
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Update visible tweets for video playback coordination
         updateVisibleTweetsForVideoPlayback()
+        
+        // Track scroll offset and delta for toolbar hiding
+        let currentOffset = scrollView.contentOffset.y
+        let delta = currentOffset - lastScrollOffset
+        
+        // Only forward significant changes to reduce jitter (matching old SwiftUI implementation)
+        let headerThreshold: CGFloat = 20
+        guard abs(delta) >= headerThreshold else { return }
+        
+        // Call the onScroll callback with accumulated delta
+        onScroll?(currentOffset, delta)
+        
+        lastScrollOffset = currentOffset
     }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

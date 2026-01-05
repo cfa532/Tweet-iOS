@@ -15,11 +15,13 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     let isLoadingMore: Bool
     let isLoading: Bool
     let loadMoreTweets: () -> Void
+    let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     
     func makeUIViewController(context: Context) -> TweetTableViewController {
         let controller = TweetTableViewController()
         
         controller.loadMoreTweets = loadMoreTweets
+        controller.onScroll = onScroll
         controller.headerViewBuilder = header
         controller.rowViewBuilder = { tweet in
             AnyView(rowView(tweet))
@@ -45,6 +47,7 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         
         // Update callbacks
         uiViewController.loadMoreTweets = loadMoreTweets
+        uiViewController.onScroll = onScroll
         uiViewController.headerViewBuilder = header
         uiViewController.rowViewBuilder = { tweet in
             AnyView(rowView(tweet))
