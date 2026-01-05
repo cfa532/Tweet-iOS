@@ -12,6 +12,7 @@ import UIKit
 /// Notification names for video playback coordination
 extension Notification.Name {
     static let shouldPlayVideo = Notification.Name("shouldPlayVideo")
+    static let shouldStopVideo = Notification.Name("shouldStopVideo")
     static let shouldStopAllVideos = Notification.Name("shouldStopAllVideos")
     static let videoDidFinishPlaying = Notification.Name("videoDidFinishPlaying")
     static let shouldPauseVideo = Notification.Name("shouldPauseVideo")
@@ -153,10 +154,23 @@ class VideoPlaybackCoordinator: ObservableObject {
         let currentVisibleVideoIds = Set(visibleVideos.map { $0.videoMid })
         let videoVisibilityChanged = previousVisibleVideoIds != currentVisibleVideoIds
         
-        // Clear previous state if no videos visible (so they count as "new" when they come back)
+        // Stop all videos if none are visible
         if currentVisibleVideoIds.isEmpty {
             previousVisibleVideoIds.removeAll()
+            stopAllVideos()
             return
+        }
+        
+        // Stop videos that are no longer visible
+        if videoVisibilityChanged {
+            let videosToStop = previousVisibleVideoIds.subtracting(currentVisibleVideoIds)
+            for videoMid in videosToStop {
+                NotificationCenter.default.post(
+                    name: .shouldStopVideo,
+                    object: nil,
+                    userInfo: ["videoMid": videoMid]
+                )
+            }
         }
         
         // Start playback when videos become visible OR when in idle phase with videos

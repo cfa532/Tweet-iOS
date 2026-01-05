@@ -867,6 +867,7 @@ struct SimpleVideoPlayer: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
                 .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in handleCoordinatorStopCommand() }
+                .onReceive(NotificationCenter.default.publisher(for: .shouldStopVideo)) { notification in handleCoordinatorStopCommand(notification: notification) }
                 .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in handleCoordinatorPlayCommand(notification: notification) }
                 .onReceive(NotificationCenter.default.publisher(for: .shouldPauseVideo)) { notification in handleCoordinatorPauseCommand(notification: notification) }
                 .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
@@ -1622,11 +1623,16 @@ struct SimpleVideoPlayer: View {
     
     // MARK: - Video Playback Coordinator Handlers
     
-    private func handleCoordinatorStopCommand() {
-        // Stop command from VideoPlaybackCoordinator - stop this video
+    private func handleCoordinatorStopCommand(notification: Notification? = nil) {
+        // Stop command from VideoPlaybackCoordinator
         guard mode == .mediaCell else { return }
         
-        print("🎬 [VideoOrchestrator] Stop command received for \(mid)")
+        // If notification has a specific videoMid, only stop if it matches this video
+        if let videoMid = notification?.userInfo?["videoMid"] as? String {
+            guard videoMid == mid else { return }
+        }
+        // Otherwise, stop all videos (shouldStopAllVideos notification)
+        
         coordinatorWantsToPlay = false
         player?.pause()
         playbackState = .paused
