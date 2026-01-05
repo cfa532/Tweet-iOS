@@ -621,13 +621,11 @@ struct VideoTimerOverlay: View {
             }
         }
         .onAppear {
-            print("🕐 [TIMER OVERLAY] Appeared for video \(videoMid)")
             isVisible = true
             startTimer()
             startHideTimer()
         }
         .onDisappear {
-            print("🕐 [TIMER OVERLAY] Disappeared for video \(videoMid)")
             updateTimer?.invalidate()
             updateTimer = nil
             hideTimer?.invalidate()
@@ -644,8 +642,6 @@ struct VideoTimerOverlay: View {
     }
     
     private func startTimer() {
-        print("🕐 [TIMER OVERLAY] Starting update timer for \(videoMid)")
-        
         // Request immediate update
         requestUpdate()
         
@@ -663,15 +659,12 @@ struct VideoTimerOverlay: View {
     }
     
     private func startHideTimer() {
-        print("🕐 [TIMER OVERLAY] Starting 5s hide timer for \(videoMid)")
-        
         // Cancel any existing hide timer
         hideTimer?.invalidate()
         
         // Hide after 5 seconds
         let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [videoMid] _ in
             Task { @MainActor in
-                print("🕐 [TIMER OVERLAY] Hiding timer for \(videoMid)")
                 self.isVisible = false
             }
         }

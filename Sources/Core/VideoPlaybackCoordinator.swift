@@ -99,8 +99,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     // MARK: - Initialization
     
     private init() {
-        print("🎬 [VideoOrchestrator] Initialized with new 2s autoplay + primary selection logic")
-        
         // Listen for video finished notifications
         NotificationCenter.default.addObserver(
             self,
@@ -140,8 +138,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Share the video list with FullScreenVideoManager to avoid duplicate tracking
         // This consolidates video tracking in one place
         FullScreenVideoManager.shared.updateVideoList(videos: videos, tweets: tweets)
-        
-        print("🎬 [VideoOrchestrator] Built video list: \(videos.count) videos from \(tweets.count) tweets")
     }
     
     /// Previously visible video IDs (to detect actual video changes, not just tweet changes)
@@ -160,15 +156,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Clear previous state if no videos visible (so they count as "new" when they come back)
         if currentVisibleVideoIds.isEmpty {
             previousVisibleVideoIds.removeAll()
-            print("🎬 [VideoOrchestrator] No videos visible, clearing state")
             return
-        }
-        
-        // Debug logging
-        print("🎬 [VideoOrchestrator] Update: \(currentVisibleVideoIds.count) videos visible, changed: \(videoVisibilityChanged), phase: \(phase)")
-        if videoVisibilityChanged {
-            print("🎬 [VideoOrchestrator]   Previous IDs: \(previousVisibleVideoIds)")
-            print("🎬 [VideoOrchestrator]   Current IDs: \(currentVisibleVideoIds)")
         }
         
         // Start playback when videos become visible OR when in idle phase with videos
@@ -179,12 +167,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
                currentVisibleVideoIds.contains(where: { primaryId.contains($0) }) {
-                print("🎬 [VideoOrchestrator] Videos changed but primary still visible, keeping playback")
                 previousVisibleVideoIds = currentVisibleVideoIds
                 return
             }
-            
-            print("🎬 [VideoOrchestrator] Videos changed, resetting to idle and starting 0.1s debounce")
             
             // Reset to idle phase
             phase = .idle
@@ -204,10 +189,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     if self.phase == .idle && !self.visibleVideos.isEmpty {
-                        print("🎬 [VideoOrchestrator] Debounce complete (0.1s), starting survey phase")
                         self.startSurveyPhase()
-                    } else {
-                        print("🎬 [VideoOrchestrator] Debounce fired but phase=\(self.phase), skipping")
                     }
                 }
             }
@@ -215,13 +197,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             playbackDebounceTimer = timer
         } else if !videoVisibilityChanged && phase == .idle && !currentVisibleVideoIds.isEmpty && playbackDebounceTimer == nil {
             // Handle case where videos are already visible but we're in idle (e.g., initial load)
-            print("🎬 [VideoOrchestrator] Videos present in idle phase, starting 0.1s debounce")
-            
             let timer = Timer(timeInterval: 0.1, repeats: false) { [weak self] _ in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     if self.phase == .idle && !self.visibleVideos.isEmpty {
-                        print("🎬 [VideoOrchestrator] Debounce complete (0.1s), starting survey phase")
                         self.startSurveyPhase()
                     }
                 }
@@ -233,11 +212,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Update previous state
         previousVisibleVideoIds = currentVisibleVideoIds
         
-        // Don't stop videos during scroll (keep playing)
-        if !wasScrolling {
-            print("🎬 [VideoOrchestrator] Scroll started - keeping videos playing")
-        }
-        
         // Cancel scroll stop timer - we don't need re-evaluation anymore
         // Videos start via debounce during scroll, no need for post-scroll restart
         scrollStopTimer?.invalidate()
@@ -246,8 +220,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Stop all videos and reset state
     func stopAllVideos() {
-        print("🎬 [VideoOrchestrator] Stopping all videos")
-        
         // Cancel all timers
         surveyTimer?.invalidate()
         surveyTimer = nil

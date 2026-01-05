@@ -40,6 +40,9 @@ class TweetTableViewController: UITableViewController {
     private var hasCompletedInitialLayout: Bool = false
     private var hasAdjustedInitialPosition: Bool = false
     
+    // Height cache for layout stability (prevents jumps when cells with videos load)
+    private var heightCache: [String: CGFloat] = [:]
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -48,8 +51,6 @@ class TweetTableViewController: UITableViewController {
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
-        
-        print("DEBUG: [TweetTableViewController] viewDidLoad - delegate is set to self")
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -105,7 +106,9 @@ class TweetTableViewController: UITableViewController {
         tableView.register(TweetTableViewCell.self, forCellReuseIdentifier: TweetTableViewCell.reuseIdentifier)
         tableView.separatorStyle = .none
         tableView.backgroundColor = .systemBackground
-        tableView.estimatedRowHeight = 200
+        
+        // Use smarter estimated height based on cached values
+        tableView.estimatedRowHeight = 250 // Base estimate, will be refined per cell
         tableView.rowHeight = UITableView.automaticDimension
         
         // CRITICAL: Explicitly set delegate to self
@@ -128,9 +131,7 @@ class TweetTableViewController: UITableViewController {
         // This ensures the last tweet is fully visible and scrollable above the bottom navigation
         let bottomInset: CGFloat = 40 // Extra padding beyond safe area
         tableView.contentInset.bottom = bottomInset
-        tableView.scrollIndicatorInsets.bottom = bottomInset
-        
-        print("DEBUG: [TweetTableViewController] Table view configured - delegate: \(String(describing: tableView.delegate))")
+        tableView.verticalScrollIndicatorInsets.bottom = bottomInset
     }
     
     private func setupRefreshControl() {
@@ -140,14 +141,10 @@ class TweetTableViewController: UITableViewController {
     }
     
     @objc private func handleRefresh() {
-        print("DEBUG: [TweetTableViewController] Pull-to-refresh triggered")
         Task {
-            print("DEBUG: [TweetTableViewController] Calling onRefresh callback")
             await onRefresh?()
-            print("DEBUG: [TweetTableViewController] onRefresh completed")
             await MainActor.run {
                 self.customRefreshControl?.endRefreshing()
-                print("DEBUG: [TweetTableViewController] Refresh control ended")
             }
         }
     }
@@ -159,9 +156,16 @@ class TweetTableViewController: UITableViewController {
         let oldTweets = tweets
         tweets = newTweets
         
+        // Clean up height cache for tweets no longer in the list (memory optimization)
+        let currentTweetIds = Set(newTweets.map { $0.mid })
+        heightCache = heightCache.filter { currentTweetIds.contains($0.key) }
+        
         // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
-            print("DEBUG: [TweetTableViewController] Initial load - reloading all data")
+            // Preflight: estimate heights for new tweets before layout
+            // This reduces first-time layout jumps by providing better initial estimates
+            preflightHeightEstimates(for: newTweets)
+            
             tableView.reloadData()
             videoCoordinator.buildVideoList(from: newTweets)
             
@@ -188,8 +192,10 @@ class TweetTableViewController: UITableViewController {
             let afterNewOnes = Array(newIds.dropFirst(potentialPrependCount))
             
             if afterNewOnes == oldIds {
-                // Yes! New tweets were prepended at the top
-                print("DEBUG: [TweetTableViewController] \(potentialPrependCount) tweet(s) prepended at top - using insertRows")
+                // Preflight: estimate heights for new tweets to reduce layout jumps
+                let prependedTweets = Array(newTweets.prefix(potentialPrependCount))
+                preflightHeightEstimates(for: prependedTweets)
+                
                 let indexPaths = (0..<potentialPrependCount).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .automatic)
                 videoCoordinator.buildVideoList(from: newTweets)
@@ -202,8 +208,10 @@ class TweetTableViewController: UITableViewController {
             let newIdsPrefix = Array(newIds.prefix(oldCount))
             
             if newIdsPrefix == oldIds {
-                // Yes! New tweets were appended at the end
-                print("DEBUG: [TweetTableViewController] \(newTweets.count - oldCount) tweet(s) appended - using insertRows")
+                // Preflight: estimate heights for new tweets to reduce layout jumps
+                let appendedTweets = Array(newTweets[oldCount...])
+                preflightHeightEstimates(for: appendedTweets)
+                
                 let indexPaths = (oldCount..<newTweets.count).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .none)
                 videoCoordinator.buildVideoList(from: newTweets)
@@ -222,7 +230,6 @@ class TweetTableViewController: UITableViewController {
         }
         
         // Complex change: fallback to full reload
-        print("DEBUG: [TweetTableViewController] Complex change detected - reloading all data")
         tableView.reloadData()
         videoCoordinator.buildVideoList(from: newTweets)
     }
@@ -383,12 +390,35 @@ class TweetTableViewController: UITableViewController {
     
     // MARK: - UITableViewDelegate
     
+    override func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
+        guard indexPath.row < tweets.count else { return 250 }
+        let tweetId = tweets[indexPath.row].mid
+        
+        // Use cached height if available for better estimation
+        if let cachedHeight = heightCache[tweetId] {
+            return cachedHeight
+        }
+        
+        // Otherwise, estimate based on tweet content
+        let tweet = tweets[indexPath.row]
+        return estimateHeight(for: tweet)
+    }
+    
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        // Cache the actual rendered height for future estimations
+        guard indexPath.row < tweets.count else { return }
+        let tweetId = tweets[indexPath.row].mid
+        heightCache[tweetId] = cell.frame.height
+        
         // Load more when approaching end
         if indexPath.row >= tweets.count - 3 && hasMoreTweets && !isLoadingMore && !isLoading {
-            print("DEBUG: [TweetTableViewController] Triggering load more at row \(indexPath.row)")
             loadMoreTweets?()
         }
+    }
+    
+    override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        // Keep height cached even after cell disappears
+        // Height cache persists for better scroll stability
     }
     
     
@@ -417,15 +447,67 @@ class TweetTableViewController: UITableViewController {
     }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        print("DEBUG: [TweetTableViewController] ✅ scrollViewWillBeginDragging")
+        // Scroll started - video coordinator handles playback
     }
     
     override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        print("DEBUG: [TweetTableViewController] ✅ scrollViewDidEndDragging - decelerate: \(decelerate)")
+        // Scroll ended - handled by coordinator
     }
     
     override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        print("DEBUG: [TweetTableViewController] ✅ scrollViewDidEndDecelerating")
+        // Deceleration ended - handled by coordinator
+    }
+    
+    // MARK: - Height Estimation
+    
+    /// Preflight height estimates for new tweets to reduce initial layout jumps
+    private func preflightHeightEstimates(for tweets: [Tweet]) {
+        // Calculate estimated heights for new tweets before first layout
+        // This provides better initial estimates and reduces jumps
+        for tweet in tweets where heightCache[tweet.mid] == nil {
+            let estimated = estimateHeight(for: tweet)
+            heightCache[tweet.mid] = estimated
+        }
+    }
+    
+    /// Estimate cell height based on tweet content for better layout stability
+    private func estimateHeight(for tweet: Tweet) -> CGFloat {
+        var estimatedHeight: CGFloat = 0
+        
+        // Base tweet content height (author info, text, actions)
+        estimatedHeight += 80 // Author row + padding
+        
+        // Estimate text height (very rough approximation)
+        if let content = tweet.content, !content.isEmpty {
+            let charCount = content.count
+            // Assume ~40 chars per line, 20pt line height
+            let estimatedLines = max(1, CGFloat(charCount) / 40)
+            estimatedHeight += estimatedLines * 20
+        }
+        
+        // Add media height if present
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            // Calculate media grid height
+            let screenWidth = UIScreen.main.bounds.width
+            let gridWidth = screenWidth - 16 // Account for padding
+            
+            // Get aspect ratio from MediaGridViewModel logic
+            let aspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
+            let mediaHeight = gridWidth / aspectRatio
+            
+            estimatedHeight += mediaHeight + 8 // Media + padding
+        }
+        
+        // Add quoted tweet height if present
+        if tweet.originalTweetId != nil {
+            estimatedHeight += 120 // Approximate quoted tweet height
+        }
+        
+        // Actions bar height
+        estimatedHeight += 40
+        
+        // Clamp to reasonable bounds to prevent extreme estimates
+        return min(max(estimatedHeight, 150), 800)
     }
     
     // MARK: - Video Playback Coordination
