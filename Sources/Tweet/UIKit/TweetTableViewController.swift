@@ -147,21 +147,69 @@ class TweetTableViewController: UITableViewController {
     
     func updateTweets(_ newTweets: [Tweet]) {
         let oldCount = tweets.count
+        let oldTweets = tweets
         tweets = newTweets
         
+        // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
-            // Initial load
+            print("DEBUG: [TweetTableViewController] Initial load - reloading all data")
             tableView.reloadData()
-        } else if newTweets.count > oldCount {
-            // New tweets added
-            let indexPaths = (oldCount..<newTweets.count).map { IndexPath(row: $0, section: 0) }
-            tableView.insertRows(at: indexPaths, with: .none)
-        } else if newTweets.count < oldCount {
-            // Tweets removed
-            tableView.reloadData()
+            videoCoordinator.buildVideoList(from: newTweets)
+            return
         }
         
-        // Update video coordinator with new tweets
+        // No change
+        if oldCount == newTweets.count && oldTweets.map({ $0.mid }) == newTweets.map({ $0.mid }) {
+            videoCoordinator.buildVideoList(from: newTweets)
+            return
+        }
+        
+        // Smart update: Check for common patterns
+        let oldIds = oldTweets.map { $0.mid }
+        let newIds = newTweets.map { $0.mid }
+        
+        // Case 1: Tweets prepended (new tweets at top) - most common for new posts
+        if newTweets.count > oldCount {
+            let potentialPrependCount = newTweets.count - oldCount
+            let afterNewOnes = Array(newIds.dropFirst(potentialPrependCount))
+            
+            if afterNewOnes == oldIds {
+                // Yes! New tweets were prepended at the top
+                print("DEBUG: [TweetTableViewController] \(potentialPrependCount) tweet(s) prepended at top - using insertRows")
+                let indexPaths = (0..<potentialPrependCount).map { IndexPath(row: $0, section: 0) }
+                tableView.insertRows(at: indexPaths, with: .automatic)
+                videoCoordinator.buildVideoList(from: newTweets)
+                return
+            }
+        }
+        
+        // Case 2: Tweets appended (pagination) - common for load more
+        if newTweets.count > oldCount {
+            let newIdsPrefix = Array(newIds.prefix(oldCount))
+            
+            if newIdsPrefix == oldIds {
+                // Yes! New tweets were appended at the end
+                print("DEBUG: [TweetTableViewController] \(newTweets.count - oldCount) tweet(s) appended - using insertRows")
+                let indexPaths = (oldCount..<newTweets.count).map { IndexPath(row: $0, section: 0) }
+                tableView.insertRows(at: indexPaths, with: .none)
+                videoCoordinator.buildVideoList(from: newTweets)
+                return
+            }
+        }
+        
+        // Case 3: Single tweet removed - common for delete
+        if newTweets.count == oldCount - 1 {
+            if let removedIndex = oldIds.firstIndex(where: { id in !newIds.contains(id) }) {
+                print("DEBUG: [TweetTableViewController] 1 tweet removed at index \(removedIndex) - using deleteRows")
+                tableView.deleteRows(at: [IndexPath(row: removedIndex, section: 0)], with: .automatic)
+                videoCoordinator.buildVideoList(from: newTweets)
+                return
+            }
+        }
+        
+        // Complex change: fallback to full reload
+        print("DEBUG: [TweetTableViewController] Complex change detected - reloading all data")
+        tableView.reloadData()
         videoCoordinator.buildVideoList(from: newTweets)
     }
     

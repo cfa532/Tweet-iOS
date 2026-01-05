@@ -38,8 +38,14 @@ struct FollowingsTweetView: View {
                 TweetListNotification(
                     name: .newTweetCreated,
                     key: "tweet",
-                    shouldAccept: { tweet in !(tweet.isPrivate ?? false) },
-                    action: { tweet in viewModel.handleNewTweet(tweet) }
+                    shouldAccept: { tweet in 
+                        print("DEBUG: [FollowingsTweetView] newTweetCreated notification received - tweetId: \(tweet.mid), isPrivate: \(tweet.isPrivate ?? false)")
+                        return !(tweet.isPrivate ?? false)
+                    },
+                    action: { tweet in 
+                        print("DEBUG: [FollowingsTweetView] Calling handleNewTweet for: \(tweet.mid)")
+                        viewModel.handleNewTweet(tweet)
+                    }
                 ),
                 TweetListNotification(
                     name: .tweetDeleted,

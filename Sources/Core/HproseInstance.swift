@@ -5976,11 +5976,13 @@ final class HproseInstance: ObservableObject {
                 
                 // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                 await MainActor.run {
+                    print("DEBUG: [HproseInstance] Posting .newTweetCreated notification for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
                         userInfo: ["tweet": uploadedTweet]
                     )
+                    print("DEBUG: [HproseInstance] .newTweetCreated notification posted successfully")
                 }
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
@@ -6287,11 +6289,13 @@ final class HproseInstance: ObservableObject {
                     
                     // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                     await MainActor.run {
+                        print("DEBUG: [HproseInstance] Posting .newTweetCreated notification (retry path) for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
                         NotificationCenter.default.post(
                             name: .newTweetCreated,
                             object: nil,
                             userInfo: ["tweet": uploadedTweet]
                         )
+                        print("DEBUG: [HproseInstance] .newTweetCreated notification posted successfully (retry path)")
                     }
                 } else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])

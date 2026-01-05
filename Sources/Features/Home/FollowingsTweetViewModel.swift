@@ -100,15 +100,24 @@ class FollowingsTweetViewModel: ObservableObject {
     
     // optimistic UI update
     func handleNewTweet(_ tweet: Tweet?) {
+        print("DEBUG: [FollowingsTweetViewModel] handleNewTweet called - tweet: \(tweet?.mid ?? "nil")")
         if let tweet = tweet {
+            print("DEBUG: [FollowingsTweetViewModel] Tweet isPrivate: \(tweet.isPrivate ?? false), authorId: \(tweet.authorId)")
             // Don't show private tweets in the home feed
             if !(tweet.isPrivate ?? false) {
+                let countBefore = tweets.count
                 // For new tweets, use mergeTweets (with sorting) since they should appear at the top
                 tweets.mergeTweets([tweet])
+                let countAfter = tweets.count
+                print("DEBUG: [FollowingsTweetViewModel] Added new tweet to main feed - count: \(countBefore) -> \(countAfter), tweetId: \(tweet.mid)")
                 
                 // Cache new tweets in main feed under appUser.mid
                 TweetCacheManager.shared.saveTweet(tweet, userId: hproseInstance.appUser.mid)
+            } else {
+                print("DEBUG: [FollowingsTweetViewModel] Skipped private tweet: \(tweet.mid)")
             }
+        } else {
+            print("DEBUG: [FollowingsTweetViewModel] handleNewTweet received nil tweet")
         }
     }
     
