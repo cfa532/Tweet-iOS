@@ -152,38 +152,54 @@ class TweetTableViewController: UITableViewController {
             
             guard let headerView = hostingController.view else { return }
             
-            // Create a container view with horizontal padding (5pt leading, 7pt trailing for profile)
-            let containerView = UIView()
-            containerView.backgroundColor = .clear
-            containerView.addSubview(headerView)
+            // Use frame-based layout (no constraints) to avoid width=0 conflicts
+            // Calculate content width accounting for padding
+            let tableWidth = max(tableView.bounds.width, 100) // Ensure minimum width
+            let contentWidth = tableWidth - (leadingPadding + trailingPadding)
             
-            headerView.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                headerView.topAnchor.constraint(equalTo: containerView.topAnchor),
-                headerView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: leadingPadding),
-                headerView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -trailingPadding),
-                headerView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
-            ])
+            // Size the SwiftUI view
+            headerView.translatesAutoresizingMaskIntoConstraints = true
+            let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingCompressedSize.height)
+            let fittingSize = hostingController.sizeThatFits(in: targetSize)
             
-            // Calculate the required size for the header (accounting for padding)
-            let targetSize = CGSize(width: tableView.bounds.width - (leadingPadding + trailingPadding), height: UIView.layoutFittingCompressedSize.height)
-            let size = headerView.systemLayoutSizeFitting(
-                targetSize,
-                withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel
+            // Set frame with padding
+            headerView.frame = CGRect(
+                x: leadingPadding,
+                y: 0,
+                width: contentWidth,
+                height: fittingSize.height
             )
             
-            // Set the container frame and assign as table header view (ONLY ONCE)
-            containerView.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: size.height)
+            // Create container view and add header
+            let containerView = UIView()
+            containerView.backgroundColor = .clear
+            containerView.frame = CGRect(x: 0, y: 0, width: tableWidth, height: fittingSize.height)
+            containerView.addSubview(headerView)
+            
+            // Assign as table header view (ONLY ONCE)
             tableView.tableHeaderView = containerView
         } else {
             // SUBSEQUENT UPDATES: Only update content, don't reassign tableHeaderView
             // This prevents scroll position jumps
             headerHostingController?.rootView = headerBuilder()
             
-            // Force layout to ensure size is correct
-            headerHostingController?.view.setNeedsLayout()
-            headerHostingController?.view.layoutIfNeeded()
+            // Recalculate size with frame-based layout
+            if let headerView = headerHostingController?.view, let containerView = tableView.tableHeaderView {
+                let tableWidth = max(tableView.bounds.width, 100)
+                let contentWidth = tableWidth - (leadingPadding + trailingPadding)
+                let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingCompressedSize.height)
+                let fittingSize = headerHostingController?.sizeThatFits(in: targetSize) ?? targetSize
+                
+                // Update frames if size changed
+                let oldHeight = containerView.frame.height
+                if abs(oldHeight - fittingSize.height) > 1 {
+                    print("DEBUG: [TweetTableViewController] Header height changed: \(oldHeight) -> \(fittingSize.height)")
+                    headerView.frame = CGRect(x: leadingPadding, y: 0, width: contentWidth, height: fittingSize.height)
+                    containerView.frame = CGRect(x: 0, y: 0, width: tableWidth, height: fittingSize.height)
+                    // Trigger table view layout update
+                    tableView.tableHeaderView = containerView
+                }
+            }
         }
     }
     
