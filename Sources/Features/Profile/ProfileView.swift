@@ -247,7 +247,6 @@ struct ProfileView: View {
                                 },
                                 onAvatarTap: { showAvatarFullScreen = true }
                             )
-                            .padding(.horizontal, -8)
 
                             ProfileStatsView(
                                 user: user,

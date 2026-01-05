@@ -78,7 +78,8 @@ struct ProfileStatsView: View {
             }
         }
         .padding(.vertical, 8)
-        .padding(.horizontal, 16)
+        .padding(.leading, 24)
+        .padding(.trailing, 20)
         .background(Color.cyan.opacity(0.3))
         .id(singleton.tweetCount) // Force re-render when tweetCount changes
     }

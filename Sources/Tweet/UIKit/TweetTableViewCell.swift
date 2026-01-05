@@ -32,7 +32,9 @@ class TweetTableViewCell: UITableViewCell {
     func configure(
         with tweet: Tweet,
         rowView: (Tweet) -> AnyView,
-        parentViewController: UIViewController
+        parentViewController: UIViewController,
+        leadingPadding: CGFloat = 8,
+        trailingPadding: CGFloat = 8
     ) {
         // Only recreate hosting controller if tweet changed
         if currentTweetId != tweet.mid {
@@ -63,12 +65,12 @@ class TweetTableViewCell: UITableViewCell {
             contentView.addSubview(hostingController.view)
             hostingController.didMove(toParent: parentViewController)
             
-            // Layout with constraints (8pt horizontal padding)
+            // Layout with constraints (configurable horizontal padding)
             hostingController.view.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 hostingController.view.topAnchor.constraint(equalTo: contentView.topAnchor),
-                hostingController.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
-                hostingController.view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
+                hostingController.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: leadingPadding),
+                hostingController.view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -trailingPadding),
                 hostingController.view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
             ])
         } else {

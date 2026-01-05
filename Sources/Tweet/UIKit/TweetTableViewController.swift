@@ -19,9 +19,12 @@ class TweetTableViewController: UITableViewController {
     
     // Callbacks
     var loadMoreTweets: (() -> Void)?
+    var onRefresh: (() async -> Void)?  // Pull-to-refresh callback
     var rowViewBuilder: ((Tweet) -> AnyView)?
     var headerViewBuilder: (() -> AnyView)?
     var onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
+    var leadingPadding: CGFloat = 8  // Configurable leading padding for cells
+    var trailingPadding: CGFloat = 8  // Configurable trailing padding for cells
     
     // Header hosting controller
     private var headerHostingController: UIHostingController<AnyView>?
@@ -34,6 +37,7 @@ class TweetTableViewController: UITableViewController {
     
     // Scroll tracking for toolbar hiding
     private var lastScrollOffset: CGFloat = 0
+    private var hasCompletedInitialLayout: Bool = false
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -42,6 +46,18 @@ class TweetTableViewController: UITableViewController {
         setupRefreshControl()
         
         print("DEBUG: [TweetTableViewController] viewDidLoad - delegate is set to self")
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        
+        // Initialize lastScrollOffset to current offset to prevent incorrect delta on first scroll
+        // This prevents toolbar from hiding incorrectly when view loads with negative content offset
+        if !hasCompletedInitialLayout {
+            lastScrollOffset = tableView.contentOffset.y
+            hasCompletedInitialLayout = true
+            print("DEBUG: [TweetTableViewController] Initial layout completed - lastScrollOffset: \(lastScrollOffset)")
+        }
     }
     
     private func setupTableView() {
@@ -58,6 +74,15 @@ class TweetTableViewController: UITableViewController {
         // Disable prefetching to reduce complexity
         tableView.prefetchDataSource = nil
         
+        // CRITICAL: Disable section header pinning so headers scroll naturally
+        if #available(iOS 15.0, *) {
+            tableView.sectionHeaderTopPadding = 0
+        }
+        
+        // Use automatic adjustment to respect safe area (navigation bar)
+        // The scroll jump is prevented by not reassigning tableHeaderView in updateHeader()
+        tableView.contentInsetAdjustmentBehavior = .automatic
+        
         print("DEBUG: [TweetTableViewController] Table view configured - delegate: \(String(describing: tableView.delegate))")
     }
     
@@ -68,9 +93,16 @@ class TweetTableViewController: UITableViewController {
     }
     
     @objc private func handleRefresh() {
-        // Trigger refresh
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.customRefreshControl?.endRefreshing()
+        print("DEBUG: [TweetTableViewController] Pull-to-refresh triggered")
+        
+        // Call async refresh callback
+        Task {
+            await onRefresh?()
+            
+            // End refreshing on main thread
+            await MainActor.run {
+                self.customRefreshControl?.endRefreshing()
+            }
         }
     }
     
@@ -94,6 +126,65 @@ class TweetTableViewController: UITableViewController {
         
         // Update video coordinator with new tweets
         videoCoordinator.buildVideoList(from: newTweets)
+    }
+    
+    func updateHeader() {
+        guard let headerBuilder = headerViewBuilder else {
+            if tableView.tableHeaderView != nil {
+                tableView.tableHeaderView = nil
+            }
+            return
+        }
+        
+        // Create or update header hosting controller
+        if headerHostingController == nil {
+            // FIRST TIME: Create and set up header
+            let headerView = headerBuilder()
+            let hostingController = UIHostingController(rootView: headerView)
+            hostingController.view.backgroundColor = .clear
+            
+            // CRITICAL: Disable safe area insets to prevent layout shifts
+            hostingController.view.insetsLayoutMarginsFromSafeArea = false
+            
+            self.headerHostingController = hostingController
+            addChild(hostingController)
+            hostingController.didMove(toParent: self)
+            
+            guard let headerView = hostingController.view else { return }
+            
+            // Create a container view with horizontal padding (5pt leading, 7pt trailing for profile)
+            let containerView = UIView()
+            containerView.backgroundColor = .clear
+            containerView.addSubview(headerView)
+            
+            headerView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                headerView.topAnchor.constraint(equalTo: containerView.topAnchor),
+                headerView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: leadingPadding),
+                headerView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -trailingPadding),
+                headerView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
+            ])
+            
+            // Calculate the required size for the header (accounting for padding)
+            let targetSize = CGSize(width: tableView.bounds.width - (leadingPadding + trailingPadding), height: UIView.layoutFittingCompressedSize.height)
+            let size = headerView.systemLayoutSizeFitting(
+                targetSize,
+                withHorizontalFittingPriority: .required,
+                verticalFittingPriority: .fittingSizeLevel
+            )
+            
+            // Set the container frame and assign as table header view (ONLY ONCE)
+            containerView.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: size.height)
+            tableView.tableHeaderView = containerView
+        } else {
+            // SUBSEQUENT UPDATES: Only update content, don't reassign tableHeaderView
+            // This prevents scroll position jumps
+            headerHostingController?.rootView = headerBuilder()
+            
+            // Force layout to ensure size is correct
+            headerHostingController?.view.setNeedsLayout()
+            headerHostingController?.view.layoutIfNeeded()
+        }
     }
     
     func updateLoadingState(isLoading: Bool, isLoadingMore: Bool, hasMoreTweets: Bool) {
@@ -130,7 +221,9 @@ class TweetTableViewController: UITableViewController {
             cell.configure(
                 with: tweet,
                 rowView: rowView,
-                parentViewController: self
+                parentViewController: self,
+                leadingPadding: leadingPadding,
+                trailingPadding: trailingPadding
             )
         }
         
@@ -147,34 +240,16 @@ class TweetTableViewController: UITableViewController {
         }
     }
     
-    override func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-        guard let headerBuilder = headerViewBuilder else { return nil }
-        
-        if headerHostingController == nil {
-            let headerView = headerBuilder()
-            let hostingController = UIHostingController(rootView: headerView)
-            hostingController.view.backgroundColor = .clear
-            self.headerHostingController = hostingController
-            addChild(hostingController)
-            hostingController.didMove(toParent: self)
-        }
-        
-        return headerHostingController?.view
-    }
-    
-    override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        return headerViewBuilder != nil ? UITableView.automaticDimension : 0
-    }
-    
-    override func tableView(_ tableView: UITableView, estimatedHeightForHeaderInSection section: Int) -> CGFloat {
-        return headerViewBuilder != nil ? 100 : 0
-    }
     
     // MARK: - UIScrollViewDelegate
     
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Update visible tweets for video playback coordination
         updateVisibleTweetsForVideoPlayback()
+        
+        // Don't trigger toolbar hiding until initial layout is complete
+        // This prevents incorrect hiding when view first loads
+        guard hasCompletedInitialLayout else { return }
         
         // Track scroll offset and delta for toolbar hiding
         let currentOffset = scrollView.contentOffset.y

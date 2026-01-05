@@ -199,7 +199,10 @@ struct ProfileTweetsSection<Header: View>: View {
                     shouldAccept: { _ in true },
                     action: { tweet in viewModel.handlePrivacyChange(tweetId: tweet.mid) }
                 )
-            ], onScroll: onScroll,
+            ],
+            onScroll: onScroll,
+            leadingPadding: 5,  // Profile left padding (reduced by 3 from 8pt)
+            trailingPadding: 7,  // Profile right padding (increased by 2 from 5pt)
             header: {
                 AnyView(
                     VStack(spacing: 0) {
@@ -211,7 +214,8 @@ struct ProfileTweetsSection<Header: View>: View {
                                     .font(.subheadline)
                                     .bold()
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal)
+                                    .padding(.leading, 5)
+                                    .padding(.trailing, 7)
                                     .padding(.top, 8)
                                     .padding(.bottom, 4)
                                     .background(Color(UIColor.systemBackground))

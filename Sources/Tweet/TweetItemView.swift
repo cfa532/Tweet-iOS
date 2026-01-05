@@ -32,14 +32,14 @@ struct TweetItemView: View, Equatable {
             // Check if this is the same user as the profile being viewed
             if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
                 // Same user - scroll to top
-                Avatar(user: user)
+                Avatar(user: user, size: 40)
                     .onTapGesture {
                         onAvatarTapInProfile?(user)
                     }
             } else {
                 // Different user - navigate to their profile
                 NavigationLink(value: user) {
-                    Avatar(user: user)
+                    Avatar(user: user, size: 40)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -50,13 +50,13 @@ struct TweetItemView: View, Equatable {
                     print("⭐ [TweetItemView] Avatar button tapped (\(context)) - user: \(user.username ?? "nil")")
                     onAvatarTap?(user)
                 } label: {
-                    Avatar(user: user)
+                    Avatar(user: user, size: 40)
                 }
                 .buttonStyle(PlainButtonStyle())
             } else {
                 // Use NavigationLink when no callback
                 NavigationLink(value: user) {
-                    Avatar(user: user)
+                    Avatar(user: user, size: 40)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -64,29 +64,37 @@ struct TweetItemView: View, Equatable {
     }
 
     var body: some View {
-        Group {
-            // Hide retweets/quoted tweets if their original tweets failed to load
-            if isRetweetOrQuotedTweet && originalTweet == nil && hasLoadedOriginalTweet {
-                // This is a retweet/quoted tweet but original tweet failed to load - don't show it
-                EmptyView()
-            } else if onTap == nil {
-                // Use NavigationLink when no onTap callback is provided
-                // For retweets with no content, navigate to the original tweet
-                let navigationValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
-                NavigationLink(value: navigationValue) {
-                    tweetContent
-                }
-                .buttonStyle(PlainButtonStyle())
-            } else {
-                // Use tap gesture when onTap callback is provided
-                tweetContent
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // For retweets with no content, pass the original tweet to the callback
-                        let callbackValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
-                        onTap?(callbackValue)
+        VStack(spacing: 0) {
+            Group {
+                // Hide retweets/quoted tweets if their original tweets failed to load
+                if isRetweetOrQuotedTweet && originalTweet == nil && hasLoadedOriginalTweet {
+                    // This is a retweet/quoted tweet but original tweet failed to load - don't show it
+                    EmptyView()
+                } else if onTap == nil {
+                    // Use NavigationLink when no onTap callback is provided
+                    // For retweets with no content, navigate to the original tweet
+                    let navigationValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
+                    NavigationLink(value: navigationValue) {
+                        tweetContent
                     }
+                    .buttonStyle(PlainButtonStyle())
+                } else {
+                    // Use tap gesture when onTap callback is provided
+                    tweetContent
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // For retweets with no content, pass the original tweet to the callback
+                            let callbackValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
+                            onTap?(callbackValue)
+                        }
+                }
             }
+            
+            // Bottom separator with shadow
+            Rectangle()
+                .fill(Color(.systemGray).opacity(0.2))
+                .frame(height: 1)
+                .padding(.horizontal, 2)
         }
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
@@ -454,32 +462,6 @@ struct EmbeddedTweetView: View, Equatable {
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
-    @ViewBuilder
-    private func avatarView(for user: User) -> some View {
-        if isInProfile {
-            // Check if this is the same user as the profile being viewed
-            if let currentProfileUser = currentProfileUser, currentProfileUser.mid == user.mid {
-                // Same user - scroll to top
-                Avatar(user: user)
-                    .onTapGesture {
-                        onAvatarTapInProfile?(user)
-                    }
-            } else {
-                // Different user - navigate to their profile
-                NavigationLink(value: user) {
-                    Avatar(user: user)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-        } else {
-            // Use NavigationLink when not in profile
-            NavigationLink(value: user) {
-                Avatar(user: user)
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
-    }
-
     var body: some View {
         Group {
             if onTap == nil {
@@ -518,12 +500,15 @@ struct EmbeddedTweetView: View, Equatable {
             // Use Group to force re-evaluation when tweet.author changes (@Published)
             Group {
                 if let user = tweet.author {
-                    avatarView(for: user)
+                    NavigationLink(value: user) {
+                        Avatar(user: user, size: 42)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 } else {
-                    // Placeholder (same size as Avatar default: 40)
+                    // Placeholder (same size as Avatar: 42 for embedded tweets)
                     Circle()
                         .fill(Color.gray.opacity(0.3))
-                        .frame(width: 40, height: 40)
+                        .frame(width: 42, height: 42)
                 }
             }
             // STABILITY: Fixed avatar size prevents layout shifts

@@ -31,6 +31,8 @@ struct TweetListView<RowView: View>: View {
     let header: (() -> AnyView)?
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
+    let leadingPadding: CGFloat  // Leading padding for cells
+    let trailingPadding: CGFloat  // Trailing padding for cells
     private let pageSize: UInt = 5  // Reduced for better server load distribution
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -149,6 +151,8 @@ struct TweetListView<RowView: View>: View {
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat, CGFloat) -> Void)? = nil,  // (offset, delta)
+        leadingPadding: CGFloat = 8,  // Default 8pt leading padding
+        trailingPadding: CGFloat = 8,  // Default 8pt trailing padding
         header: (() -> AnyView)? = nil,
         rowView: @escaping (Tweet) -> RowView
     ) {
@@ -157,6 +161,8 @@ struct TweetListView<RowView: View>: View {
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
         self.onScroll = onScroll
+        self.leadingPadding = leadingPadding
+        self.trailingPadding = trailingPadding
         self.header = header
         // Default: listen for newTweetCreated and insert at top
         self.notifications = notifications ?? [
@@ -191,7 +197,10 @@ struct TweetListView<RowView: View>: View {
                     isLoadingMore: isLoadingMore,
                     isLoading: isLoading,
                     loadMoreTweets: { loadMoreTweets() },
-                    onScroll: onScroll
+                    onRefresh: { await refreshTweets() },
+                    onScroll: onScroll,
+                    leadingPadding: leadingPadding,
+                    trailingPadding: trailingPadding
                 )
                 .onAppear {
                     screenHeight = geometry.size.height
