@@ -298,6 +298,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)? // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onExitFullScreen: (() -> Void)? // Callback to exit fullscreen
     
+    // Consolidated video tracking (shared with VideoPlaybackCoordinator to avoid duplicate tracking)
+    private var cachedVideos: [VideoPlaybackInfo] = []
+    private var cachedTweets: [Tweet] = []
+    
     // Video completion observer
     private var videoCompletionObserver: NSObjectProtocol?
     
@@ -360,6 +364,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 NSLog("✅ [FullScreenVideoManager] Prewarmed asset cache for \(mediaID) without attaching to player")
             }
         }
+    }
+    
+    /// Update video list from VideoPlaybackCoordinator (consolidated tracking)
+    func updateVideoList(videos: [VideoPlaybackInfo], tweets: [Tweet]) {
+        self.cachedVideos = videos
+        self.cachedTweets = tweets
+        print("DEBUG: [FullScreenVideoManager] Updated video list: \(videos.count) videos from \(tweets.count) tweets (consolidated)")
     }
     
     /// Set the video search function from TweetListView

@@ -27,7 +27,8 @@ private enum VideoPlaybackPhase {
 }
 
 /// Individual video tracking info for orchestration
-private struct VideoPlaybackInfo: Equatable {
+/// Shared structure for video metadata (used by VideoPlaybackCoordinator and FullScreenVideoManager)
+struct VideoPlaybackInfo: Equatable {
     let tweetId: String
     let videoMid: String
     let index: Int
@@ -135,6 +136,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         self.allVideos = videos
+        
+        // Share the video list with FullScreenVideoManager to avoid duplicate tracking
+        // This consolidates video tracking in one place
+        FullScreenVideoManager.shared.updateVideoList(videos: videos, tweets: tweets)
+        
         print("🎬 [VideoOrchestrator] Built video list: \(videos.count) videos from \(tweets.count) tweets")
     }
     
