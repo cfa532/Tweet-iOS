@@ -368,6 +368,9 @@ struct TweetDetailView: View {
                         }
                     }
                     .coordinateSpace(name: "scroll")
+                    .refreshable {
+                        await refreshTweetAndComments()
+                    }
             .simultaneousGesture(
                 DragGesture()
                     .onChanged { value in
@@ -724,6 +727,28 @@ struct TweetDetailView: View {
                 }
             }
         }
+    }
+    
+    private func refreshTweetAndComments() async {
+        // Refresh both tweet and comments when pull-to-refresh is triggered
+        async let tweetRefresh: Void = {
+            if let refreshedTweet = try? await hproseInstance.refreshTweet(
+                tweetId: tweet.mid,
+                authorId: tweet.authorId
+            ) {
+                await MainActor.run {
+                    try? tweet.update(from: refreshedTweet)
+                }
+            }
+        }()
+        
+        async let commentsRefresh: Void = {
+            await refreshComments()
+        }()
+        
+        // Wait for both to complete
+        await tweetRefresh
+        await commentsRefresh
     }
     
     private func refreshComments() {

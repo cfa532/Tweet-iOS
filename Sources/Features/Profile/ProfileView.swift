@@ -461,9 +461,26 @@ struct ProfileView: View {
         // Threshold for detecting intentional scroll
         let scrollThreshold: CGFloat = 15
         
-        // DON'T force show based on offset - ProfileView offset is often negative
-        // Just rely on scroll direction (delta)
+        // CRITICAL: Always show toolbar when near the top (like TweetDetailView)
+        // This prevents toolbar from disappearing during pull-to-refresh
+        // Profile view content offset starts negative (due to header), so use a reasonable threshold
+        if offset > -200 {
+            // Near the top - always show toolbar
+            if !isNavigationVisible {
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    isNavigationVisible = true
+                }
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": true]
+                )
+            }
+            previousScrollOffset = offset
+            return
+        }
         
+        // Only process scroll direction changes when scrolled down into content
         // Ignore very small deltas (noise from rendering/layout)
         guard abs(delta) > 2 else { return }
         

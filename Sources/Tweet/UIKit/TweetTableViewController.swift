@@ -93,13 +93,8 @@ class TweetTableViewController: UITableViewController {
     }
     
     @objc private func handleRefresh() {
-        print("DEBUG: [TweetTableViewController] Pull-to-refresh triggered")
-        
-        // Call async refresh callback
         Task {
             await onRefresh?()
-            
-            // End refreshing on main thread
             await MainActor.run {
                 self.customRefreshControl?.endRefreshing()
             }
@@ -157,18 +152,27 @@ class TweetTableViewController: UITableViewController {
             let tableWidth = max(tableView.bounds.width, 100) // Ensure minimum width
             let contentWidth = tableWidth - (leadingPadding + trailingPadding)
             
-            // Size the SwiftUI view
+            // Size the SwiftUI view properly
             headerView.translatesAutoresizingMaskIntoConstraints = true
+            
+            // Set a fixed width for the hosting controller to ensure proper layout
+            hostingController.view.frame.size.width = contentWidth
+            
+            // Calculate the fitting height with the fixed width
             let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingCompressedSize.height)
             let fittingSize = hostingController.sizeThatFits(in: targetSize)
             
-            // Set frame with padding
+            // Set final frame with padding
             headerView.frame = CGRect(
                 x: leadingPadding,
                 y: 0,
                 width: contentWidth,
                 height: fittingSize.height
             )
+            
+            // Force layout to ensure SwiftUI calculates correctly
+            headerView.setNeedsLayout()
+            headerView.layoutIfNeeded()
             
             // Create container view and add header
             let containerView = UIView()
@@ -179,7 +183,7 @@ class TweetTableViewController: UITableViewController {
             // Assign as table header view (ONLY ONCE)
             tableView.tableHeaderView = containerView
         } else {
-            // SUBSEQUENT UPDATES: Only update content, don't reassign tableHeaderView
+            // SUBSEQUENT UPDATES: Only update content, don't reassign tableHeaderView unless necessary
             // This prevents scroll position jumps
             headerHostingController?.rootView = headerBuilder()
             
@@ -187,6 +191,12 @@ class TweetTableViewController: UITableViewController {
             if let headerView = headerHostingController?.view, let containerView = tableView.tableHeaderView {
                 let tableWidth = max(tableView.bounds.width, 100)
                 let contentWidth = tableWidth - (leadingPadding + trailingPadding)
+                
+                // Set fixed width before calculating height
+                headerView.frame.size.width = contentWidth
+                headerView.setNeedsLayout()
+                headerView.layoutIfNeeded()
+                
                 let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingCompressedSize.height)
                 let fittingSize = headerHostingController?.sizeThatFits(in: targetSize) ?? targetSize
                 
@@ -194,10 +204,23 @@ class TweetTableViewController: UITableViewController {
                 let oldHeight = containerView.frame.height
                 if abs(oldHeight - fittingSize.height) > 1 {
                     print("DEBUG: [TweetTableViewController] Header height changed: \(oldHeight) -> \(fittingSize.height)")
+                    
+                    // CRITICAL: Preserve scroll position when updating header
+                    let currentOffset = tableView.contentOffset
+                    
                     headerView.frame = CGRect(x: leadingPadding, y: 0, width: contentWidth, height: fittingSize.height)
                     containerView.frame = CGRect(x: 0, y: 0, width: tableWidth, height: fittingSize.height)
+                    
                     // Trigger table view layout update
                     tableView.tableHeaderView = containerView
+                    
+                    // Restore scroll position after header update
+                    // Account for height change in header
+                    let heightDiff = fittingSize.height - oldHeight
+                    let newOffset = CGPoint(x: currentOffset.x, y: currentOffset.y + heightDiff)
+                    tableView.setContentOffset(newOffset, animated: false)
+                    
+                    print("DEBUG: [TweetTableViewController] Adjusted scroll: \(currentOffset.y) -> \(newOffset.y) (heightDiff: \(heightDiff))")
                 }
             }
         }
@@ -207,10 +230,6 @@ class TweetTableViewController: UITableViewController {
         self.isLoading = isLoading
         self.isLoadingMore = isLoadingMore
         self.hasMoreTweets = hasMoreTweets
-        
-        if !isLoading {
-            customRefreshControl?.endRefreshing()
-        }
     }
     
     // MARK: - UITableViewDataSource

@@ -144,6 +144,8 @@ struct TweetListView<RowView: View>: View {
     }
 
     // MARK: - Initialization
+    let onRefreshExtra: (() async -> Void)?  // Optional extra refresh callback
+    
     init(
         title: String,
         tweets: Binding<[Tweet]>,
@@ -154,6 +156,7 @@ struct TweetListView<RowView: View>: View {
         leadingPadding: CGFloat = 8,  // Default 8pt leading padding
         trailingPadding: CGFloat = 8,  // Default 8pt trailing padding
         header: (() -> AnyView)? = nil,
+        onRefreshExtra: (() async -> Void)? = nil,  // Extra refresh callback
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
@@ -164,6 +167,7 @@ struct TweetListView<RowView: View>: View {
         self.leadingPadding = leadingPadding
         self.trailingPadding = trailingPadding
         self.header = header
+        self.onRefreshExtra = onRefreshExtra
         // Default: listen for newTweetCreated and insert at top
         self.notifications = notifications ?? [
             TweetListNotification(
@@ -197,7 +201,10 @@ struct TweetListView<RowView: View>: View {
                     isLoadingMore: isLoadingMore,
                     isLoading: isLoading,
                     loadMoreTweets: { loadMoreTweets() },
-                    onRefresh: { await refreshTweets() },
+                    onRefresh: {
+                        await refreshTweets()
+                        await onRefreshExtra?()
+                    },
                     onScroll: onScroll,
                     leadingPadding: leadingPadding,
                     trailingPadding: trailingPadding

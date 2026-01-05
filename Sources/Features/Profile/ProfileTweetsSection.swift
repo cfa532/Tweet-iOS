@@ -256,6 +256,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     }
                 )
             },
+            onRefreshExtra: onPinnedTweetsRefresh,
             rowView: { tweet in
                 TweetItemView(
                     tweet: tweet,
@@ -277,9 +278,6 @@ struct ProfileTweetsSection<Header: View>: View {
             }
         )
         .frame(maxHeight: .infinity)
-        .refreshable {
-            await onPinnedTweetsRefresh()
-        }
         .onChange(of: user.mid) { _, _ in
             viewModel.tweets.removeAll()
         }
