@@ -263,12 +263,14 @@ class TweetTableViewController: UITableViewController {
                     let isAtTop = abs(currentOffset.y) < 10 || (topInset > 0 && abs(currentOffset.y + topInset) < 10)
                     
                     if isAtTop {
-                        // At the top: keep position at proper top (below nav bar)
+                        // At the top: keep position at proper top (below nav bar) with smooth animation
                         let properTopOffset = topInset > 0 ? -topInset : 0
-                        tableView.setContentOffset(CGPoint(x: 0, y: properTopOffset), animated: false)
-                        print("DEBUG: [TweetTableViewController] Staying at top: \(currentOffset.y) -> \(properTopOffset)")
+                        UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
+                            self.tableView.setContentOffset(CGPoint(x: 0, y: properTopOffset), animated: false)
+                        }, completion: nil)
+                        print("DEBUG: [TweetTableViewController] Staying at top (animated): \(currentOffset.y) -> \(properTopOffset)")
                     } else {
-                        // Scrolled down: preserve visible content by adjusting for height change
+                        // Scrolled down: preserve visible content by adjusting for height change (instant)
                         let newOffset = CGPoint(x: currentOffset.x, y: currentOffset.y + heightDiff)
                         tableView.setContentOffset(newOffset, animated: false)
                         print("DEBUG: [TweetTableViewController] Adjusted scroll: \(currentOffset.y) -> \(newOffset.y) (heightDiff: \(heightDiff))")

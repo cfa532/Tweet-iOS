@@ -428,10 +428,10 @@ struct TweetListView<RowView: View>: View {
             }
             
             await MainActor.run {
-                // Update tweets with server data while preserving cached tweets for failed IDs
+                // Update tweets with server data - REPLACE on refresh, don't merge
                 if hasValidTweet {
-                    // Use mergeTweets to preserve cached tweets that weren't in server response
-                    tweets.mergeTweets(validTweets)
+                    // On refresh, replace existing tweets with fresh server data
+                    tweets = validTweets
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
                     
