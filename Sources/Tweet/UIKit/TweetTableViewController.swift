@@ -28,6 +28,9 @@ class TweetTableViewController: UITableViewController {
     // Refresh control
     private var customRefreshControl: UIRefreshControl?
     
+    // Video playback coordinator
+    private let videoCoordinator = VideoPlaybackCoordinator.shared
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -84,6 +87,9 @@ class TweetTableViewController: UITableViewController {
             // Tweets removed
             tableView.reloadData()
         }
+        
+        // Update video coordinator with new tweets
+        videoCoordinator.buildVideoList(from: newTweets)
     }
     
     func updateLoadingState(isLoading: Bool, isLoadingMore: Bool, hasMoreTweets: Bool) {
@@ -163,8 +169,8 @@ class TweetTableViewController: UITableViewController {
     // MARK: - UIScrollViewDelegate
     
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        print("DEBUG: [TweetTableViewController] ✅ scrollViewDidScroll called - offset: \(scrollView.contentOffset.y)")
-        // Scroll events are now being detected properly
+        // Update visible tweets for video playback coordination
+        updateVisibleTweetsForVideoPlayback()
     }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -177,5 +183,21 @@ class TweetTableViewController: UITableViewController {
     
     override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         print("DEBUG: [TweetTableViewController] ✅ scrollViewDidEndDecelerating")
+    }
+    
+    // MARK: - Video Playback Coordination
+    
+    private func updateVisibleTweetsForVideoPlayback() {
+        guard !tweets.isEmpty else { return }
+        
+        // Get visible cells
+        let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
+        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
+            guard indexPath.row < tweets.count else { return nil }
+            return tweets[indexPath.row].mid
+        })
+        
+        // Update coordinator
+        videoCoordinator.updateVisibleTweets(visibleTweetIds)
     }
 }

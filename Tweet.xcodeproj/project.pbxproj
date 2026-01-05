@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C22045EF1B134C4698599733 /* VideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */; };
 		52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */; };
 		8BFE5A55ECEA49F3A6FC6D3F /* TweetTableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A8664A026114553AC588E7A /* TweetTableViewController.swift */; };
 		1A510F6D811F4CE89FC9FE05 /* TweetTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2C260FE784A43EF9772A398 /* TweetTableView.swift */; };
@@ -143,6 +144,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
 		26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TweetTableViewCell.swift"; sourceTree = "<group>"; };
 		7A8664A026114553AC588E7A /* TweetTableViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TweetTableViewController.swift"; sourceTree = "<group>"; };
 		E2C260FE784A43EF9772A398 /* TweetTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TweetTableView.swift"; sourceTree = "<group>"; };
@@ -376,6 +378,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */,
 				46A73E3B2F04C76D001310E5 /* NodePool.swift */,
 				AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */,
 				466E00932E7023460068D968 /* MemoryWarningManager.swift */,
@@ -783,6 +786,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C22045EF1B134C4698599733 /* VideoPlaybackCoordinator.swift in Sources */,
 				52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */,
 				8BFE5A55ECEA49F3A6FC6D3F /* TweetTableViewController.swift in Sources */,
 				1A510F6D811F4CE89FC9FE05 /* TweetTableView.swift in Sources */,

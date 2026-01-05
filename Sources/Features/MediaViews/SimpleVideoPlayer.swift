@@ -723,10 +723,16 @@ struct SimpleVideoPlayer: View {
     
     // Reactive autoPlay state - use VideoManager if available, otherwise use static autoPlay
     // For fullscreen and detail modes, always use static autoPlay (bypass VideoManager)
+    // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls all playback
     private var currentAutoPlay: Bool {
         if mode == .mediaBrowser || mode == .tweetDetail || mode == .embeddedDetail {
             return autoPlay
         }
+        // MediaCell mode: always return false - coordinator controls playback via notifications
+        if mode == .mediaCell {
+            return false
+        }
+        // Fallback for other modes
         if let videoManager = videoManager {
             return videoManager.shouldPlayVideo(for: mid)
         }
@@ -771,44 +777,63 @@ struct SimpleVideoPlayer: View {
     
     var body: some View {
         videoContentView
-            .onAppear {
-                handleOnAppear()
-                // Initialize overlay coverage state when view appears (no polling).
-                isCoveredByOverlay = OverlayVisibilityCoordinator.shared.isCovered
-            }
-            .onDisappear { handleOnDisappear() }
-            .onChange(of: mode) { oldMode, newMode in handleModeChange(oldMode: oldMode, newMode: newMode) }
-            .onChange(of: isMuted) { _, newMuteState in handleMuteChange(newMuteState: newMuteState) }
-            .onReceive(MuteState.shared.$isMuted) { globalMuteState in handleGlobalMuteChange(globalMuteState: globalMuteState) }
-            .onChange(of: currentAutoPlay) { _, shouldAutoPlay in handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay) }
-            .onChange(of: isVisible) { _, visible in handleVisibilityChange(visible: visible) }
-            .onChange(of: isActuallyVisible) { _, actuallyVisible in handleActualVisibilityChange(actuallyVisible: actuallyVisible) }
-            .onReceive(NotificationCenter.default.publisher(for: .overlayCoverageChanged)) { notification in
-                guard mode == .mediaCell else { return }
-                if let isCovered = notification.userInfo?["isCovered"] as? Bool {
-                    isCoveredByOverlay = isCovered
-                }
-            }
-            // Observe VideoManager's currentVideoIndex changes for sequential playback
-            .modifier(VideoManagerObserverModifier(videoManager: videoManager, mid: mid, mode: mode) { shouldAutoPlay in
-                handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay)
-            })
-            .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
-            .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
-            .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
-            .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
-            .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
-            .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in
-                handleReloadVisibleVideosOnly()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in handleWillResignActive() }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
-            .onTapGesture { handleTap() }
-            .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
+            .modifier(lifecycleModifiers)
+            .modifier(notificationModifiers)
+            .modifier(gestureModifiers)
             .task(id: loadingState) { await performPeriodicHealthCheck() }
+    }
+    
+    private var lifecycleModifiers: AnyViewModifier {
+        AnyViewModifier { content in
+            content
+                .onAppear {
+                    handleOnAppear()
+                    isCoveredByOverlay = OverlayVisibilityCoordinator.shared.isCovered
+                }
+                .onDisappear { handleOnDisappear() }
+                .onChange(of: mode) { oldMode, newMode in handleModeChange(oldMode: oldMode, newMode: newMode) }
+                .onChange(of: isMuted) { _, newMuteState in handleMuteChange(newMuteState: newMuteState) }
+                .onChange(of: currentAutoPlay) { _, shouldAutoPlay in handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay) }
+                .onChange(of: isVisible) { _, visible in handleVisibilityChange(visible: visible) }
+                .onChange(of: isActuallyVisible) { _, actuallyVisible in handleActualVisibilityChange(actuallyVisible: actuallyVisible) }
+                .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
+                .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
+                .modifier(VideoManagerObserverModifier(videoManager: videoManager, mid: mid, mode: mode) { shouldAutoPlay in
+                    handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay)
+                })
+        }
+    }
+    
+    private var notificationModifiers: AnyViewModifier {
+        AnyViewModifier { content in
+            content
+                .onReceive(MuteState.shared.$isMuted) { globalMuteState in handleGlobalMuteChange(globalMuteState: globalMuteState) }
+                .onReceive(NotificationCenter.default.publisher(for: .overlayCoverageChanged)) { notification in
+                    guard mode == .mediaCell else { return }
+                    if let isCovered = notification.userInfo?["isCovered"] as? Bool {
+                        isCoveredByOverlay = isCovered
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
+                .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in handleCoordinatorStopCommand() }
+                .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in handleCoordinatorPlayCommand(notification: notification) }
+                .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
+                .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
+                .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in handleReloadVisibleVideosOnly() }
+                .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in handleAppUserReady() }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in handleWillResignActive() }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
+        }
+    }
+    
+    private var gestureModifiers: AnyViewModifier {
+        AnyViewModifier { content in
+            content
+                .onTapGesture { handleTap() }
+                .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
+        }
     }
     
     @ViewBuilder
@@ -1518,6 +1543,44 @@ struct SimpleVideoPlayer: View {
             }
         }
         // TweetDetail and MediaBrowser: DO NOTHING
+    }
+    
+    // MARK: - Video Playback Coordinator Handlers
+    
+    private func handleCoordinatorStopCommand() {
+        // Stop command from VideoPlaybackCoordinator - stop this video
+        guard mode == .mediaCell else { return }
+        
+        print("DEBUG: [VideoCoordinator] Stop command received for \(mid)")
+        player?.pause()
+    }
+    
+    private func handleCoordinatorPlayCommand(notification: Notification) {
+        // Play command from VideoPlaybackCoordinator - check if it's for this video
+        guard mode == .mediaCell else { return }
+        guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
+        guard videoMid == mid else { return }
+        
+        print("DEBUG: [VideoCoordinator] Play command received for \(mid)")
+        
+        // Only play if player is ready
+        guard let player = player, loadingState == .loaded else {
+            print("DEBUG: [VideoCoordinator] Player not ready for \(mid), loadingState: \(loadingState)")
+            return
+        }
+        
+        // Seek to start if needed
+        let currentTime = player.currentTime()
+        if currentTime.seconds > 0 {
+            let progress = currentTime.seconds / (player.currentItem?.duration.seconds ?? 1.0)
+            if progress > 0.95 {
+                // Video is near the end, restart
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+        }
+        
+        player.play()
+        print("DEBUG: [VideoCoordinator] Started playback for \(mid)")
     }
     
     private func handleWillResignActive() {
@@ -3768,42 +3831,32 @@ struct SimpleVideoPlayer: View {
                     }
                     
                     if shouldAutoPlay {
-                        // CRITICAL: For MediaCell, check VideoManager, actual visibility, and detail view activity before playing
-                        // This ensures only the current video plays in sequential playback and not when covered or detail view active
-                        let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
-                        let actuallyVisible = (self.mode == .mediaCell || self.mode == .embeddedDetail) ? !self.isCoveredByOverlay : true
-                        let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-
-                        if approved && actuallyVisible && noDetailViewActive {
-                            // CRITICAL: Prevent duplicate playback attempts from status and buffer observers
-                            guard !self.isStartingPlayback && player.rate == 0 else {
-                                NSLog("⏭️ [VIDEO READY] Skipping playback start - already starting or playing for \(mid)")
-                                return
-                            }
-                            self.isStartingPlayback = true
-                            
-                            // CRITICAL: Always ensure muteState is correct before playing in MediaCell
-                            if self.mode == .mediaCell {
-                                player.isMuted = MuteState.shared.isMuted
-                                NSLog("🔇 [PLAYER MUTE] KVO status ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
-                            }
-                            // Start playing automatically
-                            self.playWithResumeIfNeeded(player)
-                            if self.mode == .mediaCell {
-                                self.playbackState = .playing
-                            }
-                            NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
-                            
-                            // Reset flag after a delay to allow playback to actually start
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                self.isStartingPlayback = false
-                            }
-                        } else if !actuallyVisible {
-                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
-                        } else if !noDetailViewActive {
-                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - detail view active")
+                        // CRITICAL: For MediaCell mode, NEVER auto-play on status ready
+                        // VideoPlaybackCoordinator controls all playback via notifications
+                        if self.mode == .mediaCell {
+                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - waiting for VideoPlaybackCoordinator command")
                         } else {
-                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - not approved by VideoManager")
+                            // Non-MediaCell modes: use old auto-play logic
+                            let actuallyVisible = !self.isCoveredByOverlay
+                            let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+
+                            if actuallyVisible && noDetailViewActive {
+                                guard !self.isStartingPlayback && player.rate == 0 else {
+                                    NSLog("⏭️ [VIDEO READY] Skipping playback start - already starting or playing for \(mid)")
+                                    return
+                                }
+                                self.isStartingPlayback = true
+                                self.playWithResumeIfNeeded(player)
+                                NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (non-MediaCell mode)")
+                                
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    self.isStartingPlayback = false
+                                }
+                            } else if !actuallyVisible {
+                                NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
+                            } else if !noDetailViewActive {
+                                NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - detail view active")
+                            }
                         }
                     } else {
                         // Preroll to render first frame without playing
@@ -3833,42 +3886,32 @@ struct SimpleVideoPlayer: View {
                     if hasEnoughData && loadingState.isLoading {
                         NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.2f", bufferedDurationAhead))s buffered), showing first frame")
                         
-                        // CRITICAL: Only play() if video should actually be playing
-                        // For sequential playback, check with VideoManager first
-                        // This prevents videos from playing to completion prematurely (especially short videos)
-                        // CRITICAL: Default to false for MediaCell to prevent both videos from playing
-                        // Also check if video is actually visible (not covered by overlay)
-                        let managerApproved = self.mode != .mediaCell || self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                        let actuallyVisible = self.mode != .mediaCell || !self.isCoveredByOverlay
-                        let noDetailViewActive = self.mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
-                        let shouldPlay = shouldAutoPlay && managerApproved && actuallyVisible && noDetailViewActive
-                        
-                        // CRITICAL: Prevent duplicate playback attempts if status observer already started it
-                        if shouldPlay && player.rate == 0 && !self.isStartingPlayback {
-                            self.isStartingPlayback = true
+                        // CRITICAL: For MediaCell mode, NEVER auto-play on load
+                        // VideoPlaybackCoordinator will send explicit play commands via notifications
+                        // This prevents multiple videos from playing simultaneously
+                        // Only non-MediaCell modes (mediaBrowser, embeddedDetail) can auto-play
+                        if self.mode == .mediaCell {
+                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - waiting for VideoPlaybackCoordinator command")
+                            // First frame will render, but playback controlled by coordinator
+                        } else {
+                            // Non-MediaCell modes: use old auto-play logic
+                            let actuallyVisible = !self.isCoveredByOverlay
+                            let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                            let shouldPlay = shouldAutoPlay && actuallyVisible && noDetailViewActive
                             
-                            // CRITICAL: Always ensure muteState is correct before playing in MediaCell
-                            if self.mode == .mediaCell {
-                                player.isMuted = MuteState.shared.isMuted
-                                NSLog("🔇 [PLAYER MUTE] First frame render - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                            if shouldPlay && player.rate == 0 && !self.isStartingPlayback {
+                                self.isStartingPlayback = true
+                                self.playWithResumeIfNeeded(player)
+                                NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (non-MediaCell mode)")
+                                
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    self.isStartingPlayback = false
+                                }
+                            } else if !actuallyVisible {
+                                NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
+                            } else if !noDetailViewActive {
+                                NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - detail view active")
                             }
-                            self.playWithResumeIfNeeded(player)
-                            if self.mode == .mediaCell {
-                                self.playbackState = .playing
-                            }
-                            NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (approved by VideoManager)")
-                            
-                            // Reset flag after a delay to allow playback to actually start
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                self.isStartingPlayback = false
-                            }
-                        } else if !actuallyVisible {
-                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
-                        } else if !noDetailViewActive {
-                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - detail view active")
-                        } else if !shouldPlay {
-                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - waiting for approval from VideoManager")
-                            // First frame will render when player is ready, no need to play()
                         }
                         
                         loadingState = .loaded
@@ -4424,7 +4467,8 @@ struct SimpleVideoPlayer: View {
                     
                     // Brief delay to let seek settle, then start playing
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        if self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
+                        // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls playback
+                        if self.mode != .mediaCell && self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
                             NSLog("▶️ [PLAYBACK] Starting playback after cache restore: \(self.mid)")
                             self.player?.play()
                             self.playbackState = .playing
@@ -4445,7 +4489,8 @@ struct SimpleVideoPlayer: View {
                     
                     // Brief delay to let seek settle, then start playing
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        if self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
+                        // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls playback
+                        if self.mode != .mediaCell && self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
                             NSLog("▶️ [PLAYBACK] Starting playback after sequential reset: \(self.mid)")
                             self.player?.play()
                             self.playbackState = .playing
@@ -4461,7 +4506,8 @@ struct SimpleVideoPlayer: View {
                     
                     // Brief delay to let seek settle
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        if self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
+                        // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls playback
+                        if self.mode != .mediaCell && self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
                             NSLog("▶️ [PLAYBACK] Starting playback: \(self.mid)")
                             self.player?.play()
                             self.playbackState = .playing
@@ -4968,3 +5014,16 @@ struct VideoManagerObserverModifier: ViewModifier {
     }
 }
 
+// MARK: - AnyViewModifier Helper
+
+struct AnyViewModifier: ViewModifier {
+    let modifier: (Content) -> AnyView
+    
+    init<V: View>(@ViewBuilder modifier: @escaping (Content) -> V) {
+        self.modifier = { AnyView(modifier($0)) }
+    }
+    
+    func body(content: Content) -> some View {
+        modifier(content)
+    }
+}
