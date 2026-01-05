@@ -5878,15 +5878,6 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
-                let uploadedTweet = tweet
-                
-                // Fetch author off-main, but assign @Published properties on main.
-                let author = try? await self.fetchUser(tweet.authorId)
-                await MainActor.run {
-                    // Tweet is an ObservableObject; avoid publishing from background threads.
-                    uploadedTweet.mid = newTweetId
-                    uploadedTweet.author = author
-                }
                 
                 // Immediately update appUser tweet count (like favorites/bookmarks)
                 await MainActor.run {
@@ -5898,7 +5889,23 @@ final class HproseInstance: ObservableObject {
                 // Refresh appUser from server to get updated tweetCount and other properties
                 try? await self.refreshAppUserFromServer()
                 
-                return uploadedTweet
+                // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
+                // This ensures all server-generated fields are populated correctly
+                print("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
+                if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweet.authorId) {
+                    print("DEBUG: [uploadTweet] Successfully fetched complete tweet with all fields")
+                    return completeTweet
+                } else {
+                    print("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
+                    // Fallback: return partial tweet if fetch fails
+                    let uploadedTweet = tweet
+                    let author = try? await self.fetchUser(tweet.authorId)
+                    await MainActor.run {
+                        uploadedTweet.mid = newTweetId
+                        uploadedTweet.author = author
+                    }
+                    return uploadedTweet
+                }
             } else {
                 // Failure case: extract error message
                 print("DEBUG: [uploadTweet] Server returned success=false, full response: \(responseDict)")
