@@ -38,6 +38,7 @@ class TweetTableViewController: UITableViewController {
     // Scroll tracking for toolbar hiding
     private var lastScrollOffset: CGFloat = 0
     private var hasCompletedInitialLayout: Bool = false
+    private var hasAdjustedInitialPosition: Bool = false
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -46,6 +47,29 @@ class TweetTableViewController: UITableViewController {
         setupRefreshControl()
         
         print("DEBUG: [TweetTableViewController] viewDidLoad - delegate is set to self")
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        // Only adjust once, and only if at the initial bad position (around 0)
+        // Don't interfere with header-adjustment or user scrolling
+        guard !hasAdjustedInitialPosition else { return }
+        hasAdjustedInitialPosition = true
+        
+        let topInset = tableView.adjustedContentInset.top
+        let currentOffset = tableView.contentOffset.y
+        
+        // Only adjust if offset is close to 0 (the bad initial position)
+        // and topInset is set (nav bar is present)
+        // Ignore if already properly positioned or if user has scrolled
+        if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 {
+            print("DEBUG: [TweetTableViewController] Adjusting initial position in viewDidAppear: \(currentOffset) -> -\(topInset)")
+            tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
+            lastScrollOffset = -topInset
+        } else {
+            print("DEBUG: [TweetTableViewController] Skipping adjustment - topInset: \(topInset), currentOffset: \(currentOffset)")
+        }
     }
     
     override func viewDidLayoutSubviews() {
@@ -57,6 +81,20 @@ class TweetTableViewController: UITableViewController {
             lastScrollOffset = tableView.contentOffset.y
             hasCompletedInitialLayout = true
             print("DEBUG: [TweetTableViewController] Initial layout completed - lastScrollOffset: \(lastScrollOffset)")
+            
+            // Ensure table view is scrolled to proper top position (respecting safe area)
+            // This prevents header from being covered by navigation bar
+            let topInset = tableView.adjustedContentInset.top
+            let currentOffset = tableView.contentOffset.y
+            
+            print("DEBUG: [TweetTableViewController] Initial layout - topInset: \(topInset), currentOffset: \(currentOffset)")
+            
+            // If offset is too negative (header would be under nav bar), correct it
+            if currentOffset < -topInset {
+                print("DEBUG: [TweetTableViewController] Correcting initial scroll position: \(currentOffset) -> -\(topInset)")
+                tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
+                lastScrollOffset = -topInset
+            }
         }
     }
     
@@ -93,10 +131,14 @@ class TweetTableViewController: UITableViewController {
     }
     
     @objc private func handleRefresh() {
+        print("DEBUG: [TweetTableViewController] Pull-to-refresh triggered")
         Task {
+            print("DEBUG: [TweetTableViewController] Calling onRefresh callback")
             await onRefresh?()
+            print("DEBUG: [TweetTableViewController] onRefresh completed")
             await MainActor.run {
                 self.customRefreshControl?.endRefreshing()
+                print("DEBUG: [TweetTableViewController] Refresh control ended")
             }
         }
     }
@@ -207,6 +249,7 @@ class TweetTableViewController: UITableViewController {
                     
                     // CRITICAL: Preserve scroll position when updating header
                     let currentOffset = tableView.contentOffset
+                    let topInset = tableView.adjustedContentInset.top
                     
                     headerView.frame = CGRect(x: leadingPadding, y: 0, width: contentWidth, height: fittingSize.height)
                     containerView.frame = CGRect(x: 0, y: 0, width: tableWidth, height: fittingSize.height)
@@ -214,13 +257,22 @@ class TweetTableViewController: UITableViewController {
                     // Trigger table view layout update
                     tableView.tableHeaderView = containerView
                     
-                    // Restore scroll position after header update
-                    // Account for height change in header
+                    // Only adjust scroll position if user has scrolled away from the top
+                    // If at the top (offset near 0 or -topInset), stay at the top
                     let heightDiff = fittingSize.height - oldHeight
-                    let newOffset = CGPoint(x: currentOffset.x, y: currentOffset.y + heightDiff)
-                    tableView.setContentOffset(newOffset, animated: false)
+                    let isAtTop = abs(currentOffset.y) < 10 || (topInset > 0 && abs(currentOffset.y + topInset) < 10)
                     
-                    print("DEBUG: [TweetTableViewController] Adjusted scroll: \(currentOffset.y) -> \(newOffset.y) (heightDiff: \(heightDiff))")
+                    if isAtTop {
+                        // At the top: keep position at proper top (below nav bar)
+                        let properTopOffset = topInset > 0 ? -topInset : 0
+                        tableView.setContentOffset(CGPoint(x: 0, y: properTopOffset), animated: false)
+                        print("DEBUG: [TweetTableViewController] Staying at top: \(currentOffset.y) -> \(properTopOffset)")
+                    } else {
+                        // Scrolled down: preserve visible content by adjusting for height change
+                        let newOffset = CGPoint(x: currentOffset.x, y: currentOffset.y + heightDiff)
+                        tableView.setContentOffset(newOffset, animated: false)
+                        print("DEBUG: [TweetTableViewController] Adjusted scroll: \(currentOffset.y) -> \(newOffset.y) (heightDiff: \(heightDiff))")
+                    }
                 }
             }
         }

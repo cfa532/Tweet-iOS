@@ -277,9 +277,6 @@ struct TweetListView<RowView: View>: View {
                     }
             }
             }  // Close ZStack
-            .refreshable {
-                await refreshTweets()
-            }
             .task {
                 // Only load if tweets are empty and we haven't completed initial load
                 if tweets.isEmpty && !initialLoadComplete {
@@ -408,8 +405,13 @@ struct TweetListView<RowView: View>: View {
     }
 
     func refreshTweets() async {
-        guard !isLoading else { return }
+        print("DEBUG: [TweetListView] refreshTweets called - isLoading: \(isLoading)")
+        guard !isLoading else {
+            print("DEBUG: [TweetListView] refreshTweets blocked - already loading")
+            return
+        }
         
+        print("DEBUG: [TweetListView] refreshTweets starting - fetching page 0 from server")
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
@@ -419,6 +421,11 @@ struct TweetListView<RowView: View>: View {
             let freshTweets = try await tweetFetcher(0, pageSize, false)
             let validTweets = freshTweets.compactMap { $0 }
             let hasValidTweet = !validTweets.isEmpty
+            
+            print("DEBUG: [TweetListView] refreshTweets received - total: \(freshTweets.count), valid: \(validTweets.count)")
+            if validTweets.isEmpty {
+                print("DEBUG: [TweetListView] ⚠️ No valid tweets received from server refresh!")
+            }
             
             await MainActor.run {
                 // Update tweets with server data while preserving cached tweets for failed IDs

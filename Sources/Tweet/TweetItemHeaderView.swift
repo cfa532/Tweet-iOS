@@ -93,16 +93,30 @@ struct TweetMenu: View {
                 if tweet.authorId == appUser.mid {
                     Button(action: {
                         Task {
-                            if let isPinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
-                                isCurrentlyPinned = isPinned
-                                NotificationCenter.default.post(
-                                    name: .tweetPinStatusChanged,
-                                    object: nil,
-                                    userInfo: [
-                                        "tweetId": tweet.mid,
-                                        "isPinned": isPinned
-                                    ]
-                                )
+                            do {
+                                if let isPinned = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                                    print("DEBUG: [TweetMenu] Pin toggle successful - isPinned: \(isPinned), tweetId: \(tweet.mid)")
+                                    isCurrentlyPinned = isPinned
+                                    NotificationCenter.default.post(
+                                        name: .tweetPinStatusChanged,
+                                        object: nil,
+                                        userInfo: [
+                                            "tweetId": tweet.mid,
+                                            "isPinned": isPinned
+                                        ]
+                                    )
+                                } else {
+                                    print("DEBUG: [TweetMenu] Pin toggle returned nil for tweet: \(tweet.mid)")
+                                }
+                            } catch {
+                                print("DEBUG: [TweetMenu] Pin toggle failed: \(error)")
+                                // Show error toast
+                                await MainActor.run {
+                                    NotificationCenter.default.post(
+                                        name: .errorOccurred,
+                                        object: NSError(domain: "PinToggle", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to update pin status: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                                    )
+                                }
                             }
                         }
                     }) {

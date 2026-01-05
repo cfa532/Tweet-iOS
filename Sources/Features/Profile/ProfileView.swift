@@ -113,6 +113,8 @@ struct ProfileView: View {
                 if let _ = notification.userInfo?["tweetId"] as? String,
                    let _ = notification.userInfo?["isPinned"] as? Bool {
                     Task {
+                        // Add delay to allow server to update before refreshing
+                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
                         await refreshPinnedTweets()
                     }
                 }
@@ -458,64 +460,67 @@ struct ProfileView: View {
     @State private var lastSignificantDelta: CGFloat = 0
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
-        // Threshold for detecting intentional scroll
-        let scrollThreshold: CGFloat = 15
-        
-        // CRITICAL: Always show toolbar when near the top (like TweetDetailView)
-        // This prevents toolbar from disappearing during pull-to-refresh
-        // Profile view content offset starts negative (due to header), so use a reasonable threshold
-        if offset > -200 {
-            // Near the top - always show toolbar
-            if !isNavigationVisible {
+        // Defer state changes to avoid "Modifying state during view update" warning
+        DispatchQueue.main.async {
+            // Threshold for detecting intentional scroll
+            let scrollThreshold: CGFloat = 15
+            
+            // CRITICAL: Always show toolbar when near the top (like TweetDetailView)
+            // This prevents toolbar from disappearing during pull-to-refresh
+            // Profile view content offset starts negative (due to header), so use a reasonable threshold
+            if offset > -200 {
+                // Near the top - always show toolbar
+                if !self.isNavigationVisible {
+                    withAnimation(.easeInOut(duration: 0.4)) {
+                        self.isNavigationVisible = true
+                    }
+                    NotificationCenter.default.post(
+                        name: .navigationVisibilityChanged,
+                        object: nil,
+                        userInfo: ["isVisible": true]
+                    )
+                }
+                self.previousScrollOffset = offset
+                return
+            }
+            
+            // Only process scroll direction changes when scrolled down into content
+            // Ignore very small deltas (noise from rendering/layout)
+            guard abs(delta) > 2 else { return }
+            
+            // Detect significant scroll direction changes
+            // Positive delta = scrolling down (content moves up)
+            // Negative delta = scrolling up (content moves down)
+            let isScrollingDown = delta > scrollThreshold
+            let isScrollingUp = delta < -scrollThreshold
+            
+            // Update navigation visibility based on scroll direction
+            if isScrollingDown && self.isNavigationVisible {
+                // Scrolling down significantly - hide bottom bar
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    self.isNavigationVisible = false
+                }
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": false]
+                )
+                self.lastSignificantDelta = delta
+            } else if isScrollingUp && !self.isNavigationVisible {
+                // Scrolling up significantly - show bottom bar
                 withAnimation(.easeInOut(duration: 0.4)) {
-                    isNavigationVisible = true
+                    self.isNavigationVisible = true
                 }
                 NotificationCenter.default.post(
                     name: .navigationVisibilityChanged,
                     object: nil,
                     userInfo: ["isVisible": true]
                 )
+                self.lastSignificantDelta = delta
             }
-            previousScrollOffset = offset
-            return
+            
+            self.previousScrollOffset = offset
         }
-        
-        // Only process scroll direction changes when scrolled down into content
-        // Ignore very small deltas (noise from rendering/layout)
-        guard abs(delta) > 2 else { return }
-        
-        // Detect significant scroll direction changes
-        // Positive delta = scrolling down (content moves up)
-        // Negative delta = scrolling up (content moves down)
-        let isScrollingDown = delta > scrollThreshold
-        let isScrollingUp = delta < -scrollThreshold
-        
-        // Update navigation visibility based on scroll direction
-        if isScrollingDown && isNavigationVisible {
-            // Scrolling down significantly - hide bottom bar
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isNavigationVisible = false
-            }
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": false]
-            )
-            lastSignificantDelta = delta
-        } else if isScrollingUp && !isNavigationVisible {
-            // Scrolling up significantly - show bottom bar
-            withAnimation(.easeInOut(duration: 0.4)) {
-                isNavigationVisible = true
-            }
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": true]
-            )
-            lastSignificantDelta = delta
-        }
-        
-        previousScrollOffset = offset
     }
     
     // MARK: - Helper Methods
