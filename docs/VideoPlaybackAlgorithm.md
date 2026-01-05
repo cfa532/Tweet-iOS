@@ -1,11 +1,13 @@
 # Video Playback Algorithm
 
-**Last Updated**: January 4, 2026  
+**Last Updated**: January 5, 2026  
 **Status**: ✅ Production (Conservative Recovery + Fullscreen Resume) ⚠️ Watchdog Disabled
 
 ## Overview
 
 This document describes the algorithm for video playback in the Tweet-iOS app, specifically for sequential video playback within media grids and individual video player management. The algorithm handles video lifecycle, background/foreground transitions, fullscreen interactions, and automatic resume functionality.
+
+> **Note:** As of January 5, 2026, a new **VideoPlaybackCoordinator** system has been implemented for tweet feed videos. This provides intelligent orchestration with survey phase, primary video selection, and sequential playback. The algorithm described in this document still applies to **MediaGridView** (multi-video tweets), while feed-level orchestration is now handled by `VideoPlaybackCoordinator`. See [NEW_VIDEO_ORCHESTRATION.md](NEW_VIDEO_ORCHESTRATION.md) for details.
 
 ## Core Components
 

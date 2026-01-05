@@ -572,16 +572,118 @@ struct MuteButton: View {
             muteState.toggleMute()
         }) {
             Image(systemName: muteState.isMuted ? "speaker.slash" : "speaker.wave.2")
-                .font(.system(size: 14))
-                .foregroundColor(.white)
-                .frame(width: 30, height: 30)
+                .font(.system(size: 16))
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 26, height: 26)
                 .background(
                     // Semi-transparent dark background for visibility - no shadow
                     Circle()
-                        .fill(Color.black.opacity(0.5))
+                        .fill(Color.black.opacity(0.3))
                 )
                 .contentShape(Circle())
         }
         .buttonStyle(PlainButtonStyle()) // Remove default button shadow
+    }
+}
+
+// MARK: - TimeRemainingDisplay
+struct TimeRemainingDisplay: View {
+    let timeRemaining: String
+    
+    var body: some View {
+        Text(timeRemaining)
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundColor(.white.opacity(0.6))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                // Semi-transparent dark background for visibility - similar to mute button
+                Capsule()
+                    .fill(Color.black.opacity(0.4))
+            )
+            .contentShape(Capsule())
+    }
+}
+
+// MARK: - VideoTimerOverlay
+struct VideoTimerOverlay: View {
+    let videoMid: String
+    @State private var timeRemaining: String = "0:00"
+    @State private var updateTimer: Timer?
+    @State private var isVisible: Bool = true
+    @State private var hideTimer: Timer?
+    
+    var body: some View {
+        Group {
+            if isVisible {
+                TimeRemainingDisplay(timeRemaining: timeRemaining)
+                    .transition(.opacity)
+            }
+        }
+        .onAppear {
+            print("🕐 [TIMER OVERLAY] Appeared for video \(videoMid)")
+            isVisible = true
+            startTimer()
+            startHideTimer()
+        }
+        .onDisappear {
+            print("🕐 [TIMER OVERLAY] Disappeared for video \(videoMid)")
+            updateTimer?.invalidate()
+            updateTimer = nil
+            hideTimer?.invalidate()
+            hideTimer = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .videoTimerUpdate)) { notification in
+            guard let mid = notification.userInfo?["videoMid"] as? String,
+                  mid == self.videoMid,
+                  let time = notification.userInfo?["timeRemaining"] as? String else {
+                return
+            }
+            timeRemaining = time
+        }
+    }
+    
+    private func startTimer() {
+        print("🕐 [TIMER OVERLAY] Starting update timer for \(videoMid)")
+        
+        // Request immediate update
+        requestUpdate()
+        
+        // Setup repeating timer for updates (use .common mode to fire during scroll)
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [videoMid] _ in
+            // Request update from SimpleVideoPlayer
+            NotificationCenter.default.post(
+                name: .requestVideoTimerUpdate,
+                object: nil,
+                userInfo: ["videoMid": videoMid]
+            )
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        updateTimer = timer
+    }
+    
+    private func startHideTimer() {
+        print("🕐 [TIMER OVERLAY] Starting 5s hide timer for \(videoMid)")
+        
+        // Cancel any existing hide timer
+        hideTimer?.invalidate()
+        
+        // Hide after 5 seconds
+        let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [videoMid] _ in
+            Task { @MainActor in
+                print("🕐 [TIMER OVERLAY] Hiding timer for \(videoMid)")
+                self.isVisible = false
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        hideTimer = timer
+    }
+    
+    private func requestUpdate() {
+        NotificationCenter.default.post(
+            name: .requestVideoTimerUpdate,
+            object: nil,
+            userInfo: ["videoMid": videoMid]
+        )
     }
 }

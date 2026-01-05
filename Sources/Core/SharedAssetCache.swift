@@ -1169,9 +1169,10 @@ class SharedAssetCache: ObservableObject {
             }
         }
         
-        // PERFORMANCE FIX: Also remove players not accessed in last 5 minutes
+        // PERFORMANCE FIX: Also remove players not accessed in last 10 minutes
+        // Increased from 5 to 10 minutes to prevent cleanup of waiting videos during long video playback
         let now = Date()
-        let inactiveThreshold: TimeInterval = 300 // 5 minutes
+        let inactiveThreshold: TimeInterval = 600 // 10 minutes
         let inactiveKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > inactiveThreshold }.map { $0.key }
         
         if !inactiveKeys.isEmpty {
@@ -1194,8 +1195,14 @@ class SharedAssetCache: ObservableObject {
                 cachingPlayerItems.removeValue(forKey: key)
                 resourceLoaderDelegates.removeValue(forKey: key)
             }
-            print("DEBUG: [SharedAssetCache] Removed \(inactiveKeys.count) inactive players (>5min old)")
+            print("DEBUG: [SharedAssetCache] Removed \(inactiveKeys.count) inactive players (>10min old)")
         }
+    }
+    
+    /// Update access time for a player to prevent premature cleanup (called when video becomes visible)
+    @MainActor func updatePlayerAccessTime(mediaID: String) {
+        guard playerCache[mediaID] != nil else { return }
+        cacheTimestamps[mediaID] = Date()
     }
     
     /// Get cache statistics

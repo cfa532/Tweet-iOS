@@ -1,13 +1,15 @@
 # Video System - Complete Documentation
 
-**Last Updated:** December 29, 2025  
-**Status:** ✅ Production (Unified Architecture + Seek Failure Recovery)
+**Last Updated:** January 5, 2026  
+**Status:** ✅ Production (Unified Architecture + Video Orchestration)
 
 ---
 
 ## Overview
 
 Unified video playback architecture using `SimpleVideoPlayer` across all contexts (grid, detail, fullscreen) with intelligent caching, KVO-based state management, and automatic error recovery. Supports both HLS adaptive streaming and progressive MP4 playback.
+
+**New:** Video orchestration system provides intelligent playback management with 2-second survey phase, primary video selection, and sequential playback. See [NEW_VIDEO_ORCHESTRATION.md](NEW_VIDEO_ORCHESTRATION.md) for details.
 
 ---
 
@@ -42,17 +44,51 @@ Network/Disk Cache
 
 ### UX: Last-Frame Placeholder (MediaCell)
 
-To avoid brief black flashes during **background/foreground**, **layer reattachment**, or **buffering**, MediaCell now renders a **frozen “last displayed frame” placeholder** behind a spinner until playback is ready again.
+To avoid brief black flashes during **background/foreground**, **layer reattachment**, **buffering**, or **video finish**, MediaCell now renders a **frozen "last displayed frame" placeholder** behind a spinner until playback is ready again.
 
 **Implementation (high level):**
 - Captures decoded frames using `AVPlayerItemVideoOutput` (works for both `.video` and `.hls_video`).
 - Stores a **downscaled** `UIImage` in an in-memory cache keyed by `mid` (short TTL + count limit).
 - On transitions (off-screen + background), captures once and reuses as placeholder on return.
+- **When video finishes:** Captures last frame and displays it as overlay (prevents black screen).
+
+**Capture Triggers:**
+- `onDisappear` - User scrolls video off-screen
+- `willResignActive` - App entering background
+- `videoFinished` - Video reaches end (when `disableAutoRestart=true`)
+- `backgroundRecovery` - App returning from background
 
 **Key logs:**
 ```
 🖼️ [LAST FRAME] Captured for {mid} (onDisappear)
 🖼️ [LAST FRAME] Captured for {mid} (willResignActive)
+🖼️ [LAST FRAME] Captured for {mid} (videoFinished)
+```
+
+### Sequential Playback Integration
+
+**VideoPlaybackCoordinator Integration:**
+- Listens for `.shouldPlayVideo` notification with `isSurvey` and `isPrimary` flags
+- Posts `.videoDidFinishPlaying` notification when video reaches end
+- Supports survey mode (2s preview from start) and primary mode (play to completion)
+- Last frame displayed when video finishes to prevent black screen
+
+**Notification Flow:**
+```
+VideoPlaybackCoordinator sends .shouldPlayVideo
+    ↓
+SimpleVideoPlayer receives notification
+    ↓
+If isSurvey=true: Seek to start, play for 2s
+If isPrimary=true: Continue from current position
+    ↓
+Video finishes
+    ↓
+Post .videoDidFinishPlaying notification
+    ↓
+Capture and display last frame
+    ↓
+VideoPlaybackCoordinator starts next video
 ```
 
 ### Playback Modes
@@ -128,6 +164,51 @@ playerItemErrorObserver = playerItem.observe(\.error, options: [.new, .initial])
 - `.initial` option checks for existing errors immediately
 - Observers never invalidate themselves (stay active throughout playback)
 - Reset `retryAttempts = 0` on successful load
+
+---
+
+## VideoPlaybackCoordinator
+
+**Location:** `Sources/Core/VideoPlaybackCoordinator.swift`
+
+### Purpose
+
+Orchestrates video playback across the tweet feed with intelligent survey phase, primary video selection, and sequential playback.
+
+### Key Features
+
+1. **Immediate Playback (0.1s Debounce)**
+   - Videos start playing 0.1s after becoming visible
+   - Prevents unnecessary starts/stops during rapid scrolling
+   - Uses `.common` run loop mode to fire during active scrolling
+
+2. **Survey Phase (2 seconds)**
+   - All visible videos play simultaneously for preview
+   - Gives users quick overview of available content
+   - Identifies most prominent video after survey
+
+3. **Primary Video Selection**
+   - Algorithm considers distance from viewport center and visibility ratio
+   - Primary video continues playing to completion
+   - Other videos pause after survey phase
+
+4. **Sequential Playback**
+   - Automatically plays next visible video when primary finishes
+   - Continues until no more visible videos
+   - Seamless transitions between videos
+
+### Integration
+
+**TweetTableViewController:**
+- Reports visible tweet IDs during scroll
+- Provides table view reference for viewport calculations
+
+**SimpleVideoPlayer:**
+- Listens for `.shouldPlayVideo` notification
+- Posts `.videoDidFinishPlaying` when video ends
+- Handles survey mode (`isSurvey`) and primary mode (`isPrimary`)
+
+**See:** [NEW_VIDEO_ORCHESTRATION.md](NEW_VIDEO_ORCHESTRATION.md) for complete documentation
 
 ---
 
@@ -1515,7 +1596,8 @@ DEBUG: [PROGRESSIVE FETCH SUCCESS] - Network request completed
 ## Files
 
 **Core Video System:**
-- `Sources/Features/MediaViews/SimpleVideoPlayer.swift` - Unified video player (2300+ lines)
+- `Sources/Features/MediaViews/SimpleVideoPlayer.swift` - Unified video player (5000+ lines)
+- `Sources/Core/VideoPlaybackCoordinator.swift` - Orchestration & sequential playback
 - `Sources/Core/SharedAssetCache.swift` - Player pool & cache management
 - `Sources/Core/SingletonVideoManagers.swift` - Fullscreen player singleton with auto-resume
 - `Sources/Core/VideoLoadingManager.swift` - Concurrency & priority

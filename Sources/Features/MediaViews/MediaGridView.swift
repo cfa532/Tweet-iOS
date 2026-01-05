@@ -639,6 +639,25 @@ struct MediaGridView: View, Equatable {
                     .padding(.bottom, 12)
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            // Show timer for video (bottom left)
+            if attachments.count == 1,
+               let attachment = attachments.first,
+               attachment.type == .video || attachment.type == .hls_video {
+                VideoTimerOverlay(videoMid: attachment.mid)
+                    .padding(.leading, 12)
+                    .padding(.bottom, 12)
+                    .onAppear {
+                        print("🕐 [TIMER OVERLAY CONTAINER] Timer overlay container appeared for \(attachment.mid)")
+                    }
+            } else {
+                // Debug: show why timer is not displayed
+                Color.clear
+                    .onAppear {
+                        print("🕐 [TIMER OVERLAY CONTAINER] Timer not shown - attachments.count=\(attachments.count), hasVideo=\(attachments.first?.type == .video || attachments.first?.type == .hls_video)")
+                    }
+            }
+        }
         .onAppear {
             // CRITICAL: If already initialized, do NOTHING to prevent recomposition
             // This is the key to smooth scrolling - once a retweet is rendered, it stays rendered

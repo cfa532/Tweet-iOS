@@ -1,24 +1,31 @@
 # New Video Orchestration System
 
 **Created:** January 5, 2026  
-**Status:** ✅ Implemented, Pending Testing
+**Last Updated:** January 5, 2026  
+**Status:** ✅ Production
 
 ---
 
 ## Overview
 
-The new video orchestration system introduces intelligent video playback management with a 2-second survey phase, primary video selection, and sequential playback. This creates a more engaging user experience by showing previews of all visible videos before focusing on the most prominent one.
+The new video orchestration system introduces intelligent video playback management with a 2-second survey phase, primary video selection, and sequential playback. Videos start playing immediately when scrolled into view (with a 0.1s debounce), providing an engaging and responsive user experience.
 
 ---
 
 ## Key Features
 
-### 1. **2-Second Survey Phase**
-- When scrolling stops, all visible videos start playing simultaneously
-- Each video plays for exactly 2 seconds
-- Gives users a preview of all available content
+### 1. **Immediate Playback with Smart Debounce**
+- Videos start playing **0.1 seconds** after becoming visible
+- Prevents unnecessary starts/stops during rapid scrolling
+- No need to wait for scroll to stop completely
+- Smooth, responsive user experience
 
-### 2. **Primary Video Selection**
+### 2. **2-Second Survey Phase**
+- All visible videos play simultaneously for 2 seconds
+- Gives users a preview of all available content
+- Survey begins 0.1s after videos become visible
+
+### 3. **Primary Video Selection**
 - After the 2-second survey, the system identifies the "primary video"
 - Selection algorithm considers:
   - Distance from viewport center
@@ -26,21 +33,22 @@ The new video orchestration system introduces intelligent video playback managem
   - Combines both factors for optimal selection
 - Primary video continues playing to completion
 
-### 3. **Sequential Playback**
+### 4. **Sequential Playback**
 - When primary video finishes, automatically starts the next visible video
 - Continues until no more visible videos remain
 - Seamless transitions between videos
+- **Last Frame Display**: Finished videos show their last frame instead of black screen
 
-### 4. **Scroll Persistence**
+### 5. **Scroll Persistence**
 - Videos keep playing during scroll (no interruption)
 - Provides smooth, continuous experience
 - Better engagement compared to pause-on-scroll
 
-### 5. **Post-Scroll Re-evaluation**
-- Videos start playing immediately when they become visible
-- After scroll stops, waits 2 seconds before re-identifying primary video
-- Allows user to settle on content before restarting survey
-- Smooth transitions when scrolling between videos
+### 6. **Flicker-Free Background Recovery**
+- Videos maintain their last frame when app goes to background
+- On return to foreground, video recovers without visible reloading
+- Uses cached last frame as placeholder during recovery
+- Seamless user experience with no black screens or flickering
 
 ---
 
@@ -100,9 +108,13 @@ VideoPlaybackCoordinator receives visible tweet IDs
     ↓
 Detects new videos became visible
     ↓
-startSurveyPhase() IMMEDIATELY (no delay)
+Phase reset to .idle
     ↓
-Scroll stop timer also starts (2s delay for re-evaluation)
+Start 0.1s debounce timer (using .common run loop mode)
+    ↓
+0.1 seconds pass (timer fires even during scroll)
+    ↓
+startSurveyPhase()
 ```
 
 ### Survey Phase (0-2 seconds)
@@ -110,7 +122,10 @@ Scroll stop timer also starts (2s delay for re-evaluation)
 ```
 startSurveyPhase()
     ↓
+Phase transition: .idle → .surveying
+    ↓
 Post .shouldPlayVideo notification for ALL visible videos
+    with isSurvey=true (starts from beginning)
     ↓
 All visible videos start playing simultaneously
     ↓
@@ -142,13 +157,21 @@ Primary video continues playing to completion
 ```
 Primary video finishes
     ↓
-handleVideoFinished() notification
+SimpleVideoPlayer posts .videoDidFinishPlaying notification
+    with videoMid and tweetId
+    ↓
+VideoPlaybackCoordinator.handleVideoFinished() receives notification
+    ↓
+Verify this is the primary video (not survey phase video)
     ↓
 playNextVisibleVideo()
     ↓
 Find next video in visible videos list
     ↓
-If next exists: Set as new primary and play
+If next exists: 
+    - Set as new primary
+    - Post .shouldPlayVideo with isPrimary=true
+    - Video continues from current position
     ↓
 If no next: stopAllVideos()
 ```
@@ -160,13 +183,55 @@ User starts scrolling
     ↓
 updateVisibleTweets() called repeatedly
     ↓
-Videos keep playing (no pause)
+Videos keep playing (no interruption)
     ↓
-Scroll stop timer resets on each call (2s delay)
+Set of visible video IDs changes?
     ↓
-When scrolling stops for 2s: onScrollStopped()
+Yes: Reset phase to .idle, start new 0.1s debounce
+    (ensures smooth transitions when new videos scroll into view)
     ↓
-Re-evaluate visible videos and restart survey phase
+No: Keep existing playback state
+    (videos continue playing during scroll)
+```
+
+### Last Frame Capture & Display
+
+```
+Video finishes playing (disableAutoRestart=true)
+    ↓
+handleVideoFinished() in SimpleVideoPlayer
+    ↓
+Post .videoDidFinishPlaying notification
+    ↓
+captureLastFrameNearEndIfPossible(reason: "videoFinished")
+    ↓
+Seek backwards up to 3 seconds to find non-black frame
+    ↓
+Use AVPlayerItemVideoOutput to extract pixel buffer
+    ↓
+Convert to UIImage and cache in VideoLastFrameCache
+    ↓
+Display cached frame as overlay (prevents black screen)
+```
+
+### Background Recovery
+
+```
+App enters background
+    ↓
+SimpleVideoPlayer captures last frame (onDisappear)
+    ↓
+Frame stored in VideoLastFrameCache
+    ↓
+App returns to foreground
+    ↓
+Video layer needs to be reattached
+    ↓
+While reattaching, show cached last frame as placeholder
+    ↓
+Once player ready, remove placeholder and resume playback
+    ↓
+User sees continuous video, no black screen or flicker
 ```
 
 ---
@@ -227,22 +292,15 @@ func identifyPrimaryVideo() -> VideoInfo? {
     "tweetId": String,
     "videoMid": String,
     "videoIndex": Int,
-    "isSurvey": Bool?,      // true = 2s preview
-    "isPrimary": Bool?       // true = play to completion
+    "isSurvey": Bool?,      // true = start from beginning (2s preview)
+    "isPrimary": Bool?       // true = continue from current position
 ]
 ```
 
-### .shouldPauseVideo
-
-**Sender:** `VideoPlaybackCoordinator`  
-**Receivers:** `SimpleVideoPlayer` (MediaCell mode only)
-
-**UserInfo:**
-```swift
-[
-    "videoMid": String
-]
-```
+**Behavior:**
+- `isSurvey=true`: Video seeks to start (CMTime.zero) and plays for 2 seconds
+- `isPrimary=true`: Video continues from current position until completion
+- Both flags can be combined (survey first, then primary)
 
 ### .shouldStopAllVideos
 
@@ -250,6 +308,10 @@ func identifyPrimaryVideo() -> VideoInfo? {
 **Receivers:** `SimpleVideoPlayer` (all modes)
 
 **UserInfo:** None
+
+**Behavior:**
+- Pauses all videos immediately
+- Used when visibility changes dramatically
 
 ### .videoDidFinishPlaying
 
@@ -259,9 +321,15 @@ func identifyPrimaryVideo() -> VideoInfo? {
 **UserInfo:**
 ```swift
 [
-    "videoMid": String
+    "videoMid": String,
+    "tweetId": String       // Parent tweet ID (optional)
 ]
 ```
+
+**Behavior:**
+- Posted when video reaches end (AVPlayerItem.didPlayToEndTime)
+- Only posted when `disableAutoRestart=true`
+- Triggers sequential playback in VideoPlaybackCoordinator
 
 ---
 
@@ -271,14 +339,92 @@ func identifyPrimaryVideo() -> VideoInfo? {
 
 ```swift
 // In VideoPlaybackCoordinator
-private let SCROLL_STOP_DELAY: TimeInterval = 2.0   // Wait 2s after scroll stops
+private let PLAYBACK_DEBOUNCE: TimeInterval = 0.1    // Debounce before starting playback
 private let SURVEY_DURATION: TimeInterval = 2.0      // Show each video for 2s
 ```
 
 **To adjust:**
 - Change constants in `VideoPlaybackCoordinator.swift`
-- Scroll stop delay: Line ~82 in `updateVisibleTweets()`
-- Survey duration: Line ~122 in `startSurveyPhase()`
+- Playback debounce: Line ~170 in `updateVisibleTweets()` (Timer initialization)
+- Survey duration: Line ~140 in `startSurveyPhase()` (Survey timer)
+
+**Critical Implementation Detail:**
+The debounce timer uses `RunLoop.main.add(timer, forMode: .common)` to ensure it fires during active scrolling. The `.common` mode allows the timer to execute even when the main thread is busy with scroll events.
+
+---
+
+## Last Frame Capture System
+
+### Purpose
+
+Prevents black screens when videos finish or when recovering from background by displaying the last rendered frame as a static placeholder.
+
+### Implementation
+
+**Location:** `Sources/Features/MediaViews/SimpleVideoPlayer.swift`
+
+**Components:**
+1. **AVPlayerItemVideoOutput**: Accesses decoded video frames
+2. **VideoLastFrameCache**: In-memory cache for captured frames
+3. **Capture Logic**: Seeks backwards to find non-black frames
+
+### Capture Algorithm
+
+```swift
+func captureLastFrameNearEndIfPossible(reason: String) async {
+    // 1. Get current video duration
+    let duration = player.currentItem?.duration
+    
+    // 2. Seek backwards up to 3 seconds to find a good frame
+    let captureTime = max(0, duration.seconds - 3.0)
+    player.seek(to: CMTime(seconds: captureTime, preferredTimescale: 600))
+    
+    // 3. Extract pixel buffer using AVPlayerItemVideoOutput
+    let output = AVPlayerItemVideoOutput()
+    player.currentItem?.add(output)
+    let pixelBuffer = output.copyPixelBuffer(forItemTime: captureTime, itemTimeForDisplay: nil)
+    
+    // 4. Convert to UIImage
+    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+    let context = CIContext()
+    let cgImage = context.createCGImage(ciImage, from: ciImage.extent)
+    let image = UIImage(cgImage: cgImage)
+    
+    // 5. Cache the frame
+    VideoLastFrameCache.shared.cacheFrame(image, for: videoMid)
+}
+```
+
+### Display Logic
+
+```swift
+// In SimpleVideoPlayer body
+ZStack {
+    VideoPlayer(player: player)
+    
+    // Show last frame when finished
+    if playbackState == .finished, let cachedFrame = cachedLastFrame {
+        Image(uiImage: cachedFrame)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .transition(.opacity)
+    }
+}
+```
+
+### Cache Management
+
+**VideoLastFrameCache:**
+- In-memory cache (not persisted to disk)
+- TTL: 10 minutes per frame
+- Max capacity: 50 frames
+- Automatic eviction when capacity exceeded
+
+### Use Cases
+
+1. **Video Finish**: When video reaches end, show last frame instead of black
+2. **Background Recovery**: When app returns from background, show cached frame during reload
+3. **Seeking**: When seeking to end, show frame before black screen appears
 
 ---
 
@@ -305,37 +451,53 @@ private let SURVEY_DURATION: TimeInterval = 2.0      // Show each video for 2s
 ## Testing Checklist
 
 ### Basic Functionality
-- [ ] Videos start playing 2s after scroll stops
-- [ ] All visible videos play during survey phase
-- [ ] Primary video is correctly identified (centered + visible)
-- [ ] Non-primary videos pause after survey phase
-- [ ] Primary video plays to completion
+- [x] Videos start playing 0.1s after becoming visible
+- [x] All visible videos play during survey phase
+- [x] Primary video is correctly identified (centered + visible)
+- [x] Primary video plays to completion
+- [x] Debounce timer fires during active scrolling (uses .common mode)
 
 ### Sequential Playback
-- [ ] Next video starts when primary finishes
-- [ ] Sequential playback continues through all visible videos
-- [ ] Playback stops when no more visible videos
+- [x] Next video starts when primary finishes
+- [x] Sequential playback continues through all visible videos
+- [x] Playback stops when no more visible videos
+- [x] Finished videos show last frame (not black screen)
+- [x] .videoDidFinishPlaying notification posted correctly
 
 ### Scroll Behavior
-- [ ] Videos keep playing during scroll
-- [ ] Scroll stop timer resets correctly
-- [ ] 2s delay works after scroll stops
-- [ ] Survey phase restarts after new scroll stop
+- [x] Videos keep playing during scroll
+- [x] Videos start immediately when scrolled into view (0.1s debounce)
+- [x] Phase resets to .idle when visible videos change
+- [x] Smooth transitions when scrolling between videos
+- [x] No multiple restarts during scroll
+
+### Last Frame Display
+- [x] Last frame captured properly when video finishes
+- [x] Last frame shown as overlay when video ends
+- [x] No black screen after video finishes
+- [x] Last frame cache works correctly
+
+### Background Recovery
+- [x] Last frame cached when app goes to background
+- [x] Video recovers without flicker on foreground return
+- [x] No visible reloading or black screens
+- [x] Seamless user experience during app lifecycle transitions
 
 ### Edge Cases
-- [ ] Single video tweets work correctly
-- [ ] Multi-video tweets (2+) work correctly
-- [ ] Rapid scrolling doesn't break state
-- [ ] Backgrounding app preserves state
-- [ ] Returning from background resumes correctly
-- [ ] Fast scroll past videos doesn't cause crashes
-- [ ] Videos that fail to load don't block others
+- [x] Single video tweets work correctly
+- [x] Multi-video tweets (2+) work correctly
+- [x] Rapid scrolling doesn't break state
+- [x] Backgrounding app preserves state
+- [x] Returning from background resumes correctly
+- [x] Fast scroll past videos doesn't cause crashes
+- [x] Videos that fail to load don't block others
 
 ### Performance
-- [ ] No memory leaks during extended scrolling
-- [ ] Smooth 60fps scrolling with videos playing
-- [ ] CPU/battery usage reasonable
-- [ ] Video transitions are smooth
+- [x] No memory leaks during extended scrolling
+- [x] Smooth scrolling with videos playing
+- [x] CPU/battery usage reasonable
+- [x] Video transitions are smooth
+- [x] Debounce prevents excessive start/stop cycles
 
 ---
 
@@ -388,12 +550,28 @@ None - the system uses the same notification-based architecture. Existing code c
 
 ## Troubleshooting
 
-### Videos not playing after scroll stops
+### Videos not starting when scrolled into view
 
 **Check:**
-1. Is scroll stop timer firing? (Log in `updateVisibleTweets()`)
-2. Are visible tweets being detected? (Log `visibleTweetIds`)
-3. Is survey phase starting? (Log in `startSurveyPhase()`)
+1. Is debounce timer firing? Look for log: `🎬 [VideoOrchestrator] Debounce complete (0.1s)`
+2. Is timer using `.common` run loop mode? (Should fire during scroll)
+3. Is phase being reset to `.idle`? Look for log: `🎬 [VideoOrchestrator] Phase reset to .idle`
+4. Are visible videos being detected? (Log `visibleTweetIds`)
+
+**Common Issue:**
+- Timer not firing during scroll → Check `RunLoop.main.add(timer, forMode: .common)` is used
+- Timer blocked by MainActor → Check timer callback uses `DispatchQueue.main.async`
+
+### Videos restarting multiple times during scroll
+
+**Check:**
+1. Is phase being reset too aggressively? (Should only reset when video IDs change)
+2. Is debounce timer being invalidated properly?
+3. Are video IDs being compared correctly? (Use Set comparison)
+
+**Fix:**
+- Only reset phase when visible video IDs actually change
+- Don't reset phase if videos are just changing positions
 
 ### Primary video not identified correctly
 
@@ -402,19 +580,42 @@ None - the system uses the same notification-based architecture. Existing code c
 2. Are cells being found? (Log in `findCell()`)
 3. Is viewport calculation correct? (Log visible rect and cell frames)
 
-### Videos pausing unexpectedly
-
-**Check:**
-1. Survey timer duration (should be 2.0s)
-2. Notification delivery (log in `handleCoordinatorPauseCommand()`)
-3. Phase transitions (log phase changes)
-
 ### Sequential playback not working
 
 **Check:**
-1. Video finish notifications being sent? (Log in `handleVideoFinished()`)
-2. Next video being found? (Log in `playNextVisibleVideo()`)
-3. Primary video ID being updated? (Log `primaryVideoId` changes)
+1. Is `.videoDidFinishPlaying` notification being sent? (Log in `SimpleVideoPlayer.handleVideoFinished()`)
+2. Is coordinator receiving notification? (Log in `VideoPlaybackCoordinator.handleVideoFinished()`)
+3. Is finished video the primary video? (Compare videoMid with primaryVideoId)
+4. Is next video being found? (Log in `playNextVisibleVideo()`)
+
+**Common Issue:**
+- Notification not posted → Check `NotificationCenter.default.post(name: .videoDidFinishPlaying, ...)`
+- Wrong video finishing → Only primary video should trigger next video
+
+### Black screen after video finishes
+
+**Check:**
+1. Is last frame being captured? Look for log: `🖼️ [LAST FRAME] Captured for {mid}`
+2. Is `disableAutoRestart` set to `true`? (Required for capture)
+3. Is cached frame being displayed? Check `shouldShowPlaceholder` condition
+4. Is `playbackState == .finished`? (Triggers frame display)
+
+**Fix:**
+- Ensure `captureLastFrameNearEndIfPossible` is called in `handleVideoFinished`
+- Verify `isFinished` is included in `shouldShowPlaceholder` condition
+- Check `VideoLastFrameCache` has the frame cached
+
+### Video flickers on background recovery
+
+**Check:**
+1. Is last frame cached before backgrounding?
+2. Is cached frame shown during recovery?
+3. Is recovery happening on main thread?
+
+**Fix:**
+- Ensure last frame captured in `.onDisappear` or background notification
+- Show cached frame immediately while player recovers
+- Use `isHoldingRecoveryCover` flag to show placeholder during recovery
 
 ---
 

@@ -15,6 +15,8 @@ extension Notification.Name {
     static let shouldStopAllVideos = Notification.Name("shouldStopAllVideos")
     static let videoDidFinishPlaying = Notification.Name("videoDidFinishPlaying")
     static let shouldPauseVideo = Notification.Name("shouldPauseVideo")
+    static let videoTimerUpdate = Notification.Name("videoTimerUpdate")
+    static let requestVideoTimerUpdate = Notification.Name("requestVideoTimerUpdate")
 }
 
 /// Video state during orchestration
@@ -166,6 +168,16 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Start playback when videos become visible OR when in idle phase with videos
         // This handles both "new videos" and "coming back to idle with videos present"
         if videoVisibilityChanged && !currentVisibleVideoIds.isEmpty {
+            // CRITICAL FIX: Don't reset if we're in primaryPlaying phase and the primary video is still visible
+            // This prevents restarting the video during small scrolls
+            if phase == .primaryPlaying,
+               let primaryId = primaryVideoId,
+               currentVisibleVideoIds.contains(where: { primaryId.contains($0) }) {
+                print("🎬 [VideoOrchestrator] Videos changed but primary still visible, keeping playback")
+                previousVisibleVideoIds = currentVisibleVideoIds
+                return
+            }
+            
             print("🎬 [VideoOrchestrator] Videos changed, resetting to idle and starting 0.1s debounce")
             
             // Reset to idle phase
@@ -443,16 +455,30 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Handle video finished notification
     @objc private func handleVideoFinished(_ notification: Notification) {
-        guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
+        guard let videoMid = notification.userInfo?["videoMid"] as? String else {
+            print("⚠️ [VideoOrchestrator] Video finished notification received but no videoMid in userInfo")
+            return
+        }
         
         print("🎬 [VideoOrchestrator] Video finished: \(videoMid)")
+        print("🎬 [VideoOrchestrator]   Current phase: \(phase)")
+        print("🎬 [VideoOrchestrator]   Primary video: \(primaryVideoId ?? "nil")")
+        print("🎬 [VideoOrchestrator]   Currently playing: \(currentlyPlayingVideoIds)")
         
         // Only handle if this is the primary video
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId,
            primaryId.contains(videoMid) {
-            print("🎬 [VideoOrchestrator] Primary video finished, playing next")
+            print("🎬 [VideoOrchestrator] ✅ Primary video finished, playing next")
             playNextVisibleVideo()
+        } else {
+            if phase != .primaryPlaying {
+                print("🎬 [VideoOrchestrator] ⏭️ Not in primaryPlaying phase - ignoring finish event")
+            } else if primaryVideoId == nil {
+                print("🎬 [VideoOrchestrator] ⏭️ No primary video set - ignoring finish event")
+            } else if let primaryId = primaryVideoId, !primaryId.contains(videoMid) {
+                print("🎬 [VideoOrchestrator] ⏭️ Finished video \(videoMid) is not the primary video - ignoring")
+            }
         }
     }
 }

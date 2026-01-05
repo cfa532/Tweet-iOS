@@ -401,6 +401,21 @@ struct SimpleVideoPlayer: View {
     // TweetDetail: prevent "play from 0 then jump back" by restoring seek before playback.
     @State private var hasAppliedDetailRestore: Bool = false
     @State private var isApplyingDetailRestore: Bool = false
+    
+    // Timer display state (MediaCell only) - exposed for parent overlay
+    @State var showTimeRemaining: Bool = false
+    @State private var timeRemainingDisplayTask: Task<Void, Never>?
+    var timeRemainingText: String {
+        guard let duration = player?.currentItem?.duration.seconds,
+              duration.isFinite,
+              let currentTime = player?.currentTime().seconds else {
+            return "0:00"
+        }
+        let remaining = max(0, duration - currentTime)
+        let minutes = Int(remaining) / 60
+        let seconds = Int(remaining) % 60
+        return String(format: "%d:%02d", minutes, seconds)
+    }
 
     // MARK: - Helper Functions
     
@@ -412,6 +427,31 @@ struct SimpleVideoPlayer: View {
             // Fullscreen/Detail: Always unmute
             player.isMuted = false
         }
+    }
+    
+    // MARK: - Time Remaining Display (MediaCell)
+    
+    /// Start the timer display cycle: show all the time (for debugging)
+    @MainActor
+    private func startTimeRemainingDisplayCycle() {
+        guard mode == .mediaCell else { return }
+        
+        print("🕐 [TIMER] Starting timer display (always visible) for \(mid)")
+        
+        // Cancel any existing task
+        stopTimeRemainingDisplayCycle()
+        
+        // Show timer all the time (for debugging)
+        showTimeRemaining = true
+        print("🕐 [TIMER] Timer set to VISIBLE for \(mid)")
+    }
+    
+    /// Stop the timer display cycle
+    @MainActor
+    private func stopTimeRemainingDisplayCycle() {
+        timeRemainingDisplayTask?.cancel()
+        timeRemainingDisplayTask = nil
+        showTimeRemaining = false
     }
     
     // MARK: - Resume helpers (MediaCell)
@@ -791,7 +831,10 @@ struct SimpleVideoPlayer: View {
                     handleOnAppear()
                     isCoveredByOverlay = OverlayVisibilityCoordinator.shared.isCovered
                 }
-                .onDisappear { handleOnDisappear() }
+                .onDisappear { 
+                    stopTimeRemainingDisplayCycle()
+                    handleOnDisappear() 
+                }
                 .onChange(of: mode) { oldMode, newMode in handleModeChange(oldMode: oldMode, newMode: newMode) }
                 .onChange(of: isMuted) { _, newMuteState in handleMuteChange(newMuteState: newMuteState) }
                 .onChange(of: currentAutoPlay) { _, shouldAutoPlay in handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay) }
@@ -799,6 +842,13 @@ struct SimpleVideoPlayer: View {
                 .onChange(of: isActuallyVisible) { _, actuallyVisible in handleActualVisibilityChange(actuallyVisible: actuallyVisible) }
                 .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
                 .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
+                .onChange(of: playbackState) { oldState, newState in
+                    if newState == .playing && oldState != .playing {
+                        startTimeRemainingDisplayCycle()
+                    } else if newState != .playing {
+                        stopTimeRemainingDisplayCycle()
+                    }
+                }
                 .modifier(VideoManagerObserverModifier(videoManager: videoManager, mid: mid, mode: mode) { shouldAutoPlay in
                     handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay)
                 })
@@ -827,6 +877,22 @@ struct SimpleVideoPlayer: View {
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in handleDidEnterBackground() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in handleWillEnterForeground() }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in handleDidBecomeActive() }
+                .onReceive(NotificationCenter.default.publisher(for: .requestVideoTimerUpdate)) { notification in
+                    guard let requestedMid = notification.userInfo?["videoMid"] as? String,
+                          requestedMid == mid,
+                          mode == .mediaCell else { return }
+                    // Post current timer state
+                    print("🕐 [TIMER] Received timer request for \(mid), responding with show=\(showTimeRemaining), time=\(timeRemainingText)")
+                    NotificationCenter.default.post(
+                        name: .videoTimerUpdate,
+                        object: nil,
+                        userInfo: [
+                            "videoMid": mid,
+                            "show": showTimeRemaining,
+                            "timeRemaining": timeRemainingText
+                        ]
+                    )
+                }
         }
     }
     
@@ -1232,6 +1298,13 @@ struct SimpleVideoPlayer: View {
     private func handleVisibilityChange(visible: Bool) {
         print("DEBUG: [VIDEO VISIBILITY] isVisible changed to \(visible) for \(mid)")
         print("DEBUG: [VIDEO VISIBILITY] shouldLoadVideo: \(shouldLoadVideo), player: \(player != nil), mode: \(mode)")
+        
+        // Update player access time to prevent premature cleanup when video becomes visible
+        if visible {
+            Task { @MainActor in
+                SharedAssetCache.shared.updatePlayerAccessTime(mediaID: self.mid)
+            }
+        }
         
         // Handle visibility changes - simplified logic to avoid conflicts
         if visible {
@@ -2702,9 +2775,11 @@ struct SimpleVideoPlayer: View {
                     let bufferEmpty = item?.isPlaybackBufferEmpty ?? false
                     let isFinished = (playbackState == .finished)
                     
-                    // Only show the cached frame while we are holding the recovery cover (background recovery)
-                    // or the player is explicitly detached due to app lifecycle.
-                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached
+                    // Show the cached frame when:
+                    // 1. Holding recovery cover (background recovery)
+                    // 2. Player explicitly detached (app lifecycle)
+                    // 3. Video has finished playing (show last frame instead of black screen)
+                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isFinished
                     
                     if shouldShowPlaceholder {
                         // IMPORTANT: This overlay must be tap-through so taps still reach the video layer
@@ -4218,7 +4293,9 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Check disableAutoRestart before calling callback
         // If disabled, video should stay paused at end (no loop, no advance to next)
         if disableAutoRestart {
-            print("🎬 [VIDEO FINISHED] Video finished for \(mid) - autoRestart disabled, staying paused at end")
+            print("🎬 [VIDEO FINISHED] Video finished for \(mid) - autoRestart disabled, capturing last frame")
+            // Capture last frame to prevent black screen
+            await captureLastFrameNearEndIfPossible(reason: "videoFinished")
             return
         }
         
