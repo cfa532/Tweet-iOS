@@ -63,12 +63,12 @@ class TweetTableViewCell: UITableViewCell {
             contentView.addSubview(hostingController.view)
             hostingController.didMove(toParent: parentViewController)
             
-            // Layout with constraints
+            // Layout with constraints (8pt horizontal padding)
             hostingController.view.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 hostingController.view.topAnchor.constraint(equalTo: contentView.topAnchor),
-                hostingController.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-                hostingController.view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+                hostingController.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
+                hostingController.view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
                 hostingController.view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
             ])
         } else {

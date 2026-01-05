@@ -71,9 +71,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             stopAllVideos()
         }
         
-        // Reset scroll stop timer (0.3s delay before video starts playing)
+        // Reset scroll stop timer (0.1s delay before video starts playing)
         scrollStopTimer?.invalidate()
-        scrollStopTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+        scrollStopTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.onScrollStopped()
             }

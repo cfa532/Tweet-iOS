@@ -366,6 +366,7 @@ struct SimpleVideoPlayer: View {
     @State private var playbackState: PlaybackState = .notStarted
     @State private var retryAttempts: Int = 0 // Track retry attempts separately
     @State private var isLongPressing = false
+    @State private var coordinatorWantsToPlay: Bool = false // Track if coordinator commanded playback
     @State private var isPlayerDetached = false  // Track background state
     @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
     @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
@@ -1552,7 +1553,9 @@ struct SimpleVideoPlayer: View {
         guard mode == .mediaCell else { return }
         
         print("DEBUG: [VideoCoordinator] Stop command received for \(mid)")
+        coordinatorWantsToPlay = false
         player?.pause()
+        playbackState = .paused
     }
     
     private func handleCoordinatorPlayCommand(notification: Notification) {
@@ -1563,9 +1566,12 @@ struct SimpleVideoPlayer: View {
         
         print("DEBUG: [VideoCoordinator] Play command received for \(mid)")
         
+        // Set flag to play when ready
+        coordinatorWantsToPlay = true
+        
         // Only play if player is ready
         guard let player = player, loadingState == .loaded else {
-            print("DEBUG: [VideoCoordinator] Player not ready for \(mid), loadingState: \(loadingState)")
+            print("DEBUG: [VideoCoordinator] Player not ready for \(mid), loadingState: \(loadingState), will play when loaded")
             return
         }
         
@@ -1580,6 +1586,7 @@ struct SimpleVideoPlayer: View {
         }
         
         player.play()
+        playbackState = .playing
         print("DEBUG: [VideoCoordinator] Started playback for \(mid)")
     }
     
@@ -3920,6 +3927,13 @@ struct SimpleVideoPlayer: View {
                         // Mark as initialized to prevent recomposition when scrolling
                         if mode == .mediaCell {
                             hasInitialized = true
+                            
+                            // CRITICAL: If coordinator commanded playback while video was loading, play now
+                            if coordinatorWantsToPlay && player.rate == 0 {
+                                NSLog("▶️ [COORDINATOR DEFERRED] Video ready, playing as coordinator requested for \(mid)")
+                                player.play()
+                                playbackState = .playing
+                            }
                         }
 
                         // CRITICAL: If video was waiting to play, check playback conditions now

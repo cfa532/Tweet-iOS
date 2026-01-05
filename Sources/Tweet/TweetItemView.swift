@@ -208,11 +208,12 @@ struct TweetItemView: View, Equatable {
                             // Show placeholder while author loads
                             Circle()
                                 .fill(Color.gray.opacity(0.3))
-                                .frame(width: 40, height: 40)
+                                .frame(width: 42, height: 42)
                         }
                     }
                     // STABILITY: Fixed avatar size prevents layout shifts
-                    .frame(width: 40, height: 40)
+                    .frame(width: 42, height: 42)
+                    .padding(.leading, 3)
                     
                     // Show original tweet with retweet menu.
                     VStack(alignment: .leading, spacing: 2) {
@@ -237,7 +238,7 @@ struct TweetItemView: View, Equatable {
                             TweetItemHeaderView(tweet: originalTweet)
                             Spacer(minLength: 0)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
-                                .padding(.trailing, -24)
+                                .padding(.trailing, -20)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
@@ -247,6 +248,7 @@ struct TweetItemView: View, Equatable {
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
+                            .padding(.trailing, 4)
                     }
                     // STABILITY: Fixed size maintains consistent vertical spacing
                     .fixedSize(horizontal: false, vertical: true)
@@ -260,18 +262,19 @@ struct TweetItemView: View, Equatable {
                             // Show placeholder while author loads
                             Circle()
                                 .fill(Color.gray.opacity(0.3))
-                                .frame(width: 40, height: 40)
+                                .frame(width: 42, height: 42)
                         }
                     }
                     // STABILITY: Fixed avatar size prevents layout shifts
-                    .frame(width: 40, height: 40)
+                    .frame(width: 42, height: 42)
+                    .padding(.leading, 3)
                     
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .top, spacing: 0) {
                             TweetItemHeaderView(tweet: tweet)
                             Spacer(minLength: 0)
                             TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
-                                .padding(.trailing, -24)
+                                .padding(.trailing, -20)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
@@ -301,6 +304,7 @@ struct TweetItemView: View, Equatable {
                         if !hideActions {
                             TweetActionButtonsView(tweet: tweet)
                                 .padding(.top, 8)
+                                .padding(.trailing, 4)
                         }
                     }
                     // STABILITY: Fixed size maintains consistent vertical spacing
@@ -315,18 +319,19 @@ struct TweetItemView: View, Equatable {
                         // Show placeholder while author loads
                         Circle()
                             .fill(Color.gray.opacity(0.3))
-                            .frame(width: 40, height: 40)
+                            .frame(width: 42, height: 42)
                     }
                 }
                 // STABILITY: Fixed avatar size prevents layout shifts
-                .frame(width: 40, height: 40)
+                .frame(width: 42, height: 42)
+                .padding(.leading, 3)
                 
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
                         Spacer(minLength: 0)
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
-                            .padding(.trailing, -16)
+                            .padding(.trailing, -12)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
@@ -363,6 +368,7 @@ struct TweetItemView: View, Equatable {
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
+                            .padding(.trailing, 4)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -376,7 +382,7 @@ struct TweetItemView: View, Equatable {
                         // Show placeholder while author loads
                         Circle()
                             .fill(Color.gray.opacity(0.3))
-                            .frame(width: 40, height: 40)
+                            .frame(width: 42, height: 42)
                             .overlay(
                                 ProgressView()
                                     .scaleEffect(0.6)
@@ -385,14 +391,15 @@ struct TweetItemView: View, Equatable {
                     }
                 }
                 // STABILITY: Fixed avatar size prevents layout shifts
-                .frame(width: 40, height: 40)
+                .frame(width: 42, height: 42)
+                .padding(.leading, 3)
                 
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top, spacing: 0) {
                         TweetItemHeaderView(tweet: tweet)
                         Spacer(minLength: 0)
                         TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDeleteButton)
-                            .padding(.trailing, -24)
+                            .padding(.trailing, -20)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
@@ -403,6 +410,7 @@ struct TweetItemView: View, Equatable {
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
                             .padding(.top, 8)
+                            .padding(.trailing, 4)
                     }
                 }
                 // STABILITY: Fixed size maintains consistent vertical spacing
