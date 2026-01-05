@@ -124,6 +124,12 @@ class TweetTableViewController: UITableViewController {
         // The scroll jump is prevented by not reassigning tableHeaderView in updateHeader()
         tableView.contentInsetAdjustmentBehavior = .automatic
         
+        // Add bottom content inset to prevent last tweet from being hidden by tab bar
+        // This ensures the last tweet is fully visible and scrollable above the bottom navigation
+        let bottomInset: CGFloat = 40 // Extra padding beyond safe area
+        tableView.contentInset.bottom = bottomInset
+        tableView.scrollIndicatorInsets.bottom = bottomInset
+        
         print("DEBUG: [TweetTableViewController] Table view configured - delegate: \(String(describing: tableView.delegate))")
     }
     
