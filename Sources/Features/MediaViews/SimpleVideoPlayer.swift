@@ -4208,6 +4208,13 @@ struct SimpleVideoPlayer: View {
             player?.isMuted = MuteState.shared.isMuted
         }
         
+        // Notify the coordinator that video finished (for sequential playback)
+        NotificationCenter.default.post(
+            name: .videoDidFinishPlaying,
+            object: nil,
+            userInfo: ["videoMid": mid, "tweetId": parentTweetId ?? ""]
+        )
+        
         // CRITICAL: Check disableAutoRestart before calling callback
         // If disabled, video should stay paused at end (no loop, no advance to next)
         if disableAutoRestart {
