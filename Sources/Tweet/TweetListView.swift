@@ -180,102 +180,21 @@ struct TweetListView<RowView: View>: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            // Invisible anchor for scroll-to-top
-                            Color.clear
-                                .frame(height: 0)
-                                .id("top")
-                            
-                            TweetListContentView(
-                            tweets: Binding(
-                                get: { tweets.map { Optional($0) } },
-                                set: { newValue in
-                                    tweets = newValue.compactMap { $0 }
-                                }
-                            ),
-                            header: header,
-                            rowView: { tweet in
-                                rowView(tweet)
-                            },
-                            hasMoreTweets: $hasMoreTweets,
-                            isLoadingMore: isLoadingMore,
-                            isLoading: isLoading,
-                            initialLoadComplete: initialLoadComplete,
-                            loadMoreTweets: { loadMoreTweets() }
-                        )
-                        // STABILITY: Fixed size ensures scroll view respects content dimensions
-                        .fixedSize(horizontal: false, vertical: true)
-                        
-                        // Hidden view to measure content height
-                        Color.clear
-                            .frame(height: 1)
-                            .background(
-                                GeometryReader { contentGeometry in
-                                    Color.clear.preference(
-                                        key: TweetContentHeightPreferenceKey.self,
-                                        value: contentGeometry.frame(in: .named("tweetScroll")).maxY
-                                    )
-                                }
-                            )
-                    }
-                    .coordinateSpace(name: "tweetScroll")
-                    .padding(.horizontal, 16) // Add horizontal padding to prevent content from expanding beyond screen
-                    .scrollDismissesKeyboard(.interactively)
-                    .scrollBounceBehavior(.basedOnSize)
-                    // STABILITY: Scroll indicators help users track position during smooth scrolling
-                    .scrollIndicators(.visible)
-                    .safeAreaInset(edge: .top) {
-                        Color.clear.frame(height: 0)
-                    }
-                    .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                        geometry.contentOffset.y
-                    } action: { oldValue, newValue in
-                    // Ignore negative offsets (pull-to-refresh / bounce)
-                    guard newValue >= 0, oldValue >= 0 else { return }
-                    
-                    // Only forward significant changes to reduce jitter
-                    let effectiveDelta = newValue - lastScrollOffset
-                    let headerThreshold: CGFloat = 20
-                    guard abs(effectiveDelta) >= headerThreshold else { return }
-                    
-                    lastScrollOffset = newValue
-                    onScroll?(newValue, effectiveDelta)
-                }
+                // UIKit TABLE VIEW - Eliminates SwiftUI's GraphHost.flushTransactions() hang
+                TweetTableView(
+                    tweets: $tweets,
+                    header: header,
+                    rowView: { tweet in
+                        rowView(tweet)
+                    },
+                    hasMoreTweets: $hasMoreTweets,
+                    isLoadingMore: isLoadingMore,
+                    isLoading: isLoading,
+                    loadMoreTweets: { loadMoreTweets() }
+                )
                 .onAppear {
-                    lastScrollOffset = 0
-                    onScroll?(0, 0)
-                    scrollProxy = proxy
                     screenHeight = geometry.size.height
                 }
-                .onPreferenceChange(TweetContentHeightPreferenceKey.self) { newHeight in
-                    contentHeight = newHeight
-                    // Auto-load more if screen isn't filled and we have more tweets
-                    // Only do this after startup phase to prevent excessive operations during initial load
-                    if !isLoading && !isLoadingMore && hasMoreTweets && initialLoadComplete {
-                        Task {
-                            let inStartupPhase = await MainActor.run(body: { videoLoadingManager.isInStartupPhase })
-                            if !inStartupPhase {
-                                let needsFilling = contentHeight < screenHeight * 1.2 // 20% buffer
-                                if needsFilling && needsMoreContent {
-                                    await loadMoreToFillScreen()
-                                }
-                            }
-                        }
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .scrollToTop)) { _ in
-                    print("DEBUG: [TweetListView] Received scrollToTop notification - attempting scroll")
-                    DispatchQueue.main.async {
-                        withAnimation(.easeInOut(duration: 0.5)) {
-                            proxy.scrollTo("top", anchor: .top)
-                            print("DEBUG: [TweetListView] Scroll command executed")
-                        }
-                    }
-                }
-            }  // Close ScrollViewReader
-            }  // Close ScrollView
             
             if showToast {
                 VStack {
