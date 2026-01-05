@@ -818,6 +818,7 @@ struct SimpleVideoPlayer: View {
                 .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in handleStopAllVideos() }
                 .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in handleCoordinatorStopCommand() }
                 .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in handleCoordinatorPlayCommand(notification: notification) }
+                .onReceive(NotificationCenter.default.publisher(for: .shouldPauseVideo)) { notification in handleCoordinatorPauseCommand(notification: notification) }
                 .onReceive(NotificationCenter.default.publisher(for: .videoInfrastructureRestarted)) { _ in handleVideoInfrastructureRestarted() }
                 .onReceive(NotificationCenter.default.publisher(for: .videoLayerRefresh)) { _ in handleVideoLayerRefresh() }
                 .onReceive(NotificationCenter.default.publisher(for: .reloadVisibleVideosOnly)) { _ in handleReloadVisibleVideosOnly() }
@@ -1552,7 +1553,20 @@ struct SimpleVideoPlayer: View {
         // Stop command from VideoPlaybackCoordinator - stop this video
         guard mode == .mediaCell else { return }
         
-        print("DEBUG: [VideoCoordinator] Stop command received for \(mid)")
+        print("🎬 [VideoOrchestrator] Stop command received for \(mid)")
+        coordinatorWantsToPlay = false
+        player?.pause()
+        playbackState = .paused
+    }
+    
+    private func handleCoordinatorPauseCommand(notification: Notification) {
+        // Pause command from VideoPlaybackCoordinator - check if it's for this video
+        guard mode == .mediaCell else { return }
+        guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
+        guard videoMid == mid else { return }
+        
+        print("🎬 [VideoOrchestrator] Pause command received for \(mid)")
+        
         coordinatorWantsToPlay = false
         player?.pause()
         playbackState = .paused
@@ -1564,30 +1578,46 @@ struct SimpleVideoPlayer: View {
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
         
-        print("DEBUG: [VideoCoordinator] Play command received for \(mid)")
+        let isSurvey = notification.userInfo?["isSurvey"] as? Bool ?? false
+        let isPrimary = notification.userInfo?["isPrimary"] as? Bool ?? false
+        
+        if isSurvey {
+            print("🎬 [VideoOrchestrator] Survey play command (2s) for \(mid)")
+        } else if isPrimary {
+            print("🎬 [VideoOrchestrator] Primary play command (to completion) for \(mid)")
+        } else {
+            print("🎬 [VideoOrchestrator] Play command received for \(mid)")
+        }
         
         // Set flag to play when ready
         coordinatorWantsToPlay = true
         
         // Only play if player is ready
         guard let player = player, loadingState == .loaded else {
-            print("DEBUG: [VideoCoordinator] Player not ready for \(mid), loadingState: \(loadingState), will play when loaded")
+            print("🎬 [VideoOrchestrator] Player not ready for \(mid), loadingState: \(loadingState), will play when loaded")
             return
         }
         
-        // Seek to start if needed
-        let currentTime = player.currentTime()
-        if currentTime.seconds > 0 {
-            let progress = currentTime.seconds / (player.currentItem?.duration.seconds ?? 1.0)
-            if progress > 0.95 {
-                // Video is near the end, restart
-                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        // For survey mode, always start from beginning
+        // For primary mode, continue from current position
+        if isSurvey {
+            // Survey phase: start from beginning
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        } else if isPrimary {
+            // Primary phase: check if video is near the end, if so restart
+            let currentTime = player.currentTime()
+            if currentTime.seconds > 0 {
+                let progress = currentTime.seconds / (player.currentItem?.duration.seconds ?? 1.0)
+                if progress > 0.95 {
+                    // Video is near the end, restart
+                    player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                }
             }
         }
         
         player.play()
         playbackState = .playing
-        print("DEBUG: [VideoCoordinator] Started playback for \(mid)")
+        print("🎬 [VideoOrchestrator] Started playback for \(mid)")
     }
     
     private func handleWillResignActive() {

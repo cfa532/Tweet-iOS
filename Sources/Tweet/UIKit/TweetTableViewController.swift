@@ -46,6 +46,9 @@ class TweetTableViewController: UITableViewController {
         setupTableView()
         setupRefreshControl()
         
+        // Pass table view reference to video coordinator for viewport calculations
+        videoCoordinator.setTableView(tableView)
+        
         print("DEBUG: [TweetTableViewController] viewDidLoad - delegate is set to self")
     }
     
@@ -155,6 +158,11 @@ class TweetTableViewController: UITableViewController {
             print("DEBUG: [TweetTableViewController] Initial load - reloading all data")
             tableView.reloadData()
             videoCoordinator.buildVideoList(from: newTweets)
+            
+            // Trigger video detection after initial load
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.updateVisibleTweetsForVideoPlayback()
+            }
             return
         }
         
@@ -425,6 +433,8 @@ class TweetTableViewController: UITableViewController {
             guard indexPath.row < tweets.count else { return nil }
             return tweets[indexPath.row].mid
         })
+        
+        print("DEBUG: [TweetTableViewController] Updating visible tweets for video: \(visibleTweetIds.count) visible")
         
         // Update coordinator
         videoCoordinator.updateVisibleTweets(visibleTweetIds)

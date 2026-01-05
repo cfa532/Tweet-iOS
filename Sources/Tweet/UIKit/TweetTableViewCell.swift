@@ -14,6 +14,11 @@ class TweetTableViewCell: UITableViewCell {
     private var hostingController: UIHostingController<AnyView>?
     private var currentTweetId: String?
     
+    /// Publicly accessible tweet ID for video orchestration
+    var tweetId: String? {
+        return currentTweetId
+    }
+    
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         setupCell()
