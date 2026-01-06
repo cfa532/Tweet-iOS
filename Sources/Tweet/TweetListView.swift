@@ -363,8 +363,9 @@ struct TweetListView<RowView: View>: View {
             // Step 2: Load from server to get the most up-to-date data
             await loadFromServer(page: page, pageSize: pageSize) { _ in }
             
-            // Trigger preloading after initial load completes
-            // Initial load complete - user can manually pull to load more
+            // Step 3: Auto-load additional pages if there are more tweets on server
+            // This ensures all new tweets are loaded when app opens, not just first page
+            await autoLoadRemainingNewTweets()
             
         } catch {
             await MainActor.run {
@@ -372,6 +373,82 @@ struct TweetListView<RowView: View>: View {
                 initialLoadComplete = true
             }
         }
+    }
+    
+    /// Automatically load remaining new tweets after initial load
+    /// Continues loading pages until no more tweets or reasonable limit reached
+    private func autoLoadRemainingNewTweets() async {
+        let maxAutoLoadPages: UInt = 2  // Load up to 2 additional pages (20 tweets total with pageSize=10)
+        var pagesLoaded: UInt = 0
+        
+        // Check if there are more tweets to load
+        let shouldContinue = await MainActor.run { hasMoreTweets }
+        guard shouldContinue else { return }
+        
+        print("📥 [AUTO-LOAD] Starting automatic load of remaining new tweets...")
+        
+        while pagesLoaded < maxAutoLoadPages {
+            let currentHasMore = await MainActor.run { hasMoreTweets }
+            guard currentHasMore else {
+                print("📥 [AUTO-LOAD] No more tweets to load (completed)")
+                break
+            }
+            
+            let nextPage = await MainActor.run { currentPage + 1 }
+            print("📥 [AUTO-LOAD] Loading page \(nextPage)...")
+            
+            do {
+                let tweets = try await tweetFetcher(nextPage, pageSize, false)
+                let validTweets = tweets.compactMap { $0 }
+                
+                await MainActor.run {
+                    if !validTweets.isEmpty {
+                        // Merge new tweets into existing list
+                        self.tweets.mergeTweets(validTweets)
+                        self.currentPage = nextPage
+                        
+                        // Update hasMoreTweets based on whether we got a full page
+                        self.hasMoreTweets = tweets.count >= self.pageSize
+                        
+                        // Update video manager in background
+                        Task.detached(priority: .background) {
+                            let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+                            await self.videoLoadingManager.updateTweetList(tweetIds)
+                        }
+                        
+                        print("📥 [AUTO-LOAD] Loaded \(validTweets.count) tweets (page \(nextPage))")
+                    } else {
+                        // No valid tweets - stop loading
+                        self.hasMoreTweets = false
+                        print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) - stopping")
+                    }
+                }
+                
+                // Check if we got a partial page (indicates end of new tweets)
+                if tweets.count < pageSize {
+                    print("📥 [AUTO-LOAD] Received partial page (\(tweets.count) tweets) - completed")
+                    break
+                }
+                
+                pagesLoaded += 1
+                
+                // Small delay between requests to avoid overwhelming server
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                
+            } catch {
+                print("📥 [AUTO-LOAD] Error loading page \(nextPage): \(error)")
+                await MainActor.run {
+                    self.hasMoreTweets = false
+                }
+                break
+            }
+        }
+        
+        if pagesLoaded >= maxAutoLoadPages {
+            print("📥 [AUTO-LOAD] Reached max auto-load limit (\(maxAutoLoadPages) pages)")
+        }
+        
+        print("📥 [AUTO-LOAD] Auto-load complete. Total tweets: \(await MainActor.run { tweets.count })")
     }
 
     func refreshTweets() async {
