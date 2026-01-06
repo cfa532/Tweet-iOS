@@ -306,6 +306,9 @@ struct MediaCell: View, Equatable {
         .onChange(of: showFullScreen) { _, newValue in
             if newValue {
                 // Video is going into full-screen mode
+                // Pause all MediaCell videos to avoid multiple videos playing
+                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+                
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
                 OverlayVisibilityCoordinator.shared.beginOverlay(
                     id: "mediaBrowserFullScreen",
