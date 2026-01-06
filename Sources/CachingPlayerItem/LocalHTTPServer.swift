@@ -833,8 +833,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                    let playlistString = String(data: data, encoding: .utf8) {
                     NSLog("DEBUG: [LocalHTTPServer] Read cached playlist, size: \(data.count) bytes")
                     // Reconstruct a baseURL from the relative path for proper URL rewriting
-                    // Example: /master.m3u8 -> http://placeholder/ipfs/mediaID/master.m3u8
-                    let reconstructedBaseURL = URL(string: "http://placeholder/ipfs/\(mediaID)\(relativePath)")!
+                    // relativePath already includes /ipfs/mediaID/, so just use it directly
+                    let reconstructedBaseURL = URL(string: "http://placeholder\(relativePath)")!
                     let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: reconstructedBaseURL)
                     if let modifiedData = modifiedPlaylist.data(using: .utf8) {
                         let headers: [String: String] = [
@@ -2080,9 +2080,13 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func rewritePlaylistURLs(_ playlistString: String, mediaID: String, baseURL: URL) -> String {
         var modified = playlistString
         
+        NSLog("📝 [PLAYLIST REWRITE] Input playlist:\n\(playlistString)")
+        NSLog("📝 [PLAYLIST REWRITE] mediaID: \(mediaID), baseURL: \(baseURL.absoluteString)")
+        
         // Extract the directory path for relative URL resolution
         // For http://server/ipfs/hash/720p/playlist.m3u8 → /ipfs/hash/720p
         let playlistDirectory = baseURL.deletingLastPathComponent().path
+        NSLog("📝 [PLAYLIST REWRITE] playlistDirectory: \(playlistDirectory)")
         
         // CRITICAL: Add #EXT-X-PLAYLIST-TYPE:VOD if missing (tells AVPlayer it's VOD, not live)
         if modified.contains("#EXTINF:") && !modified.contains("#EXT-X-PLAYLIST-TYPE") {
@@ -2109,6 +2113,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         // Relative path: 720p/playlist.m3u8 -> http://127.0.0.1:port/playlistDirectory/720p/playlist.m3u8
                         localhostURL = "\(Constants.LOCAL_HOST):\(port)\(playlistDirectory)/\(pathString)"
                     }
+                    NSLog("📝 [PLAYLIST REWRITE] Rewriting '\(pathString)' -> '\(localhostURL)'")
                     modified.replaceSubrange(range, with: localhostURL)
                 }
             }
@@ -2134,6 +2139,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
+        NSLog("📝 [PLAYLIST REWRITE] Output playlist:\n\(modified)")
         return modified
     }
     
