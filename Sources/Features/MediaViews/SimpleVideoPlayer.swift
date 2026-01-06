@@ -3966,8 +3966,6 @@ struct SimpleVideoPlayer: View {
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
                 let bufferedDurationAhead = self.bufferedTimeAhead(for: item, player: player)
                 
-                NSLog("🔍 [KVO BUFFER] Fired for \(mid) - hasData: \(hasBufferedData), buffered: \(String(format: "%.1f", bufferedDurationAhead))s, loadingState: \(loadingState)")
-                
                 DispatchQueue.main.async {
                     // UX FIX: Hide spinner as soon as we have enough buffered data to render the first frame
                     let hasEnoughData = hasBufferedData && bufferedDurationAhead >= firstFrameMinimumBuffer
