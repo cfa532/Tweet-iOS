@@ -1716,6 +1716,9 @@ struct SimpleVideoPlayer: View {
             return
         }
         
+        // Check if video is already playing
+        let isCurrentlyPlaying = player.rate > 0 && playbackState == .playing
+        
         // For survey mode, only start from beginning if there's no cached position
         // For primary mode, continue from current position
         if isSurvey {
@@ -1732,15 +1735,24 @@ struct SimpleVideoPlayer: View {
                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         } else if isPrimary {
-            // Primary phase: play from current position (no forced restart)
-            // If video is at the end, it will finish immediately and coordinator will handle next video
+            // Primary phase: continue from current position without interruption
+            // CRITICAL: If already playing from survey phase, don't restart
+            if isCurrentlyPlaying {
+                NSLog("🎬 [PRIMARY] Video \(mid) already playing - continuing seamlessly from \(String(format: "%.2f", player.currentTime().seconds))s")
+                // Update state but don't interrupt playback
+                playbackState = .playing
+                return
+            }
             NSLog("🎬 [PRIMARY] Playing video \(mid) from position \(String(format: "%.2f", player.currentTime().seconds))s")
         }
         
-        player.volume = 0
-        player.play()
-        UIView.animate(withDuration: 0.3) {
-            player.volume = 1.0
+        // Only start/restart playback if not already playing
+        if !isCurrentlyPlaying {
+            player.volume = 0
+            player.play()
+            UIView.animate(withDuration: 0.3) {
+                player.volume = 1.0
+            }
         }
         playbackState = .playing
     }
