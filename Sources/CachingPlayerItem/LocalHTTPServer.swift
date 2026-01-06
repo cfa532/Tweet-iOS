@@ -526,9 +526,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             mediaRealURLs[mediaID] = realURL
         }
         
-        // Return localhost URL: http://localhost:8080/mediaID/path
+        // Return localhost URL: http://localhost:8080/ipfs/mediaID (clean format without redundancy)
         // AVPlayer will request this, and we'll serve from cache or fetch from realURL
-        let localhostURL = URL(string: "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(realURL.path)")!
+        let localhostURL = URL(string: "\(Constants.LOCAL_HOST):\(port)\(realURL.path)")!
         // Removed repetitive registration log
         return localhostURL
     }
@@ -750,19 +750,19 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        // NEW FORMAT: /mediaID/ipfs/hash/path (e.g., /QmAbc.../ipfs/QmAbc.../master.m3u8)
-        // Extract mediaID (first component after /)
+        // FORMAT: /ipfs/hash or /ipfs/hash/path (e.g., /ipfs/QmAbc... or /ipfs/QmAbc.../master.m3u8)
+        // Extract mediaID from /ipfs/ path
         let pathComponents = path.components(separatedBy: "/").filter { !$0.isEmpty }
-        guard pathComponents.count >= 1 else {
+        guard pathComponents.count >= 2, pathComponents[0] == "ipfs" else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
             return
         }
         
-        let mediaID = pathComponents[0]
+        let mediaID = pathComponents[1]
         
-        // Reconstruct the relative path (everything after mediaID)
-        let relativePath = "/" + pathComponents[1...].joined(separator: "/")
+        // Reconstruct relative path for real URL requests
+        let relativePath = path
         
         // Removed repetitive request log
         
@@ -776,9 +776,51 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // CRITICAL: Check cache FIRST before requiring real URL
         // This allows cached content to be served during app startup before baseUrl is resolved
+        // Only check cache if there's a specific file requested (not just /ipfs/mediaID for progressive video)
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let mediaDir = cacheDir.appendingPathComponent(mediaID)
-        let potentialCachePath = mediaDir.appendingPathComponent(relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath)
+        
+        // Skip cache check for progressive video requests (just /ipfs/mediaID with no filename)
+        // These are handled by progressive video proxy logic below
+        guard pathComponents.count > 2 else {
+            // No filename specified - this is a progressive video request, skip cache
+            // (Progressive videos use range requests and aren't fully cached as single files)
+            NSLog("DEBUG: [LocalHTTPServer] Progressive video request for \(mediaID), skipping cache check")
+            // Continue to real URL handling below
+            guard let realURL = mediaRealURLs[mediaID] else {
+                NSLog("DEBUG: [LocalHTTPServer] No real URL found for mediaID: \(mediaID)")
+                sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                completion()
+                return
+            }
+            
+            // Construct full real URL
+            guard var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false) else {
+                NSLog("DEBUG: [LocalHTTPServer] Failed to parse URL components")
+                sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                completion()
+                return
+            }
+            
+            components.path = relativePath
+            components.query = nil
+            
+            guard let fullRealURL = components.url else {
+                NSLog("DEBUG: [LocalHTTPServer] Failed to construct URL")
+                sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                completion()
+                return
+            }
+            
+            // Progressive video - proxy with Content-Type fix
+            handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
+            completion()
+            return
+        }
+        
+        // Extract file path after /ipfs/mediaID/ for cache lookup (HLS playlists/segments)
+        let filePathComponents = pathComponents[2...].joined(separator: "/")
+        let potentialCachePath = mediaDir.appendingPathComponent(filePathComponents)
         
         if FileManager.default.fileExists(atPath: potentialCachePath.path) {
             NSLog("DEBUG: [LocalHTTPServer] Serving cached file: \(relativePath) for mediaID: \(mediaID)")

@@ -270,8 +270,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Start survey phase - play all visible videos for 2s each
     private func startSurveyPhase() {
-        print("🎬 [VideoOrchestrator] Starting survey phase with \(visibleVideos.count) visible videos")
-        
         phase = .surveying
         currentlyPlayingVideoIds.removeAll()
         
@@ -292,8 +290,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func playVideoForSurvey(_ video: VideoPlaybackInfo) {
         let videoId = video.identifier
         currentlyPlayingVideoIds.insert(videoId)
-        
-        print("🎬 [VideoOrchestrator] Starting 2s survey play for video \(video.videoMid)")
         
         // Notify video to start playing
         NotificationCenter.default.post(

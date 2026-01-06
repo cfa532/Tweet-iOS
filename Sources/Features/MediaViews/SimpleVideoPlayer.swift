@@ -905,7 +905,6 @@ struct SimpleVideoPlayer: View {
                           requestedMid == mid,
                           mode == .mediaCell else { return }
                     // Post current timer state
-                    print("🕐 [TIMER] Received timer request for \(mid), responding with show=\(showTimeRemaining), time=\(timeRemainingText)")
                     NotificationCenter.default.post(
                         name: .videoTimerUpdate,
                         object: nil,
@@ -1694,14 +1693,6 @@ struct SimpleVideoPlayer: View {
         
         let isSurvey = notification.userInfo?["isSurvey"] as? Bool ?? false
         let isPrimary = notification.userInfo?["isPrimary"] as? Bool ?? false
-        
-        if isSurvey {
-            print("🎬 [VideoOrchestrator] Survey play command (2s) for \(mid)")
-        } else if isPrimary {
-            print("🎬 [VideoOrchestrator] Primary play command (to completion) for \(mid)")
-        } else {
-            print("🎬 [VideoOrchestrator] Play command received for \(mid)")
-        }
         
         // Set flag to play when ready
         coordinatorWantsToPlay = true
