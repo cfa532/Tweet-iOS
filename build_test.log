@@ -5,63 +5,6 @@ Command line invocation:
 { platform:macOS, arch:arm64, variant:Designed for [iPad,iPhone], id:00008132-0012491E01D9801C, name:My Mac }
 { platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }
 { platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }
-{ platform:iOS Simulator, arch:arm64, id:56D48368-C77D-4EAA-93FD-08E4665B6BCC, OS:18.6, name:iPad (A16) }
-{ platform:iOS Simulator, arch:x86_64, id:56D48368-C77D-4EAA-93FD-08E4665B6BCC, OS:18.6, name:iPad (A16) }
-{ platform:iOS Simulator, arch:arm64, id:0FCCCB62-AF94-480F-996D-DD662346F728, OS:26.0, name:iPad (A16) }
-{ platform:iOS Simulator, arch:arm64, id:A6ABD056-795F-4E6C-B3D7-72EEA9320751, OS:26.1, name:iPad (A16) }
-{ platform:iOS Simulator, arch:arm64, id:69F396EF-936F-4DC9-81BA-93CF0AB326FA, OS:26.2, name:iPad (A16) }
-{ platform:iOS Simulator, arch:arm64, id:196A5101-E89C-44AF-A254-B254261E0871, OS:18.6, name:iPad Air 11-inch (M3) }
-{ platform:iOS Simulator, arch:x86_64, id:196A5101-E89C-44AF-A254-B254261E0871, OS:18.6, name:iPad Air 11-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:0BA03B02-2758-45FF-9928-715D1460AFD7, OS:26.0, name:iPad Air 11-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:58779D2F-BAF6-490D-85AC-F9D2A4DBAFE3, OS:26.1, name:iPad Air 11-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:C5545C59-6564-4C5C-B6C5-0287A2F5C9A8, OS:26.2, name:iPad Air 11-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:A0BF0289-3F7C-4763-AF7A-BF35E8C6D200, OS:18.6, name:iPad Air 13-inch (M3) }
-{ platform:iOS Simulator, arch:x86_64, id:A0BF0289-3F7C-4763-AF7A-BF35E8C6D200, OS:18.6, name:iPad Air 13-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:EEFFA362-5E1A-44A8-8E83-2D00D6D6FBC3, OS:26.0, name:iPad Air 13-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:05EDB7ED-E84A-4DE1-AA5E-DDA8041751B7, OS:26.1, name:iPad Air 13-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:C5091172-D0D2-4BBD-A6A4-B740E2396C12, OS:26.2, name:iPad Air 13-inch (M3) }
-{ platform:iOS Simulator, arch:arm64, id:55D62053-D815-4847-AA17-0DB70CDD3A7C, OS:18.6, name:iPad Pro 11-inch (M4) }
-{ platform:iOS Simulator, arch:x86_64, id:55D62053-D815-4847-AA17-0DB70CDD3A7C, OS:18.6, name:iPad Pro 11-inch (M4) }
-{ platform:iOS Simulator, arch:arm64, id:2BC8FB30-F829-460E-96B4-9624D68D7E14, OS:26.0, name:iPad Pro 11-inch (M4) }
-{ platform:iOS Simulator, arch:arm64, id:DDC00209-B4CA-4D9C-8591-441FF9061993, OS:26.0, name:iPad Pro 11-inch (M5) }
-{ platform:iOS Simulator, arch:arm64, id:75B7AAC1-B691-4833-A13E-82E6CD79AEE4, OS:26.1, name:iPad Pro 11-inch (M5) }
-{ platform:iOS Simulator, arch:arm64, id:CCCC5EE7-3EB5-4498-9793-E7B2E047C401, OS:26.2, name:iPad Pro 11-inch (M5) }
-{ platform:iOS Simulator, arch:arm64, id:51AD97CE-3423-43CC-BE60-875BC78417DE, OS:18.6, name:iPad Pro 13-inch (M4) }
-{ platform:iOS Simulator, arch:x86_64, id:51AD97CE-3423-43CC-BE60-875BC78417DE, OS:18.6, name:iPad Pro 13-inch (M4) }
-{ platform:iOS Simulator, arch:arm64, id:C56AC3CE-9247-485D-9067-26500FB95542, OS:26.0, name:iPad Pro 13-inch (M4) }
-{ platform:iOS Simulator, arch:arm64, id:859269D0-8505-4944-897B-F6D012856308, OS:26.0, name:iPad Pro 13-inch (M5) }
-{ platform:iOS Simulator, arch:arm64, id:7BB7D1D6-2B9C-4E9B-B9A6-46B2CA50C8EB, OS:26.1, name:iPad Pro 13-inch (M5) }
-{ platform:iOS Simulator, arch:arm64, id:881735AF-60C4-482E-92AD-F3AD396A8EA4, OS:26.2, name:iPad Pro 13-inch (M5) }
-{ platform:iOS Simulator, arch:arm64, id:A5FF4670-5143-4B41-9000-7BF06A5894AB, OS:18.6, name:iPad mini (A17 Pro) }
-{ platform:iOS Simulator, arch:x86_64, id:A5FF4670-5143-4B41-9000-7BF06A5894AB, OS:18.6, name:iPad mini (A17 Pro) }
-{ platform:iOS Simulator, arch:arm64, id:2592F2EC-29C1-42CD-BE45-E51651417D5A, OS:26.0, name:iPad mini (A17 Pro) }
-{ platform:iOS Simulator, arch:arm64, id:862FAE26-E5D6-4A5D-87D1-0DA0D5A3E930, OS:26.1, name:iPad mini (A17 Pro) }
-{ platform:iOS Simulator, arch:arm64, id:FDA2A5F9-8575-4741-8F58-60493AC3DE55, OS:26.2, name:iPad mini (A17 Pro) }
-{ platform:iOS Simulator, arch:arm64, id:BCCFAE3C-119F-4705-B4DB-95E8DC015561, OS:18.6, name:iPhone 16 }
-{ platform:iOS Simulator, arch:x86_64, id:BCCFAE3C-119F-4705-B4DB-95E8DC015561, OS:18.6, name:iPhone 16 }
-{ platform:iOS Simulator, arch:arm64, id:37E580C7-E2C8-436D-BC45-053505CE56EC, OS:18.6, name:iPhone 16 Plus }
-{ platform:iOS Simulator, arch:x86_64, id:37E580C7-E2C8-436D-BC45-053505CE56EC, OS:18.6, name:iPhone 16 Plus }
-{ platform:iOS Simulator, arch:arm64, id:03E452D8-16BB-4188-A609-1C61565EB550, OS:18.6, name:iPhone 16 Pro }
-{ platform:iOS Simulator, arch:x86_64, id:03E452D8-16BB-4188-A609-1C61565EB550, OS:18.6, name:iPhone 16 Pro }
-{ platform:iOS Simulator, arch:arm64, id:D9FA8EC6-F57D-4126-90EB-65738312DE80, OS:18.6, name:iPhone 16 Pro Max }
-{ platform:iOS Simulator, arch:x86_64, id:D9FA8EC6-F57D-4126-90EB-65738312DE80, OS:18.6, name:iPhone 16 Pro Max }
-{ platform:iOS Simulator, arch:arm64, id:B47170BA-8285-4C23-94D2-6CB202F76A20, OS:18.6, name:iPhone 16e }
-{ platform:iOS Simulator, arch:x86_64, id:B47170BA-8285-4C23-94D2-6CB202F76A20, OS:18.6, name:iPhone 16e }
-{ platform:iOS Simulator, arch:arm64, id:16352768-7B4A-4226-B256-2F6AD1B0E09D, OS:26.0, name:iPhone 16e }
-{ platform:iOS Simulator, arch:arm64, id:236B3AA7-E258-4F95-A194-FC7DDED0CF8E, OS:26.1, name:iPhone 16e }
-{ platform:iOS Simulator, arch:arm64, id:BAFBB36E-E788-45C8-A127-327DB607AB62, OS:26.2, name:iPhone 16e }
-{ platform:iOS Simulator, arch:arm64, id:5D46B937-EE80-4D7D-B91C-1B2EF67A548A, OS:26.0, name:iPhone 17 }
-{ platform:iOS Simulator, arch:arm64, id:25C635B5-44F8-45F2-9405-4E87B9284808, OS:26.1, name:iPhone 17 }
-{ platform:iOS Simulator, arch:arm64, id:D384F834-A515-4B9B-8AA3-491597976E18, OS:26.2, name:iPhone 17 }
-{ platform:iOS Simulator, arch:arm64, id:9B19BBD3-189D-487A-B8DF-DA4EDA3C9C39, OS:26.0, name:iPhone 17 Pro }
-{ platform:iOS Simulator, arch:arm64, id:A19E8B7A-A4E2-4CB8-8E4F-F1FAB974F64A, OS:26.1, name:iPhone 17 Pro }
-{ platform:iOS Simulator, arch:arm64, id:3444CD2C-4881-4ACF-86AB-AD816766C655, OS:26.2, name:iPhone 17 Pro }
-{ platform:iOS Simulator, arch:arm64, id:A1F1415A-F520-420A-99D2-BAB3ADCEB2AF, OS:26.0, name:iPhone 17 Pro Max }
-{ platform:iOS Simulator, arch:arm64, id:5037CB1E-8720-49D2-84F6-E6F3F47E89F9, OS:26.1, name:iPhone 17 Pro Max }
-{ platform:iOS Simulator, arch:arm64, id:56ECA2C4-06AE-466F-9333-23EEABA4E591, OS:26.2, name:iPhone 17 Pro Max }
-{ platform:iOS Simulator, arch:arm64, id:E8395894-F60B-4127-82B7-44079C3B3121, OS:26.0, name:iPhone Air }
-{ platform:iOS Simulator, arch:arm64, id:24366A5D-44BD-4465-B49A-6EB04B2E50A6, OS:26.1, name:iPhone Air }
-{ platform:iOS Simulator, arch:arm64, id:F3C38059-1961-427E-99B6-3261AEC872A6, OS:26.2, name:iPhone Air }
 { platform:iOS, arch:arm64, id:00008110-001230222230401E, name:cPhone }
 ComputePackagePrebuildTargetDependencyGraph
 
@@ -111,16 +54,16 @@ ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --
 
 ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.2.sdk -x objective-c -c /dev/null
 
-ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
-
 ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/libtool -V
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
 
 ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
 
 ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --version --output-format xml1
 
-Build description signature: 291f5cf68e1e6c2f1ce1b258613551b4
-Build description path: /Users/cfa532/Library/Developer/Xcode/DerivedData/Tweet-errgxdroldfumhdkieiumjzyonvv/Build/Intermediates.noindex/XCBuildData/291f5cf68e1e6c2f1ce1b258613551b4.xcbuilddata
+Build description signature: 8521f766cc0276c875d57b09951d7488
+Build description path: /Users/cfa532/Library/Developer/Xcode/DerivedData/Tweet-errgxdroldfumhdkieiumjzyonvv/Build/Intermediates.noindex/XCBuildData/8521f766cc0276c875d57b09951d7488.xcbuilddata
 /Users/cfa532/Documents/GitHub/Tweet-iOS/Tweet.xcodeproj: error: Provisioning profile "iOS Team Provisioning Profile: *" doesn't include the currently selected device "Sequoia" (identifier 00008132-0012491E01D9801C). (in target 'Tweet' from project 'Tweet')
 warning: Run script build phase 'Use debug InfoPlist.strings' will be run during every build because it does not specify any outputs. To address this issue, either add output dependencies to the script phase, or configure it to run in every build by unchecking "Based on dependency analysis" in the script phase. (in target 'Tweet' from project 'Tweet')
 ** BUILD FAILED **
