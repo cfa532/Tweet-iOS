@@ -582,13 +582,22 @@ class TweetTableViewController: UITableViewController {
         
         // Add media height if present
         if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Calculate media grid height
+            // CRITICAL: Use EXACT same calculation as MediaGridView to prevent layout shifts
+            // MediaGridView uses: cachedScreenWidth - 32 - 32 (for TweetListView padding)
             let screenWidth = UIScreen.main.bounds.width
-            let gridWidth = screenWidth - (leadingPadding + trailingPadding) - 16 // Account for padding
+            let isEmbedded = tweet.originalTweetId != nil && tweet.attachments == nil // This is a quoted/embedded tweet
             
-            // Get aspect ratio from MediaGridViewModel logic
+            // Match MediaGridView's exact width calculations
+            let gridWidth: CGFloat
+            if isEmbedded {
+                gridWidth = max(10, screenWidth - 140) // Embedded tweets (quoted tweets)
+            } else {
+                gridWidth = max(10, screenWidth - 32 - 32) // Regular tweets (32pt padding on each side)
+            }
+            
+            // Get aspect ratio from MediaGridViewModel - uses attachment.aspectRatio if available
             let aspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-            let mediaHeight = gridWidth / aspectRatio
+            let mediaHeight = max(10, gridWidth / aspectRatio)
             
             estimatedHeight += mediaHeight + 8 // Media + padding
         }
