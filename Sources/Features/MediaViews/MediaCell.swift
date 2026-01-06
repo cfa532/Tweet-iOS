@@ -663,7 +663,7 @@ struct VideoTimerOverlay: View {
         hideTimer?.invalidate()
         
         // Hide after 5 seconds
-        let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [videoMid] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
             Task { @MainActor in
                 self.isVisible = false
             }

@@ -146,7 +146,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Update visible tweets (called during scrolling)
     func updateVisibleTweets(_ tweetIds: Set<String>) {
-        let wasScrolling = isScrolling
         self.visibleTweetIds = tweetIds
         self.isScrolling = true
         
@@ -322,10 +321,22 @@ class VideoPlaybackCoordinator: ObservableObject {
             pauseVideo(video)
         }
         
-        // Keep primary video playing
+        // Ensure primary video is playing (restart if finished)
         primaryVideoId = primary.identifier
         currentlyPlayingVideoIds = [primary.identifier]
         phase = .primaryPlaying
+        
+        // Send primary play command to ensure video plays (especially if it finished during survey)
+        NotificationCenter.default.post(
+            name: .shouldPlayVideo,
+            object: nil,
+            userInfo: [
+                "tweetId": primary.tweetId,
+                "videoMid": primary.videoMid,
+                "videoIndex": primary.index,
+                "isPrimary": true
+            ]
+        )
         
         print("🎬 [VideoOrchestrator] Transitioned to primary playback phase")
     }
