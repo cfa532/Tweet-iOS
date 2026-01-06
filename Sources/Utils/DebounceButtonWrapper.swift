@@ -8,7 +8,7 @@ struct DebounceButton<Label: View>: View {
     private let cooldownDuration: TimeInterval
     private let disabledColor: Color?
     private let enableAnimation: Bool
-    private let enableVibration: Bool
+    private let enableHaptic: Bool
     
     @State private var isEnabled: Bool = true
     @State private var lastTapTime: Date = Date.distantPast
@@ -19,21 +19,21 @@ struct DebounceButton<Label: View>: View {
     ///   - cooldownDuration: Minimum time interval between taps (default: 0.5 seconds)
     ///   - disabledColor: Color to show when button is disabled (default: nil - uses system disabled color)
     ///   - enableAnimation: Whether to show animation when button is disabled (default: true)
-    ///   - enableVibration: Whether to provide haptic feedback when tapped (default: false)
+    ///   - enableHaptic: Whether to provide haptic feedback when tapped (default: false)
     ///   - action: The action to perform when tapped
     ///   - label: The button label view
     init(
         cooldownDuration: TimeInterval = 0.5,
         disabledColor: Color? = nil,
         enableAnimation: Bool = true,
-        enableVibration: Bool = false,
+        enableHaptic: Bool = false,
         action: @escaping () -> Void,
         @ViewBuilder label: @escaping () -> Label
     ) {
         self.cooldownDuration = cooldownDuration
         self.disabledColor = disabledColor
         self.enableAnimation = enableAnimation
-        self.enableVibration = enableVibration
+        self.enableHaptic = enableHaptic
         self.action = action
         self.label = label
     }
@@ -63,7 +63,7 @@ struct DebounceButton<Label: View>: View {
         }
         
         // Provide haptic feedback if enabled
-        if enableVibration {
+        if enableHaptic {
             let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
             impactFeedback.prepare() // Prepare for better responsiveness
             impactFeedback.impactOccurred()
@@ -92,14 +92,14 @@ extension DebounceButton where Label == Text {
         cooldownDuration: TimeInterval = 0.5,
         disabledColor: Color? = nil,
         enableAnimation: Bool = true,
-        enableVibration: Bool = false,
+        enableHaptic: Bool = false,
         action: @escaping () -> Void
     ) {
         self.init(
             cooldownDuration: cooldownDuration,
             disabledColor: disabledColor,
             enableAnimation: enableAnimation,
-            enableVibration: enableVibration,
+            enableHaptic: enableHaptic,
             action: action
         ) {
             Text(title)
@@ -114,14 +114,14 @@ extension DebounceButton where Label == Image {
         cooldownDuration: TimeInterval = 0.5,
         disabledColor: Color? = nil,
         enableAnimation: Bool = true,
-        enableVibration: Bool = false,
+        enableHaptic: Bool = false,
         action: @escaping () -> Void
     ) {
         self.init(
             cooldownDuration: cooldownDuration,
             disabledColor: disabledColor,
             enableAnimation: enableAnimation,
-            enableVibration: enableVibration,
+            enableHaptic: enableHaptic,
             action: action
         ) {
             Image(systemName: systemName)

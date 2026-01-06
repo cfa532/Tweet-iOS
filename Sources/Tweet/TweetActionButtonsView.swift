@@ -214,7 +214,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -236,7 +236,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.5,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -295,7 +295,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -383,7 +383,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -472,7 +472,7 @@ struct TweetActionButtonsView: View {
                 DebounceButton(
                     cooldownDuration: 0.3,
                     enableAnimation: true,
-                    enableVibration: false
+                    enableHaptic: true
                 ) {
                     // Show spinner immediately when button is tapped (synchronous on main thread)
                     isPreparingShare = true

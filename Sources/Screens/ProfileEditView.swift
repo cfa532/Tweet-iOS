@@ -259,7 +259,7 @@ struct ProfileEditView: View {
 
             DebounceButton(
                 cooldownDuration: 1.0,
-                enableVibration: false
+                enableHaptic: false
             ) {
                 handleSubmit()
             } label: {

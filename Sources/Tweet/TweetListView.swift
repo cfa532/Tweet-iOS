@@ -65,11 +65,9 @@ struct TweetListView<RowView: View>: View {
     /// sourceTweetId: The visible tweet in feed (could be retweet)
     /// currentVideoIndex: The current video index in the tweet's attachments
     func findNextVideoInList(sourceTweetId: String, currentVideoIndex: Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
-        print("DEBUG: [TweetListView] Finding next video - sourceTweetId: \(sourceTweetId), currentVideoIndex: \(currentVideoIndex)")
         
         // Find source tweet (the visible tweet in feed)
         guard let sourceTweetIdx = await MainActor.run(body: { tweets.firstIndex(where: { $0.mid == sourceTweetId }) }) else {
-            print("DEBUG: [TweetListView] Source tweet not found in feed")
             return nil
         }
         
@@ -80,7 +78,6 @@ struct TweetListView<RowView: View>: View {
         if let originalTweetId = sourceTweet.originalTweetId,
            let originalAuthorId = sourceTweet.originalAuthorId {
             // This is a retweet - fetch original tweet
-            print("DEBUG: [TweetListView] Source tweet is retweet, fetching original tweet")
             if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                 mediaTweet = original
             } else {
@@ -96,29 +93,24 @@ struct TweetListView<RowView: View>: View {
                 (attachment.type == .video || attachment.type == .hls_video) ? index : nil
             }
             
-            print("DEBUG: [TweetListView] Media tweet has \(videoIndices.count) videos at indices: \(videoIndices)")
             
             // Check if there are more videos in current media tweet
             if let currentPosInVideoList = videoIndices.firstIndex(of: currentVideoIndex),
                currentPosInVideoList + 1 < videoIndices.count {
                 let nextVideoIdx = videoIndices[currentPosInVideoList + 1]
-                print("DEBUG: [TweetListView] ✅ Found next video in same tweet at index \(nextVideoIdx)")
                 return (mediaTweet, nextVideoIdx, sourceTweetId) // Same source tweet
             }
         }
         
         // No more videos in current tweet, search next VISIBLE tweets in feed
-        print("DEBUG: [TweetListView] Searching next visible tweets for videos... (from index \(sourceTweetIdx + 1) to \(await MainActor.run { tweets.count - 1}))")
         let tweetCount = await MainActor.run { tweets.count }
         for idx in (sourceTweetIdx + 1)..<tweetCount {
             let nextTweet = await MainActor.run { tweets[idx] }
-            print("DEBUG: [TweetListView] Checking visible tweet \(idx): \(nextTweet.mid), isRetweet: \(nextTweet.originalTweetId != nil)")
             
             // Get media tweet (handle retweets)
             let nextMediaTweet: Tweet
             if let originalTweetId = nextTweet.originalTweetId,
                let originalAuthorId = nextTweet.originalAuthorId {
-                print("DEBUG: [TweetListView] Tweet \(idx) is retweet, fetching original")
                 if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                     nextMediaTweet = original
                 } else {
@@ -129,17 +121,12 @@ struct TweetListView<RowView: View>: View {
             }
             
             if let attachments = nextMediaTweet.attachments {
-                let videoTypes = attachments.map { $0.type }
-                print("DEBUG: [TweetListView] Tweet \(idx) attachment types: \(videoTypes)")
-                
                 if let firstVideoIdx = attachments.firstIndex(where: { $0.type == .video || $0.type == .hls_video }) {
-                    print("DEBUG: [TweetListView] ✅ Found next video at visible tweet index \(idx), video index \(firstVideoIdx)")
                     return (nextMediaTweet, firstVideoIdx, nextTweet.mid) // Return source tweet ID
                 }
             }
         }
         
-        print("DEBUG: [TweetListView] ❌ No more videos found")
         return nil
     }
 
@@ -234,11 +221,8 @@ struct TweetListView<RowView: View>: View {
                         if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
                             if notification.name == .tweetDeleted {
                                 // For tweet deletion, handle directly in TweetListView
-                                let countBefore = tweets.count
                                 tweets.removeAll { $0.mid == tweetId }
-                                let countAfter = tweets.count
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
-                                print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
                             } else if notification.name == .tweetPrivacyChanged {
                                 // For privacy changes, handle removal directly here
                                 // Find the tweet first before removing it
@@ -248,13 +232,11 @@ struct TweetListView<RowView: View>: View {
                                 let countAfter = tweets.count
                                 
                                 if countBefore != countAfter {
-                                    print("DEBUG: [TweetListView] Removed privacy-changed tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
                                     // Also call custom handler with the tweet that was removed
                                     if let tweet = tweetToRemove {
                                         notification.action(tweet)
                                     }
                                 } else {
-                                    print("DEBUG: [TweetListView] Privacy-changed tweet \(tweetId) not found in list (title: \(title))")
                                 }
                             } else {
                                 // For other notifications, call the custom handler
@@ -269,10 +251,7 @@ struct TweetListView<RowView: View>: View {
                         // No built-in handling here to avoid conflicts
                         // Special case: blockUser may send blockedUserId to remove all tweets from that user
                         if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
-                            let originalCount = tweets.count
                             tweets.removeAll { $0.authorId == blockedUserId }
-                            let removedCount = originalCount - tweets.count
-                            print("[TweetListView] Removed \(removedCount) tweets from blocked user: \(blockedUserId)")
                         }
                     }
             }
@@ -298,11 +277,9 @@ struct TweetListView<RowView: View>: View {
         .onAppear {
             // Set up fullscreen video search function for auto-advance
             // Each TweetListView overwrites the previous one's function
-            print("DEBUG: [TweetListView] Registering video search function - title: \(title), tweets count: \(tweets.count)")
             FullScreenVideoManager.shared.setVideoSearchFunction(
                 findNextVideoInList,
                 onNavigate: { tweet, videoIndex, sourceTweetId in
-                    print("DEBUG: [TweetListView] Fullscreen navigation callback - tweet: \(tweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(sourceTweetId)")
                     // MediaBrowserView will handle the actual navigation
                 }
             )
@@ -329,7 +306,6 @@ struct TweetListView<RowView: View>: View {
                     
                     // Set hasMoreTweets based on cache - if we got a full page, there might be more
                     hasMoreTweets = tweetsFromCache.count >= pageSize
-                    print("[TweetListView] Initial cache load: got \(tweetsFromCache.count) tweets, hasMoreTweets=\(hasMoreTweets)")
 
                     // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
                     // Defer during initial startup to prevent hangs
@@ -396,7 +372,6 @@ struct TweetListView<RowView: View>: View {
             }
             
         } catch {
-            print("[TweetListView] Error during initial load: \(error)")
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
@@ -405,13 +380,10 @@ struct TweetListView<RowView: View>: View {
     }
 
     func refreshTweets() async {
-        print("DEBUG: [TweetListView] refreshTweets called - isLoading: \(isLoading)")
         guard !isLoading else {
-            print("DEBUG: [TweetListView] refreshTweets blocked - already loading")
             return
         }
         
-        print("DEBUG: [TweetListView] refreshTweets starting - fetching page 0 from server")
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
@@ -422,9 +394,7 @@ struct TweetListView<RowView: View>: View {
             let validTweets = freshTweets.compactMap { $0 }
             let hasValidTweet = !validTweets.isEmpty
             
-            print("DEBUG: [TweetListView] refreshTweets received - total: \(freshTweets.count), valid: \(validTweets.count)")
             if validTweets.isEmpty {
-                print("DEBUG: [TweetListView] ⚠️ No valid tweets received from server refresh!")
             }
             
             await MainActor.run {
@@ -461,7 +431,6 @@ struct TweetListView<RowView: View>: View {
             }
             
         } catch {
-            print("[TweetListView] Refresh failed: \(error)")
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
@@ -471,14 +440,11 @@ struct TweetListView<RowView: View>: View {
     }
 
     func loadMoreTweets(page: UInt? = nil) {
-        print("[TweetListView] loadMoreTweets called: hasMoreTweets=\(hasMoreTweets), isLoadingMore=\(isLoadingMore), initialLoadComplete=\(initialLoadComplete), currentPage=\(currentPage)")
         guard hasMoreTweets, !isLoadingMore, initialLoadComplete else {
-            print("[TweetListView] loadMoreTweets guard failed - returning early")
             return 
         }
         
         let nextPage = page ?? (currentPage + 1)
-        print("[TweetListView] loadMoreTweets proceeding with page \(nextPage)")
         
         // Load next two pages in advance, separated by 3 seconds
         loadNextTwoPages(startingFrom: nextPage)
@@ -510,7 +476,6 @@ struct TweetListView<RowView: View>: View {
                 // Capture the last visible tweet before loading
                 if let lastTweet = tweets.last {
                     lastVisibleTweetIdBeforeLoad = lastTweet.mid
-                    print("[TweetListView] Captured last visible tweet: \(lastTweet.mid)")
                 }
                 
                 isLoadingMore = true
@@ -537,7 +502,6 @@ struct TweetListView<RowView: View>: View {
                     // This is optimistic - server update will correct it if needed
                     if tweetsFromCache.count >= pageSize {
                         hasMoreTweets = true
-                        print("[TweetListView] LoadMore cache: got full page (\(tweetsFromCache.count) >= \(pageSize)), setting hasMoreTweets=true")
                     }
                     
                     // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
@@ -553,7 +517,6 @@ struct TweetListView<RowView: View>: View {
                     // Restore scroll position to keep the last visible tweet above bottom bar
                     // Only restore scroll position after startup phase to avoid unwanted scrolling during app launch
                     if let lastTweetId = lastVisibleTweetIdBeforeLoad, !videoLoadingManager.isInStartupPhase {
-                        print("[TweetListView] Restoring scroll position to tweet: \(lastTweetId)")
                         // Use a slight delay to ensure layout is complete
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             withAnimation(.easeOut(duration: 0.25)) {
@@ -561,9 +524,8 @@ struct TweetListView<RowView: View>: View {
                             }
                         }
                         lastVisibleTweetIdBeforeLoad = nil
-                    } else if let lastTweetId = lastVisibleTweetIdBeforeLoad, videoLoadingManager.isInStartupPhase {
+                    } else if let _ = lastVisibleTweetIdBeforeLoad, videoLoadingManager.isInStartupPhase {
                         // During startup phase, just clear the captured tweet without scrolling
-                        print("[TweetListView] Skipping scroll restoration during startup phase for tweet: \(lastTweetId)")
                         lastVisibleTweetIdBeforeLoad = nil
                     }
                 }
@@ -573,7 +535,6 @@ struct TweetListView<RowView: View>: View {
                     await loadFromServer(page: page, pageSize: pageSize, completion: completion)
                 }
             } catch {
-                print("[TweetListView] Error loading page \(page): \(error)")
                 
                 // Calculate elapsed time for error case
                 let elapsedTime = Date().timeIntervalSince(startTime)
@@ -592,16 +553,14 @@ struct TweetListView<RowView: View>: View {
                     // Restore scroll position even on error
                     // Only restore scroll position after startup phase to avoid unwanted scrolling during app launch
                     if let lastTweetId = lastVisibleTweetIdBeforeLoad, !videoLoadingManager.isInStartupPhase {
-                        print("[TweetListView] Restoring scroll position after error to tweet: \(lastTweetId)")
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             withAnimation(.easeOut(duration: 0.25)) {
                                 scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
                             }
                         }
                         lastVisibleTweetIdBeforeLoad = nil
-                    } else if let lastTweetId = lastVisibleTweetIdBeforeLoad, videoLoadingManager.isInStartupPhase {
+                    } else if let _ = lastVisibleTweetIdBeforeLoad, videoLoadingManager.isInStartupPhase {
                         // During startup phase, just clear the captured tweet without scrolling
-                        print("[TweetListView] Skipping scroll restoration during startup phase after error for tweet: \(lastTweetId)")
                         lastVisibleTweetIdBeforeLoad = nil
                     }
                 }
@@ -626,7 +585,6 @@ struct TweetListView<RowView: View>: View {
             }
             
         } catch {
-            print("[TweetListView] Server load failed: \(error)")
             
             await MainActor.run {
                 // Mark initial load as complete even on error for page 0
@@ -669,10 +627,8 @@ struct TweetListView<RowView: View>: View {
             // If we got a full page, there might be more tweets
             if tweetsFromServer.count >= pageSize {
                 hasMoreTweets = true
-                print("[TweetListView] Got full page (\(tweetsFromServer.count) >= \(pageSize)), setting hasMoreTweets=true")
             } else {
                 hasMoreTweets = false
-                print("[TweetListView] Got partial page (\(tweetsFromServer.count) < \(pageSize)), setting hasMoreTweets=false")
             }
 
             // Mark initial load as complete for page 0 only if we got valid tweets
@@ -691,7 +647,6 @@ struct TweetListView<RowView: View>: View {
             }
         } else if tweetsFromServer.count < pageSize {
             hasMoreTweets = false
-            print("[TweetListView] No valid tweets and partial page (\(tweetsFromServer.count) < \(pageSize)), setting hasMoreTweets=false")
             // Server returned fewer than pageSize tweets (or empty), so no more pages
             if page == 0 {
                 if tweets.isEmpty {
@@ -710,7 +665,6 @@ struct TweetListView<RowView: View>: View {
             // All tweets are nil but we got a full page, continue to next page
             currentPage = page
             hasMoreTweets = true
-            print("[TweetListView] Full page with all nil tweets, setting hasMoreTweets=true to continue searching")
         }
     }
 
@@ -754,7 +708,6 @@ struct TweetListView<RowView: View>: View {
     private func loadMoreToFillScreen() async {
         guard hasMoreTweets, !isLoadingMore, !isLoading, initialLoadComplete else { return }
         
-        print("DEBUG: [TweetListView] Auto-loading more to fill screen (content: \(contentHeight), screen: \(screenHeight))")
         
         // Temporarily disable auto-fill to prevent infinite loop
         await MainActor.run {

@@ -263,7 +263,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer = AVPlayer()
         singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
         singletonPlayer?.isMuted = false
-        print("DEBUG: [FullScreenVideoManager] ✅ Lazily initialized singleton player when first accessed")
     }
     
     func pausePlayer() {
@@ -334,7 +333,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Initialize singleton player early (called during app startup)
     func initializePlayerEarly() {
         guard singletonPlayer == nil else {
-            print("DEBUG: [FullScreenVideoManager] Player already initialized, skipping early init")
             return
         }
         
@@ -343,7 +341,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
         singletonPlayer?.isMuted = false
         
-        print("DEBUG: [FullScreenVideoManager] ✅ Initialized singleton player early during app startup")
     }
 
     /// Prewarm the singleton by creating (and optionally attaching) a first AVPlayerItem.
@@ -370,19 +367,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     func updateVideoList(videos: [VideoPlaybackInfo], tweets: [Tweet]) {
         self.cachedVideos = videos
         self.cachedTweets = tweets
-        print("DEBUG: [FullScreenVideoManager] Updated video list: \(videos.count) videos from \(tweets.count) tweets (consolidated)")
     }
     
     /// Set the video search function from TweetListView
     func setVideoSearchFunction(_ findNext: @escaping (String, Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)?, onNavigate: @escaping (Tweet, Int, String) -> Void) {
         self.findNextVideo = findNext
         self.onNavigateToNextVideo = onNavigate
-        print("DEBUG: [FullScreenVideoManager] Set video search function")
     }
     
     /// Load and play a video in the singleton player
     func loadVideo(url: URL, mid: String, tweetId: String, sourceTweetId: String, videoIndex: Int, mediaType: MediaType) {
-        print("DEBUG: [FullScreenVideoManager] Loading video in singleton player - mid: \(mid), tweetId: \(tweetId), sourceTweetId: \(sourceTweetId), videoIndex: \(videoIndex)")
 
         // If we already have the correct item loaded, don't thrash observers / state.
         if currentVideoMid == mid,
@@ -390,21 +384,18 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
            singletonPlayer?.currentItem != nil {
             // Still ensure buffering observers are attached (covers view recreation edge cases).
             setupTimeControlStatusObserver()
-            print("DEBUG: [FullScreenVideoManager] Video already loaded, skipping duplicate load")
             return
         }
         
         // CRITICAL: If we're already loading this exact video, ignore duplicate calls
         // This prevents race conditions from multiple onAppear handlers calling loadVideo
         if loadingMid == mid && currentVideoMid == mid {
-            print("DEBUG: [FullScreenVideoManager] Already loading video \(mid), ignoring duplicate call")
             return
         }
         
         // CRITICAL FIX: Clear any prewarmed item to prevent flash of wrong video
         // This ensures we start with a clean slate when loading a new video
         if singletonPlayer?.currentItem != nil && currentVideoMid != mid {
-            print("DEBUG: [FullScreenVideoManager] Clearing prewarmed/old item before loading new video")
             singletonPlayer?.pause()
             singletonPlayer?.replaceCurrentItem(with: nil)
         }
@@ -445,7 +436,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // This avoids network requests while allowing the new playerItem to be associated with our player
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedPlayerItem = cachedPlayer.currentItem {
-            print("DEBUG: [FullScreenVideoManager] ✅ Found cached player for \(mid), creating new playerItem from cached asset")
             
             // Create new playerItem from cached asset (fast, no network request)
             let asset = cachedPlayerItem.asset
@@ -454,7 +444,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             Task { @MainActor in
                 // Ignore stale completions (e.g. duplicated loadVideo calls from view recreations)
                 guard self.loadGeneration == generation, self.currentVideoMid == mid else {
-                    print("DEBUG: [FullScreenVideoManager] Ignoring stale playerItem setup for \(mid)")
                     return
                 }
                 self.loadingMid = nil
@@ -465,9 +454,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 // Create or reuse singleton player (fullscreen's unique player instance)
                 if self.singletonPlayer == nil {
                     self.singletonPlayer = AVPlayer(playerItem: playerItem)
-                    print("DEBUG: [FullScreenVideoManager] Created singleton player with cached playerItem")
                 } else {
-                    print("DEBUG: [FullScreenVideoManager] Reusing singleton player with cached playerItem")
                     self.singletonPlayer?.replaceCurrentItem(with: playerItem)
                 }
                 
@@ -490,7 +477,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 
                 // Check if player item is ready
                 if playerItem.status == .readyToPlay {
-                    print("DEBUG: [FullScreenVideoManager] Cached playerItem ready immediately")
                     
                     // Check if video finished in mediaCell - if so, restart from beginning
                     let duration = playerItem.duration
@@ -519,7 +505,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             self.checkAndRewindIfAtEnd {
                                 self.singletonPlayer?.play()
                                 self.isPlaying = true
-                                print("DEBUG: [FullScreenVideoManager] Started playback with cached playerItem (after clearing invalid state)")
                             }
                             return
                         }
@@ -543,11 +528,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         self.checkAndRewindIfAtEnd {
                             self.singletonPlayer?.play()
                             self.isPlaying = true
-                            print("DEBUG: [FullScreenVideoManager] Started playback with cached playerItem")
                         }
                     }
                 } else {
-                    print("DEBUG: [FullScreenVideoManager] Cached playerItem not ready yet (status: \(playerItem.status.rawValue)), will play when ready")
                     self.isPlaying = true // Mark as "should be playing"
                     
                     // CRITICAL: Observe playerItem status to start playback when it becomes ready
@@ -626,7 +609,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     }
                 }
                 
-                print("DEBUG: [FullScreenVideoManager] ✅ Reused cached playerItem for fullscreen - mid: \(mid)")
             }
             return
         }
@@ -640,7 +622,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 await MainActor.run {
                     // Ignore stale completions
                     guard self.loadGeneration == generation, self.currentVideoMid == mid else {
-                        print("DEBUG: [FullScreenVideoManager] Ignoring stale asset completion for \(mid)")
                         return
                     }
                     self.loadingMid = nil
@@ -651,9 +632,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     // Create or reuse singleton player
                     if self.singletonPlayer == nil {
                         self.singletonPlayer = AVPlayer(playerItem: playerItem)
-                        print("DEBUG: [FullScreenVideoManager] Created new singleton player")
                     } else {
-                        print("DEBUG: [FullScreenVideoManager] Reusing singleton player with new item")
                         self.singletonPlayer?.replaceCurrentItem(with: playerItem)
                     }
                     
@@ -679,7 +658,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     
                     // Check if player item is ready
                     if playerItem.status == .readyToPlay {
-                        print("DEBUG: [FullScreenVideoManager] Player item ready immediately, checking for saved position")
                         
                         // Check if video finished in mediaCell - if so, restart from beginning
                         let duration = playerItem.duration
@@ -737,20 +715,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             self.checkAndRewindIfAtEnd {
                                 self.singletonPlayer?.play()
                                 self.isPlaying = true
-                                print("DEBUG: [FullScreenVideoManager] Started playback after position check")
                             }
                         }
                     } else {
-                        print("DEBUG: [FullScreenVideoManager] Player item not ready yet (status: \(playerItem.status.rawValue)), will play when ready via AVPlayerViewController observer")
                         self.isPlaying = true // Mark as "should be playing"
                     }
                     
-                    print("DEBUG: [FullScreenVideoManager] ✅ Singleton player loaded - mid: \(mid), tweetId: \(tweetId), videoIndex: \(videoIndex)")
                 }
             } catch {
                 await MainActor.run {
                     guard self.loadGeneration == generation, self.currentVideoMid == mid else {
-                        print("DEBUG: [FullScreenVideoManager] Ignoring stale load error for \(mid): \(error)")
                         return
                     }
                     self.loadingMid = nil
@@ -1016,7 +990,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                print("DEBUG: [FullScreenVideoManager] Video finished in singleton player")
                 self.isPlaying = false
                 
                 // Trigger auto-advance after delay
@@ -1121,13 +1094,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     func handleVideoFinished() {
         guard let currentSourceTweetId = currentSourceTweetId,
               let findNextVideo = findNextVideo else {
-            print("DEBUG: [FullScreenVideoManager] No source tweet ID or search function, cannot advance")
             // Don't rewind here - will check position when user tries to play
             isPlaying = false
             return
         }
         
-        print("DEBUG: [FullScreenVideoManager] Video finished for sourceTweet: \(currentSourceTweetId), videoIndex: \(currentVideoIndex)")
         isPlaying = false
         
         // Use TweetListView's async search function to find next video
@@ -1135,12 +1106,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         Task {
             if let nextVideo = await findNextVideo(currentSourceTweetId, currentVideoIndex) {
                 await MainActor.run {
-                    print("DEBUG: [FullScreenVideoManager] ✅ Found next video - mediaTweet: \(nextVideo.tweet.mid), videoIndex: \(nextVideo.videoIndex), sourceTweetId: \(nextVideo.sourceTweetId)")
                     onNavigateToNextVideo?(nextVideo.tweet, nextVideo.videoIndex, nextVideo.sourceTweetId)
                 }
             } else {
                 await MainActor.run {
-                    print("DEBUG: [FullScreenVideoManager] ❌ No more videos found in feed - video will rewind when user tries to play")
                     // Don't rewind here - will check position when user tries to play
                 }
             }
@@ -1156,13 +1125,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         // Check if player is broken - if so, reload the video
         if isPlayerBroken() {
-            print("DEBUG: [FullScreenVideoManager] Player is broken - clearing for recreation")
             // Clear broken player so view can recreate it
             singletonPlayer?.pause()
             singletonPlayer = nil
             isPlaying = false
             // The view should detect nil player and reload
-            print("DEBUG: [FullScreenVideoManager] Cleared broken player - view should reload")
             completion()
             return
         }
@@ -1175,13 +1142,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let timeRemaining = duration.seconds - currentTime.seconds
             // If within 0.5 seconds of end, rewind to beginning
             if timeRemaining <= 0.5 {
-                print("DEBUG: [FullScreenVideoManager] Video at end (\(String(format: "%.1f", timeRemaining))s remaining) - rewinding to beginning")
                 player.seek(to: .zero) { [weak self] finished in
                     guard finished, let _ = self else {
                         completion()
                         return
                     }
-                    print("DEBUG: [FullScreenVideoManager] Video rewound to beginning")
                     completion()
                 }
                 return
@@ -1196,27 +1161,22 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     func navigateToNext() {
         // Don't navigate while app is backgrounding (e.g. user swipes up to go Home).
         guard UIApplication.shared.applicationState == .active else {
-            print("DEBUG: [FullScreenVideoManager] Ignoring swipe-up navigateToNext while app not active")
             return
         }
 
         guard let currentSourceTweetId = currentSourceTweetId,
               let findNextVideo = findNextVideo else {
-            print("DEBUG: [FullScreenVideoManager] No source tweet ID or search function")
             return
         }
         
-        print("DEBUG: [FullScreenVideoManager] Swipe up - navigating to next video from sourceTweet: \(currentSourceTweetId)")
         
         Task {
             if let nextVideo = await findNextVideo(currentSourceTweetId, currentVideoIndex) {
                 await MainActor.run {
-                    print("DEBUG: [FullScreenVideoManager] ✅ Found next video - navigating")
                     onNavigateToNextVideo?(nextVideo.tweet, nextVideo.videoIndex, nextVideo.sourceTweetId)
                 }
             } else {
                 await MainActor.run {
-                    print("DEBUG: [FullScreenVideoManager] ❌ No more videos - exiting fullscreen")
                     onExitFullScreen?()
                 }
             }
@@ -1277,7 +1237,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         cleanupObservers()
         isBuffering = false
         
-        print("DEBUG: [FullScreenVideoManager] Cleared video content (player instance retained)")
         
     }
     
@@ -1290,7 +1249,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Resume playback (checks position and rewinds if at end)
     func play() {
         guard singletonPlayer != nil else {
-            print("DEBUG: [FullScreenVideoManager] No player to play")
             return
         }
         
@@ -1299,7 +1257,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             guard let self = self, let player = self.singletonPlayer else { return }
             player.play()
             self.isPlaying = true
-            print("DEBUG: [FullScreenVideoManager] Started playback")
         }
     }
     
@@ -1308,7 +1265,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Two-layer recovery from background
     func recoverFromBackground() {
         guard let player = singletonPlayer else {
-            print("DEBUG: [FullScreenVideoManager] No player to recover")
             hasRecoveredThisCycle = true
             return
         }
@@ -1448,7 +1404,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     func clearSearchFunction() {
         findNextVideo = nil
         onNavigateToNextVideo = nil
-        print("DEBUG: [FullScreenVideoManager] Cleared search function")
     }
 }
 

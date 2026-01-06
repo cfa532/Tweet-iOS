@@ -1,7 +1,9 @@
 # Video System - Complete Documentation
 
-**Last Updated:** January 5, 2026  
+**Last Updated:** January 6, 2026  
 **Status:** ✅ Production (Unified Architecture + Video Orchestration)
+
+> **Recent Updates (Jan 6, 2026):** Fixed retweet video indexing, added audio fade in/fade out effects, and resolved cached video playback issues in profile. See [DOCUMENTATION_UPDATE_JAN_6_2026.md](DOCUMENTATION_UPDATE_JAN_6_2026.md) for details.
 
 ---
 
@@ -35,6 +37,36 @@ Network/Disk Cache
 - **KVO-Based State:** No polling, pure event-driven state management
 - **Automatic Recovery:** Background/foreground transitions, network failures, app init delays
 - **Intelligent Caching:** Separate strategies for HLS (playlist-based) and progressive (byte-range)
+
+---
+
+## Recent Improvements (January 6, 2026)
+
+### 1. Retweet Video Indexing Fix
+
+Videos in retweets are now correctly indexed at the retweet's position, not the original tweet's position. Added `sourceTweetId` parameter that flows through the component hierarchy to track viewing context:
+
+```
+TweetItemView (retweet) → TweetItemBodyView → MediaGridView → MediaCell → MediaBrowserView
+                            ↓ sourceTweetId = retweetId
+```
+
+**Result:** Fullscreen navigation starts from the user's actual position in the feed.
+
+### 2. Audio Fade In/Fade Out Effects
+
+Smooth volume transitions (fade in: 300ms, fade out: 200ms) applied to all play/pause operations for pleasant audio transitions.
+
+### 3. Cached Video Playback Fix
+
+Fixed issue where cached players with buffered data failed to play because `bufferedTimeAhead()` returned 0. Now trusts players with non-empty `loadedTimeRanges`:
+
+```swift
+let hasSufficientBuffer = hasBufferedData && 
+                          (bufferedDuration >= firstFrameMinimumBuffer || bufferedDuration == 0)
+```
+
+**Result:** Videos play immediately from cache across all views (main feed → profile).
 
 ---
 
@@ -89,6 +121,30 @@ Post .videoDidFinishPlaying notification
 Capture and display last frame
     ↓
 VideoPlaybackCoordinator starts next video
+```
+
+### Audio Fade Effects (New: Jan 6, 2026)
+
+**Smooth Volume Transitions:**
+- **Fade In:** 300ms volume ramp from 0 → 1.0 when playback starts
+- **Fade Out:** 200ms volume ramp from 1.0 → 0 before pause
+- Applied to: play, resume, visibility changes, coordinator commands, error recovery
+
+**Implementation:**
+```swift
+// Fade in
+player.volume = 0
+player.play()
+UIView.animate(withDuration: 0.3) {
+    player.volume = 1.0
+}
+
+// Fade out
+UIView.animate(withDuration: 0.2, animations: {
+    player.volume = 0
+}, completion: { _ in
+    player.pause()
+})
 ```
 
 ### Playback Modes

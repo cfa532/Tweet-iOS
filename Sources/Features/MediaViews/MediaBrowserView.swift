@@ -120,7 +120,6 @@ struct MediaBrowserView: View {
                     // Small delay to ensure overlay state is fully updated
                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
                     NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                    print("DEBUG: [MediaBrowserView] Posted reloadVisibleVideosOnly after fullscreen dismissed")
                 }
             }
     }
@@ -128,7 +127,6 @@ struct MediaBrowserView: View {
     private func setupFullScreenManager() {
         // Set up navigation callback for auto-advance and swipe up
         FullScreenVideoManager.shared.onNavigateToNextVideo = { [self] nextTweet, videoIndex, nextSourceTweetId in
-            print("DEBUG: [MediaBrowserView] Navigating to tweet: \(nextTweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(nextSourceTweetId)")
             
             // Animate transition: slide current video up and next video in from bottom
             Task { @MainActor in
@@ -151,7 +149,6 @@ struct MediaBrowserView: View {
                         ?? HproseInstance.baseUrl
                     
                     if let url = attachment.getUrl(baseUrl) {
-                        print("DEBUG: [MediaBrowserView] Loading next video: \(url)")
                         FullScreenVideoManager.shared.loadVideo(
                             url: url,
                             mid: attachment.mid,
@@ -186,7 +183,6 @@ struct MediaBrowserView: View {
         
         // Set up exit fullscreen callback (when no more videos)
         FullScreenVideoManager.shared.onExitFullScreen = { [self] in
-            print("DEBUG: [MediaBrowserView] Exiting fullscreen - no more videos")
             dismiss()
         }
     }
@@ -242,7 +238,6 @@ struct MediaBrowserView: View {
                     .tabViewStyle(.page)
                     .indexViewStyle(.page(backgroundDisplayMode: .always))
                     .onChange(of: currentIndex) { _, newIndex in
-                        print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
                         previousIndex = newIndex
                         
                         // Clean up non-visible images to free memory
@@ -424,7 +419,6 @@ struct MediaBrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
             .onChange(of: currentIndex) { oldIndex, newIndex in
-                print("DEBUG: [MediaBrowserView] TabView index changed from \(oldIndex) to \(newIndex)")
                 
                 // Load new video when user swipes TO this video
                 if newIndex == index && isVideoAttachment(attachment) {
@@ -441,7 +435,6 @@ struct MediaBrowserView: View {
                 else if oldIndex == index && newIndex != index && 
                         FullScreenVideoManager.shared.currentVideoMid == attachment.mid &&
                         isVideoAttachment(attachment) {
-                    print("DEBUG: [MediaBrowserView] Pausing video \(attachment.mid) at index \(index) as user swiped away")
                     FullScreenVideoManager.shared.pause()
                 }
             }
@@ -516,22 +509,18 @@ struct MediaBrowserView: View {
     
     private func loadImageIfNeeded(for attachment: MimeiFileType, at index: Int) {
         let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
-        print("DEBUG: [MediaBrowserView] loadImageIfNeeded called for \(loadId)")
         
         // First, try to get compressed image immediately
         if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
-            print("DEBUG: [MediaBrowserView] Found cached image for \(loadId)")
             imageStates[index] = .loaded(compressedImage)
             return
         }
         
         // If no compressed image available, show loading state
-        print("DEBUG: [MediaBrowserView] Starting network load for \(loadId)")
         imageStates[index] = .loading
         
         // Load and cache compressed image
         guard let url = attachment.getUrl(baseUrl) else { 
-            print("DEBUG: [MediaBrowserView] No URL for \(loadId)")
             imageStates[index] = .error
             return 
         }
@@ -543,7 +532,6 @@ struct MediaBrowserView: View {
             attachment: attachment,
             baseUrl: baseUrl
         ) { compressedImage in
-            print("DEBUG: [MediaBrowserView] Load completed for \(loadId), success: \(compressedImage != nil)")
             if let compressedImage = compressedImage {
                 self.imageStates[index] = .loaded(compressedImage)
             } else {
@@ -570,7 +558,6 @@ struct MediaBrowserView: View {
         // Clear image states to free memory
         imageStates.wrappedValue.removeAll()
         
-        print("DEBUG: [MediaBrowserView] Cleaned up image states and cancelled loads")
     }
     
     private static func cleanupNonVisibleImages(attachments: [MimeiFileType], currentIndex: Int, imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {

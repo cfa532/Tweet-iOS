@@ -16,12 +16,10 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func updatePinnedTweetIds(_ newPinnedTweetIds: Set<String>) {
-        print("DEBUG: [ProfileTweetsViewModel] Updating pinned tweet IDs from \(pinnedTweetIds.count) to \(newPinnedTweetIds.count)")
         
         // Remove any tweets that are now pinned from the current list
         let newlyPinnedIds = newPinnedTweetIds.subtracting(pinnedTweetIds)
         if !newlyPinnedIds.isEmpty {
-            print("DEBUG: [ProfileTweetsViewModel] Removing \(newlyPinnedIds.count) newly pinned tweets from list")
             tweets.removeAll { tweet in
                 newlyPinnedIds.contains(tweet.mid)
             }
@@ -30,7 +28,6 @@ class ProfileTweetsViewModel: ObservableObject {
         // Add back any tweets that are no longer pinned
         let newlyUnpinnedIds = pinnedTweetIds.subtracting(newPinnedTweetIds)
         if !newlyUnpinnedIds.isEmpty {
-            print("DEBUG: [ProfileTweetsViewModel] \(newlyUnpinnedIds.count) tweets are no longer pinned")
         }
         
         pinnedTweetIds = newPinnedTweetIds
@@ -43,21 +40,18 @@ class ProfileTweetsViewModel: ObservableObject {
                 pageNumber: page,
                 pageSize: pageSize
             )
-            print("DEBUG: [ProfileTweetsViewModel] Got \(serverTweets.count) tweets from server, filtering out \(pinnedTweetIds.count) pinned tweets")
             
             // Filter out pinned tweets from server response
             let filteredTweets = serverTweets.filter { tweet in
                 if let tweet = tweet {
                     let isPinned = pinnedTweetIds.contains(tweet.mid)
                     if isPinned {
-                        print("DEBUG: [ProfileTweetsViewModel] Filtering out pinned tweet: \(tweet.mid)")
                     }
                     return !isPinned
                 }
                 return true // Keep nil tweets
             }
             
-            print("DEBUG: [ProfileTweetsViewModel] After filtering: \(filteredTweets.count) tweets")
             
             await MainActor.run {
                 tweets.mergeTweets(filteredTweets.compactMap{ $0 })
@@ -70,7 +64,6 @@ class ProfileTweetsViewModel: ObservableObject {
             
             return filteredTweets
         } catch {
-            print("[ProfileTweetsViewModel] Error fetching tweets: \(error)")
             return []
         }
     }
@@ -80,14 +73,12 @@ class ProfileTweetsViewModel: ObservableObject {
         if !(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid {
             // Don't add the tweet if it's pinned
             if !pinnedTweetIds.contains(tweet.mid) {
-                print("DEBUG: [ProfileTweetsViewModel] Adding new tweet to list: \(tweet.mid)")
                 // Use mergeTweets to maintain proper chronological ordering
                 tweets.mergeTweets([tweet])
                 
                 // Cache new tweets in profile under their authorId
                 TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
             } else {
-                print("DEBUG: [ProfileTweetsViewModel] Skipping pinned tweet: \(tweet.mid)")
             }
         }
     }
@@ -102,11 +93,9 @@ class ProfileTweetsViewModel: ObservableObject {
         if user.mid == hproseInstance.appUser.mid {
             // For appUser's profile, keep all tweets (public and private)
             // Privacy change will be reflected in UI, no need to remove/add
-            print("[ProfileTweetsViewModel] Privacy changed for appUser's tweet: \(tweetId)")
         } else {
             // For other users' profiles, remove the tweet since it became private
             tweets.removeAll { $0.mid == tweetId }
-            print("[ProfileTweetsViewModel] Removed private tweet from other user's profile: \(tweetId)")
         }
     }
     
@@ -235,7 +224,6 @@ struct ProfileTweetsSection<Header: View>: View {
                                     currentProfileUser: user,
                                     onRemove: { tweetId in
                                         // Handle pinned tweet removal if needed
-                                        print("DEBUG: [ProfileTweetsSection] Pinned tweet removal requested for: \(tweetId)")
                                         // Post notification to trigger deletion handling in ProfileView
                                         NotificationCenter.default.post(
                                             name: .tweetDeleted,
@@ -248,7 +236,6 @@ struct ProfileTweetsSection<Header: View>: View {
                                 }
                             }
                             .onAppear {
-                                print("DEBUG: [ProfileTweetsSection] Pinned tweets section appeared with \(pinnedTweets.count) tweets")
                             }
                         } else {
                             // No pinned tweets to display
@@ -282,11 +269,9 @@ struct ProfileTweetsSection<Header: View>: View {
             viewModel.tweets.removeAll()
         }
         .onChange(of: pinnedTweetIds) { _, newPinnedTweetIds in
-            print("DEBUG: [ProfileTweetsSection] Pinned tweet IDs changed to: \(newPinnedTweetIds)")
             viewModel.updatePinnedTweetIds(newPinnedTweetIds)
         }
         .onDisappear {
-            print("DEBUG: [ProfileTweetsSection] Section disappeared")
         }
     }
     

@@ -221,7 +221,7 @@ struct TweetMenu: View {
                 Image(systemName: "ellipsis")
                     .foregroundColor(isPressed ? .primary : .secondary)
                     .font(.system(size: 16, weight: .medium))
-                    .frame(width: 44, height: 24, alignment: .leading) // Minimum 44x44 tap target for accessibility
+                    .frame(width: 44, height: 24, alignment: .topLeading)
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 8)
@@ -229,14 +229,6 @@ struct TweetMenu: View {
                     )
                     .scaleEffect(isPressed ? 0.95 : 1.0)
                     .animation(.easeInOut(duration: 0.1), value: isPressed)
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.1)) {
-                            isPressed = true
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            isPressed = false
-                        }
-                    }
                     .accessibilityLabel("Tweet options")
                     .accessibilityHint("Double tap to open tweet menu")
             }

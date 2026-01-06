@@ -118,7 +118,7 @@ struct UserRowView: View {
                     if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest {
                         DebounceButton(
                             cooldownDuration: 0.5,
-                            enableVibration: false
+                            enableHaptic: false
                         ) {
                             // Toggle optimistically first
                             isFollowing.toggle()

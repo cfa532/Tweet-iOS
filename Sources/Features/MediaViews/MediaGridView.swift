@@ -88,13 +88,11 @@ struct MediaGridView: View, Equatable {
         
         // Use VideoManager to determine if this video should play
         let shouldPlay = videoManager.shouldPlayVideo(for: attachment.mid)
-        print("DEBUG: [MediaGridView] shouldPlayVideo(\(index)) for \(attachment.mid): shouldPlay=\(shouldPlay)")
         
         return shouldPlay
     }
     
     private func onVideoFinished() {
-        print("DEBUG: [MediaGridView] onVideoFinished called for tweet \(parentTweet.mid)")
         Task {
             await videoManager.onVideoFinished(tweetId: parentTweet.mid)
         }
@@ -704,7 +702,6 @@ struct MediaGridView: View, Equatable {
                     // Check if VideoManager needs to be re-initialized for this tweet
                     let needsReinit = videoManager.videoMids != videoMids || videoManager.videoMids.isEmpty
                     if needsReinit {
-                        print("DEBUG: [MediaGridView] Re-initializing VideoManager on reappear for tweet \(parentTweet.mid)")
                         Task {
                             await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
                         }
@@ -720,7 +717,6 @@ struct MediaGridView: View, Equatable {
             
             // Simulator video playback disabled - uncomment to re-enable
             // #if targetEnvironment(simulator)
-            // print("DEBUG: [MediaGridView] Running in simulator - disabling video playback to prevent crashes")
             // shouldLoadVideo = false
             // return
             // #endif
@@ -749,7 +745,6 @@ struct MediaGridView: View, Equatable {
             // This prevents recomposition when scrolling up past retweets
             if videoMids.count >= 1 {
                 let alreadySetup = videoManager.videoMids == videoMids && videoManager.currentVideoIndex >= 0
-                print("DEBUG: [MediaGridView] onAppear for tweet \(parentTweet.mid): videoMids=\(videoMids), alreadySetup=\(alreadySetup), currentIndex=\(videoManager.currentVideoIndex)")
                 
                 if !alreadySetup && !hasSetupSequentialPlayback {
                     hasSetupSequentialPlayback = true
@@ -758,20 +753,17 @@ struct MediaGridView: View, Equatable {
                     Task.detached(priority: .background) {
                         await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
                         await MainActor.run {
-                            print("DEBUG: [MediaGridView] ✅ Setup sequential playback for tweet \(parentTweet.mid), currentIndex after setup: \(videoManager.currentVideoIndex)")
 
                             // If all videos were finished (saved index >= count), restart from beginning
                             if videoManager.currentVideoIndex >= videoMids.count {
                                 videoManager.currentVideoIndex = 0
                                 videoManager.saveCurrentIndex(for: parentTweet.mid)
-                                print("DEBUG: [MediaGridView] Reset currentVideoIndex to 0 (was >= count)")
                             }
                         }
                     }
                 } else if alreadySetup {
                     // Already set up - mark as done to prevent future checks
                     hasSetupSequentialPlayback = true
-                    print("DEBUG: [MediaGridView] Already set up for tweet \(parentTweet.mid), currentIndex: \(videoManager.currentVideoIndex)")
                 }
             }
             
@@ -828,11 +820,9 @@ struct MediaGridView: View, Equatable {
         .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
             if let tweetId = notification.userInfo?["tweetId"] as? String,
                tweetId == parentTweet.mid {
-                print("DEBUG: [MediaGridView] Received cancel video loading notification for tweet \(tweetId)")
                 // Don't cancel loading for a tweet that is currently visible.
                 // Fullscreen/login overlays can confuse global visibility/cancellation heuristics.
                 guard !isVisible else {
-                    print("DEBUG: [MediaGridView] Ignoring cancelVideoLoading for visible tweet \(tweetId)")
                     return
                 }
                 shouldLoadVideo = false
@@ -842,7 +832,6 @@ struct MediaGridView: View, Equatable {
         .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
             if let tweetId = notification.userInfo?["tweetId"] as? String,
                tweetId == parentTweet.mid {
-                print("DEBUG: [MediaGridView] Received video preloading notification for tweet \(tweetId)")
                 // Enable video loading for preloading
                 shouldLoadVideo = true
             }

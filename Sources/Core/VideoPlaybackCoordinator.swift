@@ -120,9 +120,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     func buildVideoList(from tweets: [Tweet]) {
         var videos: [VideoPlaybackInfo] = []
         
-        print("DEBUG: [buildVideoList] Processing \(tweets.count) tweets")
         
-        for (idx, tweet) in tweets.enumerated() {
+        for (_, tweet) in tweets.enumerated() {
             // For retweets, get attachments from original tweet but use retweet's ID for positioning
             let attachments: [MimeiFileType]?
             let isRetweet = tweet.originalTweetId != nil && tweet.attachments == nil
@@ -131,16 +130,13 @@ class VideoPlaybackCoordinator: ObservableObject {
                 // This is a retweet - try to get original tweet from singleton cache
                 if let originalTweet = Tweet.getInstance(for: originalTweetId) {
                     attachments = originalTweet.attachments
-                    print("DEBUG: [buildVideoList] Tweet \(idx) (\(tweet.mid)) is RETWEET of \(originalTweetId), using original's attachments")
                 } else {
                     // Original tweet not in cache yet - skip for now, will be added when it loads
-                    print("DEBUG: [buildVideoList] Tweet \(idx) (\(tweet.mid)) is RETWEET of \(originalTweetId), but original NOT IN CACHE - skipping")
                     continue
                 }
             } else {
                 attachments = tweet.attachments
                 if isRetweet {
-                    print("DEBUG: [buildVideoList] Tweet \(idx) (\(tweet.mid)) is retweet but HAS attachments directly")
                 }
             }
             
@@ -148,7 +144,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             for (index, attachment) in attachments.enumerated() {
                 if attachment.type == .video || attachment.type == .hls_video {
-                    print("DEBUG: [buildVideoList] Adding video at tweet index \(idx), tweetId=\(tweet.mid), videoMid=\(attachment.mid), attachmentIndex=\(index)")
                     videos.append(VideoPlaybackInfo(
                         tweetId: tweet.mid,  // Use retweet's ID so positioning matches user's view
                         videoMid: attachment.mid,
@@ -156,11 +151,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     ))
                 }
             }
-        }
-        
-        print("DEBUG: [buildVideoList] Final video list: \(videos.count) videos")
-        for (idx, video) in videos.enumerated() {
-            print("DEBUG: [buildVideoList]   Video \(idx): tweetId=\(video.tweetId), videoMid=\(video.videoMid)")
         }
         
         self.allVideos = videos
@@ -293,7 +283,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         isScrolling = false
         // Scroll stop handler is now a no-op since we handle everything via debounce during scroll
         // Videos continue playing through scroll and beyond
-        print("🎬 [VideoOrchestrator] Scroll stopped (no action needed - videos already playing)")
     }
     
     /// Start survey phase - play all visible videos for 2s each
@@ -432,7 +421,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         let videoId = video.identifier
         currentlyPlayingVideoIds.remove(videoId)
         
-        print("🎬 [VideoOrchestrator] Pausing video \(video.videoMid)")
         
         NotificationCenter.default.post(
             name: .shouldPauseVideo,
@@ -449,7 +437,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         // Find current primary in visible videos list
         guard let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentPrimary }) else {
-            print("🎬 [VideoOrchestrator] Primary video no longer visible")
             stopAllVideos()
             return
         }
@@ -457,13 +444,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Find next video
         let nextIndex = currentIndex + 1
         guard nextIndex < visibleVideos.count else {
-            print("🎬 [VideoOrchestrator] No more visible videos, stopping")
             stopAllVideos()
             return
         }
         
         let nextVideo = visibleVideos[nextIndex]
-        print("🎬 [VideoOrchestrator] Playing next video: \(nextVideo.videoMid)")
         
         // Set new primary and start playing
         primaryVideoId = nextVideo.identifier
@@ -488,24 +473,16 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         
-        print("🎬 [VideoOrchestrator] Video finished: \(videoMid)")
-        print("🎬 [VideoOrchestrator]   Current phase: \(phase)")
-        print("🎬 [VideoOrchestrator]   Primary video: \(primaryVideoId ?? "nil")")
-        print("🎬 [VideoOrchestrator]   Currently playing: \(currentlyPlayingVideoIds)")
         
         // Only handle if this is the primary video
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId,
            primaryId.contains(videoMid) {
-            print("🎬 [VideoOrchestrator] ✅ Primary video finished, playing next")
             playNextVisibleVideo()
         } else {
             if phase != .primaryPlaying {
-                print("🎬 [VideoOrchestrator] ⏭️ Not in primaryPlaying phase - ignoring finish event")
             } else if primaryVideoId == nil {
-                print("🎬 [VideoOrchestrator] ⏭️ No primary video set - ignoring finish event")
             } else if let primaryId = primaryVideoId, !primaryId.contains(videoMid) {
-                print("🎬 [VideoOrchestrator] ⏭️ Finished video \(videoMid) is not the primary video - ignoring")
             }
         }
     }

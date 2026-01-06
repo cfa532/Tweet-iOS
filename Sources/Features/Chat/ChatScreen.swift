@@ -384,7 +384,7 @@ struct ChatScreen: View {
         DebounceButton(
             cooldownDuration: 0.3,
             enableAnimation: true,
-            enableVibration: false
+            enableHaptic: false
         ) {
             sendMessage()
         } label: {

@@ -61,7 +61,6 @@ class VideoLoadingManager: ObservableObject {
     func endStartupPhase() async {
         await MainActor.run {
             isInStartupPhase = false
-            print("DEBUG: [VideoLoadingManager] Startup phase ended - video operations now allowed")
 
             // Post notification that startup phase has ended
             NotificationCenter.default.post(name: .startupPhaseEnded, object: nil)
@@ -72,13 +71,11 @@ class VideoLoadingManager: ObservableObject {
     /// Note: Despite the method name, this tracks all media types that need loading priority (video, audio, etc.)
     func registerTweetWithVideos(_ tweetId: String) {
         tweetsWithVideos.insert(tweetId)
-        print("DEBUG: [VideoLoadingManager] Registered tweet \(tweetId) as containing media (video/audio)")
     }
     
     /// Register a retweet-to-original relationship
     func registerRetweetRelationship(retweetId: String, originalTweetId: String) {
         retweetToOriginalMap[retweetId] = originalTweetId
-        print("DEBUG: [VideoLoadingManager] Registered retweet relationship: \(retweetId) -> \(originalTweetId)")
     }
     
     /// Update the currently visible tweet index
@@ -105,18 +102,15 @@ class VideoLoadingManager: ObservableObject {
         // HIGHEST PRIORITY: Original tweets of visible retweets should load immediately
         let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
         if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing loading")
             return true
         }
         
         guard let index = allTweetIds.firstIndex(of: tweetId) else { 
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) not found in allTweetIds - denying loading")
             return false 
         }
                 
         // HIGHEST PRIORITY: Current visible tweet should always load regardless of any constraints
         if index == currentVisibleTweetIndex {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is current visible tweet, highest priority - allowing loading")
             return true
         }
         
@@ -126,7 +120,6 @@ class VideoLoadingManager: ObservableObject {
         // CRITICAL: Never load videos for tweets above current position (scrolling up stability)
         // This prevents layout instability when scrolling up past previously viewed tweets
         if distance < 0 {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is above current position (distance: \(distance)), denying loading for scroll stability")
             return false
         }
         
@@ -134,19 +127,16 @@ class VideoLoadingManager: ObservableObject {
         // This allows fast loading of nearby cached content without causing layout shifts from distant tweets
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
         if hasCachedContent && distance <= preloadCount {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content and is within preload range, allowing loading")
             return true
         }
         
         // Check if we're already loading too many videos
         if activeLoadingCount >= maxConcurrentLoads {
-            print("DEBUG: [VideoLoadingManager] Throttling video load for \(tweetId) - too many active loads (\(activeLoadingCount))")
             return false
         }
         
         // Check if we're loading too frequently
         if isLoadingTooFrequently() {
-            print("DEBUG: [VideoLoadingManager] Throttling video load for \(tweetId) - loading too frequently")
             return false
         }
         
@@ -160,7 +150,6 @@ class VideoLoadingManager: ObservableObject {
         // HIGHEST PRIORITY: Original tweets of visible retweets should preload
         let currentVisibleTweetId = allTweetIds.indices.contains(currentVisibleTweetIndex) ? allTweetIds[currentVisibleTweetIndex] : nil
         if let visibleId = currentVisibleTweetId, retweetToOriginalMap[visibleId] == tweetId {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is the ORIGINAL of visible retweet \(visibleId), HIGHEST PRIORITY - allowing preloading")
             return true
         }
         
@@ -171,7 +160,6 @@ class VideoLoadingManager: ObservableObject {
         
         // HIGHEST PRIORITY: Current visible tweet should always preload regardless of any constraints
         if index == currentVisibleTweetIndex {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) is current visible tweet, highest priority - allowing preloading")
             return true
         }
         
@@ -188,7 +176,6 @@ class VideoLoadingManager: ObservableObject {
         // This allows fast preloading of nearby cached content without causing layout shifts
         let hasCachedContent = SharedAssetCache.shared.hasCachedContent(for: tweetId)
         if hasCachedContent && distance <= preloadCount {
-            print("DEBUG: [VideoLoadingManager] Tweet \(tweetId) has cached content and is within preload range, allowing preloading")
             return true
         }
         
@@ -218,13 +205,11 @@ class VideoLoadingManager: ObservableObject {
         activeLoadingCount += 1
         loadCountInLastMinute += 1
         lastLoadTime = Date()
-        print("DEBUG: [VideoLoadingManager] Video load started. Active loads: \(activeLoadingCount)")
     }
     
     /// Notify that a video load has completed
     func videoLoadCompleted() {
         activeLoadingCount = max(0, activeLoadingCount - 1)
-        print("DEBUG: [VideoLoadingManager] Video load completed. Active loads: \(activeLoadingCount)")
         
         // Process queue if there are pending loads
         if !loadingQueue.isEmpty && !isProcessingQueue {
@@ -291,7 +276,6 @@ class VideoLoadingManager: ObservableObject {
         // Cancelling during overlays can stop videos that should resume after dismissal.
         let isCovered = await MainActor.run { self.isContentCoveredByOverlay() }
         if isCovered {
-            print("DEBUG: [VideoLoadingManager] Content covered by overlay, skipping cancellation batch (\(tweetIds.count) tweets)")
             return
         }
 
@@ -368,7 +352,6 @@ class VideoLoadingManager: ObservableObject {
                         // Add to queue if we're at capacity
                         if !loadingQueue.contains(tweetId) {
                             loadingQueue.append(tweetId)
-                            print("DEBUG: [VideoLoadingManager] Queued video preloading for tweet \(tweetId)")
                         }
                     }
                 }
@@ -386,7 +369,6 @@ class VideoLoadingManager: ObservableObject {
                 let tweetId = loadingQueue.removeFirst()
                 if shouldPreloadVideos(for: tweetId) {
                     triggerVideoPreloading(for: tweetId)
-                    print("DEBUG: [VideoLoadingManager] Processed queued video preloading for tweet \(tweetId)")
                 }
                 
                 // No artificial delay - process queue as fast as possible
@@ -401,7 +383,6 @@ class VideoLoadingManager: ObservableObject {
     private func cancelVideoLoading(for tweetId: String) {
         // This method is kept for backward compatibility but is no longer used
         // Cancellations are now handled by the background timer
-        print("DEBUG: [VideoLoadingManager] Legacy cancelVideoLoading called for \(tweetId) - using background cancellation instead")
     }
     
     private func triggerVideoPreloading(for tweetId: String) {

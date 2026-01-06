@@ -36,13 +36,11 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         // Set up header if present
         controller.updateHeader()
         
-        print("DEBUG: [TweetTableView] Created TweetTableViewController")
         
         return controller
     }
     
     func updateUIViewController(_ uiViewController: TweetTableViewController, context: Context) {
-        print("DEBUG: [TweetTableView] updateUIViewController - tweets count: \(tweets.count)")
         
         // Update tweets
         uiViewController.updateTweets(tweets)

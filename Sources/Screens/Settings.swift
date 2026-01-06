@@ -47,7 +47,7 @@ struct SettingsView: View {
                     DebounceButton(
                         cooldownDuration: 0.5,
                         enableAnimation: true,
-                        enableVibration: false
+                        enableHaptic: false
                     ) {
                         cleanupCache()
                     } label: {

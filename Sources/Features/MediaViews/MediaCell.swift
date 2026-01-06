@@ -107,7 +107,6 @@ struct MediaCell: View, Equatable {
         
         // Only update if changed to avoid unnecessary view updates
         if effectiveBaseUrl != newBaseUrl {
-            print("DEBUG: [MediaCell] BaseUrl updated for video \(attachment.mid): \(effectiveBaseUrl.absoluteString) -> \(newBaseUrl.absoluteString)")
             effectiveBaseUrl = newBaseUrl
         }
     }
@@ -198,11 +197,9 @@ struct MediaCell: View, Equatable {
             if isVideoAttachment {
                 if isEmbedded {
                     shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
-                    print("DEBUG: [MediaCell] onAppear (embedded) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), shouldLoadVideo=\(shouldLoadVideo)")
                 } else {
                     let managerSays = videoManager.shouldPlayVideo(for: attachment.mid)
                     shouldAutoPlay = managerSays && shouldLoadVideo
-                    print("DEBUG: [MediaCell] onAppear for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), videoManager=\(managerSays), shouldLoadVideo=\(shouldLoadVideo), currentIndex=\(videoManager.currentVideoIndex), videoMids=\(videoManager.videoMids)")
                     
                     // CRITICAL FIX: If this is a new grid that just appeared and has videos,
                     // ensure VideoManager knows to play the first video
@@ -261,7 +258,6 @@ struct MediaCell: View, Equatable {
                 } else {
                     shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo
                 }
-                print("DEBUG: [MediaCell] onChange(isVisible) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
             }
         }
         
@@ -273,7 +269,6 @@ struct MediaCell: View, Equatable {
                 } else {
                     shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid)
                 }
-                print("DEBUG: [MediaCell] onChange(shouldLoadVideo) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
             }
         }
         
@@ -336,7 +331,6 @@ struct MediaCell: View, Equatable {
     private func startBackgroundPreloading() {
         // This method is disabled because grid-level debouncing now handles all video preloading
         // Individual cells no longer need to preload videos independently
-        print("DEBUG: [MediaCell] startBackgroundPreloading() called but disabled - grid-level debouncing handles preloading")
         return
     }
     
@@ -416,7 +410,6 @@ struct MediaCell: View, Equatable {
             // Only reload if cell is visible and image was released
             guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
             
-            print("DEBUG: [MediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
             self.loadImage()
         }
     }

@@ -68,11 +68,9 @@ class TweetTableViewController: UITableViewController {
         // and topInset is set (nav bar is present)
         // Ignore if already properly positioned or if user has scrolled
         if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 {
-            print("DEBUG: [TweetTableViewController] Adjusting initial position in viewDidAppear: \(currentOffset) -> -\(topInset)")
             tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
             lastScrollOffset = -topInset
         } else {
-            print("DEBUG: [TweetTableViewController] Skipping adjustment - topInset: \(topInset), currentOffset: \(currentOffset)")
         }
     }
     
@@ -84,18 +82,15 @@ class TweetTableViewController: UITableViewController {
         if !hasCompletedInitialLayout {
             lastScrollOffset = tableView.contentOffset.y
             hasCompletedInitialLayout = true
-            print("DEBUG: [TweetTableViewController] Initial layout completed - lastScrollOffset: \(lastScrollOffset)")
             
             // Ensure table view is scrolled to proper top position (respecting safe area)
             // This prevents header from being covered by navigation bar
             let topInset = tableView.adjustedContentInset.top
             let currentOffset = tableView.contentOffset.y
             
-            print("DEBUG: [TweetTableViewController] Initial layout - topInset: \(topInset), currentOffset: \(currentOffset)")
             
             // If offset is too negative (header would be under nav bar), correct it
             if currentOffset < -topInset {
-                print("DEBUG: [TweetTableViewController] Correcting initial scroll position: \(currentOffset) -> -\(topInset)")
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
             }
@@ -222,7 +217,6 @@ class TweetTableViewController: UITableViewController {
         // Case 3: Single tweet removed - common for delete
         if newTweets.count == oldCount - 1 {
             if let removedIndex = oldIds.firstIndex(where: { id in !newIds.contains(id) }) {
-                print("DEBUG: [TweetTableViewController] 1 tweet removed at index \(removedIndex) - using deleteRows")
                 tableView.deleteRows(at: [IndexPath(row: removedIndex, section: 0)], with: .automatic)
                 videoCoordinator.buildVideoList(from: newTweets)
                 return
@@ -314,7 +308,6 @@ class TweetTableViewController: UITableViewController {
                 // Update frames if size changed
                 let oldHeight = containerView.frame.height
                 if abs(oldHeight - fittingSize.height) > 1 {
-                    print("DEBUG: [TweetTableViewController] Header height changed: \(oldHeight) -> \(fittingSize.height)")
                     
                     // CRITICAL: Preserve scroll position when updating header
                     let currentOffset = tableView.contentOffset
@@ -337,12 +330,10 @@ class TweetTableViewController: UITableViewController {
                         UIView.animate(withDuration: 0.2, delay: 0, options: .curveEaseOut, animations: {
                             self.tableView.setContentOffset(CGPoint(x: 0, y: properTopOffset), animated: false)
                         }, completion: nil)
-                        print("DEBUG: [TweetTableViewController] Staying at top (animated): \(currentOffset.y) -> \(properTopOffset)")
                     } else {
                         // Scrolled down: preserve visible content by adjusting for height change (instant)
                         let newOffset = CGPoint(x: currentOffset.x, y: currentOffset.y + heightDiff)
                         tableView.setContentOffset(newOffset, animated: false)
-                        print("DEBUG: [TweetTableViewController] Adjusted scroll: \(currentOffset.y) -> \(newOffset.y) (heightDiff: \(heightDiff))")
                     }
                 }
             }
