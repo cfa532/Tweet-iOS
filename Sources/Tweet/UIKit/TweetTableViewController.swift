@@ -571,15 +571,75 @@ class TweetTableViewController: UITableViewController {
     private func updateVisibleTweetsForVideoPlayback() {
         guard !tweets.isEmpty else { return }
         
-        // Get visible cells
+        // Calculate main content area (excluding header and footer)
+        let mainContentRect = calculateMainContentRect()
+        
+        // Get visible cells and filter by main content area
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
         let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
             guard indexPath.row < tweets.count else { return nil }
+            
+            // Get the cell for this index path
+            guard let cell = tableView.cellForRow(at: indexPath) else { return nil }
+            
+            // Convert cell frame to table view coordinates
+            let cellFrame = tableView.convert(cell.frame, to: tableView)
+            
+            // Check if cell intersects with main content area
+            let intersection = cellFrame.intersection(mainContentRect)
+            
+            // Only consider cells that have at least 30% of their height visible in main content area
+            // This ensures videos are sufficiently visible before starting playback
+            let visibilityRatio = intersection.height / cellFrame.height
+            guard visibilityRatio >= 0.3 else { return nil }
+            
             return tweets[indexPath.row].mid
         })
         
         // Update coordinator
         videoCoordinator.updateVisibleTweets(visibleTweetIds)
+    }
+    
+    /// Calculate the visible main content area (excluding header and footer)
+    private func calculateMainContentRect() -> CGRect {
+        // Start with the visible bounds of the table view
+        let visibleBounds = tableView.bounds
+        var mainContentY = tableView.contentOffset.y
+        var mainContentHeight = visibleBounds.height
+        
+        // Exclude table header view from top
+        if let headerView = tableView.tableHeaderView {
+            let headerHeight = headerView.frame.height
+            let headerBottom = headerHeight // Header is at position 0
+            
+            // If we're scrolled such that header is still visible, adjust top boundary
+            if mainContentY < headerBottom {
+                let headerVisibleHeight = headerBottom - mainContentY
+                mainContentY += headerVisibleHeight
+                mainContentHeight -= headerVisibleHeight
+            }
+        }
+        
+        // Exclude table footer view from bottom
+        if let footerView = tableView.tableFooterView {
+            let footerHeight = footerView.frame.height
+            let contentHeight = tableView.contentSize.height
+            let footerTop = contentHeight - footerHeight
+            let visibleBottom = tableView.contentOffset.y + visibleBounds.height
+            
+            // If footer is visible at bottom, adjust bottom boundary
+            if visibleBottom > footerTop {
+                let footerVisibleHeight = visibleBottom - footerTop
+                mainContentHeight -= footerVisibleHeight
+            }
+        }
+        
+        return CGRect(
+            x: 0,
+            y: mainContentY,
+            width: visibleBounds.width,
+            height: max(0, mainContentHeight) // Ensure non-negative height
+        )
     }
     
     // MARK: - Bottom Pull-to-Load
