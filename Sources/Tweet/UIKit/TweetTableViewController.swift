@@ -522,8 +522,6 @@ class TweetTableViewController: UITableViewController {
             return tweets[indexPath.row].mid
         })
         
-        print("DEBUG: [TweetTableViewController] Updating visible tweets for video: \(visibleTweetIds.count) visible")
-        
         // Update coordinator
         videoCoordinator.updateVisibleTweets(visibleTweetIds)
     }

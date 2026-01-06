@@ -67,7 +67,20 @@ class VideoStateCache {
     private let cacheExpirationInterval: TimeInterval = 600 // 10 minutes
     private let maxCacheSize = 15 // Maximum number of cached states (reduced for better performance)
     
+    // CRITICAL: Track visible videos to prevent them from being evicted
+    private var visibleVideoMids: Set<String> = []
+    
     private init() {}
+    
+    /// Mark a video as visible (prevents eviction)
+    func markAsVisible(_ mid: String) {
+        visibleVideoMids.insert(mid)
+    }
+    
+    /// Mark a video as not visible (allows eviction)
+    func markAsNotVisible(_ mid: String) {
+        visibleVideoMids.remove(mid)
+    }
     
     func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
         cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
@@ -75,7 +88,11 @@ class VideoStateCache {
         // Manage cache size with LRU eviction
         if cache.count > maxCacheSize {
             // Sort by timestamp (oldest first) and remove oldest entries
-            let sortedKeys = cache.sorted { $0.value.timestamp < $1.value.timestamp }.map { $0.key }
+            // CRITICAL: Never evict visible videos
+            let sortedKeys = cache
+                .filter { !visibleVideoMids.contains($0.key) } // Skip visible videos
+                .sorted { $0.value.timestamp < $1.value.timestamp }
+                .map { $0.key }
             let keysToRemove = sortedKeys.prefix(cache.count - maxCacheSize)
             
             for key in keysToRemove {
@@ -153,6 +170,11 @@ class VideoStateCache {
     }
     
     func clearCache(for mid: String) {
+        // CRITICAL: Never clear cache for visible videos
+        if visibleVideoMids.contains(mid) {
+            print("⚠️ [VIDEO CACHE] Refusing to clear cache for visible video \(mid)")
+            return
+        }
         print("DEBUG: [VIDEO CACHE] Clearing cache for \(mid)")
         cache.removeValue(forKey: mid)
     }
@@ -976,6 +998,11 @@ struct SimpleVideoPlayer: View {
     // MARK: - Lifecycle Handlers
     
     private func handleOnAppear() {
+        // CRITICAL: Mark video as visible to prevent cache eviction
+        if mode == .mediaCell {
+            VideoStateCache.shared.markAsVisible(mid)
+            SharedAssetCache.shared.markAsVisible(mid)
+        }
         
         // Handle idle timer for fullscreen modes
         if mode == .mediaBrowser {
@@ -1045,6 +1072,12 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleOnDisappear() {
+        // CRITICAL: Mark video as not visible to allow cache eviction if needed
+        if mode == .mediaCell {
+            VideoStateCache.shared.markAsNotVisible(mid)
+            SharedAssetCache.shared.markAsNotVisible(mid)
+        }
+        
         // Cancel recovery timeout task (cleanup)
         recoveryTimeoutTask?.cancel()
         recoveryTimeoutTask = nil
@@ -1073,6 +1106,8 @@ struct SimpleVideoPlayer: View {
             // For MediaCell mode, save the current global mute state
             // For detail/fullscreen modes, we need to track the original global mute state
             let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
+            let currentTime = player.currentTime().seconds
+            NSLog("💾 [VIDEO CACHE] Saving position \(String(format: "%.2f", currentTime))s for \(mid) in handleOnDisappear")
             VideoStateCache.shared.cacheVideoState(
                 for: mid,
                 player: player,
@@ -1677,11 +1712,21 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // For survey mode, always start from beginning
+        // For survey mode, only start from beginning if there's no cached position
         // For primary mode, continue from current position
         if isSurvey {
-            // Survey phase: start from beginning
-            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+            // Check if video has a cached position from previous viewing
+            let hasCachedPosition = VideoStateCache.shared.hasCachedPlaybackInfo(for: mid)
+            let currentTime = player.currentTime().seconds
+            
+            if hasCachedPosition && currentTime > 0.5 {
+                // Video was restored from cache - keep the current position
+                NSLog("🎬 [SURVEY] Video \(mid) has cached position (\(String(format: "%.2f", currentTime))s) - NOT seeking to zero")
+            } else {
+                // New video or at beginning - start from zero for survey
+                NSLog("🎬 [SURVEY] Video \(mid) starting from beginning")
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
         } else if isPrimary {
             // Primary phase: check if video is near the end, if so restart
             let currentTime = player.currentTime()
@@ -2785,7 +2830,9 @@ struct SimpleVideoPlayer: View {
                     // 1. Holding recovery cover (background recovery)
                     // 2. Player explicitly detached (app lifecycle)
                     // 3. Video has finished playing (show last frame instead of black screen)
-                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isFinished
+                    // 4. Video is being initialized (prevents black flicker when scrolling back)
+                    let isInitializing = loadingState.isLoading && player.rate == 0
+                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isFinished || isInitializing
                     
                     if shouldShowPlaceholder {
                         // IMPORTANT: This overlay must be tap-through so taps still reach the video layer
@@ -3537,18 +3584,28 @@ struct SimpleVideoPlayer: View {
                 cachedState.player.pause()
             }
             
-            // Use seek with tolerance for better reliability
-            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+            // Restore cached position
             let videoMid = self.mid
+            let seekTime = cachedState.time.seconds
+            let duration = cachedState.player.currentItem?.duration.seconds ?? 0
+            
+            // Log if cached position exceeds known duration (metadata may still be loading)
+            if seekTime > duration && duration > 0 {
+                NSLog("⚠️ [VIDEO CACHE] Cached position \(String(format: "%.2f", seekTime))s exceeds current known duration \(String(format: "%.2f", duration))s for \(videoMid) - seeking anyway (AVPlayer will clamp if needed)")
+            }
+            
+            // Use seek with tolerance for better reliability
+            // AVPlayer will clamp the seek position to valid range if metadata is still loading
+            let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
+            NSLog("🔄 [VIDEO CACHE] Seeking to cached position: \(String(format: "%.2f", seekTime))s for \(videoMid)")
             cachedState.player.seek(to: cachedState.time, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
                 if finished {
-                    // Don't auto-play here - let KVO handlers handle it (same as first time)
-                    // KVO handlers will fire when ready and check VideoManager via checkPlaybackConditions
-                    NSLog("DEBUG: [VIDEO CACHE] Seek completed for \(videoMid), waiting for KVO handlers (same as first time)")
+                    NSLog("✅ [VIDEO CACHE] Seek completed for \(videoMid) at \(String(format: "%.2f", seekTime))s")
                 } else {
                     // CRITICAL: Seek failed (common after background transitions)
                     // Instead of recreating, just start from beginning - much faster!
                     NSLog("⚠️ [VIDEO CACHE] Seek to \(cachedState.time.seconds)s failed for \(videoMid) - starting from beginning instead")
+                    
                     Task { @MainActor in
                         // Clear cached position so we start fresh
                         VideoStateCache.shared.clearCache(for: videoMid)
@@ -4534,15 +4591,28 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // CRITICAL: If video was finished but is now approved to play (next in sequence),
-                // reset it to allow playback - this handles sequential video transitions
+                // reset it ONLY if the video actually played to completion (no cached position exists)
+                // This allows videos that were paused mid-playback to resume from their saved position
                 if playbackState == .finished {
-                    print("🔄 [VIDEO PLAYBACK] Video \(mid) was finished but is now next in sequence - resetting for playback")
-                    playbackState = .notStarted
-                    // CRITICAL: For sequential playback, always start from beginning, don't restore cached position
-                    // Clear cached position to prevent resume logic from seeking to stale position
-                    VideoStateCache.shared.clearCache(for: mid)
-                    // Seek to start to ensure clean state
-                    player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                    // Check if we have a saved position for this video (scrolled away before finishing)
+                    let hasCachedPosition = VideoStateCache.shared.hasCachedPlaybackInfo(for: mid)
+                    let cachedInfo = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)
+                    let duration = player?.currentItem?.duration.seconds ?? 0
+                    let cachedTime = cachedInfo?.time.seconds ?? 0
+                    let isNearEnd = duration > 0 && cachedTime > duration - 0.5
+                    
+                    // Only clear cache and restart if video actually finished (cached position is near end or no cache)
+                    // This prevents restarting videos that were paused mid-playback when scrolling
+                    if !hasCachedPosition || isNearEnd {
+                        print("🔄 [VIDEO PLAYBACK] Video \(mid) was finished and at end - resetting for playback")
+                        playbackState = .notStarted
+                        VideoStateCache.shared.clearCache(for: mid)
+                        player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                    } else {
+                        print("🔄 [VIDEO PLAYBACK] Video \(mid) has cached position (\(String(format: "%.2f", cachedTime))s) - will resume instead of restart")
+                        playbackState = .notStarted
+                        // Don't clear cache - let the resume logic below handle it
+                    }
                 }
             }
             
@@ -4556,99 +4626,11 @@ struct SimpleVideoPlayer: View {
                 NSLog("🔇 [PLAYER MUTE] checkPlaybackConditions - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
             }
             
-            // MediaCell resume behavior:
-            // - If we have a cached playback position (e.g. scrolled off-screen and back), resume from that time.
-            // - For sequential playback transitions (video was finished), always start from beginning.
-            // - Otherwise, start from the beginning.
-            //
-            // Note: `restoreFromCache` seeks to cachedState.time but marks playbackState as `.notStarted`
-            // so we must not blindly seek to `.zero` here, or we'd erase the resume position.
+            // MediaCell: Trust player position - either at 0 (new player) or at cached position (from restoreFromCache)
+            // DON'T seek to zero here - that would erase positions that restoreFromCache just set!
             if mode == .mediaCell && playbackState == .notStarted {
-                // CRITICAL: Handle resume behavior for MediaCell videos
-                // - For sequential transitions (video finished, next video starts): always start from beginning
-                // - For scrolling back (has cached position): restore cached position
-                // - For single videos: restore cached position if available (scrolling back scenario)
-                let isCurrentVideoInSequence = videoManager?.shouldPlayVideo(for: mid) == true
-                let videoMidsCount = videoManager?.videoMids.count ?? 0
-                let isSingleVideo = videoMidsCount == 1
-                let cachedInfo = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)
-                let hasCachedPosition = cachedInfo != nil
-                let cachedTime = cachedInfo?.time ?? .zero
-                
-                let currentSeconds = player?.currentTime().seconds ?? 0
-                let duration = player?.currentItem?.duration.seconds ?? 0
-                let isNearEnd = duration > 0 && currentSeconds > duration - 0.5
-                let cachedIsNearEnd = duration > 0 && cachedTime.seconds > duration - 0.5
-                
-                // Determine if we should restore cached position:
-                // 1. Single video: restore if has cached position and not near end (scrolling back scenario)
-                // 2. Multiple videos: restore if NOT current video in sequence (scrolling back to non-current video)
-                // 3. Multiple videos current: don't restore (sequential transition, start from beginning)
-                let shouldRestoreCache = hasCachedPosition && !cachedIsNearEnd && (
-                    isSingleVideo || // Single video: always restore if has valid cache
-                    !isCurrentVideoInSequence // Multiple videos: restore if not current (scrolling back)
-                )
-                
-                if shouldRestoreCache {
-                    // Restore from cache (scrolling back scenario)
-                    let resumeSeconds = cachedTime.seconds.isFinite ? cachedTime.seconds : 0
-                    let needsSeek = abs(currentSeconds - resumeSeconds) > 0.25
-                    
-                    if needsSeek {
-                        NSLog("🔄 [PLAYBACK] Restoring cached position (\(String(format: "%.2f", resumeSeconds))s) for \(mid)\(isSingleVideo ? " (single video)" : " (scrolled back)")")
-                        player?.seek(to: cachedTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                    }
-                    
-                    // Brief delay to let seek settle, then start playing
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls playback
-                        if self.mode != .mediaCell && self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
-                            NSLog("▶️ [PLAYBACK] Starting playback after cache restore: \(self.mid)")
-                            self.player?.play()
-                            self.playbackState = .playing
-                        }
-                    }
-                    return
-                } else if isCurrentVideoInSequence {
-                    // Current video in sequence (or single video without cache) - start from beginning
-                    // Clear cache if video is at end to prevent future resume attempts
-                    if isNearEnd || (hasCachedPosition && cachedIsNearEnd) {
-                        NSLog("🔄 [PLAYBACK] Sequential playback - clearing stale cache and seeking to start for \(mid) (was at \(String(format: "%.2f", currentSeconds))s)")
-                        VideoStateCache.shared.clearCache(for: mid)
-                        player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                    } else if currentSeconds > 0.25 {
-                        NSLog("🔄 [PLAYBACK] Sequential playback - seeking to start position for \(mid) (was at \(String(format: "%.2f", currentSeconds))s)")
-                        player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                    }
-                    
-                    // Brief delay to let seek settle, then start playing
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls playback
-                        if self.mode != .mediaCell && self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
-                            NSLog("▶️ [PLAYBACK] Starting playback after sequential reset: \(self.mid)")
-                            self.player?.play()
-                            self.playbackState = .playing
-                        }
-                    }
-                    return
-                } else {
-                    // Not current video and no cache - ensure we're at start
-                    if currentSeconds > 0.25 {
-                        NSLog("🔄 [PLAYBACK] Seeking to start position for \(mid)")
-                        player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                    }
-                    
-                    // Brief delay to let seek settle
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls playback
-                        if self.mode != .mediaCell && self.player?.rate == 0 && self.isVisible && self.videoManager?.shouldPlayVideo(for: self.mid) == true {
-                            NSLog("▶️ [PLAYBACK] Starting playback: \(self.mid)")
-                            self.player?.play()
-                            self.playbackState = .playing
-                        }
-                    }
-                    return
-                }
+                NSLog("🎬 [PLAYBACK] Player ready at current position for \(mid), letting VideoPlaybackCoordinator control playback")
+                // Position is already correct - do nothing
             }
             
             // CRITICAL: Check actual player position before playing

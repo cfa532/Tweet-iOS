@@ -20,6 +20,9 @@ private struct CacheMetadata: Codable {
 class SharedAssetCache: ObservableObject {
     static let shared = SharedAssetCache()
     
+    // CRITICAL: Track visible videos to prevent their players from being removed
+    private var visibleVideoMids: Set<String> = []
+    
     // MARK: - CachingPlayerItem Delegate
     private class CachingPlayerItemDelegateImpl: NSObject, CachingPlayerItemDelegate {
         func playerItem(_ playerItem: CachingPlayerItem, didFinishDownloadingFileAt filePath: String) {
@@ -536,7 +539,22 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Remove invalid cached player
+    /// Mark a video as visible (prevents player removal)
+    func markAsVisible(_ mediaID: String) {
+        visibleVideoMids.insert(mediaID)
+    }
+    
+    /// Mark a video as not visible (allows player removal)
+    func markAsNotVisible(_ mediaID: String) {
+        visibleVideoMids.remove(mediaID)
+    }
+    
     func removeInvalidPlayer(for mediaID: String) {
+        // CRITICAL: Never remove players for visible videos
+        if visibleVideoMids.contains(mediaID) {
+            print("⚠️ [SHARED ASSET CACHE] Refusing to remove player for visible video \(mediaID)")
+            return
+        }
         playerCache.removeValue(forKey: mediaID)
     }
     
