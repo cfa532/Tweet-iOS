@@ -50,6 +50,17 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     private var heightCache: [String: CGFloat] = [:]
     
+    // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
+    private var videoVisibilityUpdateTimer: Timer?
+    private var lastVideoVisibilityUpdate: Date?
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms throttle
+    
+    // Cached main content rect to avoid recalculating on every visibility check
+    private var cachedMainContentRect: CGRect?
+    private var lastContentOffset: CGFloat = 0
+    private var lastHeaderHeight: CGFloat = 0
+    private var lastFooterHeight: CGFloat = 0
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -123,6 +134,13 @@ class TweetTableViewController: UITableViewController {
         // CRITICAL: Disable section header pinning so headers scroll naturally
         if #available(iOS 15.0, *) {
             tableView.sectionHeaderTopPadding = 0
+        }
+        
+        // Self-sizing optimization flags for better scroll performance
+        if #available(iOS 15.0, *) {
+            tableView.fillerRowHeight = 0  // Don't calculate filler rows
+            tableView.sectionHeaderHeight = 0  // No section headers
+            tableView.sectionFooterHeight = 0  // No section footers
         }
         
         // Use automatic adjustment to respect safe area (navigation bar)
@@ -465,8 +483,18 @@ class TweetTableViewController: UITableViewController {
     // MARK: - UIScrollViewDelegate
     
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // Update visible tweets for video playback coordination
-        updateVisibleTweetsForVideoPlayback()
+        // Throttle video visibility updates to avoid expensive calculations on every scroll frame
+        // Schedule update if not already scheduled
+        if videoVisibilityUpdateTimer == nil {
+            videoVisibilityUpdateTimer = Timer.scheduledTimer(
+                withTimeInterval: videoVisibilityThrottleInterval,
+                repeats: false
+            ) { [weak self] _ in
+                self?.updateVisibleTweetsForVideoPlayback()
+                self?.videoVisibilityUpdateTimer?.invalidate()
+                self?.videoVisibilityUpdateTimer = nil
+            }
+        }
         
         // Detect bottom pull-to-load gesture (always check, even before initial layout)
         let contentHeight = scrollView.contentSize.height
@@ -533,19 +561,30 @@ class TweetTableViewController: UITableViewController {
         // Base tweet content height (author info, text, actions)
         estimatedHeight += 80 // Author row + padding
         
-        // Estimate text height (very rough approximation)
+        // Estimate text height using actual font metrics (more accurate than character count)
         if let content = tweet.content, !content.isEmpty {
-            let charCount = content.count
-            // Assume ~40 chars per line, 20pt line height
-            let estimatedLines = max(1, CGFloat(charCount) / 40)
-            estimatedHeight += estimatedLines * 20
+            // Use actual system font to calculate height
+            let font = UIFont.systemFont(ofSize: 17, weight: .regular) // Default tweet text font
+            let screenWidth = UIScreen.main.bounds.width
+            let textWidth = screenWidth - (leadingPadding + trailingPadding) - 16 // Account for padding and margins
+            
+            // Calculate bounding rect for text
+            let maxSize = CGSize(width: textWidth, height: .greatestFiniteMagnitude)
+            let textRect = (content as NSString).boundingRect(
+                with: maxSize,
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font],
+                context: nil
+            )
+            
+            estimatedHeight += ceil(textRect.height) + 8 // Add padding
         }
         
         // Add media height if present
         if let attachments = tweet.attachments, !attachments.isEmpty {
             // Calculate media grid height
             let screenWidth = UIScreen.main.bounds.width
-            let gridWidth = screenWidth - 16 // Account for padding
+            let gridWidth = screenWidth - (leadingPadding + trailingPadding) - 16 // Account for padding
             
             // Get aspect ratio from MediaGridViewModel logic
             let aspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
@@ -563,7 +602,7 @@ class TweetTableViewController: UITableViewController {
         estimatedHeight += 40
         
         // Clamp to reasonable bounds to prevent extreme estimates
-        return min(max(estimatedHeight, 150), 800)
+        return min(max(estimatedHeight, 150), 1000)
     }
     
     // MARK: - Video Playback Coordination
@@ -601,10 +640,23 @@ class TweetTableViewController: UITableViewController {
     }
     
     /// Calculate the visible main content area (excluding header and footer)
+    /// Cached to avoid expensive recalculation on every visibility check
     private func calculateMainContentRect() -> CGRect {
-        // Start with the visible bounds of the table view
+        let currentOffset = tableView.contentOffset.y
+        let currentHeaderHeight = tableView.tableHeaderView?.frame.height ?? 0
+        let currentFooterHeight = tableView.tableFooterView?.frame.height ?? 0
+        
+        // Return cached rect if conditions haven't changed significantly (within 10pt)
+        if let cached = cachedMainContentRect,
+           abs(currentOffset - lastContentOffset) < 10,
+           abs(currentHeaderHeight - lastHeaderHeight) < 1,
+           abs(currentFooterHeight - lastFooterHeight) < 1 {
+            return cached
+        }
+        
+        // Recalculate if cache is invalid
         let visibleBounds = tableView.bounds
-        var mainContentY = tableView.contentOffset.y
+        var mainContentY = currentOffset
         var mainContentHeight = visibleBounds.height
         
         // Exclude table header view from top
@@ -625,7 +677,7 @@ class TweetTableViewController: UITableViewController {
             let footerHeight = footerView.frame.height
             let contentHeight = tableView.contentSize.height
             let footerTop = contentHeight - footerHeight
-            let visibleBottom = tableView.contentOffset.y + visibleBounds.height
+            let visibleBottom = currentOffset + visibleBounds.height
             
             // If footer is visible at bottom, adjust bottom boundary
             if visibleBottom > footerTop {
@@ -634,12 +686,20 @@ class TweetTableViewController: UITableViewController {
             }
         }
         
-        return CGRect(
+        let rect = CGRect(
             x: 0,
             y: mainContentY,
             width: visibleBounds.width,
             height: max(0, mainContentHeight) // Ensure non-negative height
         )
+        
+        // Cache the result
+        cachedMainContentRect = rect
+        lastContentOffset = currentOffset
+        lastHeaderHeight = currentHeaderHeight
+        lastFooterHeight = currentFooterHeight
+        
+        return rect
     }
     
     // MARK: - Bottom Pull-to-Load

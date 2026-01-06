@@ -89,8 +89,9 @@ class TweetTableViewCell: UITableViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         // DON'T remove hosting controller here - it causes the loop
-        // Just clear the tweet ID
-        currentTweetId = nil
+        // DON'T clear currentTweetId - let configure() handle tweet changes
+        // This prevents unnecessary hosting controller recreations when
+        // the same tweet is displayed again during cell reuse
     }
     
     deinit {
