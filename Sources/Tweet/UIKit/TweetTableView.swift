@@ -14,7 +14,7 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     @Binding var hasMoreTweets: Bool
     let isLoadingMore: Bool
     let isLoading: Bool
-    let loadMoreTweets: () -> Void
+    let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
     let onRefresh: (() async -> Void)?  // Pull-to-refresh callback
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let leadingPadding: CGFloat  // Leading padding for cells

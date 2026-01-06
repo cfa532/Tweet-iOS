@@ -34,6 +34,15 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
+        // Wait for app initialization if not complete (same as home feed)
+        if !hproseInstance.isAppInitialized {
+            print("⏳ [PROFILE FETCH] Waiting for app initialization...")
+            while !hproseInstance.isAppInitialized {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            print("✅ [PROFILE FETCH] App initialization complete")
+        }
+        
         do {
             let serverTweets = try await hproseInstance.fetchUserTweets(
                 user: user,

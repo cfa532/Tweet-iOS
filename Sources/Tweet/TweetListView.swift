@@ -187,7 +187,7 @@ struct TweetListView<RowView: View>: View {
                     hasMoreTweets: $hasMoreTweets,
                     isLoadingMore: isLoadingMore,
                     isLoading: isLoading,
-                    loadMoreTweets: { loadMoreTweets() },
+                    loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
                     onRefresh: {
                         await refreshTweets()
                         await onRefreshExtra?()
@@ -365,10 +365,9 @@ struct TweetListView<RowView: View>: View {
             await loadFromServer(page: page, pageSize: pageSize) { _ in }
             
             // Trigger preloading after initial load completes
-            if hasMoreTweets {
-                await MainActor.run {
-                    loadNextTwoPages(startingFrom: 1)
-                }
+            // Always load next two pages on startup, regardless of hasMoreTweets
+            await MainActor.run {
+                loadNextTwoPages(startingFrom: 1, forceLoad: true)
             }
             
         } catch {
@@ -439,8 +438,9 @@ struct TweetListView<RowView: View>: View {
         }
     }
 
-    func loadMoreTweets(page: UInt? = nil) {
-        guard hasMoreTweets, !isLoadingMore, initialLoadComplete else {
+    func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
+        // Allow bypassing hasMoreTweets check for manual pull-to-load
+        guard (hasMoreTweets || forceLoad), !isLoadingMore, initialLoadComplete else {
             return 
         }
         
@@ -451,13 +451,13 @@ struct TweetListView<RowView: View>: View {
     }
     
     // MARK: - Batch Loading for Prefetching
-    private func loadNextTwoPages(startingFrom startPage: UInt) {
+    private func loadNextTwoPages(startingFrom startPage: UInt, forceLoad: Bool = false) {
         // Load first page immediately
         loadSinglePage(page: startPage) { success in
-            if success && self.hasMoreTweets {
-                // Load second page after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if self.hasMoreTweets && !self.isLoadingMore {
+            if success || forceLoad {
+                // Load second page after a delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    if (self.hasMoreTweets && !self.isLoadingMore) || forceLoad {
                         self.loadSinglePage(page: startPage + 1) { _ in }
                     }
                 }

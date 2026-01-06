@@ -109,10 +109,8 @@ struct FollowingsTweetView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in
-            // Load page 0 tweets when user is ready (guest or logged-in)
-            Task {
-                await viewModel.loadPage0Tweets()
-            }
+            // TweetListView already handles initial loading with correct pageSize
+            // No need to manually trigger here
         }
         .onAppear {
             onScroll?(0, 0)

@@ -22,7 +22,6 @@ struct ContentView: View {
     @State private var showCloudDriveLimitAlert = false
     
     var body: some View {
-        let _ = NSLog("DEBUG: [ContentView] ContentView body is being rendered")
         ZStack(alignment: .bottom) {
             // Main content area
             VStack(spacing: 0) {
@@ -31,8 +30,7 @@ struct ContentView: View {
                         HomeView(
                             navigationPath: $navigationPath,
                             onNavigationVisibilityChanged: { isVisible in
-                                print("[ContentView] Navigation visibility changed to: \(isVisible)")
-                                isNavigationVisible = isVisible
+                                // Disabled to prevent dual updates (NotificationCenter handles this)
                             },
                             onReturnToHome: {
                                 selectedTab = 0
@@ -215,6 +213,9 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigationVisibilityChanged)) { notification in
             if let isVisible = notification.userInfo?["isVisible"] as? Bool {
+                // Prevent redundant updates
+                guard isNavigationVisible != isVisible else { return }
+                
                 print("[ContentView] Navigation visibility changed to: \(isVisible)")
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = isVisible

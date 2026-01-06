@@ -17,8 +17,16 @@ class TweetTableViewController: UITableViewController {
     private var isLoadingMore: Bool = false
     private var isLoading: Bool = false
     
+    // Bottom pull-to-load state
+    private var isBottomPullActive: Bool = false
+    private var bottomPullThreshold: CGFloat = 80  // Pull down 80pt to trigger
+    
+    // Spinner timing
+    private var loadingSpinnerStartTime: Date? = nil
+    private let minimumSpinnerDisplayTime: TimeInterval = 0.5  // 500ms minimum
+    
     // Callbacks
-    var loadMoreTweets: (() -> Void)?
+    var loadMoreTweets: ((Bool) -> Void)?  // Parameter: forceLoad
     var onRefresh: (() async -> Void)?  // Pull-to-refresh callback
     var rowViewBuilder: ((Tweet) -> AnyView)?
     var headerViewBuilder: (() -> AnyView)?
@@ -344,6 +352,51 @@ class TweetTableViewController: UITableViewController {
         self.isLoading = isLoading
         self.isLoadingMore = isLoadingMore
         self.hasMoreTweets = hasMoreTweets
+        
+        print("🔄 [LOADING STATE] isLoading: \(isLoading), isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
+        
+        // Show/hide loading spinner at bottom using table footer (simple approach)
+        if isLoadingMore {
+            // Record when spinner was shown
+            loadingSpinnerStartTime = Date()
+            print("⏳ [FOOTER SPINNER] Showing spinner")
+            let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 56))
+            let spinner = UIActivityIndicatorView(style: .medium)
+            spinner.center = CGPoint(x: footerView.bounds.width / 2, y: footerView.bounds.height / 2)
+            spinner.startAnimating()
+            footerView.addSubview(spinner)
+            tableView.tableFooterView = footerView
+        } else {
+            // Hide spinner, but ensure minimum display time
+            if let startTime = loadingSpinnerStartTime {
+                let elapsedTime = Date().timeIntervalSince(startTime)
+                let remainingTime = max(0, minimumSpinnerDisplayTime - elapsedTime)
+                
+                if remainingTime > 0 {
+                    print("⏳ [FOOTER SPINNER] Delaying hide for \(Int(remainingTime * 1000))ms to meet minimum 500ms")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + remainingTime) { [weak self] in
+                        guard let self = self else { return }
+                        if self.tableView.tableFooterView != nil {
+                            print("✅ [FOOTER SPINNER] Hiding spinner after minimum time")
+                        }
+                        self.tableView.tableFooterView = nil
+                        self.loadingSpinnerStartTime = nil
+                    }
+                } else {
+                    if tableView.tableFooterView != nil {
+                        print("✅ [FOOTER SPINNER] Hiding spinner (minimum time already met)")
+                    }
+                    tableView.tableFooterView = nil
+                    loadingSpinnerStartTime = nil
+                }
+            } else {
+                // No start time recorded, hide immediately
+                if tableView.tableFooterView != nil {
+                    print("✅ [FOOTER SPINNER] Hiding spinner (no start time)")
+                }
+                tableView.tableFooterView = nil
+            }
+        }
     }
     
     // MARK: - UITableViewDataSource
@@ -402,8 +455,17 @@ class TweetTableViewController: UITableViewController {
         heightCache[tweetId] = cell.frame.height
         
         // Load more when approaching end
-        if indexPath.row >= tweets.count - 3 && hasMoreTweets && !isLoadingMore && !isLoading {
-            loadMoreTweets?()
+        let isNearEnd = indexPath.row >= tweets.count - 3
+        
+        if isNearEnd {
+            print("📱 [PAGINATION] Row \(indexPath.row)/\(tweets.count) near end - hasMore: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), isLoading: \(isLoading)")
+            
+            if hasMoreTweets && !isLoadingMore && !isLoading {
+                print("📥 [PAGINATION] Auto-load calling loadMoreTweets(forceLoad: false)")
+                loadMoreTweets?(false)  // Auto-load respects hasMoreTweets
+            } else {
+                print("⏸️ [PAGINATION] Blocked - hasMore: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), isLoading: \(isLoading)")
+            }
         }
     }
     
@@ -418,6 +480,22 @@ class TweetTableViewController: UITableViewController {
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Update visible tweets for video playback coordination
         updateVisibleTweetsForVideoPlayback()
+        
+        // Detect bottom pull-to-load gesture (always check, even before initial layout)
+        let contentHeight = scrollView.contentSize.height
+        let scrollViewHeight = scrollView.frame.size.height
+        let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight
+        
+        // Only allow pull-to-load if we have at least a few tweets
+        if tweets.count >= 4 && bottomOffset > bottomPullThreshold && !isLoadingMore && !isBottomPullActive {
+            // User pulled down past threshold
+            print("📱 [BOTTOM PULL] Threshold reached, triggering loadMore")
+            isBottomPullActive = true
+            triggerBottomPullLoadMore()
+        } else if bottomOffset <= 0 {
+            // User released or scrolled back up
+            isBottomPullActive = false
+        }
         
         // Don't trigger toolbar hiding until initial layout is complete
         // This prevents incorrect hiding when view first loads
@@ -515,5 +593,22 @@ class TweetTableViewController: UITableViewController {
         
         // Update coordinator
         videoCoordinator.updateVisibleTweets(visibleTweetIds)
+    }
+    
+    // MARK: - Bottom Pull-to-Load
+    
+    private func triggerBottomPullLoadMore() {
+        guard !isLoadingMore else { return }
+        
+        print("🔄 [BOTTOM PULL] Manual pull - calling loadMoreTweets(forceLoad: true)")
+        updateLoadingState(isLoading: isLoading, isLoadingMore: true, hasMoreTweets: hasMoreTweets)
+        
+        // Call the load more callback with forceLoad=true to bypass hasMoreTweets check
+        loadMoreTweets?(true)
+        
+        // Reset flag after a delay to allow next pull
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.isBottomPullActive = false
+        }
     }
 }
