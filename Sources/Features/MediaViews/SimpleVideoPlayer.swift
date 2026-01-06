@@ -169,13 +169,13 @@ class VideoStateCache {
         return cachedTimeSeconds >= durationSeconds - 0.5
     }
     
-    func clearCache(for mid: String) {
-        // CRITICAL: Never clear cache for visible videos
-        if visibleVideoMids.contains(mid) {
+    func clearCache(for mid: String, force: Bool = false) {
+        // CRITICAL: Never clear cache for visible videos (unless forced)
+        if !force && visibleVideoMids.contains(mid) {
             print("⚠️ [VIDEO CACHE] Refusing to clear cache for visible video \(mid)")
             return
         }
-        print("DEBUG: [VIDEO CACHE] Clearing cache for \(mid)")
+        print("DEBUG: [VIDEO CACHE] Clearing cache for \(mid)\(force ? " (forced)" : "")")
         cache.removeValue(forKey: mid)
     }
     
@@ -1102,18 +1102,26 @@ struct SimpleVideoPlayer: View {
         // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
         // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
         if mode == .mediaCell, let player = player {
-            // For MediaCell mode, save the current global mute state
-            // For detail/fullscreen modes, we need to track the original global mute state
-            let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
             let currentTime = player.currentTime().seconds
-            NSLog("💾 [VIDEO CACHE] Saving position \(String(format: "%.2f", currentTime))s for \(mid) in handleOnDisappear")
-            VideoStateCache.shared.cacheVideoState(
-                for: mid,
-                player: player,
-                time: player.currentTime(),
-                wasPlaying: player.rate > 0,
-                originalMuteState: originalMuteState
-            )
+            let duration = player.currentItem?.duration.seconds ?? 0
+            
+            // Don't save position if video is finished (at the end)
+            // This prevents restoring to the end position when scrolling back
+            if duration > 0 && currentTime >= duration - 0.5 {
+                NSLog("🎬 [VIDEO CACHE] Skipping save - video finished at \(String(format: "%.2f", currentTime))s for \(mid)")
+            } else {
+                // For MediaCell mode, save the current global mute state
+                // For detail/fullscreen modes, we need to track the original global mute state
+                let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
+                NSLog("💾 [VIDEO CACHE] Saving position \(String(format: "%.2f", currentTime))s for \(mid) in handleOnDisappear")
+                VideoStateCache.shared.cacheVideoState(
+                    for: mid,
+                    player: player,
+                    time: player.currentTime(),
+                    wasPlaying: player.rate > 0,
+                    originalMuteState: originalMuteState
+                )
+            }
         }
         
         // CRITICAL: Always pause player when view disappears
@@ -4343,7 +4351,8 @@ struct SimpleVideoPlayer: View {
         if disableAutoRestart {
             print("🎬 [VIDEO FINISHED] Video finished for \(mid) - staying at end naturally (AVPlayer shows last frame)")
             // Clear cached position so when this video scrolls back into view, it starts from zero naturally
-            VideoStateCache.shared.clearCache(for: mid)
+            // Force clear even if video is still visible, to ensure clean restart
+            VideoStateCache.shared.clearCache(for: mid, force: true)
             // Don't capture last frame here - AVPlayer already shows it naturally
             // Only capture when scrolling away (in onDisappear) to preserve for recovery
             return
