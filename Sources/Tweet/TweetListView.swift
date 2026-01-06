@@ -55,6 +55,7 @@ struct TweetListView<RowView: View>: View {
     @State private var screenHeight: CGFloat = 0
     @State private var needsMoreContent: Bool = true
     @State private var startupTime: Date = Date()
+    @State private var foregroundObserver: NSObjectProtocol?
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -282,10 +283,91 @@ struct TweetListView<RowView: View>: View {
                     // MediaBrowserView will handle the actual navigation
                 }
             )
+            
+            // Set up foreground observer to fetch new tweets when app returns
+            setupForegroundObserver()
+        }
+        .onDisappear {
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
         }
     }
 
     // MARK: - Methods
+    
+    /// Setup observer to fetch new tweets when app comes to foreground
+    private func setupForegroundObserver() {
+        // Remove existing observer if any
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
+        // Listen for app becoming active (returning from background or screen lock)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            
+            // Only fetch if initial load has completed (avoid interfering with app startup)
+            guard self.initialLoadComplete else {
+                print("📱 [FOREGROUND] Skipping fetch - initial load not complete")
+                return
+            }
+            
+            // Fetch new tweets when app comes to foreground
+            print("📱 [FOREGROUND] App became active - fetching new tweets...")
+            Task {
+                await self.fetchNewTweetsOnForeground()
+            }
+        }
+        
+        print("📱 [FOREGROUND] Observer set up - will fetch tweets on app foreground")
+    }
+    
+    /// Fetch new tweets when app comes to foreground
+    /// This refreshes the first page to show any new tweets that arrived while app was in background
+    private func fetchNewTweetsOnForeground() async {
+        // Don't fetch if already loading or refreshing
+        guard !isLoading && !isLoadingMore else {
+            print("📱 [FOREGROUND] Skipping - already loading")
+            return
+        }
+        
+        print("📱 [FOREGROUND] Fetching fresh tweets from server...")
+        
+        do {
+            // Fetch fresh tweets from server (page 0, no cache)
+            let freshTweets = try await tweetFetcher(0, pageSize, false)
+            let validTweets = freshTweets.compactMap { $0 }
+            
+            await MainActor.run {
+                if !validTweets.isEmpty {
+                    // Merge new tweets into existing list (will sort by timestamp)
+                    tweets.mergeTweets(validTweets)
+                    currentPage = 0
+                    hasMoreTweets = freshTweets.count >= pageSize
+                    
+                    // Update video manager in background
+                    Task.detached(priority: .background) {
+                        let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+                        await self.videoLoadingManager.updateTweetList(tweetIds)
+                    }
+                    
+                    print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
+                } else {
+                    print("📱 [FOREGROUND] No new tweets found")
+                }
+            }
+        } catch {
+            print("📱 [FOREGROUND] ❌ Error fetching tweets: \(error)")
+        }
+    }
+    
     func performInitialLoad() async {
         currentPage = 0
         let page: UInt = 0
