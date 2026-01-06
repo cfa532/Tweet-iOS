@@ -51,7 +51,6 @@ class TweetTableViewController: UITableViewController {
     private var heightCache: [String: CGFloat] = [:]
     
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
-    private var videoVisibilityUpdateTimer: Timer?
     private var lastVideoVisibilityUpdate: Date?
     private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms throttle
     
@@ -484,16 +483,21 @@ class TweetTableViewController: UITableViewController {
     
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Throttle video visibility updates to avoid expensive calculations on every scroll frame
-        // Schedule update if not already scheduled
-        if videoVisibilityUpdateTimer == nil {
-            videoVisibilityUpdateTimer = Timer.scheduledTimer(
-                withTimeInterval: videoVisibilityThrottleInterval,
-                repeats: false
-            ) { [weak self] _ in
-                self?.updateVisibleTweetsForVideoPlayback()
-                self?.videoVisibilityUpdateTimer?.invalidate()
-                self?.videoVisibilityUpdateTimer = nil
-            }
+        // Use time-based throttling: execute immediately on first call, then throttle subsequent calls
+        let now = Date()
+        let shouldUpdate: Bool
+        
+        if let lastUpdate = lastVideoVisibilityUpdate {
+            // Check if enough time has passed since last update
+            shouldUpdate = now.timeIntervalSince(lastUpdate) >= videoVisibilityThrottleInterval
+        } else {
+            // First update - execute immediately
+            shouldUpdate = true
+        }
+        
+        if shouldUpdate {
+            lastVideoVisibilityUpdate = now
+            updateVisibleTweetsForVideoPlayback()
         }
         
         // Detect bottom pull-to-load gesture (always check, even before initial layout)

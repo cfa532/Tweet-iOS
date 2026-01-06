@@ -307,7 +307,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     @objc private func handleDidBecomeActive() {
-        let isScreenLock = !didEnterBackground
+        let _ = !didEnterBackground  // Track if this was screen lock vs background
         
         // End background task - no longer needed
         endBackgroundTask()
@@ -330,7 +330,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             return (isRunning, listener?.state, port)
         }
         
-        let (running, listenerState, currentPort) = serverState
+        let (running, listenerState, _) = serverState
         
         guard running else {
             return
@@ -910,7 +910,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Extract quality level for logging (dynamic - no hardcoding!)
         let pathComponents = cachePath.components(separatedBy: "/")
         // Look for any component that ends with 'p' (e.g., "480p", "720p", "1080p", "4k", etc.)
-        let quality = pathComponents.first(where: { component in
+        let _ = pathComponents.first(where: { component in
             // Matches patterns like "480p", "720p", "1080p", etc.
             component.hasSuffix("p") && component.dropLast().allSatisfy({ $0.isNumber })
         }) ?? "unknown"
@@ -939,8 +939,8 @@ public class LocalHTTPServer: @unchecked Sendable {
             } else {
                 let memoryManager = MemoryCapManager.shared
                 if memoryManager.isAboveDuplicateBlockThreshold {
-                    let percentage = memoryManager.memoryUsagePercentage * 100
-                    let threshold = memoryManager.duplicateBlockThresholdPercentage * 100
+                    let _ = memoryManager.memoryUsagePercentage * 100
+                    let _ = memoryManager.duplicateBlockThresholdPercentage * 100
                     
                     let body = "Memory usage high. Retry segment later.".data(using: .utf8)
                     self.sendResponse(
@@ -964,10 +964,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         let downloadStartTime = Date()
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
             // This completion is called AFTER the file is written and served
-            let downloadTime = Date().timeIntervalSince(downloadStartTime)
+            let _ = Date().timeIntervalSince(downloadStartTime)
             
             if FileManager.default.fileExists(atPath: cachePath) {
-                let fileSize = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
+                let _ = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
             } else {
                 NSLog("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
             }
@@ -1253,11 +1253,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let streamTask = session.dataTask(with: streamRequest)
                     streamTask.resume()
                     
-                    let remainderEndDescription = resolvedRequestedEnd.map { "\($0)" } ?? "end"
+                    _ = resolvedRequestedEnd.map { "\($0)" } ?? "end"
                 }
                 
                 if cachedSegmentLength > 0 {
-                    let cachedEnd = cachedOverlapStart + cachedSegmentLength - 1
+                    let _ = cachedOverlapStart + cachedSegmentLength - 1
                     self.streamFileRange(
                         connection: connection,
                         fileURL: cacheFileURL,
@@ -1543,7 +1543,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 statusCode = 206
             }
-            let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
+            let _ = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
             
             if method == "HEAD" {
                 sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
@@ -1641,7 +1641,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 
                 let statusCode = rangeHeader != nil ? 206 : 200
-                let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
+                let _ = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
                 
                 if method == "HEAD" {
                     sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
@@ -1812,7 +1812,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let startTime = Date()
         
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
-            let downloadTime = Date().timeIntervalSince(startTime)
+            let _ = Date().timeIntervalSince(startTime)
             guard let self = self else { return }
             
             // MEMORY FIX: Use autoreleasepool for large segment downloads (4-5MB each)
@@ -1821,7 +1821,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let pathComponents = cachePath.components(separatedBy: "/")
                 let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
                 
-                if let error = error {
+                if error != nil {
                     
                     // Record failure for this mediaID (attachment mid)
                     if !mediaID.isEmpty {

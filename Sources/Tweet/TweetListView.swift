@@ -291,7 +291,6 @@ struct TweetListView<RowView: View>: View {
             // Clean up foreground observer
             if let observer = foregroundObserver {
                 NotificationCenter.default.removeObserver(observer)
-                foregroundObserver = nil
             }
         }
     }
@@ -310,9 +309,7 @@ struct TweetListView<RowView: View>: View {
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self = self else { return }
-            
+        ) { _ in
             // Only fetch if initial load has completed (avoid interfering with app startup)
             guard self.initialLoadComplete else {
                 print("📱 [FOREGROUND] Skipping fetch - initial load not complete")
