@@ -366,10 +366,16 @@ class TweetTableViewController: UITableViewController {
     }
     
     func updateLoadingState(isLoadingMore: Bool, hasMoreTweets: Bool) {
+        // Only log and update UI if state actually changed
+        let stateChanged = self.isLoadingMore != isLoadingMore || self.hasMoreTweets != hasMoreTweets
+        
         self.isLoadingMore = isLoadingMore
         self.hasMoreTweets = hasMoreTweets
         
-        print("🔄 [LOADING STATE] isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
+        // Only log when state actually changes to avoid spam
+        if stateChanged {
+            print("🔄 [LOADING STATE] isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
+        }
         
         // Show/hide loading spinner at bottom using table footer (simple approach)
         if isLoadingMore {
