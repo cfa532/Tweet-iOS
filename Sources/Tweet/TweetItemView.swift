@@ -250,7 +250,7 @@ struct TweetItemView: View, Equatable {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible)
+                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, sourceTweetId: tweet.mid)
                             // STABILITY: Layout priority for tweet body prevents shifting
                             .layoutPriority(1)
                         

@@ -31,6 +31,7 @@ struct MediaCell: View, Equatable {
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
     let isEmbedded: Bool
+    let sourceTweetId: String?  // ID of tweet user is viewing (retweet ID for retweets)
     
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -47,7 +48,7 @@ struct MediaCell: View, Equatable {
     @ObservedObject var videoManager: VideoManager
     @ObservedObject private var muteState = MuteState.shared
     
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager, isEmbedded: Bool = false) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager, isEmbedded: Bool = false, sourceTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -56,6 +57,7 @@ struct MediaCell: View, Equatable {
         self._isVisible = State(initialValue: isVisible)
         self.videoManager = videoManager
         self.isEmbedded = isEmbedded
+        self.sourceTweetId = sourceTweetId
         
         // Initialize effectiveBaseUrl with fallback chain
         let initialBaseUrl = parentTweet.author?.baseUrl 
@@ -303,7 +305,7 @@ struct MediaCell: View, Equatable {
             MediaBrowserView(
                 tweet: parentTweet,
                 initialIndex: attachmentIndex,
-                sourceTweetId: parentTweet.mid
+                sourceTweetId: sourceTweetId ?? parentTweet.mid  // Use retweet ID if provided, else original tweet ID
             )
         }
         .onChange(of: showFullScreen) { _, newValue in

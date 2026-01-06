@@ -120,18 +120,47 @@ class VideoPlaybackCoordinator: ObservableObject {
     func buildVideoList(from tweets: [Tweet]) {
         var videos: [VideoPlaybackInfo] = []
         
-        for tweet in tweets {
-            guard let attachments = tweet.attachments else { continue }
+        print("DEBUG: [buildVideoList] Processing \(tweets.count) tweets")
+        
+        for (idx, tweet) in tweets.enumerated() {
+            // For retweets, get attachments from original tweet but use retweet's ID for positioning
+            let attachments: [MimeiFileType]?
+            let isRetweet = tweet.originalTweetId != nil && tweet.attachments == nil
+            
+            if let originalTweetId = tweet.originalTweetId, tweet.attachments == nil {
+                // This is a retweet - try to get original tweet from singleton cache
+                if let originalTweet = Tweet.getInstance(for: originalTweetId) {
+                    attachments = originalTweet.attachments
+                    print("DEBUG: [buildVideoList] Tweet \(idx) (\(tweet.mid)) is RETWEET of \(originalTweetId), using original's attachments")
+                } else {
+                    // Original tweet not in cache yet - skip for now, will be added when it loads
+                    print("DEBUG: [buildVideoList] Tweet \(idx) (\(tweet.mid)) is RETWEET of \(originalTweetId), but original NOT IN CACHE - skipping")
+                    continue
+                }
+            } else {
+                attachments = tweet.attachments
+                if isRetweet {
+                    print("DEBUG: [buildVideoList] Tweet \(idx) (\(tweet.mid)) is retweet but HAS attachments directly")
+                }
+            }
+            
+            guard let attachments = attachments else { continue }
             
             for (index, attachment) in attachments.enumerated() {
                 if attachment.type == .video || attachment.type == .hls_video {
+                    print("DEBUG: [buildVideoList] Adding video at tweet index \(idx), tweetId=\(tweet.mid), videoMid=\(attachment.mid), attachmentIndex=\(index)")
                     videos.append(VideoPlaybackInfo(
-                        tweetId: tweet.mid,
+                        tweetId: tweet.mid,  // Use retweet's ID so positioning matches user's view
                         videoMid: attachment.mid,
                         index: index
                     ))
                 }
             }
+        }
+        
+        print("DEBUG: [buildVideoList] Final video list: \(videos.count) videos")
+        for (idx, video) in videos.enumerated() {
+            print("DEBUG: [buildVideoList]   Video \(idx): tweetId=\(video.tweetId), videoMid=\(video.videoMid)")
         }
         
         self.allVideos = videos

@@ -18,6 +18,7 @@ struct TweetItemBodyView: View {
     var enableTap: Bool = false
     var isVisible: Bool = true
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
+    var sourceTweetId: String? = nil // ID of tweet user is viewing (retweet ID for retweets)
     @State private var isExpanded = false
     @State private var showLoginSheet = false
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -95,7 +96,8 @@ struct TweetItemBodyView: View {
                         MediaGridView(
                             parentTweet: tweet,
                             attachments: mediaAttachments,
-                            isEmbedded: isEmbedded
+                            isEmbedded: isEmbedded,
+                            sourceTweetId: sourceTweetId  // Pass the viewing context tweet ID
                         )
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .clipped()
