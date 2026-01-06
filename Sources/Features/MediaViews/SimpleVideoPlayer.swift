@@ -1719,15 +1719,9 @@ struct SimpleVideoPlayer: View {
                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         } else if isPrimary {
-            // Primary phase: check if video is near the end, if so restart
-            let currentTime = player.currentTime()
-            if currentTime.seconds > 0 {
-                let progress = currentTime.seconds / (player.currentItem?.duration.seconds ?? 1.0)
-                if progress > 0.95 {
-                    // Video is near the end, restart
-                    player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
-                }
-            }
+            // Primary phase: play from current position (no forced restart)
+            // If video is at the end, it will finish immediately and coordinator will handle next video
+            NSLog("🎬 [PRIMARY] Playing video \(mid) from position \(String(format: "%.2f", player.currentTime().seconds))s")
         }
         
         player.play()
@@ -2820,10 +2814,10 @@ struct SimpleVideoPlayer: View {
                     // Show the cached frame when:
                     // 1. Holding recovery cover (background recovery)
                     // 2. Player explicitly detached (app lifecycle)
-                    // 3. Video has finished playing (show last frame instead of black screen)
-                    // 4. Video is being initialized (prevents black flicker when scrolling back)
+                    // 3. Video is being initialized (prevents black flicker when scrolling back)
+                    // NOTE: Do NOT show cached frame when video naturally finishes - let it show the actual last frame from AVPlayer
                     let isInitializing = loadingState.isLoading && player.rate == 0
-                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isFinished || isInitializing
+                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isInitializing
                     
                     if shouldShowPlaceholder {
                         // IMPORTANT: This overlay must be tap-through so taps still reach the video layer
@@ -4347,9 +4341,11 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Check disableAutoRestart before calling callback
         // If disabled, video should stay paused at end (no loop, no advance to next)
         if disableAutoRestart {
-            print("🎬 [VIDEO FINISHED] Video finished for \(mid) - autoRestart disabled, capturing last frame")
-            // Capture last frame to prevent black screen
-            await captureLastFrameNearEndIfPossible(reason: "videoFinished")
+            print("🎬 [VIDEO FINISHED] Video finished for \(mid) - staying at end naturally (AVPlayer shows last frame)")
+            // Clear cached position so when this video scrolls back into view, it starts from zero naturally
+            VideoStateCache.shared.clearCache(for: mid)
+            // Don't capture last frame here - AVPlayer already shows it naturally
+            // Only capture when scrolling away (in onDisappear) to preserve for recovery
             return
         }
         
