@@ -33,7 +33,7 @@ struct TweetListView<RowView: View>: View {
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let leadingPadding: CGFloat  // Leading padding for cells
     let trailingPadding: CGFloat  // Trailing padding for cells
-    private let pageSize: UInt = 5  // Reduced for better server load distribution
+    private let pageSize: UInt = 10  // Manual load-more only
 
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var tweets: [Tweet]
@@ -186,7 +186,6 @@ struct TweetListView<RowView: View>: View {
                     },
                     hasMoreTweets: $hasMoreTweets,
                     isLoadingMore: isLoadingMore,
-                    isLoading: isLoading,
                     loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
                     onRefresh: {
                         await refreshTweets()
@@ -365,10 +364,7 @@ struct TweetListView<RowView: View>: View {
             await loadFromServer(page: page, pageSize: pageSize) { _ in }
             
             // Trigger preloading after initial load completes
-            // Always load next two pages on startup, regardless of hasMoreTweets
-            await MainActor.run {
-                loadNextTwoPages(startingFrom: 1, forceLoad: true)
-            }
+            // Initial load complete - user can manually pull to load more
             
         } catch {
             await MainActor.run {
@@ -444,26 +440,16 @@ struct TweetListView<RowView: View>: View {
             return 
         }
         
+        // Set loading flag IMMEDIATELY to prevent duplicate calls
+        isLoadingMore = true
+        
         let nextPage = page ?? (currentPage + 1)
         
-        // Load next two pages in advance, separated by 3 seconds
-        loadNextTwoPages(startingFrom: nextPage)
+        // Load single page only (no batch prefetch)
+        loadSinglePage(page: nextPage) { _ in }
     }
     
-    // MARK: - Batch Loading for Prefetching
-    private func loadNextTwoPages(startingFrom startPage: UInt, forceLoad: Bool = false) {
-        // Load first page immediately
-        loadSinglePage(page: startPage) { success in
-            if success || forceLoad {
-                // Load second page after a delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    if (self.hasMoreTweets && !self.isLoadingMore) || forceLoad {
-                        self.loadSinglePage(page: startPage + 1) { _ in }
-                    }
-                }
-            }
-        }
-    }
+    // MARK: - Batch Loading (Removed - now using single page loads only)
     
     private func loadSinglePage(page: UInt, completion: @escaping (Bool) -> Void) {
         let pageSize = self.pageSize

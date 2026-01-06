@@ -13,7 +13,6 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     let rowView: (Tweet) -> RowView
     @Binding var hasMoreTweets: Bool
     let isLoadingMore: Bool
-    let isLoading: Bool
     let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
     let onRefresh: (() async -> Void)?  // Pull-to-refresh callback
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
@@ -47,7 +46,6 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         
         // Update loading state
         uiViewController.updateLoadingState(
-            isLoading: isLoading,
             isLoadingMore: isLoadingMore,
             hasMoreTweets: hasMoreTweets
         )

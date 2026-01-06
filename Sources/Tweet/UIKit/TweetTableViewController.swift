@@ -15,7 +15,6 @@ class TweetTableViewController: UITableViewController {
     private var tweets: [Tweet] = []
     private var hasMoreTweets: Bool = true
     private var isLoadingMore: Bool = false
-    private var isLoading: Bool = false
     
     // Bottom pull-to-load state
     private var isBottomPullActive: Bool = false
@@ -132,7 +131,8 @@ class TweetTableViewController: UITableViewController {
         
         // Add bottom content inset to prevent last tweet from being hidden by tab bar
         // This ensures the last tweet is fully visible and scrollable above the bottom navigation
-        let bottomInset: CGFloat = 40 // Extra padding beyond safe area
+        // Tab bar height ~49pt + safe area bottom (~34pt on devices with home indicator)
+        let bottomInset: CGFloat = 60 // Extra padding to account for tab bar + safe area
         tableView.contentInset.bottom = bottomInset
         tableView.verticalScrollIndicatorInsets.bottom = bottomInset
     }
@@ -348,12 +348,11 @@ class TweetTableViewController: UITableViewController {
         }
     }
     
-    func updateLoadingState(isLoading: Bool, isLoadingMore: Bool, hasMoreTweets: Bool) {
-        self.isLoading = isLoading
+    func updateLoadingState(isLoadingMore: Bool, hasMoreTweets: Bool) {
         self.isLoadingMore = isLoadingMore
         self.hasMoreTweets = hasMoreTweets
         
-        print("🔄 [LOADING STATE] isLoading: \(isLoading), isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
+        print("🔄 [LOADING STATE] isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
         
         // Show/hide loading spinner at bottom using table footer (simple approach)
         if isLoadingMore {
@@ -454,19 +453,7 @@ class TweetTableViewController: UITableViewController {
         let tweetId = tweets[indexPath.row].mid
         heightCache[tweetId] = cell.frame.height
         
-        // Load more when approaching end
-        let isNearEnd = indexPath.row >= tweets.count - 3
-        
-        if isNearEnd {
-            print("📱 [PAGINATION] Row \(indexPath.row)/\(tweets.count) near end - hasMore: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), isLoading: \(isLoading)")
-            
-            if hasMoreTweets && !isLoadingMore && !isLoading {
-                print("📥 [PAGINATION] Auto-load calling loadMoreTweets(forceLoad: false)")
-                loadMoreTweets?(false)  // Auto-load respects hasMoreTweets
-            } else {
-                print("⏸️ [PAGINATION] Blocked - hasMore: \(hasMoreTweets), isLoadingMore: \(isLoadingMore), isLoading: \(isLoading)")
-            }
-        }
+        // Auto-load disabled - only manual pull-to-load at bottom
     }
     
     override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
@@ -601,7 +588,7 @@ class TweetTableViewController: UITableViewController {
         guard !isLoadingMore else { return }
         
         print("🔄 [BOTTOM PULL] Manual pull - calling loadMoreTweets(forceLoad: true)")
-        updateLoadingState(isLoading: isLoading, isLoadingMore: true, hasMoreTweets: hasMoreTweets)
+        updateLoadingState(isLoadingMore: true, hasMoreTweets: hasMoreTweets)
         
         // Call the load more callback with forceLoad=true to bypass hasMoreTweets check
         loadMoreTweets?(true)
