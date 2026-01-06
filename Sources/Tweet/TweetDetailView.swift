@@ -87,6 +87,7 @@ struct DetailMediaCell: View {
                                 parentTweetId: parentTweet.mid,
                                 isVisible: true,
                                 mediaType: attachment.type,
+                                authorId: parentTweet.authorId, // Pass authorId for health check
                                 autoPlay: true,
                                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
                                 showNativeControls: true,

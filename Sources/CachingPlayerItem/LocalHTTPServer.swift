@@ -2103,11 +2103,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let pathString = String(modified[range])
                     let localhostURL: String
                     if pathString.hasPrefix("/") {
-                        // Absolute path: /ipfs/QmHash/720p/playlist.m3u8 -> http://127.0.0.1:port/mediaID/ipfs/QmHash/720p/playlist.m3u8
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(pathString)"
+                        // Absolute path: /ipfs/QmHash/720p/playlist.m3u8 -> http://127.0.0.1:port/ipfs/QmHash/720p/playlist.m3u8
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(pathString)"
                     } else {
-                        // Relative path: 720p/playlist.m3u8 -> http://127.0.0.1:port/mediaID/playlistDirectory/720p/playlist.m3u8
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(playlistDirectory)/\(pathString)"
+                        // Relative path: 720p/playlist.m3u8 -> http://127.0.0.1:port/playlistDirectory/720p/playlist.m3u8
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(playlistDirectory)/\(pathString)"
                     }
                     modified.replaceSubrange(range, with: localhostURL)
                 }
@@ -2123,11 +2123,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let pathString = String(modified[range])
                     let localhostURL: String
                     if pathString.hasPrefix("/") {
-                        // Absolute path: /ipfs/QmHash/segment000.ts -> http://127.0.0.1:port/mediaID/ipfs/QmHash/segment000.ts
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(pathString)"
+                        // Absolute path: /ipfs/QmHash/segment000.ts -> http://127.0.0.1:port/ipfs/QmHash/segment000.ts
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(pathString)"
                     } else {
-                        // Relative path: segment000.ts -> http://127.0.0.1:port/mediaID/playlistDirectory/segment000.ts
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(playlistDirectory)/\(pathString)"
+                        // Relative path: segment000.ts -> http://127.0.0.1:port/playlistDirectory/segment000.ts
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(playlistDirectory)/\(pathString)"
                     }
                     modified.replaceSubrange(range, with: localhostURL)
                 }

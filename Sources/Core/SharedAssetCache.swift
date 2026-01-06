@@ -549,13 +549,16 @@ class SharedAssetCache: ObservableObject {
         visibleVideoMids.remove(mediaID)
     }
     
-    func removeInvalidPlayer(for mediaID: String) {
-        // CRITICAL: Never remove players for visible videos
-        if visibleVideoMids.contains(mediaID) {
+    func removeInvalidPlayer(for mediaID: String, force: Bool = false) {
+        // CRITICAL: Never remove players for visible videos (unless forced for error recovery)
+        if !force && visibleVideoMids.contains(mediaID) {
             print("⚠️ [SHARED ASSET CACHE] Refusing to remove player for visible video \(mediaID)")
             return
         }
         playerCache.removeValue(forKey: mediaID)
+        if force {
+            print("DEBUG: [SHARED ASSET CACHE] Force removed player for \(mediaID)")
+        }
     }
     
     /// Clear asset cache for a specific mediaID
@@ -564,7 +567,21 @@ class SharedAssetCache: ObservableObject {
         cacheTimestamps.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
-        print("DEBUG: [SHARED ASSET CACHE] Cleared asset cache for mediaID: \(mediaID)")
+        
+        // CRITICAL: Also delete disk cache files (playlists and segments)
+        // Without this, retry uses stale cached playlists leading to "no available resources" errors
+        Task.detached {
+            // Delete the main mediaID directory used by LocalHTTPServer (includes all playlists and segments)
+            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            let mediaDir = cacheDir.appendingPathComponent(mediaID)
+            try? FileManager.default.removeItem(at: mediaDir)
+            
+            await MainActor.run {
+                // Also delete HLS cache (playlists + segments) - legacy locations
+                CachingPlayerItem.clearHLSCache(for: mediaID)
+                print("DEBUG: [SHARED ASSET CACHE] Cleared asset cache + disk cache for mediaID: \(mediaID)")
+            }
+        }
     }
     
     /// Clear player and associated assets for a specific mediaID (for failed players)

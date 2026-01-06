@@ -473,6 +473,7 @@ struct MediaCell: View, Equatable {
                 parentTweetId: parentTweet.mid,
                 isVisible: isVisible,
                 mediaType: attachment.type,
+                authorId: parentTweet.authorId, // Pass authorId for health check
                 autoPlay: shouldAutoPlay, // Use state variable instead of computed value
                 videoManager: isEmbedded ? nil : videoManager,
                 onVideoFinished: onVideoFinished,

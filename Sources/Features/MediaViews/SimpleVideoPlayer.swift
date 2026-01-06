@@ -366,6 +366,7 @@ struct SimpleVideoPlayer: View {
     let parentTweetId: String? // Optional parent tweet ID for unique identification
     let isVisible: Bool
     let mediaType: MediaType // Add MediaType parameter
+    let authorId: String? // Author ID for health check during retry
     
     // MARK: Optional Parameters
     var autoPlay: Bool = true
@@ -671,8 +672,8 @@ struct SimpleVideoPlayer: View {
         
         captureLastFrameIfPossible(reason: "watchdog_\(reason)")
         
-        SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
-        VideoStateCache.shared.clearCache(for: mid)
+        SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
+        VideoStateCache.shared.clearCache(for: mid, force: true)
         
         player?.pause()
         player = nil
@@ -1492,7 +1493,7 @@ struct SimpleVideoPlayer: View {
                 if playerIsMissing || playerIsBroken {
                     let reason = playerIsMissing ? "missing" : "broken"
                     print("⚠️ [VIDEO VISIBILITY] Sanity check failed - player is \(reason), recreating for \(mid)")
-                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
                     player = nil
                     loadingState = .idle
                     playbackState = .notStarted
@@ -1827,7 +1828,7 @@ struct SimpleVideoPlayer: View {
                     self.timeObserverPlayer = nil
                     
                     // Remove from SharedAssetCache
-                    SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
+                    SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey, force: true)
                     
                     let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: self.mid)?.wasPlaying ?? false
                     
@@ -1960,12 +1961,12 @@ struct SimpleVideoPlayer: View {
         recoveryTimeoutTask?.cancel()
         recoveryTimeoutTask = nil
         
-        // Start 15-second timeout for MediaCell recovery
-        // If video doesn't get ready and start playing within 15s, force full recreation
+        // Start 10-second timeout for MediaCell recovery
+        // If video doesn't get ready and start playing within 10s, force full recreation
         if mode == .mediaCell {
             let videoMid = mid // Capture for closure
             recoveryTimeoutTask = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 15_000_000_000) // 15 seconds
+                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
                 
                 // Check if task was cancelled (normal recovery succeeded)
                 guard !Task.isCancelled else {
@@ -1973,9 +1974,9 @@ struct SimpleVideoPlayer: View {
                     return
                 }
                 
-                // After 15 seconds, check if video is playing properly
+                // After 10 seconds, check if video is playing properly
                 guard let player = self.player, let playerItem = player.currentItem else {
-                    print("⚠️ [VIDEO RECOVERY TIMEOUT] \(videoMid) has no player after 15s - already cleared")
+                    print("⚠️ [VIDEO RECOVERY TIMEOUT] \(videoMid) has no player after 10s - already cleared")
                     return
                 }
                 
@@ -1985,13 +1986,13 @@ struct SimpleVideoPlayer: View {
                 
                 // If video is playing or at least ready with buffer, recovery succeeded
                 if isPlaying || (isReady && hasBuffer) {
-                    print("✅ [VIDEO RECOVERY TIMEOUT] \(videoMid) recovered successfully within 15s (playing: \(isPlaying), ready: \(isReady), hasBuffer: \(hasBuffer))")
+                    print("✅ [VIDEO RECOVERY TIMEOUT] \(videoMid) recovered successfully within 10s (playing: \(isPlaying), ready: \(isReady), hasBuffer: \(hasBuffer))")
                     self.recoveryTimeoutTask = nil
                     return
                 }
                 
-                // Video still not ready after 15s - force full recreation
-                NSLog("⚠️ [VIDEO RECOVERY TIMEOUT] \(videoMid) failed to recover within 15s - forcing full recreation")
+                // Video still not ready after 10s - force full recreation
+                NSLog("⚠️ [VIDEO RECOVERY TIMEOUT] \(videoMid) failed to recover within 10s - forcing full recreation")
                 NSLog("⚠️ [VIDEO RECOVERY TIMEOUT] State: playing=\(isPlaying), ready=\(isReady), hasBuffer=\(hasBuffer), status=\(playerItem.status.rawValue)")
                 
                 // Clean up observers
@@ -2002,7 +2003,7 @@ struct SimpleVideoPlayer: View {
                 self.timeObserverPlayer = nil
                 
                 // Remove from SharedAssetCache
-                SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey)
+                SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey, force: true)
                 
                 // Clear player and state
                 player.pause()
@@ -2038,7 +2039,7 @@ struct SimpleVideoPlayer: View {
             timeObserverPlayer = nil
             
             // Remove from SharedAssetCache
-            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             
             let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
             let currentTime = player?.currentTime() ?? .zero
@@ -2158,7 +2159,7 @@ struct SimpleVideoPlayer: View {
             }
             timeObserver = nil
             timeObserverPlayer = nil
-            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
             player.pause()
             self.player = nil
@@ -2181,7 +2182,7 @@ struct SimpleVideoPlayer: View {
             }
             timeObserver = nil
             timeObserverPlayer = nil
-            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             let wasPlaying = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
             player.pause()
             self.player = nil
@@ -2412,7 +2413,7 @@ struct SimpleVideoPlayer: View {
                 timeObserverPlayer = nil
                 
                 // Remove from SharedAssetCache to force fresh creation
-                SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
                 
                 player?.pause()
                 player = nil
@@ -2529,7 +2530,7 @@ struct SimpleVideoPlayer: View {
             timeObserverPlayer = nil
 
             // Force fresh creation.
-            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             player?.pause()
             player = nil
             loadingState = .idle
@@ -3396,7 +3397,7 @@ struct SimpleVideoPlayer: View {
         // Validate cached player before using it
         guard let playerItem = cachedState.player.currentItem else {
             NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player has no currentItem; keeping playback info and creating new player for \(mid)")
-            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
             return
@@ -3406,7 +3407,7 @@ struct SimpleVideoPlayer: View {
         // Check if player item is in a failed state
         if playerItem.status == .failed {
             NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item is in failed state; keeping playback info and creating new player for \(mid)")
-            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
             return
@@ -3433,7 +3434,7 @@ struct SimpleVideoPlayer: View {
                 } else if playerItem.status == .failed {
                     // Only clear cache if player has FAILED, not if it's just loading
                     NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item FAILED for MediaCell; keeping playback info and creating new player for \(mid)")
-                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
                     loadingState = .idle  // Reset loading state before recreating
                     setupPlayer()
                     return
@@ -4171,7 +4172,8 @@ struct SimpleVideoPlayer: View {
         NSLog("DEBUG: [VIDEO CLEANUP] Cleaning up failed player for \(self.mid)")
         
         // CRITICAL: Clear VideoStateCache first - this is checked FIRST in setupPlayer()
-        VideoStateCache.shared.clearCache(for: self.mid)
+        // Force clear even if visible - we're cleaning up a failed player!
+        VideoStateCache.shared.clearCache(for: self.mid, force: true)
         
         // Remove from shared cache to free memory
         SharedAssetCache.shared.clearPlayerForMediaID(self.mid)
@@ -4218,24 +4220,17 @@ struct SimpleVideoPlayer: View {
     private func handleError(strategy: RecoveryStrategy = .loadFailure) {
         print("DEBUG: [VIDEO ERROR] Handling error with strategy: \(strategy) for \(mid), retryCount: \(retryAttempts)")
         
-        // Clear caches using uniquePlayerURL to match caching key
-        VideoStateCache.shared.clearCache(for: mid)
-        SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+        // Clear caches using uniquePlayerURL to match caching key (force clear for error recovery)
+        VideoStateCache.shared.clearCache(for: mid, force: true)
+        SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
         
-        // CRITICAL: Only clear disk cache after multiple failures
-        // First failure might be temporary (seek issue, network glitch, etc.)
-        // Clearing disk cache forces expensive network refetch
-        if retryAttempts >= 2 {
-            // Multiple failures - clear everything including disk cache
-            print("DEBUG: [VIDEO ERROR] Multiple failures (\(retryAttempts + 1)) - clearing disk cache for \(mid)")
-            Task.detached {
-                await MainActor.run {
-                    SharedAssetCache.shared.clearAssetCache(for: self.mid)
-                }
+        // CRITICAL: Clear disk cache on failure to force fresh fetch
+        // With only 1 retry, we clear everything to maximize recovery chances
+        print("DEBUG: [VIDEO ERROR] Clearing disk cache for \(mid)")
+        Task.detached {
+            await MainActor.run {
+                SharedAssetCache.shared.clearAssetCache(for: self.mid)
             }
-        } else {
-            // First retry - keep disk cache, might just be a temporary issue
-            print("DEBUG: [VIDEO ERROR] First retry - keeping disk cache for \(mid)")
         }
         
         // Apply strategy
@@ -4246,10 +4241,10 @@ struct SimpleVideoPlayer: View {
             // Clean up failed player
             cleanupFailedPlayer()
             
-            // Automatic retry up to 3 times
-            if retryAttempts < 3 {
-                let retryDelay = Double(retryAttempts + 1) * 1.0 // 1s, 2s, 3s delays
-                print("DEBUG: [VIDEO ERROR] Auto-retry #\(retryAttempts + 1) in \(retryDelay)s for \(mid)")
+            // Automatic retry once only
+            if retryAttempts < 1 {
+                let retryDelay = 2.0 // 2 second delay
+                print("DEBUG: [VIDEO ERROR] Auto-retry #1 in \(retryDelay)s for \(mid)")
                 
                 // Keep showing spinner during retry by staying in loading state
                 loadingState = .loading
@@ -4257,6 +4252,18 @@ struct SimpleVideoPlayer: View {
                 retryAttempts += 1
                 
                 Task { @MainActor in
+                    // Check author health first
+                    if let authorId = self.authorId {
+                        print("DEBUG: [VIDEO RETRY] Checking author health for \(authorId)")
+                        do {
+                            // Refresh user to check health
+                            _ = try await HproseInstance.shared.fetchUser(authorId)
+                            print("✅ [VIDEO RETRY] Author health check passed for \(authorId)")
+                        } catch {
+                            print("⚠️ [VIDEO RETRY] Author health check failed for \(authorId): \(error)")
+                        }
+                    }
+                    
                     try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
                     
                     // Only retry if still visible and should load
@@ -4271,10 +4278,10 @@ struct SimpleVideoPlayer: View {
                     self.setupPlayer()
                 }
             } else {
-                // After 3 retries, still keep showing spinner (never show error)
+                // After 1 retry, still keep showing spinner (never show error)
                 loadingState = .loading
                 player = nil
-                print("DEBUG: [VIDEO ERROR] Video failed after 3 retries for \(mid), keeping spinner visible")
+                print("DEBUG: [VIDEO ERROR] Video failed after 1 retry for \(mid), keeping spinner visible")
             }
             
             // For fullscreen, try to restore from cache as last resort
@@ -4527,7 +4534,7 @@ struct SimpleVideoPlayer: View {
             guard let playerItem = player.currentItem else {
                 if !loadingState.isLoading {
                     NSLog("⚠️ [VIDEO VALIDATION] Player has no currentItem for \(mid) - recreating")
-                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
                     self.player = nil
                     loadingState = .idle
                     playbackState = .notStarted
@@ -4540,7 +4547,7 @@ struct SimpleVideoPlayer: View {
             if !currentSeconds.isFinite {
                 if !loadingState.isLoading {
                     NSLog("⚠️ [VIDEO VALIDATION] Player currentTime is invalid (\(currentSeconds)) for \(mid) - recreating")
-                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey)
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
                     self.player = nil
                     loadingState = .idle
                     playbackState = .notStarted
