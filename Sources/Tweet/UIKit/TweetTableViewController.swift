@@ -13,6 +13,7 @@ class TweetTableViewController: UITableViewController {
     
     // Data
     private var tweets: [Tweet] = []
+    private var pinnedTweetIds: Set<String> = []  // Track pinned tweets for video visibility
     private var hasMoreTweets: Bool = true
     private var isLoadingMore: Bool = false
     
@@ -170,6 +171,10 @@ class TweetTableViewController: UITableViewController {
     }
     
     // MARK: - Public API
+    
+    func updatePinnedTweetIds(_ ids: Set<String>) {
+        self.pinnedTweetIds = ids
+    }
     
     func updateTweets(_ newTweets: [Tweet]) {
         let oldCount = tweets.count
@@ -627,14 +632,28 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Video Playback Coordination
     
     private func updateVisibleTweetsForVideoPlayback() {
-        guard !tweets.isEmpty else { return }
+        guard !tweets.isEmpty || !pinnedTweetIds.isEmpty else { return }
         
         // Calculate main content area (excluding header and footer)
         let mainContentRect = calculateMainContentRect()
         
+        // Start with pinned tweets (they're always in header, so always visible if header is visible)
+        var visibleTweetIds = Set<String>()
+        
+        // Check if header is visible and add pinned tweets if so
+        if let headerView = tableView.tableHeaderView, !pinnedTweetIds.isEmpty {
+            let headerFrame = headerView.frame
+            let headerIntersection = headerFrame.intersection(mainContentRect)
+            
+            // If header is at least 30% visible, consider pinned tweets visible
+            if headerIntersection.height / headerFrame.height >= 0.3 {
+                visibleTweetIds.formUnion(pinnedTweetIds)
+            }
+        }
+        
         // Get visible cells and filter by main content area
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
-        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
+        let visibleRowTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
             guard indexPath.row < tweets.count else { return nil }
             
             // Get the cell for this index path
@@ -653,6 +672,9 @@ class TweetTableViewController: UITableViewController {
             
             return tweets[indexPath.row].mid
         })
+        
+        // Combine pinned and row tweets
+        visibleTweetIds.formUnion(visibleRowTweetIds)
         
         // Update coordinator
         videoCoordinator.updateVisibleTweets(visibleTweetIds)

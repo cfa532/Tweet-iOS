@@ -33,6 +33,7 @@ struct TweetListView<RowView: View>: View {
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let leadingPadding: CGFloat  // Leading padding for cells
     let trailingPadding: CGFloat  // Trailing padding for cells
+    let pinnedTweetIds: Set<String>  // Pinned tweet IDs for video visibility tracking
     private let pageSize: UInt = 10  // Manual load-more only
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -143,6 +144,7 @@ struct TweetListView<RowView: View>: View {
         onScroll: ((CGFloat, CGFloat) -> Void)? = nil,  // (offset, delta)
         leadingPadding: CGFloat = 8,  // Default 8pt leading padding
         trailingPadding: CGFloat = 8,  // Default 8pt trailing padding
+        pinnedTweetIds: Set<String> = [],  // Pinned tweet IDs for video visibility
         header: (() -> AnyView)? = nil,
         onRefreshExtra: (() async -> Void)? = nil,  // Extra refresh callback
         rowView: @escaping (Tweet) -> RowView
@@ -154,6 +156,7 @@ struct TweetListView<RowView: View>: View {
         self.onScroll = onScroll
         self.leadingPadding = leadingPadding
         self.trailingPadding = trailingPadding
+        self.pinnedTweetIds = pinnedTweetIds
         self.header = header
         self.onRefreshExtra = onRefreshExtra
         // Default: listen for newTweetCreated and insert at top
@@ -194,7 +197,8 @@ struct TweetListView<RowView: View>: View {
                     },
                     onScroll: onScroll,
                     leadingPadding: leadingPadding,
-                    trailingPadding: trailingPadding
+                    trailingPadding: trailingPadding,
+                    pinnedTweetIds: pinnedTweetIds
                 )
                 .onAppear {
                     screenHeight = geometry.size.height
