@@ -253,6 +253,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     
                     // Restart infrastructure asynchronously (non-blocking)
                     infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                        // CRITICAL: Refresh appUser IP FIRST for long screen locks
+                        // Network connections may have changed during extended lock
+                        print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                        await self.refreshAppUserIP()
+                        print("[AppDelegate] ✅ AppUser IP refresh complete")
+                        
                         // Restart server in background
                         await self.restartVideoInfrastructureAsync()
                         
@@ -295,6 +301,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         
                         // Restart server asynchronously (non-blocking)
                         infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                            // CRITICAL: Refresh appUser IP FIRST before restarting server
+                            // This ensures videos load with fresh IPs after server restart
+                            print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                            await self.refreshAppUserIP()
+                            print("[AppDelegate] ✅ AppUser IP refresh complete")
+                            
                             // Restart server in background
                             LocalHTTPServer.shared.startAndWait()
                             
@@ -376,18 +388,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
         
-        // Proactively refresh appUser's IP address when returning from background
-        // This ensures we don't use stale IPs if the server changed while app was suspended
-        Task {
-            await refreshAppUserIP()
-        }
-
-        // Check for new messages when returning to foreground (only updates badge, no notifications)
-        Task {
-            print("[AppDelegate] 📬 Checking for new messages on foreground return")
-            await checkMessagesForBadgeOnly()
-        }
-        
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
@@ -413,6 +413,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 // Restart infrastructure asynchronously (non-blocking)
                 // Videos will show loading state until server is ready, but UI remains interactive
                 infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                    // CRITICAL: Refresh appUser IP FIRST before restarting server
+                    // This ensures videos load with fresh IPs, not stale ones that would timeout
+                    NSLog("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                    await self.refreshAppUserIP()
+                    NSLog("[AppDelegate] ✅ AppUser IP refresh complete")
+                    
                     // Restart server in background
                     await self.restartVideoInfrastructureAsync()
                     
@@ -429,42 +435,52 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 // SHORT background (<5min) - SMART recovery: only clear if server restarted
                 NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - smart recovery")
                 
-                // Check if server is still running on the same port
-                let wasServerRunning = LocalHTTPServer.shared.isRunning
-                let oldPort = LocalHTTPServer.shared.currentPort
-                
-                if !wasServerRunning {
-                    // Server died - need full recovery
-                    NSLog("⚠️ [AppDelegate] Server not running, restarting...")
-                    AppDelegate.isVideoInfrastructureReady = false
+                // CRITICAL: Refresh IP FIRST, then do video recovery
+                // Videos must not reload with stale IPs or they will timeout
+                Task.detached(priority: .userInitiated) {
+                    NSLog("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                    await self.refreshAppUserIP()
+                    NSLog("[AppDelegate] ✅ AppUser IP refresh complete")
                     
-                    // Clear players because server will restart on a new port
-                    SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                    
-                    // Restart server
-                    LocalHTTPServer.shared.startAndWait()
-                    
-                    let newPort = LocalHTTPServer.shared.currentPort
-                    NSLog("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
-                    
-                    AppDelegate.isVideoInfrastructureReady = true
-                    
-                    // Post notification for visible videos to reload with new port
-                    NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                    NSLog("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
-                } else {
-                    // Server still running - KEEP PLAYERS INTACT!
-                    NSLog("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
-                    
-                    // Just refresh video layers and reset connection pool
-                    SharedAssetCache.shared.refreshVideoLayersForShortBackground()
-                    LocalHTTPServer.shared.resetConnectionPool()
-                    
-                    NSLog("✅ [AppDelegate] Short background recovery complete - players preserved")
-                    
-                    // Still post notification to refresh any stale players
-                    NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                    NSLog("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
+                    await MainActor.run {
+                        // Check if server is still running on the same port
+                        let wasServerRunning = LocalHTTPServer.shared.isRunning
+                        let oldPort = LocalHTTPServer.shared.currentPort
+                        
+                        if !wasServerRunning {
+                            // Server died - need full recovery
+                            NSLog("⚠️ [AppDelegate] Server not running, restarting...")
+                            AppDelegate.isVideoInfrastructureReady = false
+                            
+                            // Clear players because server will restart on a new port
+                            SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                            
+                            // Restart server
+                            LocalHTTPServer.shared.startAndWait()
+                            
+                            let newPort = LocalHTTPServer.shared.currentPort
+                            NSLog("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
+                            
+                            AppDelegate.isVideoInfrastructureReady = true
+                            
+                            // Post notification for visible videos to reload with new port
+                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                            NSLog("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
+                        } else {
+                            // Server still running - KEEP PLAYERS INTACT!
+                            NSLog("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
+                            
+                            // Just refresh video layers and reset connection pool
+                            SharedAssetCache.shared.refreshVideoLayersForShortBackground()
+                            LocalHTTPServer.shared.resetConnectionPool()
+                            
+                            NSLog("✅ [AppDelegate] Short background recovery complete - players preserved")
+                            
+                            // Still post notification to refresh any stale players
+                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                            NSLog("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
+                        }
+                    }
                 }
             }
         } else {
@@ -479,6 +495,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 NSLog("✅ [AppDelegate] Server already running - no recovery needed")
             }
             AppDelegate.isVideoInfrastructureReady = true
+        }
+        
+        // Check for new messages when returning to foreground (only updates badge, no notifications)
+        // Run this in background, doesn't need to block video recovery
+        Task {
+            print("[AppDelegate] 📬 Checking for new messages on foreground return")
+            await checkMessagesForBadgeOnly()
         }
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
