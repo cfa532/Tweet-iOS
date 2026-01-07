@@ -13,6 +13,8 @@ class TweetTableViewController: UITableViewController {
     
     // Data
     private var tweets: [Tweet] = []
+    private var pinnedTweets: [Tweet] = []  // Pinned tweets for video coordination
+    private var pinnedTweetIds: Set<String> = []  // Track pinned tweets for video visibility
     private var hasMoreTweets: Bool = true
     private var isLoadingMore: Bool = false
     
@@ -171,6 +173,17 @@ class TweetTableViewController: UITableViewController {
     
     // MARK: - Public API
     
+    func updatePinnedTweets(_ tweets: [Tweet]) {
+        print("🔵 [PINNED UPDATE] updatePinnedTweets called with \(tweets.count) tweets: \(tweets.map { $0.mid })")
+        self.pinnedTweets = tweets
+        self.pinnedTweetIds = Set(tweets.map { $0.mid })
+        
+        // CRITICAL: Rebuild video list when pinned tweets change
+        // This ensures pinned tweet videos are registered with the coordinator
+        print("🔵 [PINNED UPDATE] Rebuilding video list with \(self.tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
+        videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: pinnedTweets)
+    }
+    
     func updateTweets(_ newTweets: [Tweet]) {
         let oldCount = tweets.count
         let oldTweets = tweets
@@ -187,7 +200,7 @@ class TweetTableViewController: UITableViewController {
             preflightHeightEstimates(for: newTweets)
             
             tableView.reloadData()
-            videoCoordinator.buildVideoList(from: newTweets)
+            videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
             
             // Trigger video detection after initial load
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -198,7 +211,7 @@ class TweetTableViewController: UITableViewController {
         
         // No change
         if oldCount == newTweets.count && oldTweets.map({ $0.mid }) == newTweets.map({ $0.mid }) {
-            videoCoordinator.buildVideoList(from: newTweets)
+            videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
             return
         }
         
@@ -218,7 +231,7 @@ class TweetTableViewController: UITableViewController {
                 
                 let indexPaths = (0..<potentialPrependCount).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .automatic)
-                videoCoordinator.buildVideoList(from: newTweets)
+                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
             }
         }
@@ -234,7 +247,7 @@ class TweetTableViewController: UITableViewController {
                 
                 let indexPaths = (oldCount..<newTweets.count).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .none)
-                videoCoordinator.buildVideoList(from: newTweets)
+                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
             }
         }
@@ -243,14 +256,14 @@ class TweetTableViewController: UITableViewController {
         if newTweets.count == oldCount - 1 {
             if let removedIndex = oldIds.firstIndex(where: { id in !newIds.contains(id) }) {
                 tableView.deleteRows(at: [IndexPath(row: removedIndex, section: 0)], with: .automatic)
-                videoCoordinator.buildVideoList(from: newTweets)
+                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
             }
         }
         
         // Complex change: fallback to full reload
         tableView.reloadData()
-        videoCoordinator.buildVideoList(from: newTweets)
+        videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
     }
     
     func updateHeader() {
@@ -627,14 +640,36 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Video Playback Coordination
     
     private func updateVisibleTweetsForVideoPlayback() {
-        guard !tweets.isEmpty else { return }
+        guard !tweets.isEmpty || !pinnedTweetIds.isEmpty else { return }
         
-        // Calculate main content area (excluding header and footer)
+        // Calculate main content area (excluding header and footer) for row visibility
         let mainContentRect = calculateMainContentRect()
+        
+        // Start with pinned tweets (they're always in header, so always visible if header is visible)
+        var visibleTweetIds = Set<String>()
+        
+        // Check if header is visible in viewport and add pinned tweets if so
+        // NOTE: We check against viewport bounds, NOT mainContentRect (which excludes headers)
+        if let headerView = tableView.tableHeaderView, !pinnedTweetIds.isEmpty {
+            let headerFrame = headerView.frame
+            let viewportBounds = tableView.bounds
+            let viewportRect = CGRect(
+                x: 0,
+                y: tableView.contentOffset.y,
+                width: viewportBounds.width,
+                height: viewportBounds.height
+            )
+            let headerIntersection = headerFrame.intersection(viewportRect)
+            
+            // If header is at least 30% visible in viewport, consider pinned tweets visible
+            if headerIntersection.height / headerFrame.height >= 0.3 {
+                visibleTweetIds.formUnion(pinnedTweetIds)
+            }
+        }
         
         // Get visible cells and filter by main content area
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
-        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
+        let visibleRowTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
             guard indexPath.row < tweets.count else { return nil }
             
             // Get the cell for this index path
@@ -653,6 +688,9 @@ class TweetTableViewController: UITableViewController {
             
             return tweets[indexPath.row].mid
         })
+        
+        // Combine pinned and row tweets
+        visibleTweetIds.formUnion(visibleRowTweetIds)
         
         // Update coordinator
         videoCoordinator.updateVisibleTweets(visibleTweetIds)

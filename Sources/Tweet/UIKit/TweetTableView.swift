@@ -18,6 +18,7 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     let leadingPadding: CGFloat  // Leading padding for cells
     let trailingPadding: CGFloat  // Trailing padding for cells
+    let pinnedTweets: [Tweet]  // Pinned tweets for video coordination and visibility
     
     func makeUIViewController(context: Context) -> TweetTableViewController {
         let controller = TweetTableViewController()
@@ -43,6 +44,9 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         
         // Update tweets
         uiViewController.updateTweets(tweets)
+        
+        // Update pinned tweets for video coordination and visibility
+        uiViewController.updatePinnedTweets(pinnedTweets)
         
         // Update loading state
         uiViewController.updateLoadingState(

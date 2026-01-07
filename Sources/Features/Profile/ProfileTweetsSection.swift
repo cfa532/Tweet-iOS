@@ -201,6 +201,7 @@ struct ProfileTweetsSection<Header: View>: View {
             onScroll: onScroll,
             leadingPadding: 5,  // Profile left padding (reduced by 3 from 8pt)
             trailingPadding: 7,  // Profile right padding (increased by 2 from 5pt)
+            pinnedTweets: pinnedTweets,  // Pass pinned tweets for video coordination
             header: {
                 AnyView(
                     VStack(spacing: 0) {

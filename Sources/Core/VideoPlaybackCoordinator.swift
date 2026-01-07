@@ -116,11 +116,29 @@ class VideoPlaybackCoordinator: ObservableObject {
         self.tableView = tableView
     }
     
-    /// Build video list from tweets
-    func buildVideoList(from tweets: [Tweet]) {
+    /// Build video list from tweets (including pinned tweets)
+    func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = []) {
         var videos: [VideoPlaybackInfo] = []
         
+        print("🟢 [BUILD VIDEO LIST] Called with \(tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
         
+        // Process pinned tweets first (they appear at the top)
+        for (_, tweet) in pinnedTweets.enumerated() {
+            guard let attachments = tweet.attachments else { continue }
+            
+            for (index, attachment) in attachments.enumerated() {
+                if attachment.type == .video || attachment.type == .hls_video {
+                    print("🟢 [BUILD VIDEO LIST] Adding PINNED video: tweetId=\(tweet.mid), videoMid=\(attachment.mid)")
+                    videos.append(VideoPlaybackInfo(
+                        tweetId: tweet.mid,
+                        videoMid: attachment.mid,
+                        index: index
+                    ))
+                }
+            }
+        }
+        
+        // Then process regular tweets
         for (_, tweet) in tweets.enumerated() {
             // For retweets, get attachments from original tweet but use retweet's ID for positioning
             let attachments: [MimeiFileType]?
