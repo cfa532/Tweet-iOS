@@ -711,22 +711,40 @@ struct SimpleVideoPlayer: View {
 
         let baselinePlayer = self.player
         let baselineSeconds = baselinePlayer?.currentTime().seconds ?? 0
+        
+        NSLog("🔍 [RECOVERY COVER] Starting polling for \(mid) (reason: \(reason)), baseline: \(baselineSeconds)s, rate: \(baselinePlayer?.rate ?? 0)")
 
         recoveryCoverTask = Task { @MainActor in
             var didRefreshLayer = false
 
             // Poll for a short period; we release the cover only after we see fresh frames/time progress.
             for i in 0..<35 { // ~3.5s
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { 
+                    NSLog("🔍 [RECOVERY COVER] Task cancelled for \(self.mid)")
+                    return 
+                }
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
 
-                guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { return }
+                guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { 
+                    NSLog("🔍 [RECOVERY COVER] Not visible anymore for \(self.mid)")
+                    return 
+                }
                 guard self.isHoldingRecoveryCover else { return }
                 guard !self.isPlayerDetached else { continue }
 
-                guard let player = self.player else { continue }
+                guard let player = self.player else { 
+                    if i % 10 == 0 {
+                        NSLog("🔍 [RECOVERY COVER] No player yet for \(self.mid) at iteration \(i)")
+                    }
+                    continue 
+                }
                 if let bp = baselinePlayer, player !== bp { return } // player swapped; new flow will handle
-                guard let item = player.currentItem else { continue }
+                guard let item = player.currentItem else { 
+                    if i % 10 == 0 {
+                        NSLog("🔍 [RECOVERY COVER] No currentItem for \(self.mid) at iteration \(i)")
+                    }
+                    continue 
+                }
 
                 // Preferred signal: AVPlayerItemVideoOutput says a new frame is available.
                 var hasNewFrame = false
@@ -739,8 +757,14 @@ struct SimpleVideoPlayer: View {
                 let nowSeconds = player.currentTime().seconds
                 let advanced = baselineSeconds.isFinite && nowSeconds.isFinite && nowSeconds > baselineSeconds + 0.15
                 let playing = player.timeControlStatus == .playing || player.rate > 0
+                
+                // Log status every 10 iterations (1 second)
+                if i % 10 == 0 {
+                    NSLog("🔍 [RECOVERY COVER] \(self.mid) at \(i/10)s: now=\(nowSeconds)s, baseline=\(baselineSeconds)s, rate=\(player.rate), status=\(player.timeControlStatus.rawValue), hasNewFrame=\(hasNewFrame)")
+                }
 
                 if hasNewFrame || (playing && advanced) {
+                    NSLog("✅ [RECOVERY COVER] Released for \(self.mid) (hasNewFrame: \(hasNewFrame), playing: \(playing), advanced: \(advanced))")
                     withAnimation(.easeOut(duration: 0.15)) {
                         self.isHoldingRecoveryCover = false
                     }
@@ -752,6 +776,7 @@ struct SimpleVideoPlayer: View {
                     let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                     let bufferEmpty = item.isPlaybackBufferEmpty
                     let noRanges = item.loadedTimeRanges.isEmpty
+                    NSLog("🔄 [RECOVERY COVER] Refreshing layer for \(self.mid) (waiting: \(waiting), bufferEmpty: \(bufferEmpty), noRanges: \(noRanges))")
                     if waiting || bufferEmpty || noRanges {
                         didRefreshLayer = true
                         self.representableId += 1
@@ -761,7 +786,7 @@ struct SimpleVideoPlayer: View {
             }
 
             // If we still didn't see frames, keep the cover (spinner stays) and let watchdog/retry handle.
-            NSLog("⏳ [RECOVERY COVER] Still holding after polling (reason: \(reason)) for \(self.mid)")
+            NSLog("⏳ [RECOVERY COVER] Still holding after 3.5s polling (reason: \(reason)) for \(self.mid) - player.rate: \(self.player?.rate ?? 0), status: \(self.player?.timeControlStatus.rawValue ?? 0)")
         }
     }
     
@@ -1643,7 +1668,10 @@ struct SimpleVideoPlayer: View {
 
             // Store playback state before pausing so we can resume later
             if let player = player {
-                let wasPlaying = player.rate > 0
+                // CRITICAL: Check both player.rate AND playbackState
+                // Player might already be paused by cachePlayerStateForBackground()
+                // but playbackState still indicates it was playing
+                let wasPlaying = (player.rate > 0) || (playbackState == .playing)
                 if wasPlaying {
                     // CRITICAL: Keep playbackState as .playing so we know it was playing
                     // Don't change to .paused - we'll use .playing to determine if we should resume
@@ -1651,7 +1679,8 @@ struct SimpleVideoPlayer: View {
                     NSLog("DEBUG: [STOP ALL VIDEOS] Paused \(mid) - was playing (keeping playbackState: .playing), will resume when fullscreen closes")
                 }
                 // PERFORMANCE FIX: Save position before pausing (Twitter-style)
-                saveCurrentPosition(player: player, reason: "stopAllVideos")
+                // Pass wasPlaying explicitly to preserve state before pause
+                saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "stopAllVideos")
                 
                 // Capture the last visible frame right before pausing (covers interruptions / audio session changes).
                 captureLastFrameIfPossible(reason: "stopAllVideos")
@@ -1677,9 +1706,10 @@ struct SimpleVideoPlayer: View {
         coordinatorWantsToPlay = false
         
         // PERFORMANCE FIX: Save position before pausing (Twitter-style)
-        // This eliminates need for periodic observer
+        // CRITICAL: Capture wasPlaying state BEFORE pausing
         if let player = player {
-            saveCurrentPosition(player: player, reason: "coordinatorStop")
+            let wasPlaying = (player.rate > 0) || (playbackState == .playing)
+            saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorStop")
             player.pause()
         }
         playbackState = .paused
@@ -1694,8 +1724,11 @@ struct SimpleVideoPlayer: View {
         
         coordinatorWantsToPlay = false
         if let player = player {
+            // CRITICAL: Capture wasPlaying state BEFORE pausing
+            let wasPlaying = (player.rate > 0) || (playbackState == .playing)
+            
             // PERFORMANCE FIX: Save position before pausing (Twitter-style)
-            saveCurrentPosition(player: player, reason: "coordinatorPause")
+            saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorPause")
             
             UIView.animate(withDuration: 0.2, animations: {
                 player.volume = 0
@@ -2497,7 +2530,10 @@ struct SimpleVideoPlayer: View {
     @MainActor
     private func handleReloadVisibleVideosOnly() {
         guard mode == .mediaCell else { return }
-        guard isVisible, isActuallyVisible else { return }
+        guard isVisible, isActuallyVisible else { 
+            NSLog("🔍 [RELOAD VISIBLE] Skipping \(mid) - not visible (isVisible: \(isVisible), isActuallyVisible: \(isActuallyVisible))")
+            return 
+        }
 
         // Ensure we don't get stuck showing the explicit "Video paused" overlay.
         // Visible videos should either show last-frame/spinner placeholders or the player itself.
@@ -2515,6 +2551,8 @@ struct SimpleVideoPlayer: View {
         // Also reset stuck loading states - after background recovery, loading state might be stuck
         let needsRecreation = (playerMissing && shouldLoadVideo) || broken
         let hasStuckLoading = loadingState.isLoading && (playerMissing || broken)
+        
+        NSLog("🔍 [RELOAD VISIBLE] \(mid) - playerMissing: \(playerMissing), itemMissing: \(itemMissing), timeInvalid: \(timeInvalid), broken: \(broken), needsRecreation: \(needsRecreation), hasStuckLoading: \(hasStuckLoading)")
 
         if needsRecreation || hasStuckLoading {
             // ONLY set recovery cover for videos that actually need recreation
@@ -2595,21 +2633,37 @@ struct SimpleVideoPlayer: View {
             // CRITICAL: Don't unconditionally refresh view to avoid flicker.
             // Use delayed check to detect if layer is actually stale (similar to recoverFromBackground).
             // Most intact players will work fine without view refresh.
+            
+            // CRITICAL FIX: Check if video was playing before background and resume it
+            // When app returns from background, handleStopAllVideos pauses the video but saves wasPlaying=true
+            // We need to check this saved state and resume playback
+            let cachedState = VideoStateCache.shared.getCachedPlaybackInfo(for: self.mid)
+            let wasPlayingBeforeBackground = cachedState?.wasPlaying ?? false
+            
+            NSLog("🔍 [RELOAD VISIBLE INTACT] \(mid) - rate: \(player?.rate ?? -1), wasPlaying: \(wasPlayingBeforeBackground), currentAutoPlay: \(currentAutoPlay)")
+            
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             
-            // CRITICAL FIX: After returning from fullscreen, explicitly restart playback if needed
-            // Sometimes checkPlaybackConditions doesn't restart paused videos (e.g. saved at 0.0s from stuck fullscreen)
-            if let player = self.player, player.rate == 0, currentAutoPlay {
-                // Check if video should be playing according to VideoManager
-                let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? true
-                let actuallyVisible = !self.isCoveredByOverlay
-                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-                let isReady = player.currentItem?.status == .readyToPlay
+            // CRITICAL FIX: After returning from background, explicitly restart playback if it was playing
+            if let player = self.player, player.rate == 0 {
+                // Check if video was playing before background OR should autoplay
+                let shouldResume = wasPlayingBeforeBackground || currentAutoPlay
                 
-                if approved && actuallyVisible && noDetailViewActive && isReady {
-                    player.isMuted = MuteState.shared.isMuted
-                    playWithResumeIfNeeded(player)
-                    playbackState = .playing
+                if shouldResume {
+                    // Check if video should be playing according to VideoManager
+                    let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? true
+                    let actuallyVisible = !self.isCoveredByOverlay
+                    let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                    let isReady = player.currentItem?.status == .readyToPlay
+                    
+                    if approved && actuallyVisible && noDetailViewActive && isReady {
+                        player.isMuted = MuteState.shared.isMuted
+                        playWithResumeIfNeeded(player)
+                        playbackState = .playing
+                        NSLog("▶️ [RELOAD VISIBLE INTACT] Resumed playback for \(mid) (wasPlaying: \(wasPlayingBeforeBackground))")
+                    } else {
+                        NSLog("⏸️ [RELOAD VISIBLE INTACT] Cannot resume \(mid) - approved: \(approved), visible: \(actuallyVisible), noDetail: \(noDetailViewActive), ready: \(isReady)")
+                    }
                 }
             }
             
@@ -3763,7 +3817,12 @@ struct SimpleVideoPlayer: View {
     /// PERFORMANCE FIX: Save current playback position (Twitter-style)
     /// Called whenever video state changes (pause/stop/disappear) instead of periodic polling
     /// This eliminates CPU overhead from periodic observers while ensuring position is always saved
-    private func saveCurrentPosition(player: AVPlayer, reason: String) {
+    /// 
+    /// - Parameters:
+    ///   - player: The AVPlayer instance
+    ///   - wasPlaying: Optional override for wasPlaying state (captures state before pause)
+    ///   - reason: Debug reason for logging
+    private func saveCurrentPosition(player: AVPlayer, wasPlaying: Bool? = nil, reason: String) {
         guard mode == .mediaCell else { return }
         guard let currentItem = player.currentItem else { return }
         
@@ -3778,16 +3837,25 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        let wasPlaying = player.rate > 0
+        // Determine wasPlaying state
+        // If explicitly provided (e.g., from before-pause state), use that
+        // Otherwise, check both player.rate AND playbackState
+        let actuallyWasPlaying: Bool
+        if let wasPlaying = wasPlaying {
+            actuallyWasPlaying = wasPlaying
+        } else {
+            actuallyWasPlaying = (player.rate > 0) || (playbackState == .playing)
+        }
+        
         VideoStateCache.shared.cacheVideoState(
             for: mid,
             player: player,
             time: currentTime,
-            wasPlaying: wasPlaying,
+            wasPlaying: actuallyWasPlaying,
             originalMuteState: player.isMuted
         )
         
-        NSLog("💾 [VIDEO POSITION] Saved \(String(format: "%.2f", currentTime.seconds))s for \(mid) (reason: \(reason))")
+        NSLog("💾 [VIDEO POSITION] Saved \(String(format: "%.2f", currentTime.seconds))s for \(mid) (wasPlaying: \(actuallyWasPlaying), reason: \(reason))")
     }
     
     private func setupTimeObserver(for player: AVPlayer) {
