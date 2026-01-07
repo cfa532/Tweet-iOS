@@ -82,6 +82,12 @@ class VideoStateCache {
         visibleVideoMids.remove(mid)
     }
     
+    /// Clear cached state for a video (e.g., when video finishes)
+    func clearCachedState(for mid: String) {
+        cache.removeValue(forKey: mid)
+        visibleVideoMids.remove(mid)
+    }
+    
     func cacheVideoState(for mid: String, player: AVPlayer, time: CMTime, wasPlaying: Bool, originalMuteState: Bool) {
         cache[mid] = (player: player, time: time, wasPlaying: wasPlaying, originalMuteState: originalMuteState, timestamp: Date())
         
@@ -1709,10 +1715,24 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Capture wasPlaying state BEFORE pausing
         if let player = player {
             let wasPlaying = (player.rate > 0) || (playbackState == .playing)
-            saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorStop")
+            
+            // Only save if this is the first stop (not a duplicate)
+            // Prevents overwriting wasPlaying: true with wasPlaying: false
+            if wasPlaying || player.rate > 0 {
+                saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorStop")
+            }
+            
             player.pause()
         }
-        playbackState = .paused
+        
+        // CRITICAL: Don't change playbackState to .paused if it was .playing
+        // This preserves the "was playing" state for background recovery
+        // Multiple coordinator stop commands can arrive in quick succession,
+        // and we don't want subsequent calls to overwrite the original state
+        // Only set to .paused if it wasn't playing
+        if playbackState != .playing {
+            playbackState = .paused
+        }
     }
     
     private func handleCoordinatorPauseCommand(notification: Notification) {
@@ -1728,7 +1748,10 @@ struct SimpleVideoPlayer: View {
             let wasPlaying = (player.rate > 0) || (playbackState == .playing)
             
             // PERFORMANCE FIX: Save position before pausing (Twitter-style)
-            saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorPause")
+            // Only save if this is the first pause (not a duplicate)
+            if wasPlaying || player.rate > 0 {
+                saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorPause")
+            }
             
             UIView.animate(withDuration: 0.2, animations: {
                 player.volume = 0
@@ -1736,7 +1759,12 @@ struct SimpleVideoPlayer: View {
                 player.pause()
             })
         }
-        playbackState = .paused
+        
+        // CRITICAL: Don't change playbackState to .paused if it was .playing
+        // This preserves the "was playing" state for background recovery
+        if playbackState != .playing {
+            playbackState = .paused
+        }
     }
     
     private func handleCoordinatorPlayCommand(notification: Notification) {
@@ -3700,6 +3728,14 @@ struct SimpleVideoPlayer: View {
         // (for flicker-free placeholders during layer reattach / buffering).
         ensureVideoOutputAttachedIfNeeded(for: player)
         
+        // CRITICAL: Reset finished videos when they come back into view
+        // This provides better UX than immediately rewinding after finish
+        if mode == .mediaCell && playbackState == .finished {
+            NSLog("🔄 [VIDEO RESET] Resetting finished video \(mid) to beginning for replay")
+            // Seek to beginning - state will be reset when playback starts
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: { _ in })
+        }
+        
         // CRITICAL: For MediaCell, pause playing shared players FIRST to prevent audio bleed
         if mode == .mediaCell && player.rate > 0 {
             player.pause()
@@ -4388,9 +4424,15 @@ struct SimpleVideoPlayer: View {
         // Mark finished immediately to prevent any auto-restart logic from firing.
         playbackState = .finished
 
-        // For MediaCell mode, ensure mute state is correct and prevent any view updates
+        // CRITICAL: Clear cached playback state when video finishes
+        // This prevents stale "wasPlaying: true" state from causing issues
+        // after background/foreground cycles
+        // NOTE: We don't rewind here - video stays at last frame (better UX)
+        // Rewind happens when video comes back into view (see setupPlayer)
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
+            VideoStateCache.shared.clearCachedState(for: mid)
+            NSLog("🧹 [VIDEO FINISHED] Cleared cached state for \(mid) - will restart from beginning when scrolled back")
         }
         
         // Notify the coordinator that video finished (for sequential playback)
@@ -4784,7 +4826,13 @@ struct SimpleVideoPlayer: View {
         // Cache the state for restoration (MediaCell only, NOT TweetDetail or MediaBrowser)
         // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
         // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
-        if mode == .mediaCell {
+        // CRITICAL: Don't cache if video is at the end - we want it to start fresh
+        // Check both playbackState AND player position (race condition protection)
+        let duration = player.currentItem?.duration.seconds ?? 0
+        let isAtEnd = duration > 0 && currentTime.seconds >= duration - 0.5
+        let shouldSkipCaching = playbackState == .finished || isAtEnd
+        
+        if mode == .mediaCell && !shouldSkipCaching {
             VideoStateCache.shared.cacheVideoState(
                 for: mid,
                 player: player,
@@ -4792,6 +4840,9 @@ struct SimpleVideoPlayer: View {
                 wasPlaying: wasPlaying,
                 originalMuteState: isMuted
             )
+            NSLog("💾 [BACKGROUND CACHE] Saved state for \(mid): time=\(String(format: "%.2f", currentTime.seconds))s, wasPlaying=\(wasPlaying)")
+        } else {
+            NSLog("🚫 [BACKGROUND CACHE] Skipping cache for \(mid) - finished=\(playbackState == .finished), atEnd=\(isAtEnd)")
         }
         
         // Pause the player but keep it attached
