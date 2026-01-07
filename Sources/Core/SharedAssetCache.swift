@@ -137,6 +137,9 @@ class SharedAssetCache: ObservableObject {
             cacheTimestamps.removeValue(forKey: key)
             cachingPlayerItems.removeValue(forKey: key)
             resourceLoaderDelegates.removeValue(forKey: key)
+            
+            // PERFORMANCE FIX: Clean up tweet URL mappings for evicted assets
+            cleanupTweetMappings(for: key)
         }
         
         if !expiredKeys.isEmpty {
@@ -147,6 +150,9 @@ class SharedAssetCache: ObservableObject {
         
         // PERFORMANCE FIX: Also trigger player cache size management
         managePlayerCacheSize()
+        
+        // PERFORMANCE FIX: Clean up expired disk cache status entries
+        cleanupExpiredDiskCacheStatus()
     }
     
     // MARK: - Asset Management
@@ -258,6 +264,40 @@ class SharedAssetCache: ObservableObject {
     /// Invalidate disk cache status for a mediaID (call when cache is created or deleted)
     private func invalidateDiskCacheStatus(for mediaID: String) {
         diskCacheStatus.removeValue(forKey: mediaID)
+    }
+    
+    /// PERFORMANCE FIX: Clean up expired disk cache status entries to prevent unbounded growth
+    private func cleanupExpiredDiskCacheStatus() {
+        let now = Date()
+        let expiredKeys = diskCacheStatus.filter { 
+            now.timeIntervalSince($0.value.timestamp) > diskCacheStatusTTL 
+        }.map { $0.key }
+        
+        for key in expiredKeys {
+            diskCacheStatus.removeValue(forKey: key)
+        }
+        
+        if !expiredKeys.isEmpty {
+            NSLog("🧹 [CACHE CLEANUP] Removed \(expiredKeys.count) expired disk cache status entries")
+        }
+    }
+    
+    /// PERFORMANCE FIX: Clean up tweet URL mappings for a specific mediaID
+    private func cleanupTweetMappings(for mediaID: String) {
+        // Find and remove the mediaID from all tweet mappings
+        var tweetsToClean: [String] = []
+        for (tweetId, mediaIds) in tweetUrlMapping {
+            if mediaIds.contains(mediaID) {
+                tweetsToClean.append(tweetId)
+            }
+        }
+        
+        for tweetId in tweetsToClean {
+            tweetUrlMapping[tweetId]?.remove(mediaID)
+            if tweetUrlMapping[tweetId]?.isEmpty == true {
+                tweetUrlMapping.removeValue(forKey: tweetId)
+            }
+        }
     }
     
     /// Cancel all loading tasks for a tweet only if no cache is available
@@ -1112,6 +1152,8 @@ class SharedAssetCache: ObservableObject {
                         self.cacheTimestamps.removeValue(forKey: key)
                         self.cachingPlayerItems.removeValue(forKey: key)
                         self.resourceLoaderDelegates.removeValue(forKey: key)
+                        // PERFORMANCE FIX: Clean up tweet URL mappings
+                        self.cleanupTweetMappings(for: key)
                     }
                 }
             }
@@ -1142,6 +1184,8 @@ class SharedAssetCache: ObservableObject {
                 cacheTimestamps.removeValue(forKey: key)
                 cachingPlayerItems.removeValue(forKey: key)
                 resourceLoaderDelegates.removeValue(forKey: key)
+                // PERFORMANCE FIX: Clean up tweet URL mappings
+                cleanupTweetMappings(for: key)
             }
             
             if !keysToRemove.isEmpty {
@@ -1173,6 +1217,8 @@ class SharedAssetCache: ObservableObject {
                 cacheTimestamps.removeValue(forKey: key)
                 cachingPlayerItems.removeValue(forKey: key)
                 resourceLoaderDelegates.removeValue(forKey: key)
+                // PERFORMANCE FIX: Clean up tweet URL mappings
+                cleanupTweetMappings(for: key)
             }
         }
     }

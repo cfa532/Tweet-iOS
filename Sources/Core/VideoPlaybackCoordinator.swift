@@ -77,9 +77,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Timer for debouncing video playback (0.1s delay)
     private var playbackDebounceTimer: Timer?
     
-    /// Timer for each video's 2s autoplay during survey
-    private var videoTimers: [String: Timer] = [:]
-    
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
     
@@ -305,11 +302,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         playbackDebounceTimer?.invalidate()
         playbackDebounceTimer = nil
-        
-        for timer in videoTimers.values {
-            timer.invalidate()
-        }
-        videoTimers.removeAll()
         
         scrollStopTimer?.invalidate()
         scrollStopTimer = nil

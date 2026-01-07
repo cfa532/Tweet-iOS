@@ -403,7 +403,6 @@ struct SimpleVideoPlayer: View {
     @State private var videoOutputAttachedItem: AVPlayerItem?
     @State private var lastFrameCaptureAt: Date = .distantPast
     @State private var lastFrameVersion: Int = 0 // bumps when we store a new frame (forces view update)
-    @State private var playbackWatchdogTask: Task<Void, Never>? = nil
     @State private var isHoldingRecoveryCover: Bool = false
     @State private var recoveryCoverTask: Task<Void, Never>? = nil
     @State private var recoveryTimeoutTask: Task<Void, Never>? = nil // 15s timeout for MediaCell recovery
