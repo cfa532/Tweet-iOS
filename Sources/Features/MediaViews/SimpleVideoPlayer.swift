@@ -1650,6 +1650,9 @@ struct SimpleVideoPlayer: View {
                     // Only pause the player, not the state
                     NSLog("DEBUG: [STOP ALL VIDEOS] Paused \(mid) - was playing (keeping playbackState: .playing), will resume when fullscreen closes")
                 }
+                // PERFORMANCE FIX: Save position before pausing (Twitter-style)
+                saveCurrentPosition(player: player, reason: "stopAllVideos")
+                
                 // Capture the last visible frame right before pausing (covers interruptions / audio session changes).
                 captureLastFrameIfPossible(reason: "stopAllVideos")
                 player.pause()
@@ -1672,7 +1675,13 @@ struct SimpleVideoPlayer: View {
         // Otherwise, stop all videos (shouldStopAllVideos notification)
         
         coordinatorWantsToPlay = false
-        player?.pause()
+        
+        // PERFORMANCE FIX: Save position before pausing (Twitter-style)
+        // This eliminates need for periodic observer
+        if let player = player {
+            saveCurrentPosition(player: player, reason: "coordinatorStop")
+            player.pause()
+        }
         playbackState = .paused
     }
     
@@ -1685,6 +1694,9 @@ struct SimpleVideoPlayer: View {
         
         coordinatorWantsToPlay = false
         if let player = player {
+            // PERFORMANCE FIX: Save position before pausing (Twitter-style)
+            saveCurrentPosition(player: player, reason: "coordinatorPause")
+            
             UIView.animate(withDuration: 0.2, animations: {
                 player.volume = 0
             }, completion: { _ in
@@ -3748,39 +3760,56 @@ struct SimpleVideoPlayer: View {
         }
     }
     
+    /// PERFORMANCE FIX: Save current playback position (Twitter-style)
+    /// Called whenever video state changes (pause/stop/disappear) instead of periodic polling
+    /// This eliminates CPU overhead from periodic observers while ensuring position is always saved
+    private func saveCurrentPosition(player: AVPlayer, reason: String) {
+        guard mode == .mediaCell else { return }
+        guard let currentItem = player.currentItem else { return }
+        
+        let currentTime = player.currentTime()
+        let duration = currentItem.duration.seconds
+        
+        // Only save if time is valid and video is not at the end
+        guard currentTime.seconds.isFinite, currentTime.seconds > 0.25 else { return }
+        
+        // Don't save if video finished (at the end)
+        if duration > 0 && currentTime.seconds >= duration - 0.5 {
+            return
+        }
+        
+        let wasPlaying = player.rate > 0
+        VideoStateCache.shared.cacheVideoState(
+            for: mid,
+            player: player,
+            time: currentTime,
+            wasPlaying: wasPlaying,
+            originalMuteState: player.isMuted
+        )
+        
+        NSLog("💾 [VIDEO POSITION] Saved \(String(format: "%.2f", currentTime.seconds))s for \(mid) (reason: \(reason))")
+    }
+    
     private func setupTimeObserver(for player: AVPlayer) {
-        // Remove existing time observer if any (only from the player that added it)
-        if let existingObserver = timeObserver, let observerPlayer = timeObserverPlayer {
-            observerPlayer.removeTimeObserver(existingObserver)
-            timeObserver = nil
-            timeObserverPlayer = nil
-        }
+        // REMOVED: Periodic time observer (every 2 seconds) - replaced with event-driven saving
+        // Position is now saved on every pause/stop/disappear event (Twitter-style)
+        // This eliminates continuous CPU overhead while ensuring position is always captured
+        //
+        // Previous implementation created a periodic observer that fired every 2 seconds on main thread.
+        // This caused severe CPU slowdown as observers accumulated (100 videos = 50 callbacks/sec).
+        //
+        // New approach: Save position only when video state actually changes:
+        // - When paused (handleCoordinatorPauseCommand, handleCoordinatorStopCommand)
+        // - When stopped (handleStopAllVideos)
+        // - When scrolled away (handleOnDisappear)
+        // - When backgrounded (cachePlayerStateForBackground)
+        //
+        // Benefits:
+        // - Zero continuous CPU overhead
+        // - Position saved exactly when needed
+        // - Same behavior as Twitter's video player
         
-        // Create time observer for memory-efficient segment management
-        let timeScale = CMTimeScale(NSEC_PER_SEC)
-        let time = CMTime(seconds: 2.0, preferredTimescale: timeScale)
-        
-        timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { [mid] time in
-            // Cache/update playback time periodically.
-            // Don't require loadedTimeRanges; HLS can advance time before ranges populate reliably.
-            guard player.currentItem != nil else { return }
-            // Only record progress while actually playing.
-            // This avoids caching near-zero times during foreground recovery/buffering, which can
-            // clobber the resume time captured on background.
-            guard player.rate > 0 || player.timeControlStatus == .playing else { return }
-            let currentTime = player.currentTime()
-            guard currentTime.seconds.isFinite, currentTime.seconds > 0.25 else { return }
-            let wasPlaying = player.rate > 0
-            VideoStateCache.shared.cacheVideoState(
-                for: mid,
-                player: player,
-                time: currentTime,
-                wasPlaying: wasPlaying,
-                originalMuteState: player.isMuted
-            )
-        }
-        
-        // Store reference to the player that added this observer
+        // Store reference for compatibility
         timeObserverPlayer = player
     }
     
