@@ -13,8 +13,7 @@ class TweetTableViewController: UITableViewController {
     
     // Data
     private var tweets: [Tweet] = []
-    private var pinnedTweets: [Tweet] = []  // Pinned tweets for video coordination
-    private var pinnedTweetIds: Set<String> = []  // Track pinned tweets for video visibility
+    private var pinnedTweets: [Tweet] = []  // Pinned tweets rendered as first N rows
     private var hasMoreTweets: Bool = true
     private var isLoadingMore: Bool = false
     
@@ -175,13 +174,29 @@ class TweetTableViewController: UITableViewController {
     
     func updatePinnedTweets(_ tweets: [Tweet]) {
         print("🔵 [PINNED UPDATE] updatePinnedTweets called with \(tweets.count) tweets: \(tweets.map { $0.mid })")
+        let oldCount = pinnedTweets.count
         self.pinnedTweets = tweets
-        self.pinnedTweetIds = Set(tweets.map { $0.mid })
         
         // CRITICAL: Rebuild video list when pinned tweets change
         // This ensures pinned tweet videos are registered with the coordinator
         print("🔵 [PINNED UPDATE] Rebuilding video list with \(self.tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
         videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: pinnedTweets)
+        
+        // Reload table to reflect new pinned tweets
+        if oldCount != tweets.count {
+            // Number of rows changed, do a full reload
+            tableView.reloadData()
+        } else if oldCount > 0 {
+            // Same number, just update the content
+            let indexPaths = (0..<oldCount).map { IndexPath(row: $0, section: 0) }
+            tableView.reloadRows(at: indexPaths, with: .none)
+        }
+        
+        // CRITICAL: Update visibility after reload so coordinator knows pinned videos are visible
+        // Delay slightly to ensure cells have been created
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.updateVisibleTweetsForVideoPlayback()
+        }
     }
     
     func updateTweets(_ newTweets: [Tweet]) {
@@ -441,7 +456,7 @@ class TweetTableViewController: UITableViewController {
     }
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return tweets.count
+        return pinnedTweets.count + tweets.count
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -452,7 +467,13 @@ class TweetTableViewController: UITableViewController {
             return UITableViewCell()
         }
         
-        let tweet = tweets[indexPath.row]
+        // First N rows are pinned tweets, rest are regular tweets
+        let tweet: Tweet
+        if indexPath.row < pinnedTweets.count {
+            tweet = pinnedTweets[indexPath.row]
+        } else {
+            tweet = tweets[indexPath.row - pinnedTweets.count]
+        }
         
         if let rowView = rowViewBuilder {
             cell.configure(
@@ -470,8 +491,20 @@ class TweetTableViewController: UITableViewController {
     // MARK: - UITableViewDelegate
     
     override func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
-        guard indexPath.row < tweets.count else { return 250 }
-        let tweetId = tweets[indexPath.row].mid
+        let totalRows = pinnedTweets.count + tweets.count
+        guard indexPath.row < totalRows else { return 250 }
+        
+        // Determine which tweet this row represents
+        let tweet: Tweet
+        if indexPath.row < pinnedTweets.count {
+            tweet = pinnedTweets[indexPath.row]
+        } else {
+            let regularIndex = indexPath.row - pinnedTweets.count
+            guard regularIndex < tweets.count else { return 250 }
+            tweet = tweets[regularIndex]
+        }
+        
+        let tweetId = tweet.mid
         
         // Use cached height if available for better estimation
         if let cachedHeight = heightCache[tweetId] {
@@ -479,14 +512,24 @@ class TweetTableViewController: UITableViewController {
         }
         
         // Otherwise, estimate based on tweet content
-        let tweet = tweets[indexPath.row]
         return estimateHeight(for: tweet)
     }
     
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
         // Cache the actual rendered height for future estimations
-        guard indexPath.row < tweets.count else { return }
-        let tweetId = tweets[indexPath.row].mid
+        let totalRows = pinnedTweets.count + tweets.count
+        guard indexPath.row < totalRows else { return }
+        
+        // Determine which tweet this row represents
+        let tweetId: String
+        if indexPath.row < pinnedTweets.count {
+            tweetId = pinnedTweets[indexPath.row].mid
+        } else {
+            let regularIndex = indexPath.row - pinnedTweets.count
+            guard regularIndex < tweets.count else { return }
+            tweetId = tweets[regularIndex].mid
+        }
+        
         heightCache[tweetId] = cell.frame.height
         
         // Auto-load disabled - only manual pull-to-load at bottom
@@ -640,37 +683,16 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Video Playback Coordination
     
     private func updateVisibleTweetsForVideoPlayback() {
-        guard !tweets.isEmpty || !pinnedTweetIds.isEmpty else { return }
+        guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
         
         // Calculate main content area (excluding header and footer) for row visibility
         let mainContentRect = calculateMainContentRect()
         
-        // Start with pinned tweets (they're always in header, so always visible if header is visible)
-        var visibleTweetIds = Set<String>()
-        
-        // Check if header is visible in viewport and add pinned tweets if so
-        // NOTE: We check against viewport bounds, NOT mainContentRect (which excludes headers)
-        if let headerView = tableView.tableHeaderView, !pinnedTweetIds.isEmpty {
-            let headerFrame = headerView.frame
-            let viewportBounds = tableView.bounds
-            let viewportRect = CGRect(
-                x: 0,
-                y: tableView.contentOffset.y,
-                width: viewportBounds.width,
-                height: viewportBounds.height
-            )
-            let headerIntersection = headerFrame.intersection(viewportRect)
-            
-            // If header is at least 30% visible in viewport, consider pinned tweets visible
-            if headerIntersection.height / headerFrame.height >= 0.3 {
-                visibleTweetIds.formUnion(pinnedTweetIds)
-            }
-        }
-        
-        // Get visible cells and filter by main content area
+        // Get visible cells and check visibility
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
-        let visibleRowTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
-            guard indexPath.row < tweets.count else { return nil }
+        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
+            let totalRows = pinnedTweets.count + tweets.count
+            guard indexPath.row < totalRows else { return nil }
             
             // Get the cell for this index path
             guard let cell = tableView.cellForRow(at: indexPath) else { return nil }
@@ -686,11 +708,15 @@ class TweetTableViewController: UITableViewController {
             let visibilityRatio = intersection.height / cellFrame.height
             guard visibilityRatio >= 0.3 else { return nil }
             
-            return tweets[indexPath.row].mid
+            // Determine which tweet this row represents
+            if indexPath.row < pinnedTweets.count {
+                return pinnedTweets[indexPath.row].mid
+            } else {
+                let regularIndex = indexPath.row - pinnedTweets.count
+                guard regularIndex < tweets.count else { return nil }
+                return tweets[regularIndex].mid
+            }
         })
-        
-        // Combine pinned and row tweets
-        visibleTweetIds.formUnion(visibleRowTweetIds)
         
         // Update coordinator
         videoCoordinator.updateVisibleTweets(visibleTweetIds)

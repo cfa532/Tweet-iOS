@@ -201,54 +201,23 @@ struct ProfileTweetsSection<Header: View>: View {
             onScroll: onScroll,
             leadingPadding: 5,  // Profile left padding (reduced by 3 from 8pt)
             trailingPadding: 7,  // Profile right padding (increased by 2 from 5pt)
-            pinnedTweets: pinnedTweets,  // Pass pinned tweets for video coordination
+            pinnedTweets: pinnedTweets,  // Pass pinned tweets - they'll be rendered as table rows
             header: {
                 AnyView(
                     VStack(spacing: 0) {
                         header()
                             .id("top")
                         if !pinnedTweets.isEmpty {
-                            VStack(spacing: 0) {
-                                Text(LocalizedStringKey("Pinned"))
-                                    .font(.subheadline)
-                                    .bold()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.leading, 5)
-                                    .padding(.trailing, 7)
-                                    .padding(.top, 8)
-                                    .padding(.bottom, 4)
-                                    .background(Color(UIColor.systemBackground))
-                                
-                                // Display pinned tweets
-                                ForEach(pinnedTweets, id: \.mid) { pinnedTweet in
-                                                                    TweetItemView(
-                                    tweet: pinnedTweet,
-                                    isPinned: true,
-                                    isInProfile: true,
-                                    showDeleteButton: user.mid == hproseInstance.appUser.mid,
-                                    onAvatarTap: { user in
-                                        onUserSelect(user)
-                                    },
-                                    onTap: nil, // Will use NavigationLink instead
-                                    onAvatarTapInProfile: onAvatarTapInProfile,
-                                    currentProfileUser: user,
-                                    onRemove: { tweetId in
-                                        // Handle pinned tweet removal if needed
-                                        // Post notification to trigger deletion handling in ProfileView
-                                        NotificationCenter.default.post(
-                                            name: .tweetDeleted,
-                                            object: nil,
-                                            userInfo: ["tweetId": tweetId]
-                                        )
-                                    }
-                                )
-                                    .background(Color(UIColor.systemBackground))
-                                }
-                            }
-                            .onAppear {
-                            }
-                        } else {
-                            // No pinned tweets to display
+                            // Show "Pinned" label separator
+                            Text(LocalizedStringKey("Pinned"))
+                                .font(.subheadline)
+                                .bold()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.leading, 5)
+                                .padding(.trailing, 7)
+                                .padding(.top, 8)
+                                .padding(.bottom, 4)
+                                .background(Color(UIColor.systemBackground))
                         }
                     }
                 )
