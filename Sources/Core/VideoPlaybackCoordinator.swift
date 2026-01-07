@@ -334,6 +334,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Start survey phase - play all visible videos for 2s each
     private func startSurveyPhase() {
+        // Guard against starting survey if not in idle phase
+        guard phase == .idle else {
+            print("🎬 [VideoOrchestrator] Cannot start survey - already in \(phase) phase")
+            return
+        }
+        
+        print("🎬 [VideoOrchestrator] Starting survey phase with \(visibleVideos.count) videos")
         phase = .surveying
         currentlyPlayingVideoIds.removeAll()
         
@@ -370,7 +377,17 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// End survey phase and identify primary video
     private func endSurveyPhase() {
+        // Guard against ending survey if not in surveying phase
+        guard phase == .surveying else {
+            print("🎬 [VideoOrchestrator] Ignoring endSurvey - not in surveying phase (current: \(phase))")
+            return
+        }
+        
         print("🎬 [VideoOrchestrator] Ending survey phase, identifying primary video")
+        
+        // Invalidate survey timer to prevent duplicate calls
+        surveyTimer?.invalidate()
+        surveyTimer = nil
         
         // Identify primary video (most visible/centered)
         guard let primary = identifyPrimaryVideo() else {
