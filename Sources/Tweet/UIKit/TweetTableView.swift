@@ -20,6 +20,15 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     let trailingPadding: CGFloat  // Trailing padding for cells
     let pinnedTweets: [Tweet]  // Pinned tweets for video coordination and visibility
     
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
+    class Coordinator {
+        var lastTweetIds: [String] = []
+        var lastPinnedTweetIds: [String] = []
+    }
+    
     func makeUIViewController(context: Context) -> TweetTableViewController {
         let controller = TweetTableViewController()
         
@@ -41,12 +50,21 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     }
     
     func updateUIViewController(_ uiViewController: TweetTableViewController, context: Context) {
+        let coordinator = context.coordinator
         
-        // Update tweets
-        uiViewController.updateTweets(tweets)
+        // Only update tweets if they actually changed (compare IDs for efficiency)
+        let currentTweetIds = tweets.map { $0.mid }
+        if coordinator.lastTweetIds != currentTweetIds {
+            coordinator.lastTweetIds = currentTweetIds
+            uiViewController.updateTweets(tweets)
+        }
         
-        // Update pinned tweets for video coordination and visibility
-        uiViewController.updatePinnedTweets(pinnedTweets)
+        // Only update pinned tweets if they actually changed (compare IDs for efficiency)
+        let currentPinnedTweetIds = pinnedTweets.map { $0.mid }
+        if coordinator.lastPinnedTweetIds != currentPinnedTweetIds {
+            coordinator.lastPinnedTweetIds = currentPinnedTweetIds
+            uiViewController.updatePinnedTweets(pinnedTweets)
+        }
         
         // Update loading state
         uiViewController.updateLoadingState(
