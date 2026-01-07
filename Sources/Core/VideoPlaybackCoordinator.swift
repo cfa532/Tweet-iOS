@@ -119,6 +119,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Build video list from tweets (including pinned tweets)
     func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = []) {
         var videos: [VideoPlaybackInfo] = []
+        var seenVideoMids = Set<String>() // Track seen video mids to prevent duplicates
         
         print("🟢 [BUILD VIDEO LIST] Called with \(tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
         
@@ -128,12 +129,19 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             for (index, attachment) in attachments.enumerated() {
                 if attachment.type == .video || attachment.type == .hls_video {
+                    // Skip if we've already added this video
+                    if seenVideoMids.contains(attachment.mid) {
+                        print("🟢 [BUILD VIDEO LIST] Skipping duplicate PINNED video: videoMid=\(attachment.mid)")
+                        continue
+                    }
+                    
                     print("🟢 [BUILD VIDEO LIST] Adding PINNED video: tweetId=\(tweet.mid), videoMid=\(attachment.mid)")
                     videos.append(VideoPlaybackInfo(
                         tweetId: tweet.mid,
                         videoMid: attachment.mid,
                         index: index
                     ))
+                    seenVideoMids.insert(attachment.mid)
                 }
             }
         }
@@ -162,11 +170,18 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             for (index, attachment) in attachments.enumerated() {
                 if attachment.type == .video || attachment.type == .hls_video {
+                    // Skip if we've already added this video (e.g., it was pinned)
+                    if seenVideoMids.contains(attachment.mid) {
+                        print("🟢 [BUILD VIDEO LIST] Skipping duplicate video: videoMid=\(attachment.mid)")
+                        continue
+                    }
+                    
                     videos.append(VideoPlaybackInfo(
                         tweetId: tweet.mid,  // Use retweet's ID so positioning matches user's view
                         videoMid: attachment.mid,
                         index: index
                     ))
+                    seenVideoMids.insert(attachment.mid)
                 }
             }
         }
@@ -217,6 +232,20 @@ class VideoPlaybackCoordinator: ObservableObject {
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
                currentVisibleVideoIds.contains(where: { primaryId.contains($0) }) {
+                previousVisibleVideoIds = currentVisibleVideoIds
+                return
+            }
+            
+            // CRITICAL FIX: Don't reset if we're in surveying phase and just adding more videos
+            // This prevents duplicate survey commands when new video cells appear during the survey
+            if phase == .surveying {
+                // Only add new videos to the survey, don't restart it
+                let newVideos = visibleVideos.filter { video in
+                    !currentlyPlayingVideoIds.contains(video.identifier)
+                }
+                for video in newVideos {
+                    playVideoForSurvey(video)
+                }
                 previousVisibleVideoIds = currentVisibleVideoIds
                 return
             }
@@ -352,27 +381,36 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         print("🎬 [VideoOrchestrator] Primary video identified: \(primary.videoMid)")
         
+        // Check if primary video is already playing to avoid unnecessary play commands
+        let primaryAlreadyPlaying = currentlyPlayingVideoIds.contains(primary.identifier)
+        
         // Pause all non-primary videos
         for video in visibleVideos where video != primary {
             pauseVideo(video)
         }
         
-        // Ensure primary video is playing (restart if finished)
+        // Update state to primary phase
         primaryVideoId = primary.identifier
         currentlyPlayingVideoIds = [primary.identifier]
         phase = .primaryPlaying
         
-        // Send primary play command to ensure video plays (especially if it finished during survey)
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: [
-                "tweetId": primary.tweetId,
-                "videoMid": primary.videoMid,
-                "videoIndex": primary.index,
-                "isPrimary": true
-            ]
-        )
+        // Only send play command if video is not already playing
+        // This prevents unnecessary notifications that could cause flicker
+        if !primaryAlreadyPlaying {
+            print("🎬 [VideoOrchestrator] Primary video was not playing, sending play command")
+            NotificationCenter.default.post(
+                name: .shouldPlayVideo,
+                object: nil,
+                userInfo: [
+                    "tweetId": primary.tweetId,
+                    "videoMid": primary.videoMid,
+                    "videoIndex": primary.index,
+                    "isPrimary": true
+                ]
+            )
+        } else {
+            print("🎬 [VideoOrchestrator] Primary video already playing, no play command needed")
+        }
         
         print("🎬 [VideoOrchestrator] Transitioned to primary playback phase")
     }

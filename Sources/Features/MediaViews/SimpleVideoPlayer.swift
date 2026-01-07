@@ -2459,10 +2459,6 @@ struct SimpleVideoPlayer: View {
         guard mode == .mediaCell else { return }
         guard isVisible, isActuallyVisible else { return }
 
-
-        // Keep cover up during foreground recovery; we’ll release when frames are rendering again.
-        isHoldingRecoveryCover = true
-
         // Ensure we don't get stuck showing the explicit "Video paused" overlay.
         // Visible videos should either show last-frame/spinner placeholders or the player itself.
         isPlayerDetached = false
@@ -2481,6 +2477,9 @@ struct SimpleVideoPlayer: View {
         let hasStuckLoading = loadingState.isLoading && (playerMissing || broken)
 
         if needsRecreation || hasStuckLoading {
+            // ONLY set recovery cover for videos that actually need recreation
+            // Intact players don't need the spinner - they're already working fine
+            isHoldingRecoveryCover = true
             if hasStuckLoading {
                 loadingState = .idle
             }
@@ -2603,9 +2602,6 @@ struct SimpleVideoPlayer: View {
                 } else {
                 }
             }
-
-            // Even for intact players, release cover once we see frames.
-            scheduleRecoveryCoverRelease(reason: "reloadVisibleVideosOnlyIntact")
         } else {
             // Player is nil but shouldLoadVideo is false - this is expected for non-playing videos
             // in a grid waiting for sequential playback. Just ensure state is clean.
