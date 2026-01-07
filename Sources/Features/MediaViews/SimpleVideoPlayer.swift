@@ -1138,11 +1138,10 @@ struct SimpleVideoPlayer: View {
         // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
         if mode == .mediaCell, let player = player {
             let currentTime = player.currentTime().seconds
-            let duration = player.currentItem?.duration.seconds ?? 0
             
             // Don't save position if video is finished (at the end)
             // This prevents restoring to the end position when scrolling back
-            if duration > 0 && currentTime >= duration - 0.5 {
+            if isVideoAtEnd(player) {
                 NSLog("🎬 [VIDEO CACHE] Skipping save - video finished at \(String(format: "%.2f", currentTime))s for \(mid)")
             } else {
                 // For MediaCell mode, save the current global mute state
@@ -1794,7 +1793,13 @@ struct SimpleVideoPlayer: View {
             let hasCachedPosition = VideoStateCache.shared.hasCachedPlaybackInfo(for: mid)
             let currentTime = player.currentTime().seconds
             
-            if hasCachedPosition && currentTime > 0.5 {
+            // CRITICAL: If video is at the end (finished), always restart from beginning
+            // even if there's a cached position. This ensures finished videos restart properly.
+            if isVideoAtEnd(player) {
+                NSLog("🔄 [SURVEY] Video \(mid) is at end (\(String(format: "%.2f", currentTime))s) - restarting from beginning")
+                VideoStateCache.shared.clearCachedState(for: mid)
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+            } else if hasCachedPosition && currentTime > 0.5 {
                 // Video was restored from cache - keep the current position
                 NSLog("🎬 [SURVEY] Video \(mid) has cached position (\(String(format: "%.2f", currentTime))s) - NOT seeking to zero")
             } else {
@@ -3729,10 +3734,11 @@ struct SimpleVideoPlayer: View {
         ensureVideoOutputAttachedIfNeeded(for: player)
         
         // CRITICAL: Reset finished videos when they come back into view
-        // This provides better UX than immediately rewinding after finish
-        if mode == .mediaCell && playbackState == .finished {
-            NSLog("🔄 [VIDEO RESET] Resetting finished video \(mid) to beginning for replay")
-            // Seek to beginning - state will be reset when playback starts
+        // Check both playbackState AND player position (SwiftUI view is recreated on scroll)
+        if mode == .mediaCell && (playbackState == .finished || isVideoAtEnd(player)) {
+            NSLog("🔄 [VIDEO RESET] Resetting finished video \(mid) to beginning - atEnd=\(isVideoAtEnd(player)), finished=\(playbackState == .finished)")
+            // Clear any cached state and seek to beginning
+            VideoStateCache.shared.clearCachedState(for: mid)
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: { _ in })
         }
         
@@ -3869,7 +3875,7 @@ struct SimpleVideoPlayer: View {
         guard currentTime.seconds.isFinite, currentTime.seconds > 0.25 else { return }
         
         // Don't save if video finished (at the end)
-        if duration > 0 && currentTime.seconds >= duration - 0.5 {
+        if isVideoAtEnd(player) {
             return
         }
         
@@ -4692,7 +4698,7 @@ struct SimpleVideoPlayer: View {
             NSLog("🔍 [PLAYBACK CHECK] Video \(mid): playbackState=\(playbackState), time=\(String(format: "%.2f", currentTime))s/\(String(format: "%.2f", duration))s, atEnd=\(atEnd)")
             
             // If video is at or near the end, rewind it FIRST
-                if atEnd || currentTime > duration - 0.5 {
+                if atEnd {
                     NSLog("🔄 [PLAYBACK REWIND] Video at end, rewinding to start before playing: \(mid)")
                     player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
                     playbackState = .notStarted
@@ -4762,16 +4768,21 @@ struct SimpleVideoPlayer: View {
         }
     }
     
-    private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
+    /// Check if video is at or near the end
+    /// - Parameters:
+    ///   - player: The AVPlayer to check
+    ///   - tolerance: Seconds from end to consider as "at end" (default: 0.5s)
+    /// - Returns: True if video is within tolerance of the end
+    private func isVideoAtEnd(_ player: AVPlayer, tolerance: Double = 0.5) -> Bool {
         guard let playerItem = player.currentItem else { return false }
         
         let currentTime = player.currentTime()
         let duration = playerItem.duration
         
-        // Check if current time is very close to the end (within 0.1 seconds)
+        // Check if current time is very close to the end
         if duration.isValid && !duration.isIndefinite {
             let timeDifference = CMTimeSubtract(duration, currentTime)
-            return CMTimeCompare(timeDifference, CMTime(seconds: 0.1, preferredTimescale: duration.timescale)) <= 0
+            return CMTimeCompare(timeDifference, CMTime(seconds: tolerance, preferredTimescale: duration.timescale)) <= 0
         }
         
         return false
@@ -4826,11 +4837,9 @@ struct SimpleVideoPlayer: View {
         // Cache the state for restoration (MediaCell only, NOT TweetDetail or MediaBrowser)
         // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
         // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
-        // CRITICAL: Don't cache if video is at the end - we want it to start fresh
-        // Check both playbackState AND player position (race condition protection)
-        let duration = player.currentItem?.duration.seconds ?? 0
-        let isAtEnd = duration > 0 && currentTime.seconds >= duration - 0.5
-        let shouldSkipCaching = playbackState == .finished || isAtEnd
+        // CRITICAL: Don't cache if video is finished - we want it to start fresh
+        // Trust playbackState as source of truth (not player position which may lag due to async seeks)
+        let shouldSkipCaching = playbackState == .finished
         
         if mode == .mediaCell && !shouldSkipCaching {
             VideoStateCache.shared.cacheVideoState(
@@ -4842,7 +4851,7 @@ struct SimpleVideoPlayer: View {
             )
             NSLog("💾 [BACKGROUND CACHE] Saved state for \(mid): time=\(String(format: "%.2f", currentTime.seconds))s, wasPlaying=\(wasPlaying)")
         } else {
-            NSLog("🚫 [BACKGROUND CACHE] Skipping cache for \(mid) - finished=\(playbackState == .finished), atEnd=\(isAtEnd)")
+            NSLog("🚫 [BACKGROUND CACHE] Skipping cache for \(mid) - finished=\(playbackState == .finished), atEnd=\(isVideoAtEnd(player))")
         }
         
         // Pause the player but keep it attached
