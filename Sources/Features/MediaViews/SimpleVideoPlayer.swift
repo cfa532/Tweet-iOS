@@ -4151,6 +4151,15 @@ struct SimpleVideoPlayer: View {
             videoStallObserver = nil
         }
         
+        // PERFORMANCE FIX: Remove periodic time observer to prevent CPU accumulation
+        // This observer fires every 2 seconds - if not removed, hundreds of observers
+        // can accumulate over time, causing severe CPU slowdown on main thread
+        if let observer = timeObserver, let observerPlayer = timeObserverPlayer {
+            observerPlayer.removeTimeObserver(observer)
+        }
+        timeObserver = nil
+        timeObserverPlayer = nil
+        
         // Cancel KVO observers
         playerItemStatusObserver?.invalidate()
         playerItemStatusObserver = nil
