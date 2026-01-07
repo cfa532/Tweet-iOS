@@ -403,7 +403,6 @@ struct SimpleVideoPlayer: View {
     @State private var videoOutputAttachedItem: AVPlayerItem?
     @State private var lastFrameCaptureAt: Date = .distantPast
     @State private var lastFrameVersion: Int = 0 // bumps when we store a new frame (forces view update)
-    @State private var isStartingPlayback = false // Prevent duplicate playback attempts during recovery
     @State private var playbackWatchdogTask: Task<Void, Never>? = nil
     @State private var isHoldingRecoveryCover: Bool = false
     @State private var recoveryCoverTask: Task<Void, Never>? = nil
@@ -746,9 +745,6 @@ struct SimpleVideoPlayer: View {
                     withAnimation(.easeOut(duration: 0.15)) {
                         self.isHoldingRecoveryCover = false
                     }
-                    // CRITICAL: Ensure playback flag is reset when we confirm frames are rendering
-                    // This prevents the flag from blocking future playback attempts
-                    self.isStartingPlayback = false
                     return
                 }
 
@@ -1781,41 +1777,96 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleWillEnterForeground() {
-        // For MediaCell, AppDelegate always clears players and then posts `.reloadVisibleVideosOnly`
-        // (short background, long background, and some screen-lock recoveries).
-        // Running `recoverFromBackground()` here causes duplicate recreations (double getOrCreatePlayer)
-        // and extra churn; instead defer to `.reloadVisibleVideosOnly` for visible MediaCell videos.
-        if mode == .mediaCell, didEnterBackground {
-            // Don't detach here. Detaching shows the explicit "Video paused" overlay, which is confusing.
-            // We already have a last-frame + spinner placeholder for MediaCell while the player reloads.
-            isPlayerDetached = false
-            // Prevent didBecomeActive from running recovery again in the same cycle.
-            hasRecoveredThisCycle = true
-            return
-        }
-
-        // For non-MediaCell contexts (detail/fullscreen) and screen-lock cycles (no didEnterBackground),
-        // recover immediately.
-        if !AppDelegate.isVideoInfrastructureReady {
-            // Same reasoning: rely on last-frame/spinner placeholders instead of "paused" overlay.
-            isPlayerDetached = false
-            return
-        }
-
-        recoverFromBackground()
+        coordinateRecovery(source: .willEnterForeground)
     }
     
     private func handleDidBecomeActive() {
-        // Recover from screen lock (which triggers didBecomeActive but not willEnterForeground)
-        // Only recover if we haven't already recovered in this cycle (to avoid duplicate recovery)
-        if !hasRecoveredThisCycle {
-            recoverFromBackground()
-            // Note: recoverFromBackground() already increments representableId, so we don't do it again here
-        } else {
-            // willEnterForeground already called recoverFromBackground() which refreshed the view
-            // No need to refresh again
+        coordinateRecovery(source: .didBecomeActive)
+    }
+    
+    /// Central recovery coordinator that decides which recovery path to take
+    /// This prevents duplicate recovery operations and consolidates recovery logic
+    private func coordinateRecovery(source: RecoverySource) {
+        // If already recovered this cycle, skip
+        if hasRecoveredThisCycle {
+            return
         }
         
+        // For MediaCell with actual background (not screen lock), defer to `.reloadVisibleVideosOnly`
+        // AppDelegate will post this notification after clearing players
+        if mode == .mediaCell && didEnterBackground && source == .willEnterForeground {
+            isPlayerDetached = false
+            hasRecoveredThisCycle = true
+            return
+        }
+        
+        // For non-MediaCell or screen-lock cycles, recover immediately
+        // But only if video infrastructure is ready
+        if !AppDelegate.isVideoInfrastructureReady {
+            isPlayerDetached = false
+            return
+        }
+        
+        recoverFromBackground()
+        
+        // Perform delayed health check after recovery
+        performDelayedHealthCheck()
+    }
+    
+    private enum RecoverySource {
+        case willEnterForeground
+        case didBecomeActive
+    }
+    
+    /// Validates player state and recovers from invalid states
+    /// Returns true if player is valid or recovery was initiated, false if caller should return early
+    /// - Note: Invalid states can occur due to background transitions, memory pressure, or AVFoundation issues
+    @MainActor
+    private func validatePlayerState() -> Bool {
+        guard let player = player else {
+            return true // No player yet, validation passes
+        }
+        
+        // Check 1: Player must have a currentItem
+        guard let playerItem = player.currentItem else {
+            if !loadingState.isLoading {
+                NSLog("⚠️ [VIDEO VALIDATION] Player has no currentItem for \(mid) - recreating")
+                recoverFromInvalidPlayer()
+            }
+            return false
+        }
+        
+        // Check 2: Current time must be finite
+        let currentSeconds = player.currentTime().seconds
+        if !currentSeconds.isFinite {
+            if !loadingState.isLoading {
+                NSLog("⚠️ [VIDEO VALIDATION] Player currentTime is invalid (\(currentSeconds)) for \(mid) - recreating")
+                recoverFromInvalidPlayer()
+            }
+            return false
+        }
+        
+        // Check 3: Player item must not be in failed state
+        if playerItem.status == .failed {
+            NSLog("⚠️ [VIDEO VALIDATION] Player item is in failed state for \(mid), triggering recovery")
+            handleError(strategy: .loadFailure)
+            return false
+        }
+        
+        return true
+    }
+    
+    /// Recovers from invalid player state by cleaning up and recreating
+    @MainActor
+    private func recoverFromInvalidPlayer() {
+        SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
+        self.player = nil
+        self.loadingState = .idle
+        self.playbackState = .notStarted
+        setupPlayer()
+    }
+    
+    private func performDelayedHealthCheck() {
         // CRITICAL: Delayed health check after recovery
         // Sometimes players appear healthy immediately after recovery but are actually broken
         // Check again after a short delay to catch these cases
@@ -1864,7 +1915,6 @@ struct SimpleVideoPlayer: View {
                         if self.mode == .mediaCell {
                             self.hasInitialized = true
                         }
-                    } else {
                     }
                 }
             }
@@ -1955,10 +2005,6 @@ struct SimpleVideoPlayer: View {
         
         // Mark that we've recovered (but don't reattach yet)
         hasRecoveredThisCycle = true
-        
-        // CRITICAL: Reset playback flags to allow fresh playback attempts after recovery
-        // If previous recovery partially failed, these flags can block future playback
-        isStartingPlayback = false
         
         // CRITICAL: Cancel any existing recovery timeout task
         recoveryTimeoutTask?.cancel()
@@ -2276,8 +2322,6 @@ struct SimpleVideoPlayer: View {
                         
                         // Validate player is ready before playing
                         if playerItem.status == .readyToPlay {
-                            // CRITICAL: Reset flag before playing to allow KVO observers to work
-                            isStartingPlayback = false
                             player.play()
                             playbackState = .playing
                         } else {
@@ -2292,14 +2336,9 @@ struct SimpleVideoPlayer: View {
                                     attempts += 1
                                 }
                                 if self.playerItem?.status == .readyToPlay && self.isVisible && approved && noOverlaysActive && noDetailViewActive {
-                                    // CRITICAL: Reset flag before playing to allow future playback attempts
-                                    self.isStartingPlayback = false
                                     player.isMuted = MuteState.shared.isMuted
                                     player.play()
                                     self.playbackState = .playing
-                                } else {
-                                    // Playback conditions changed while waiting - ensure flag is reset
-                                    self.isStartingPlayback = false
                                 }
                             }
                         }
@@ -2312,8 +2351,6 @@ struct SimpleVideoPlayer: View {
                     if shouldResume {
                         // Validate player is ready before playing
                         if playerItem.status == .readyToPlay {
-                            // CRITICAL: Reset flag before playing
-                            isStartingPlayback = false
                             player.play()
                             playbackState = .playing
                         } else {
@@ -2325,13 +2362,8 @@ struct SimpleVideoPlayer: View {
                                     attempts += 1
                                 }
                                 if playerItem.status == .readyToPlay {
-                                    // CRITICAL: Reset flag before playing
-                                    self.isStartingPlayback = false
                                     player.play()
                                     self.playbackState = .playing
-                                } else {
-                                    // Player didn't become ready - ensure flag is reset
-                                    self.isStartingPlayback = false
                                 }
                             }
                         }
@@ -2348,9 +2380,9 @@ struct SimpleVideoPlayer: View {
                 // Give SwiftUI/AVPlayerLayer a beat to reattach before evaluating autoplay.
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                 
-                // CRITICAL: Only trigger autoplay if the flag is clear and player isn't already playing
+                // CRITICAL: Only trigger autoplay if player isn't already playing
                 // This prevents competing with the direct play() calls above
-                guard !self.isStartingPlayback, self.player?.rate == 0 else {
+                guard self.player?.rate == 0 && self.playbackState != .playing else {
                     return
                 }
                 
@@ -2428,9 +2460,6 @@ struct SimpleVideoPlayer: View {
             if shouldLoadVideo || mode == .tweetDetail {
                 setupPlayer()
             }
-        
-        // CRITICAL: Reset playback flag to allow fresh playback attempts
-        isStartingPlayback = false
 
         } else {
             // Non-MediaCell healthy player - refresh view
@@ -3781,9 +3810,6 @@ struct SimpleVideoPlayer: View {
         // This must happen before storing the new playerItem reference
         removePlayerObservers()
         
-        // Reset playback flag when setting up new observers
-        isStartingPlayback = false
-        
         // Store reference for cleanup (AFTER removing old observers)
         self.playerItem = playerItem
         
@@ -3938,17 +3964,13 @@ struct SimpleVideoPlayer: View {
                             let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
                             if actuallyVisible && noDetailViewActive {
-                                guard !self.isStartingPlayback && player.rate == 0 else {
-                                    NSLog("⏭️ [VIDEO READY] Skipping playback start - already starting or playing for \(mid)")
+                                // Check actual player state instead of time-based flag
+                                guard player.rate == 0 && self.playbackState != .playing else {
+                                    NSLog("⏭️ [VIDEO READY] Skipping playback start - already playing for \(mid)")
                                     return
                                 }
-                                self.isStartingPlayback = true
                                 self.playWithResumeIfNeeded(player)
                                 NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (non-MediaCell mode)")
-                                
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                    self.isStartingPlayback = false
-                                }
                             } else if !actuallyVisible {
                                 NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
                             } else if !noDetailViewActive {
@@ -3994,14 +4016,10 @@ struct SimpleVideoPlayer: View {
                             let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
                             let shouldPlay = shouldAutoPlay && actuallyVisible && noDetailViewActive
                             
-                            if shouldPlay && player.rate == 0 && !self.isStartingPlayback {
-                                self.isStartingPlayback = true
+                            // Check actual player state instead of time-based flag
+                            if shouldPlay && player.rate == 0 && self.playbackState != .playing {
                                 self.playWithResumeIfNeeded(player)
                                 NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (non-MediaCell mode)")
-                                
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                    self.isStartingPlayback = false
-                                }
                             } else if !actuallyVisible {
                                 NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
                             } else if !noDetailViewActive {
@@ -4030,8 +4048,8 @@ struct SimpleVideoPlayer: View {
 
                         // CRITICAL: If video was waiting to play, check playback conditions now
                         // This handles case where video became approved but was still loading
-                        // However, skip if playback is already starting to avoid duplicate attempts
-                        if self.currentAutoPlay && self.isVisible && self.mode == .mediaCell && !self.isStartingPlayback && player.rate == 0 {
+                        // However, skip if playback is already playing to avoid duplicate attempts
+                        if self.currentAutoPlay && self.isVisible && self.mode == .mediaCell && player.rate == 0 && self.playbackState != .playing {
                             DispatchQueue.main.async {
                                 self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
                             }
@@ -4443,40 +4461,11 @@ struct SimpleVideoPlayer: View {
         if mode == .tweetDetail, isApplyingDetailRestore {
             return
         }
-        // Validate player state before attempting playback.
-        // IMPORTANT: After long background, AppDelegate may clear players asynchronously which can leave
-        // `player` non-nil but `currentItem == nil` / invalid time. Treat that as broken and recreate.
-        if let player = player {
-            guard let playerItem = player.currentItem else {
-                if !loadingState.isLoading {
-                    NSLog("⚠️ [VIDEO VALIDATION] Player has no currentItem for \(mid) - recreating")
-                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
-                    self.player = nil
-                    loadingState = .idle
-                    playbackState = .notStarted
-                    setupPlayer()
-                }
-                return
-            }
-
-            let currentSeconds = player.currentTime().seconds
-            if !currentSeconds.isFinite {
-                if !loadingState.isLoading {
-                    NSLog("⚠️ [VIDEO VALIDATION] Player currentTime is invalid (\(currentSeconds)) for \(mid) - recreating")
-                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
-                    self.player = nil
-                    loadingState = .idle
-                    playbackState = .notStarted
-                    setupPlayer()
-                }
-                return
-            }
-
-            if playerItem.status == .failed {
-                NSLog("DEBUG: [VIDEO VALIDATION] Player item is in failed state for \(mid), triggering recovery")
-                handleError(strategy: .loadFailure)
-                return
-            }
+        
+        // Validate and recover from invalid player states
+        // These can occur due to background transitions, memory pressure, or AVFoundation issues
+        if !validatePlayerState() {
+            return
         }
 
         // TweetDetail: do not start playback until the item is ready.
@@ -4703,10 +4692,7 @@ struct SimpleVideoPlayer: View {
         // Pause the player but keep it attached
         player.pause()
     }
-    
-    
 }
-
 
 // MARK: - AVPlayerViewController Wrapper for Full Screen
         struct AVPlayerViewControllerRepresentable: UIViewControllerRepresentable {
