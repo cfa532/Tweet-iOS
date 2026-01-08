@@ -85,8 +85,9 @@
 ### Network & Data
 - `FETCHUSER_RETRY_IMPLEMENTATION.md` - Includes retry strategies
 - `INSTANT_TWEET_RENDERING.md` - Tweet rendering optimization
-- `TWEET_CACHE_STRATEGY.md` - Cache management
+- **`TWEET_CACHE_STRATEGY.md`** - Cache management strategy
 - `TWEET_MEMORY_CACHE_ALGORITHM.md` - Memory cache algorithm
+- **`PERMANENT_CACHE_SYSTEM.md`** ⭐ - Permanent caching for bookmarks/favorites/private tweets (NEW Jan 2026)
 
 ### UI/UX
 - `SCROLL_STABILITY_IMPROVEMENTS.md` - Scroll improvements

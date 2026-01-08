@@ -286,8 +286,19 @@ struct TweetListDestinationView: View {
             tweetFetcher: { page, size, isFromCache in
                 print("DEBUG: [TweetListDestinationView] Fetching \(destination.listType) - page: \(page), size: \(size), isFromCache: \(isFromCache)")
                 if isFromCache {
-                    // For bookmarks/favorites, we don't cache, so return empty array
-                    return []
+                    // Load from CoreData cache using prefixed key to avoid mixing with feed
+                    // Use format: "bookmark_list_userId" or "favorite_list_userId"
+                    let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
+                    let cacheKey = "\(tweetType.rawValue)_\(destination.userId)"
+                    let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                        for: cacheKey,
+                        page: page,
+                        pageSize: size,
+                        currentUserId: hproseInstance.appUser.mid,
+                        isProfileView: false  // Don't filter by authorId - bookmarks/favorites can be from any author
+                    )
+                    print("DEBUG: [TweetListDestinationView] Got \(cachedTweets.count) cached \(destination.listType) tweets")
+                    return cachedTweets
                 } else {
                     let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
                     let fetchedTweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: tweetType, pageNumber: page, pageSize: size)

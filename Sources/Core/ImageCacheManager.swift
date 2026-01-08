@@ -21,6 +21,10 @@ class ImageCacheManager: @unchecked Sendable {
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
     private let maxDownsampleDimension: CGFloat = 1024
     
+    // Permanent image IDs (from bookmarks/favorites - never expire)
+    private var permanentImageIDs: Set<String> = []
+    private let permanentImageIDsQueue = DispatchQueue(label: "com.tweet.permanentImageIDs")
+    
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
     private let requestsQueue = DispatchQueue(label: "com.zz.imagecache.requests", attributes: .concurrent)
@@ -128,6 +132,50 @@ class ImageCacheManager: @unchecked Sendable {
         cache.setObject(image, forKey: key as NSString, cost: cost)
     }
     
+    // MARK: - Permanent Image Management
+    
+    /// Mark image IDs from bookmarks/favorites as permanent (never expire)
+    func markImageIDsAsPermanent(_ imageIDs: [String]) {
+        permanentImageIDsQueue.async {
+            self.permanentImageIDs.formUnion(imageIDs)
+            // Only log if marking 5+ items to reduce log spam
+            if imageIDs.count >= 5 {
+                print("💾 [ImageCacheManager] Marked \(imageIDs.count) image IDs as permanent (total: \(self.permanentImageIDs.count))")
+            }
+        }
+    }
+    
+    /// Remove image IDs from permanent set (when unbookmarked/unfavorited)
+    func unmarkImageIDsAsPermanent(_ imageIDs: [String]) {
+        permanentImageIDsQueue.async {
+            self.permanentImageIDs.subtract(imageIDs)
+            print("🗑️ [ImageCacheManager] Unmarked \(imageIDs.count) image IDs (remaining: \(self.permanentImageIDs.count))")
+        }
+    }
+    
+    /// Check if image ID is marked as permanent
+    private func isPermanentImageID(_ imageID: String) -> Bool {
+        var result = false
+        permanentImageIDsQueue.sync {
+            result = permanentImageIDs.contains(imageID)
+        }
+        return result
+    }
+    
+    /// Check if an image ID belongs to a private tweet
+    private func isPrivateTweet(imageID: String) -> Bool {
+        // Check if this image ID belongs to a private tweet
+        if let tweet = findTweetByMediaID(imageID) {
+            return tweet.isPrivate ?? false
+        }
+        return false
+    }
+    
+    /// Find a tweet by its media ID
+    private func findTweetByMediaID(_ mediaID: String) -> Tweet? {
+        return Tweet.getInstance(for: mediaID)
+    }
+    
     func cleanupOldCache() {
         do {
             let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -141,6 +189,20 @@ class ImageCacheManager: @unchecked Sendable {
                    let modificationDate = attributes[.modificationDate] as? Date,
                    let fileSize = attributes[.size] as? Int64 {
                     totalSize += fileSize
+                    
+                    // Extract image ID from filename (format: imageID or imageID-thumb)
+                    let filename = fileURL.deletingPathExtension().lastPathComponent
+                    let imageID = filename.components(separatedBy: "-").first ?? filename
+                    
+                    // NEVER delete: private tweets OR bookmarks/favorites
+                    let isPrivate = isPrivateTweet(imageID: imageID)
+                    let isPermanent = isPermanentImageID(imageID)
+                    
+                    if isPrivate || isPermanent {
+                        print("💾 [ImageCacheManager] Skipping permanent image: \(imageID) (private: \(isPrivate), bookmarked: \(isPermanent))")
+                        continue
+                    }
+                    
                     if now.timeIntervalSince(modificationDate) > maxCacheAge {
                         filesToDelete.append(fileURL)
                     }
@@ -156,6 +218,18 @@ class ImageCacheManager: @unchecked Sendable {
                 }
                 
                 for fileURL in sortedFiles {
+                    // Extract image ID from filename
+                    let filename = fileURL.deletingPathExtension().lastPathComponent
+                    let imageID = filename.components(separatedBy: "-").first ?? filename
+                    
+                    // NEVER delete: private tweets OR bookmarks/favorites
+                    let isPrivate = isPrivateTweet(imageID: imageID)
+                    let isPermanent = isPermanentImageID(imageID)
+                    
+                    if isPrivate || isPermanent {
+                        continue
+                    }
+                    
                     if let fileSize = try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? Int64 {
                         filesToDelete.append(fileURL)
                         totalSize -= fileSize

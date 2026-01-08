@@ -14,9 +14,10 @@ enum Constants {
     // Localhost Configuration
     static let LOCAL_HOST = "http://127.0.0.1"
     
-    // Cache Configuration
+    // Cache Configuration  
     static let MAX_ASSET_CACHE_SIZE = 40 // Maximum number of cached assets (lightweight - just metadata)
-    static let MAX_PLAYER_CACHE_SIZE = 30 // Maximum number of cached players (LRU eviction, heavier memory footprint)
+    static let MAX_PLAYER_CACHE_SIZE = 30 // Maximum number of cached players (research shows 30 is safe on modern devices)
+    static let MAX_CONCURRENT_PLAYER_CREATIONS = 2 // Reduced to 2 to prevent LocalHTTPServer connection overload ("Broken pipe" errors)
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 600 // 10 minutes (reduced from 30 minutes)
     
     // File Upload Limits

@@ -665,6 +665,71 @@ func saveUser(_ user: User) {
 | **Cache Clearing** | Periodic (2 weeks) or manual, NOT on logout | On cache expiry |
 | **Special Handling** | Count fields | IP addresses |
 
+## Permanent Caching (January 2026)
+
+The system now implements **permanent caching** for certain content that never expires:
+
+### Content That Never Expires
+
+1. **Private Tweets** (🔒 `isPrivate == true`)
+   - Tweet metadata and all attached media
+   - Preserved to ensure privacy and offline access
+
+2. **Bookmarked Tweets** (🔖 `bookmark_list_` prefix)
+   - Tweet metadata and all attached media
+   - User explicitly saved for later viewing
+
+3. **Favorited Tweets** (⭐ `favorite_list_` prefix)
+   - Tweet metadata and all attached media
+   - User explicitly marked as important
+
+### Automatic Registration
+
+All permanent content is automatically registered when saved:
+
+```swift
+// In TweetCacheManager.saveTweet()
+let isPrivate = tweet.isPrivate == true
+let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || 
+                           userId.hasPrefix("favorite_list_")
+
+if (isPrivate || isBookmarkOrFavorite), let attachments = tweet.attachments {
+    // Mark videos as permanent
+    DiskCacheCleanupManager.shared.markMediaIDsAsPermanent(videoIDs)
+    
+    // Mark images as permanent
+    ImageCacheManager.shared.markImageIDsAsPermanent(imageIDs)
+}
+```
+
+### Cleanup Protection
+
+During cleanup, permanent content is skipped:
+
+```swift
+// NEVER delete: private tweets OR bookmarks/favorites
+let isPrivate = tweet.isPrivate == true
+let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || 
+                           userId.hasPrefix("favorite_list_")
+
+if isPrivate || isBookmarkOrFavorite {
+    continue  // Never delete
+}
+```
+
+### Expiration Policy
+
+| Content Type | Tweet Data | Videos | Images |
+|--------------|------------|--------|--------|
+| Regular Tweets | 14 days | 7 days | 7 days |
+| Private Tweets | **Never** | **Never** | **Never** |
+| Bookmarks | **Never** | **Never** | **Never** |
+| Favorites | **Never** | **Never** | **Never** |
+
+See [PERMANENT_CACHE_SYSTEM.md](PERMANENT_CACHE_SYSTEM.md) for complete details.
+
+---
+
 ## Conclusion
 
 This comprehensive caching algorithm provides:
@@ -675,5 +740,6 @@ This comprehensive caching algorithm provides:
 - **Reliability**: Robust error handling and recovery mechanisms
 - **IP Resilience**: Automatic recovery from server IP changes within 30 minutes
 - **Optimal Balance**: Performance (memory caching) + Correctness (periodic re-resolution)
+- **Permanent Protection**: Critical content never expires (private tweets, bookmarks, favorites)
 
-The system ensures that both tweet and user data is always up-to-date, accessible, and consistent across all parts of the application, with special optimizations for handling dynamic server infrastructure.
+The system ensures that both tweet and user data is always up-to-date, accessible, and consistent across all parts of the application, with special optimizations for handling dynamic server infrastructure and preserving user-saved content.

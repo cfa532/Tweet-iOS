@@ -86,7 +86,12 @@ class SharedAssetCache: ObservableObject {
     // MARK: - Configuration
     private let maxCacheSize = Constants.MAX_ASSET_CACHE_SIZE
     private let maxPlayerCacheSize = Constants.MAX_PLAYER_CACHE_SIZE
+    private let maxConcurrentCreations = Constants.MAX_CONCURRENT_PLAYER_CREATIONS
     private let cacheExpirationInterval: TimeInterval = Constants.CACHE_EXPIRATION_SECONDS
+    
+    // MARK: - Player Creation Throttling
+    private var activeCreations = 0
+    private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, continuation: CheckedContinuation<AVPlayer, Error>)] = []
     
     // MARK: - Cache Persistence
     private let cacheMetadataKey = "SharedAssetCache_Metadata"
@@ -619,6 +624,78 @@ class SharedAssetCache: ObservableObject {
             return cachedPlayer
         }
         
+        // NEW: Throttle concurrent player creation to prevent memory spikes
+        return try await withCheckedThrowingContinuation { continuation in
+            Task { @MainActor in
+                if self.activeCreations < self.maxConcurrentCreations {
+                    // Can create immediately
+                    self.activeCreations += 1
+                    print("🎬 [THROTTLE] Creating player immediately (\(self.activeCreations)/\(self.maxConcurrentCreations) active)")
+                    
+                    Task {
+                        do {
+                            let player = try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
+                            await MainActor.run {
+                                self.activeCreations -= 1
+                                self.processNextPendingCreation()
+                            }
+                            continuation.resume(returning: player)
+                        } catch {
+                            await MainActor.run {
+                                self.activeCreations -= 1
+                                self.processNextPendingCreation()
+                            }
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                } else {
+                    // Queue for later
+                    print("⏳ [THROTTLE] Queuing player creation (active: \(self.activeCreations), pending: \(self.pendingCreations.count + 1))")
+                    self.pendingCreations.append((url, tweetId, mediaType, continuation))
+                }
+            }
+        }
+    }
+    
+    /// Process next pending creation when a slot opens
+    @MainActor
+    private func processNextPendingCreation() {
+        guard !pendingCreations.isEmpty, activeCreations < maxConcurrentCreations else { return }
+        
+        let next = pendingCreations.removeFirst()
+        activeCreations += 1
+        
+        print("▶️ [THROTTLE] Processing queued player (\(activeCreations)/\(maxConcurrentCreations) active, \(pendingCreations.count) pending)")
+        
+        Task {
+            do {
+                let player = try await self.createPlayerNow(for: next.url, tweetId: next.tweetId, mediaType: next.mediaType)
+                await MainActor.run {
+                    self.activeCreations -= 1
+                    self.processNextPendingCreation()
+                }
+                next.continuation.resume(returning: player)
+            } catch {
+                await MainActor.run {
+                    self.activeCreations -= 1
+                    self.processNextPendingCreation()
+                }
+                next.continuation.resume(throwing: error)
+            }
+        }
+    }
+    
+    /// Actually create the player (called after throttling check)
+    private func createPlayerNow(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
+        guard let mediaID = extractMediaID(from: url) else {
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID"])
+        }
+        
+        // Clean up cache BEFORE creating new player
+        await MainActor.run {
+            self.managePlayerCacheSize()
+        }
+        
         // CRITICAL: Notify VideoLoadingManager that a load is starting
         await MainActor.run {
             VideoLoadingManager.shared.videoLoadStarted()
@@ -1102,8 +1179,10 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func managePlayerCacheSize() {
-        // PERFORMANCE FIX: More aggressive player cleanup
+        // Normal LRU eviction - 30 players is fine, just enforce the limit
         if playerCache.count > maxPlayerCacheSize {
+            print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - removing oldest")
+            
             // Remove least recently used players
             let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
             let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)

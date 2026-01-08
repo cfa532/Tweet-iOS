@@ -13,6 +13,10 @@ class DiskCacheCleanupManager {
     private let cleanupCheckInterval: TimeInterval = 24 * 60 * 60 // Check daily
     private var cleanupTimer: Timer?
     
+    // Set of media IDs from bookmarked/favorited tweets (never expire)
+    private var permanentMediaIDs: Set<String> = []
+    private let permanentMediaIDsQueue = DispatchQueue(label: "com.tweet.permanentMediaIDs")
+    
     // MARK: - Cache Directory
     private var cacheDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -35,6 +39,34 @@ class DiskCacheCleanupManager {
     }
     
     // MARK: - Public Methods
+    
+    /// Mark media IDs from bookmarks/favorites as permanent (never expire)
+    func markMediaIDsAsPermanent(_ mediaIDs: [String]) {
+        permanentMediaIDsQueue.async {
+            self.permanentMediaIDs.formUnion(mediaIDs)
+            // Only log if marking 5+ items to reduce log spam
+            if mediaIDs.count >= 5 {
+                print("💾 [PERMANENT CACHE] Marked \(mediaIDs.count) media IDs as permanent (total: \(self.permanentMediaIDs.count))")
+            }
+        }
+    }
+    
+    /// Remove media IDs from permanent set (when unbookmarked/unfavorited)
+    func unmarkMediaIDsAsPermanent(_ mediaIDs: [String]) {
+        permanentMediaIDsQueue.async {
+            self.permanentMediaIDs.subtract(mediaIDs)
+            print("🗑️ [PERMANENT CACHE] Unmarked \(mediaIDs.count) media IDs (remaining: \(self.permanentMediaIDs.count))")
+        }
+    }
+    
+    /// Check if media ID is marked as permanent
+    private func isPermanentMediaID(_ mediaID: String) -> Bool {
+        var result = false
+        permanentMediaIDsQueue.sync {
+            result = permanentMediaIDs.contains(mediaID)
+        }
+        return result
+    }
     
     /// Perform scheduled cleanup of old cache files
     func performScheduledCleanup() {
@@ -81,10 +113,15 @@ class DiskCacheCleanupManager {
                     continue
                 }
                 
-                // Check if this is a private tweet
-                if isPrivateTweet(mediaID: mediaID) {
-                    privateTweetCount += 1
-                    print("DEBUG: [DiskCacheCleanupManager] Skipping private tweet cache: \(mediaID)")
+                // NEVER delete: private tweets OR bookmarks/favorites
+                let isPrivate = isPrivateTweet(mediaID: mediaID)
+                let isPermanent = isPermanentMediaID(mediaID)
+                
+                if isPrivate || isPermanent {
+                    if isPrivate {
+                        privateTweetCount += 1
+                    }
+                    print("💾 [DiskCacheCleanupManager] Skipping permanent media: \(mediaID) (private: \(isPrivate), bookmarked: \(isPermanent))")
                     continue
                 }
                 

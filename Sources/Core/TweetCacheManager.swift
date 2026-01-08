@@ -230,7 +230,10 @@ extension TweetCacheManager {
                             // Filter private tweets:
                             // - Main feed: Always filter out private tweets (show all tweets, but no private ones)
                             // - Profile view: Only show private tweets if appUser is viewing their own profile
-                            if tweet.isPrivate == true {
+                            // - Bookmarks/Favorites: NEVER filter (user explicitly bookmarked/favorited them)
+                            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+                            
+                            if tweet.isPrivate == true && !isBookmarkOrFavorite {
                                 if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
                                     // Profile view: Allow private tweets only if viewing own profile (appUser == visited user)
                                     tweets.append(tweet)
@@ -239,7 +242,7 @@ extension TweetCacheManager {
                                     continue
                                 }
                             } else {
-                                // Public tweet: Always include
+                                // Public tweet OR bookmarked/favorited private tweet: Always include
                                 tweets.append(tweet)
                             }
                         } catch {
@@ -356,6 +359,26 @@ extension TweetCacheManager {
             
             try? context.save()
         }
+        
+        // Mark media as permanent for: private tweets OR bookmarks/favorites
+        let isPrivate = tweet.isPrivate == true
+        let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+        
+        if (isPrivate || isBookmarkOrFavorite), let attachments = tweet.attachments {
+            // Mark videos as permanent
+            let videoIDs = attachments.filter { $0.type == .video || $0.type == .hls_video }.compactMap { $0.mid }
+            if !videoIDs.isEmpty {
+                DiskCacheCleanupManager.shared.markMediaIDsAsPermanent(videoIDs)
+                // Reduced logging to prevent buffer overflow
+            }
+            
+            // Mark images as permanent
+            let imageIDs = attachments.filter { $0.type == .image }.compactMap { $0.mid }
+            if !imageIDs.isEmpty {
+                ImageCacheManager.shared.markImageIDsAsPermanent(imageIDs)
+                // Reduced logging to prevent buffer overflow
+            }
+        }
     }
 
     /// Update a tweet in cache for main feed.
@@ -381,9 +404,16 @@ extension TweetCacheManager {
                     // Decode tweet to check if it's private
                     guard let tweet = try? Tweet.from(cdTweet: cdTweet) else { continue }
                     
-                    // NEVER auto-delete private tweets - only manual or signout
-                    if tweet.isPrivate == true {
-                        preservedPrivateCount += 1
+                    // NEVER auto-delete: private tweets OR bookmarks/favorites
+                    let isPrivate = tweet.isPrivate == true
+                    let isBookmarkOrFavorite = cdTweet.uid?.hasPrefix("bookmark_list_") == true || 
+                                               cdTweet.uid?.hasPrefix("favorite_list_") == true
+                    
+                    if isPrivate || isBookmarkOrFavorite {
+                        if isPrivate {
+                            preservedPrivateCount += 1
+                        }
+                        print("💾 [TweetCacheManager] Preserving permanent tweet: \(tweetId) (private: \(isPrivate), bookmarked: \(isBookmarkOrFavorite))")
                         continue
                     }
                     

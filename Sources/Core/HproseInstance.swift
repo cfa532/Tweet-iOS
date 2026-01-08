@@ -2388,7 +2388,13 @@ final class HproseInstance: ObservableObject {
                             }
                         }
                     }
-                    // Don't cache tweets from bookmarks/favorites - only cache from main feed
+                    // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed
+                    // Use format: "bookmark_list_userId" or "favorite_list_userId"
+                    // saveTweet will automatically mark media as permanent based on the prefix
+                    let cacheKey = "\(type.rawValue)_\(user.mid)"
+                    // Reduced logging to prevent console buffer overflow
+                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
+                    
                     tweetsWithAuthors.append(tweet)
                     print("DEBUG: [HproseInstance] getUserTweetsByType - Successfully processed tweet \(index): \(tweet.mid)")
                 } catch {
