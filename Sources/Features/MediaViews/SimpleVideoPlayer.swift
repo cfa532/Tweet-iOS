@@ -1510,9 +1510,8 @@ struct SimpleVideoPlayer: View {
                 }
                 setupPlayer()
             } else {
-                // SANITY CHECK: Run when becoming visible to catch broken players
-                // CRITICAL: After background recovery, video layers may be stale even if player exists
-                // Always validate player can actually play, not just that it exists
+                // FAST HEALTH CHECK: Quick validation during normal scrolling
+                // Only do expensive checks if we detect potential issues from background recovery
                 let playerIsMissing = player == nil || player?.currentItem == nil
                 let playerIsBroken = !playerIsMissing && isPlayerBroken()
                 
@@ -1523,6 +1522,23 @@ struct SimpleVideoPlayer: View {
                     playbackState = .notStarted
                     setupPlayer()
                     return
+                }
+                
+                // ADDITIONAL CHECK: Only after background recovery, check if player time is valid
+                // This catches players cleared during background (fast check, no file I/O)
+                if didEnterBackground && !hasRecoveredThisCycle {
+                    if let currentPlayer = player {
+                        let currentTime = currentPlayer.currentTime()
+                        if !currentTime.isValid || !currentTime.seconds.isFinite {
+                            // Player was likely cleared during background recovery
+                            SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
+                            player = nil
+                            loadingState = .idle
+                            playbackState = .notStarted
+                            setupPlayer()
+                            return
+                        }
+                    }
                 }
                 
                 // CRITICAL FIX: Reset finished videos when scrolled back into view
