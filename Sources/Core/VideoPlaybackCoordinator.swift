@@ -104,6 +104,14 @@ class VideoPlaybackCoordinator: ObservableObject {
             name: .videoDidFinishPlaying,
             object: nil
         )
+        
+        // Listen for foreground recovery to reset playback state
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleForegroundRecovery),
+            name: .reloadVisibleVideosOnly,
+            object: nil
+        )
     }
     
     // MARK: - Public API
@@ -550,6 +558,18 @@ class VideoPlaybackCoordinator: ObservableObject {
             } else if let primaryId = primaryVideoId, !primaryId.contains(videoMid) {
             }
         }
+    }
+    
+    /// Handle foreground recovery - clear playback state to force fresh play commands
+    @objc private func handleForegroundRecovery(_ notification: Notification) {
+        print("🔄 [VideoOrchestrator] Foreground recovery - clearing playback state to force restart")
+        
+        // Clear playing state so videos get fresh play commands
+        // This forces the orchestrator to send play commands even if it thinks videos are "already playing"
+        currentlyPlayingVideoIds.removeAll()
+        primaryVideoId = nil
+        
+        print("🔄 [VideoOrchestrator] Cleared playback state - videos will receive fresh play commands")
     }
 }
 

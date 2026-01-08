@@ -211,6 +211,10 @@ extension VideoPlayerLifecycleManager {
             // Even if we already recovered, check if player is broken (e.g., after video finished)
             if isPlayerBroken() {
                 clearBrokenPlayer()
+                
+                // CRITICAL: Force reload of visible videos after clearing broken player
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("⚠️ [\(managerName)] Posted reloadVisibleVideosOnly to restart cleared video")
             }
         }
         
@@ -227,6 +231,11 @@ extension VideoPlayerLifecycleManager {
             if self.isPlayerBroken() {
                 print("⚠️ [\(managerName)] Delayed health check: Player is broken after recovery, clearing")
                 self.clearBrokenPlayer()
+                
+                // CRITICAL: Force reload of visible videos after clearing broken player
+                // This ensures the VideoOrchestrator restarts the video instead of thinking it's "already playing"
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("⚠️ [\(managerName)] Posted reloadVisibleVideosOnly to restart cleared video")
             }
         }
     }

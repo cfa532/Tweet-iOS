@@ -1357,6 +1357,34 @@ class SharedAssetCache: ObservableObject {
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)
     }
     
+    /// Aggressively cleanup video players when navigating away from video-heavy screens
+    /// This prevents memory accumulation when navigating between bookmarks/favorites/profile
+    @MainActor func cleanupForNavigation() {
+        print("🧹 [NAVIGATION CLEANUP] Starting aggressive cleanup - playerCache: \(playerCache.count), assetCache: \(assetCache.count)")
+        
+        // Cancel all ongoing loading tasks to prevent new players from being created
+        cancelAllLoadingTasks()
+        
+        // Pause and release ALL video players
+        for (key, player) in playerCache {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            print("🧹 [NAVIGATION CLEANUP] Released player: \(key)")
+        }
+        playerCache.removeAll()
+        
+        // Clear CachingPlayerItem instances
+        cachingPlayerItems.removeAll()
+        
+        // Clear asset cache to free memory
+        assetCache.removeAll()
+        
+        // Clear timestamps
+        cacheTimestamps.removeAll()
+        
+        print("🧹 [NAVIGATION CLEANUP] Cleanup complete - all players and assets released")
+    }
+    
     // MARK: - Cache Persistence Methods
     
     /// Restore cache metadata from UserDefaults on app startup

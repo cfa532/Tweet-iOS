@@ -310,6 +310,7 @@ struct TweetListView<RowView: View>: View {
             // Clean up foreground observer
             if let observer = foregroundObserver {
                 NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
             }
         }
     }
