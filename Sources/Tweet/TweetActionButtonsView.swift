@@ -499,6 +499,11 @@ struct TweetActionButtonsView: View {
                         
                         print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
                         
+                        // If sharing from detail view, resolve IPv4 for better compatibility
+                        if isInDetailView {
+                            _ = await getIPv4PreferredBaseUrl(for: tweet)
+                        }
+                        
                         // If we don't have a preloaded preview, generate it now
                         if attachmentPreviewImage == nil {
                             print("DEBUG: [SHARE] No preloaded preview, generating now...")
@@ -1324,6 +1329,49 @@ struct TweetActionButtonsView: View {
         } else {
             return typeTexts.joined(separator: ", ")
         }
+    }
+    
+    /// Get an IPv4-preferred baseUrl for sharing from detail view
+    /// If the current baseUrl is IPv6, resolves IPv4 via getHostIP and updates user's baseUrl
+    /// - Parameter tweet: The tweet being shared
+    /// - Returns: IPv4 baseUrl string if available, otherwise falls back to current baseUrl
+    private func getIPv4PreferredBaseUrl(for tweet: Tweet) async -> String {
+        guard let author = tweet.author else {
+            return AppConfig.baseUrl
+        }
+        
+        let currentBaseUrl = author.baseUrl?.absoluteString ?? AppConfig.baseUrl
+        
+        // Quick check: if already IPv4 (no brackets and at most one colon for port), use it
+        if !currentBaseUrl.contains("[") && currentBaseUrl.filter({ $0 == ":" }).count <= 1 {
+            return currentBaseUrl
+        }
+        
+        // IPv6 detected - resolve IPv4 via getHostIP
+        guard let hostIds = author.hostIds, hostIds.count > 1 else {
+            print("DEBUG: [SHARE IPv4] No hostIds available for author, using original baseUrl")
+            return currentBaseUrl
+        }
+        
+        let accessNodeMid = hostIds[1]
+        print("DEBUG: [SHARE IPv4] IPv6 detected in baseUrl, resolving IPv4 for node: \(accessNodeMid)")
+        
+        // Call getHostIP with v4Only=true
+        if let ipv4 = await hproseInstance.getHostIP(accessNodeMid, v4Only: true) {
+            let ipv4BaseUrl = "http://\(ipv4)"
+            print("DEBUG: [SHARE IPv4] ✅ Resolved IPv4: \(ipv4BaseUrl)")
+            
+            // Update author's baseUrl with IPv4
+            if let ipv4URL = URL(string: ipv4BaseUrl) {
+                author.baseUrl = ipv4URL
+                print("DEBUG: [SHARE IPv4] Updated author's baseUrl to IPv4")
+            }
+            
+            return ipv4BaseUrl
+        }
+        
+        print("DEBUG: [SHARE IPv4] ⚠️ getHostIP failed, falling back to original IPv6 baseUrl")
+        return currentBaseUrl
     }
     
     private func tweetShareText(_ tweet: Tweet) -> String {
