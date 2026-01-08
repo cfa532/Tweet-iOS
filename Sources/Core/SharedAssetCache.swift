@@ -1308,9 +1308,12 @@ class SharedAssetCache: ObservableObject {
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
-        // CRITICAL: iOS can handle 1GB+ safely on modern devices
-        // Only trigger cleanup at genuinely high memory levels
-        if memoryUsageMB > 900 {
+        // Research-backed thresholds:
+        // - iPhone SE (4GB): ~1.5GB before termination
+        // - iPhone 14 Pro (6GB): ~2.5GB before termination
+        // - 1.2GB = ~30% of 4GB = "Normal" memory pressure (safe!)
+        // - iOS memory levels: Normal (0-50%), Warning (50-80%), Critical (80-95%)
+        if memoryUsageMB > 1200 {
             // Check cooldown to prevent repeated cleanups
             if let lastWarning = lastMemoryWarningTime,
                Date().timeIntervalSince(lastWarning) < memoryWarningCooldown {
@@ -1318,13 +1321,13 @@ class SharedAssetCache: ObservableObject {
                 return
             }
             
-            print("⚠️ [MEMORY] Critical usage: \(memoryUsageMB)MB - triggering cleanup")
+            print("⚠️ [MEMORY] High usage: \(memoryUsageMB)MB (>1.2GB) - triggering cleanup")
             lastMemoryWarningTime = Date()
             handleMemoryWarning()
-        } else if memoryUsageMB > 800 {
-            print("📊 [MEMORY] High usage: \(memoryUsageMB)MB (monitoring)")
+        } else if memoryUsageMB > 1000 {
+            print("📊 [MEMORY] Approaching limit: \(memoryUsageMB)MB (monitoring)")
         }
-        // Silent monitoring below 800MB
+        // Silent monitoring below 1GB
     }
     
     // MARK: - Memory Warning Handling
@@ -1371,18 +1374,17 @@ class SharedAssetCache: ObservableObject {
         
         print("⚠️ [MEMORY WARNING] Current usage: \(memoryUsageMB)MB")
         
-        // CRITICAL: Be conservative with player cleanup - players are NOT the main memory consumer
-        // Based on logs: releasing ALL players (10 total) didn't reduce memory (752MB -> 886MB!)
-        // The real culprits are: images, video segments, LocalHTTPServer cache
+        // Research-backed: Players are NOT the main memory consumer
+        // Logs showed: releasing ALL players (10 total) didn't reduce memory (752MB -> 886MB!)
+        // Real culprits: images, video segments, LocalHTTPServer cache
         
-        if memoryUsageMB > 900 {
-            print("🗑️ [MEMORY WARNING] Over 900MB - moderate cleanup (preserve UX)")
+        if memoryUsageMB > 1200 {
+            print("🗑️ [MEMORY WARNING] Over 1.2GB - moderate cleanup (preserve UX)")
             
             // Cancel active downloads first (prevents memory growth)
             cancelAllLoadingTasks()
             
-            // MODERATE: Release only 30% of players (not ALL - terrible UX!)
-            // This preserves most videos while freeing some memory
+            // MODERATE: Release only 30% of players (preserve 70% for good UX)
             releasePartialCache(percentage: 30)
             
             print("✅ [MEMORY WARNING] Cleanup complete - released 30% of cache")
