@@ -573,7 +573,6 @@ struct TweetListView<RowView: View>: View {
         let shouldContinue = await MainActor.run { hasMoreTweets }
         guard shouldContinue else { return }
         
-        print("📥 [AUTO-LOAD] Starting automatic load of remaining new tweets...")
         
         while pagesLoaded < maxAutoLoadPages {
             let currentHasMore = await MainActor.run { hasMoreTweets }
@@ -583,7 +582,6 @@ struct TweetListView<RowView: View>: View {
             }
             
             let nextPage = await MainActor.run { currentPage + 1 }
-            print("📥 [AUTO-LOAD] Loading page \(nextPage)...")
             
             do {
                 let tweets = try await tweetFetcher(nextPage, pageSize, false)
@@ -603,8 +601,6 @@ struct TweetListView<RowView: View>: View {
                             let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
                             await self.videoLoadingManager.updateTweetList(tweetIds)
                         }
-                        
-                        print("📥 [AUTO-LOAD] Loaded \(validTweets.count) tweets (page \(nextPage))")
                     } else {
                         // No valid tweets - stop loading
                         self.hasMoreTweets = false
@@ -635,8 +631,6 @@ struct TweetListView<RowView: View>: View {
         if pagesLoaded >= maxAutoLoadPages {
             print("📥 [AUTO-LOAD] Reached max auto-load limit (\(maxAutoLoadPages) pages)")
         }
-        
-        print("📥 [AUTO-LOAD] Auto-load complete. Total tweets: \(await MainActor.run { tweets.count })")
     }
 
     func refreshTweets() async {

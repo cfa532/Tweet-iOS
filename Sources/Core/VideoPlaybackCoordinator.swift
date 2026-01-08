@@ -340,7 +340,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         
-        print("🎬 [VideoOrchestrator] Starting survey phase with \(visibleVideos.count) videos")
         phase = .surveying
         currentlyPlayingVideoIds.removeAll()
         
@@ -383,8 +382,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         
-        print("🎬 [VideoOrchestrator] Ending survey phase, identifying primary video")
-        
         // Invalidate survey timer to prevent duplicate calls
         surveyTimer?.invalidate()
         surveyTimer = nil
@@ -395,8 +392,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             stopAllVideos()
             return
         }
-        
-        print("🎬 [VideoOrchestrator] Primary video identified: \(primary.videoMid)")
 
         // Pause all non-primary videos
         for video in visibleVideos where video != primary {
@@ -427,8 +422,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 "isPrimary": true
             ]
         )
-
-        print("🎬 [VideoOrchestrator] Transitioned to primary playback phase")
     }
     
     /// Identify the primary video (most visible/centered in viewport)
