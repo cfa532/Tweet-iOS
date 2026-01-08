@@ -142,9 +142,6 @@ class SharedAssetCache: ObservableObject {
             cleanupTweetMappings(for: key)
         }
         
-        if !expiredKeys.isEmpty {
-        }
-        
         // Manage cache size
         manageCacheSize()
         
@@ -275,10 +272,6 @@ class SharedAssetCache: ObservableObject {
         
         for key in expiredKeys {
             diskCacheStatus.removeValue(forKey: key)
-        }
-        
-        if !expiredKeys.isEmpty {
-            NSLog("🧹 [CACHE CLEANUP] Removed \(expiredKeys.count) expired disk cache status entries")
         }
     }
     
@@ -617,21 +610,12 @@ class SharedAssetCache: ObservableObject {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
         
-        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called for URL: \(url.absoluteString), mediaID: \(mediaID), mediaType: \(mediaType?.rawValue ?? "nil")")
-        if let tweetId {
-            NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer received tweetId (ignored for caching): \(tweetId)")
-        } else {
-            NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayer called with no tweetId")
-        }
-        
         // CRITICAL: Cache key must ALWAYS be the mediaID (video attachment mid).
         // tweetId must never affect player caching; it caused incorrect reuse/eviction behavior.
         let cacheKey = mediaID
-        NSLog("DEBUG: [SHARED ASSET CACHE] Using cache key (mediaID): \(cacheKey)")
         
         // Try to get cached player first
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
-            NSLog("DEBUG: [SHARED ASSET CACHE] ✅ Returning cached player for mediaID: \(cacheKey)")
             return cachedPlayer
         }
         
@@ -644,17 +628,14 @@ class SharedAssetCache: ObservableObject {
         let isHLSVideo: Bool
         if let mediaType = mediaType {
             isHLSVideo = (mediaType == .hls_video)
-            NSLog("DEBUG: [SHARED ASSET CACHE] Using MediaType to determine video type - mediaType: \(mediaType.rawValue), isHLSVideo: \(isHLSVideo)")
         } else {
             // Fallback to URL-based detection for backward compatibility
             let urlString = url.absoluteString
             isHLSVideo = urlString.hasSuffix(".m3u8")
-            NSLog("DEBUG: [SHARED ASSET CACHE] Using URL-based detection - hasSuffix(.m3u8): \(isHLSVideo)")
         }
         
         if isHLSVideo {
             // Use CachingPlayerItem for HLS videos
-            NSLog("DEBUG: [SHARED ASSET CACHE] Using CachingPlayerItem for HLS video: \(url.absoluteString)")
             do {
                 let player = try await createCachingPlayer(for: url, tweetId: tweetId)
                 // Notify success
@@ -671,7 +652,6 @@ class SharedAssetCache: ObservableObject {
             }
         } else {
             // For progressive videos, use LocalHTTPServer to proxy and fix Content-Type
-            NSLog("DEBUG: [SHARED ASSET CACHE] Creating progressive video player via LocalHTTPServer for \(mediaID)")
             
             // Remove query parameters
             var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
@@ -683,9 +663,9 @@ class SharedAssetCache: ObservableObject {
             
             // Register real URL and get localhost proxy URL
             let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
-            NSLog("🔗 [PROGRESSIVE VIDEO] Original URL: \(url.absoluteString)")
-            NSLog("🔗 [PROGRESSIVE VIDEO] LocalHTTPServer proxy URL: \(localURL.absoluteString)")
-            NSLog("🔗 [PROGRESSIVE VIDEO] Real URL registered: \(cleanURL.absoluteString)")
+            print("🔗 [PROGRESSIVE VIDEO] Original URL: \(url.absoluteString)")
+            print("🔗 [PROGRESSIVE VIDEO] LocalHTTPServer proxy URL: \(localURL.absoluteString)")
+            print("🔗 [PROGRESSIVE VIDEO] Real URL registered: \(cleanURL.absoluteString)")
             
             // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
             let asset = AVURLAsset(url: localURL)
@@ -702,7 +682,6 @@ class SharedAssetCache: ObservableObject {
             // Cache the player
             await MainActor.run { 
                 cachePlayer(player, for: mediaID)
-                NSLog("DEBUG: [SHARED ASSET CACHE] Cached progressive player with cacheKey (mediaID): \(mediaID)")
                 // Notify completion
                 VideoLoadingManager.shared.videoLoadCompleted()
             }
@@ -718,8 +697,6 @@ class SharedAssetCache: ObservableObject {
         }
         
         let startTime = Date()
-        NSLog("⏱️ [VIDEO LOAD START] Creating CachingPlayerItem for mediaID: \(mediaID)")
-        NSLog("DEBUG: [SHARED ASSET CACHE] Creating CachingPlayerItem for HLS video: \(url.absoluteString), mediaID: \(mediaID)")
         
         // Check if we have cached content first to avoid network requests
         let cachedResolvedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url)
@@ -727,28 +704,21 @@ class SharedAssetCache: ObservableObject {
         // Resolve the HLS URL (use cached info if available, otherwise make network requests)
         let resolvedURL: URL
         if let cachedURL = cachedResolvedURL {
-            NSLog("DEBUG: [SHARED ASSET CACHE] Using cached HLS URL (no network request needed): \(cachedURL.absoluteString)")
             resolvedURL = cachedURL
         } else {
-            NSLog("DEBUG: [SHARED ASSET CACHE] No cached playlist found, resolving HLS URL from network")
-            let resolveStart = Date()
             let networkResolvedURL = await resolveHLSURL(url)
-            let resolveTime = Date().timeIntervalSince(resolveStart)
-            NSLog("⏱️ [HLS RESOLVE] Took \(String(format: "%.2f", resolveTime))s for mediaID: \(mediaID)")
             
             // If network resolution returns the base URL unchanged (resolution failed),
             // try cache check ONE MORE TIME with more relaxed validation
             if networkResolvedURL == url {
-                NSLog("⚠️ [HLS FALLBACK] Network resolution failed, retrying cache check for mediaID: \(mediaID)")
+                print("⚠️ [HLS FALLBACK] Network resolution failed, retrying cache check for mediaID: \(mediaID)")
                 if let fallbackCachedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url) {
-                    NSLog("✅ [HLS FALLBACK] Found cached playlist on retry: \(fallbackCachedURL.absoluteString)")
                     resolvedURL = fallbackCachedURL
                 } else {
-                    NSLog("❌ [HLS FALLBACK] Cache check retry also failed for mediaID: \(mediaID)")
+                    print("❌ [HLS FALLBACK] Cache check retry also failed for mediaID: \(mediaID)")
                     resolvedURL = networkResolvedURL
                 }
             } else {
-                NSLog("DEBUG: [SHARED ASSET CACHE] Resolved HLS URL from network: \(networkResolvedURL.absoluteString)")
                 resolvedURL = networkResolvedURL
             }
         }
@@ -775,7 +745,6 @@ class SharedAssetCache: ObservableObject {
         
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
-        NSLog("🔇 [PLAYER MUTE] Created player for \(mediaID) - isMuted: true (default)")
 
         
         // Optimize buffering for HLS playback
@@ -792,10 +761,6 @@ class SharedAssetCache: ObservableObject {
         
         // DON'T auto-play here - let the view decide when to play
         // The player is ready, the view will call play() when appropriate
-        let totalTime = Date().timeIntervalSince(startTime)
-        NSLog("⏱️ [VIDEO LOAD COMPLETE] Total time: \(String(format: "%.2f", totalTime))s for mediaID: \(mediaID)")
-        NSLog("DEBUG: [SHARED ASSET CACHE] Player created and cached for mediaID: \(mediaID), ready for playback")
-        
         return player
     }
     
@@ -806,8 +771,6 @@ class SharedAssetCache: ObservableObject {
         guard let extractedMediaID = extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
-        
-        NSLog("DEBUG: [SHARED ASSET CACHE] getOrCreatePlayerItem called for mediaID: \(extractedMediaID) - creating fresh item")
         
         // Determine if this is HLS
         let isHLSVideo: Bool
@@ -828,7 +791,6 @@ class SharedAssetCache: ObservableObject {
             let delegate = CachingPlayerItemDelegateImpl()
             cachingPlayerItem.delegate = delegate
             
-            NSLog("DEBUG: [SHARED ASSET CACHE] Created fresh HLS player item for singleton for mediaID: \(extractedMediaID)")
             return cachingPlayerItem
         } else {
             // Create fresh progressive video player item using LocalHTTPServer for IP-independent caching
@@ -840,10 +802,6 @@ class SharedAssetCache: ObservableObject {
             let asset = AVURLAsset(url: localURL)
             let playerItem = AVPlayerItem(asset: asset)
             
-            NSLog("DEBUG: [SHARED ASSET CACHE] Created fresh progressive player item for singleton with LocalHTTPServer")
-            NSLog("DEBUG: [SHARED ASSET CACHE]   MediaID: \(extractedMediaID)")
-            NSLog("DEBUG: [SHARED ASSET CACHE]   Local URL: \(localURL.absoluteString)")
-            NSLog("DEBUG: [SHARED ASSET CACHE]   Real URL: \(url.absoluteString)")
             return playerItem
         }
     }
@@ -857,7 +815,6 @@ class SharedAssetCache: ObservableObject {
         
         // Check if cache directory exists
         guard FileManager.default.fileExists(atPath: mediaCacheDir.path) else {
-            NSLog("DEBUG: [SHARED ASSET CACHE] No cache directory found for mediaID: \(mediaID)")
             return nil
         }
         
@@ -871,7 +828,6 @@ class SharedAssetCache: ObservableObject {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
-            NSLog("DEBUG: [SHARED ASSET CACHE] Failed to create enumerator for \(mediaCacheDir.path)")
             return nil
         }
         
@@ -890,12 +846,7 @@ class SharedAssetCache: ObservableObject {
                     // Don't require .ts or .m3u8 in content since some playlists might use different formats
                     if playlistString.contains("#EXTM3U") {
                         foundPlaylists.append((url: fileURL, name: fileName))
-                        NSLog("DEBUG: [SHARED ASSET CACHE] Found valid cached playlist: \(fileName), size: \(data.count) bytes")
-                    } else {
-                        NSLog("DEBUG: [SHARED ASSET CACHE] Found playlist file but missing #EXTM3U: \(fileName)")
                     }
-                } else {
-                    NSLog("DEBUG: [SHARED ASSET CACHE] Found playlist file but failed to read: \(fileName)")
                 }
             }
         }
@@ -911,13 +862,10 @@ class SharedAssetCache: ObservableObject {
                 // We just need to append the filename directly
                 let reconstructedURL = baseURL.appendingPathComponent(fileName)
                 
-                NSLog("DEBUG: [SHARED ASSET CACHE] ✅ Found cached playlist (NO NETWORK): \(found.url.path)")
-                NSLog("DEBUG: [SHARED ASSET CACHE] Reconstructed URL: \(reconstructedURL.absoluteString)")
                 return reconstructedURL
             }
         }
         
-        NSLog("DEBUG: [SHARED ASSET CACHE] No valid cached playlist found for mediaID: \(mediaID), searched playlists: \(foundPlaylists.map { $0.name })")
         return nil
     }
     
@@ -1009,11 +957,6 @@ class SharedAssetCache: ObservableObject {
     
     /// Cancel all active loading tasks to free memory immediately
     @MainActor func cancelAllLoadingTasks() {
-        let taskCount = loadingTasks.count + preloadTasks.count
-        
-        if taskCount > 0 {
-        }
-        
         // Cancel all asset loading tasks
         for (_, task) in loadingTasks {
             task.cancel()
@@ -1025,7 +968,6 @@ class SharedAssetCache: ObservableObject {
             task.cancel()
         }
         preloadTasks.removeAll()
-        
     }
     
     /// Release a percentage of cache to free memory (preserves current playing videos)
@@ -1055,7 +997,6 @@ class SharedAssetCache: ObservableObject {
                 playerCache.removeValue(forKey: key)
             }
         }
-        
     }
     
     // MARK: - Enhanced Preloading Methods
@@ -1286,12 +1227,10 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    private func handleMemoryWarning() {
-        // CRITICAL: Check if video upload is in progress
+    private func handleMemoryWarning() {        // CRITICAL: Check if video upload is in progress
         // During FFmpeg video conversion, memory spikes are expected
         // Clearing video player caches during upload breaks existing players
         if UploadProgressManager.shared.isProcessingVideo {
-            
             // Don't cancel downloads or clear caches during upload
             // The memory spike will subside after FFmpeg completes
             return
@@ -1301,16 +1240,13 @@ class SharedAssetCache: ObservableObject {
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
-        
         // Only release cache if memory usage exceeds 1.4GB (preventive cleanup threshold)
         if memoryUsageMB > 1400 {
-            
             // CRITICAL: Cancel active downloads to prevent memory from growing further
             cancelAllLoadingTasks()
             
             // Release 30% of cache (less aggressive)
             releasePartialCache(percentage: 30)
-        } else {
         }
         
         // Don't clear URL mapping - preserve user's browsing context
@@ -1387,37 +1323,14 @@ class SharedAssetCache: ObservableObject {
     /// This is called when app returns from SHORT background (< 5 minutes)
     /// iOS hasn't invalidated the video layers yet, so we can keep everything and avoid black screens
     func refreshVideoLayersForShortBackground() {
-        
         // For short backgrounds, we keep players/assets but refresh their state
         // The connection pool reset in LocalHTTPServer is usually enough
-        // But we need to verify players are still healthy
-        
-        var unhealthyPlayers = 0
-        for (_, player) in playerCache {
-            if let item = player.currentItem {
-                // Check if player is in failed state
-                if item.status == .failed {
-                    unhealthyPlayers += 1
-                }
-            } else {
-                unhealthyPlayers += 1
-            }
-        }
-        
-        if unhealthyPlayers > 0 {
-        }
-        
-        NSLog("DEBUG: [SharedAssetCache] Short background refresh complete - kept \(playerCache.count) players (\(unhealthyPlayers) unhealthy), \(assetCache.count) assets intact")
+        // But we need to verify players are still healthy (no action needed, just validation)
     }
     
     /// Clear video players for background recovery after long background periods
     /// This is called when app returns from extended background (>5 minutes)
     func clearVideoPlayersForBackgroundRecovery() {
-        
-        // Count before
-        let playerCountBefore = playerCache.count
-        let assetCountBefore = assetCache.count
-        
         // Clear all cached players - they may have invalid video layers
         // Players will be recreated on demand with fresh video layers
         for (_, player) in playerCache {
@@ -1442,8 +1355,6 @@ class SharedAssetCache: ObservableObject {
         // Keep resourceLoaderDelegates - they're needed for HLS playback
         // Keep cacheTimestamps - they track cache expiration
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)
-        
-        NSLog("DEBUG: [SharedAssetCache] Long background recovery - cleared \(playerCountBefore) players, \(assetCountBefore) assets, disk cache status (HLS cache kept - port-independent)")
     }
     
     // MARK: - Cache Persistence Methods
@@ -1473,8 +1384,6 @@ class SharedAssetCache: ObservableObject {
     
     
     private func refreshCachedPlayers() {
-        
-        var validPlayers = 0
         var invalidPlayers = 0
         
         // Validate and refresh all cached players
@@ -1490,22 +1399,15 @@ class SharedAssetCache: ObservableObject {
                 continue
             }
             
-            // Player is valid, refresh its video layer
-            validPlayers += 1
-            
             // Force a seek to refresh the video layer and ensure buffering
             let currentTime = player.currentTime()
             player.seek(to: currentTime) { finished in
                 if finished {
                     // Trigger preroll to ensure video is ready to play
-                    player.preroll(atRate: 1.0) { success in
-                        if success {
-                        }
-                    }
+                    player.preroll(atRate: 1.0) { _ in }
                 }
             }
         }
-        
         
         // Clean up invalid players after iteration
         if invalidPlayers > 0 {
@@ -1519,7 +1421,6 @@ class SharedAssetCache: ObservableObject {
                 for mediaID in invalidMediaIDs {
                     self.removeInvalidPlayer(for: mediaID)
                 }
-                
             }
         }
     }

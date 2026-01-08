@@ -122,11 +122,11 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                     sizeToPersist = cachedBytesCount
                 }
             } catch {
-                NSLog("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
+                print("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
             }
             
             if cachedBytesCount >= maxCacheSize {
-                NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
+                print("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
             }
         }
     }
@@ -157,7 +157,7 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         }
         
         if let error = error {
-            NSLog("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
+            print("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
             BlackList.shared.recordFailure(mediaID)
         } else {
             // Stream completed successfully
@@ -337,7 +337,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         guard let state = listenerState else {
-            NSLog("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
+            print("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
             queue.async { [weak self] in self?.restart() }
             return
         }
@@ -346,13 +346,13 @@ public class LocalHTTPServer: @unchecked Sendable {
         case .ready:
             return
         case .waiting(let error):
-            NSLog("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error.localizedDescription)' – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error.localizedDescription)' – restarting")
         case .failed(let error):
-            NSLog("[LocalHTTPServer] ⚠️ Listener failed with error '\(error.localizedDescription)' – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener failed with error '\(error.localizedDescription)' – restarting")
         case .cancelled:
-            NSLog("[LocalHTTPServer] ⚠️ Listener was cancelled – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener was cancelled – restarting")
         default:
-            NSLog("[LocalHTTPServer] ⚠️ Listener state \(state) – restarting for safety")
+            print("[LocalHTTPServer] ⚠️ Listener state \(state) – restarting for safety")
         }
         
         queue.async { [weak self] in self?.restart() }
@@ -371,7 +371,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         if isRunning {
         } else {
-            NSLog("[LocalHTTPServer] ✗ Server restart failed")
+            print("[LocalHTTPServer] ✗ Server restart failed")
         }
     }
     
@@ -659,7 +659,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             if let error = error {
                 // Only log non-connection-reset errors
                 if (error as NSError).code != 54 {  // 54 = Connection reset by peer
-                    NSLog("ERROR: [LocalHTTPServer] Receive error: \(error)")
+                    print("ERROR: [LocalHTTPServer] Receive error: \(error)")
                 }
             }
             
@@ -952,7 +952,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 } else {
                     // File not ready yet - on slow networks (20+ second downloads), waiting would timeout the connection
                     // Better to start an independent download for this connection
-                    NSLog("⚠️ [DEDUP] File not cached yet, starting independent download for this connection: \(fullRealURL.lastPathComponent)")
+                    print("⚠️ [DEDUP] File not cached yet, starting independent download for this connection: \(fullRealURL.lastPathComponent)")
                     fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
                 }
             }
@@ -969,7 +969,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             if FileManager.default.fileExists(atPath: cachePath) {
                 let _ = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
             } else {
-                NSLog("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
+                print("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
             }
             
             // Signal all waiting requests that download is complete AND cached
@@ -1029,12 +1029,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
-        NSLog("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
+        print("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
         
         // CACHE MISS - fetch from real server
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
-            NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
+            print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             return
         }
@@ -1051,14 +1051,14 @@ public class LocalHTTPServer: @unchecked Sendable {
             guard let self = self else { return }
             
             if let error = error {
-                NSLog("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
+                print("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
                 BlackList.shared.recordFailure(mediaID)
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
             
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                NSLog("❌ [PROGRESSIVE HEAD] Bad status for \(mediaID)")
+                print("❌ [PROGRESSIVE HEAD] Bad status for \(mediaID)")
                 BlackList.shared.recordFailure(mediaID)
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
@@ -1070,7 +1070,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 totalFileSize = size
                 self.storeProgressiveTotalSize(mediaID: mediaID, totalSize: size)
             } else {
-                NSLog("⚠️ [PROGRESSIVE HEAD] \(mediaID): totalSize unknown")
+                print("⚠️ [PROGRESSIVE HEAD] \(mediaID): totalSize unknown")
             }
             
             // Calculate response size based on what AVPlayer actually requested
@@ -1129,7 +1129,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             connection.send(content: headerData, completion: .contentProcessed { [weak self] headerError in
                 guard let self = self else { return }
                 if let headerError = headerError {
-                    NSLog("⚠️ [PROGRESSIVE HEADERS] Failed to send headers for \(mediaID): \(headerError.localizedDescription)")
+                    print("⚠️ [PROGRESSIVE HEADERS] Failed to send headers for \(mediaID): \(headerError.localizedDescription)")
                     return
                 }
                 
@@ -1186,7 +1186,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         }
                         
                         if initialCachedSize >= self.progressiveDiskCacheLimit {
-                            NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Disk cache already at 50MB for \(mediaID) - skipping additional caching")
+                            print("⚠️ [PROGRESSIVE CACHE LIMIT] Disk cache already at 50MB for \(mediaID) - skipping additional caching")
                             cacheFileHandle = nil
                             cacheFilePath = nil
                         } else {
@@ -1195,7 +1195,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                                 do {
                                     cacheFileHandle = try FileHandle(forUpdating: cacheFileURL)
                                 } catch {
-                                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to open cache file for updating (\(mediaID)): \(error.localizedDescription)")
+                                    print("⚠️ [PROGRESSIVE CACHE] Failed to open cache file for updating (\(mediaID)): \(error.localizedDescription)")
                                     cacheFileHandle = try? FileHandle(forWritingTo: cacheFileURL)
                                 }
                             } else {
@@ -1213,10 +1213,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                                 do {
                                     try fileHandle.seek(toOffset: UInt64(streamStart))
                                 } catch {
-                                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to seek cache file for \(mediaID) to \(streamStart): \(error.localizedDescription)")
+                                    print("⚠️ [PROGRESSIVE CACHE] Failed to seek cache file for \(mediaID) to \(streamStart): \(error.localizedDescription)")
                                 }
                             } else {
-                                NSLog("⚠️ [PROGRESSIVE CACHE] Could not obtain writable handle for \(mediaID) - caching disabled for this request")
+                                print("⚠️ [PROGRESSIVE CACHE] Could not obtain writable handle for \(mediaID) - caching disabled for this request")
                             }
                         }
                     }
@@ -1301,7 +1301,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             let data = "\(contiguousSize)".data(using: .utf8)
             try data?.write(to: url, options: .atomic)
         } catch {
-            NSLog("⚠️ [PROGRESSIVE META] Failed to store contiguous size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE META] Failed to store contiguous size for \(mediaID): \(error.localizedDescription)")
         }
     }
     
@@ -1318,7 +1318,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             return value
         } catch {
-            NSLog("⚠️ [PROGRESSIVE META] Failed to load contiguous size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE META] Failed to load contiguous size for \(mediaID): \(error.localizedDescription)")
             return nil
         }
     }
@@ -1365,7 +1365,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 do {
                     chunk = try handle.read(upToCount: readLength) ?? Data()
                 } catch {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk for \(mediaID): \(error.localizedDescription)")
+                    print("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk for \(mediaID): \(error.localizedDescription)")
                     break
                 }
                 
@@ -1388,7 +1388,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             return contiguous
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to infer contiguous size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to infer contiguous size for \(mediaID): \(error.localizedDescription)")
             return nil
         }
     }
@@ -1401,7 +1401,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         do {
             try data?.write(to: metaURL, options: .atomic)
         } catch {
-            NSLog("⚠️ [PROGRESSIVE META] Failed to store total size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE META] Failed to store total size for \(mediaID): \(error.localizedDescription)")
         }
     }
     
@@ -1441,7 +1441,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let cappedFileSize = min(fileSize, progressiveDiskCacheLimit)
                 cachedSize = contiguousSize > 0 ? min(contiguousSize, cappedFileSize) : cappedFileSize
             } catch {
-                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
+                print("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
                 return false
             }
             
@@ -1459,14 +1459,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                         let prefix = try fileHandle.read(upToCount: 8192) ?? Data()
                         return prefix.contains { $0 != 0 }
                     } catch {
-                        NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache prefix for \(mediaID): \(error.localizedDescription)")
+                        print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache prefix for \(mediaID): \(error.localizedDescription)")
                         return false
                     }
                 }()
                 
                 if !hasRealDataAtStart {
                 } else if !isValidProgressiveCache(fileURL: cacheFileURL) {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted COMPLETE cache for \(mediaID), deleting entire cache directory")
+                    print("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted COMPLETE cache for \(mediaID), deleting entire cache directory")
                     // Delete the entire cache directory (including legacy per-range files)
                     let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
@@ -1516,7 +1516,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     return false
                 }
             } catch {
-                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
+                print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
                 return false
             }
             
@@ -1677,7 +1677,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     
                     if !isCancellation {
                         // Only log non-cancellation errors
-                        NSLog("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
+                        print("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
                     }
                     try? fileHandle.close()
                     return
@@ -1691,7 +1691,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 )
             })
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
         }
     }
     
@@ -1727,7 +1727,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         // AVPlayer often cancels requests when it has enough data or when seeking
                     } else {
                         // Actual error - log as warning
-                        NSLog("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
+                        print("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
                     }
                     try? fileHandle.close()
                     completion?()
@@ -1742,7 +1742,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 )
             })
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk: \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk: \(error.localizedDescription)")
             try? fileHandle.close()
             completion?()
         }
@@ -1770,7 +1770,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 completion: completion
             )
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to stream cached range (\(offset)-\(offset + length - 1)) for \(fileURL.lastPathComponent): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to stream cached range (\(offset)-\(offset + length - 1)) for \(fileURL.lastPathComponent): \(error.localizedDescription)")
             completion?()
         }
     }
@@ -1803,7 +1803,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, completion: (() -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard canBypassInitialization(url: url) else {
-            NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
+            print("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             completion?()
             return
@@ -1894,7 +1894,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 do {
                     try dataToCache.write(to: cacheURL)
                 } catch {
-                    NSLog("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
+                    print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
                 }
                 
                 // Record successful fetch for this mediaID
@@ -1930,7 +1930,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let connectionState = connection.state
         switch connectionState {
         case .cancelled, .failed:
-            NSLog("⚠️ [LocalHTTPServer] Connection closed while waiting, cannot serve: \(path.components(separatedBy: "/").last ?? path)")
+            print("⚠️ [LocalHTTPServer] Connection closed while waiting, cannot serve: \(path.components(separatedBy: "/").last ?? path)")
             return
         default:
             break
@@ -1963,7 +1963,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // data released here when autoreleasepool exits
             }
         } catch {
-            NSLog("ERROR: [LocalHTTPServer] Failed to read file: \(error)")
+            print("ERROR: [LocalHTTPServer] Failed to read file: \(error)")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
         }
     }
@@ -2136,15 +2136,15 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             
             if buffer.range(of: Data([0x66, 0x74, 0x79, 0x70])) != nil { // "ftyp"
-                NSLog("⚠️ [PROGRESSIVE CACHE] moov atom not found within first \(buffer.count) bytes, but ftyp is present – assuming valid progressive file")
+                print("⚠️ [PROGRESSIVE CACHE] moov atom not found within first \(buffer.count) bytes, but ftyp is present – assuming valid progressive file")
                 return true
             }
             
-            NSLog("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
+            print("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
             return false
             
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
             return false
         }
     }

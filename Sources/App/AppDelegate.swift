@@ -336,7 +336,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidEnterBackground() {
-        NSLog("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
+        print("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
         
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
@@ -379,30 +379,30 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// - Note: Duration-based recovery is more reliable than isRunning checks
     /// - Note: Only visible videos reload automatically; off-screen videos load when scrolled into view
     @objc private func handleAppWillEnterForeground() {
-        NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
+        print("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
         
         // CRITICAL: Skip recovery routine on app startup - server is already started in didFinishLaunchingWithOptions
         // willEnterForeground can be called immediately after launch, so check if we've finished launching
         if !hasFinishedLaunching {
-            NSLog("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
+            print("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
             return
         }
         
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
-            NSLog("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
+            print("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
             
             // CRITICAL: Use DURATION-based recovery, not isRunning check
             // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
             if timeInBackground > 300 {  // 5 minutes
                 // LONG background - ALWAYS do full restart
                 // Even if isRunning=true, the listener may be suspended and unresponsive
-                NSLog("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
+                print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
                 
                 // Check if already restarting
                 if isRestartingInfrastructure {
-                    NSLog("[AppDelegate] Infrastructure restart already in progress, skipping")
+                    print("[AppDelegate] Infrastructure restart already in progress, skipping")
                     return
                 }
                 
@@ -415,9 +415,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 infrastructureRestartTask = Task.detached(priority: .userInitiated) {
                     // CRITICAL: Refresh appUser IP FIRST before restarting server
                     // This ensures videos load with fresh IPs, not stale ones that would timeout
-                    NSLog("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                    print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
                     await self.refreshAppUserIP()
-                    NSLog("[AppDelegate] ✅ AppUser IP refresh complete")
+                    print("[AppDelegate] ✅ AppUser IP refresh complete")
                     
                     // Restart server in background
                     await self.restartVideoInfrastructureAsync()
@@ -428,19 +428,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         AppDelegate.isVideoInfrastructureReady = true
                         // Post notification for ONLY visible videos to reload
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                        NSLog("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
+                        print("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
                     }
                 }
             } else {
                 // SHORT background (<5min) - SMART recovery: only clear if server restarted
-                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - smart recovery")
+                print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - smart recovery")
                 
                 // CRITICAL: Refresh IP FIRST, then do video recovery
                 // Videos must not reload with stale IPs or they will timeout
                 Task.detached(priority: .userInitiated) {
-                    NSLog("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                    print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
                     await self.refreshAppUserIP()
-                    NSLog("[AppDelegate] ✅ AppUser IP refresh complete")
+                    print("[AppDelegate] ✅ AppUser IP refresh complete")
                     
                     await MainActor.run {
                         // Check if server is still running on the same port
@@ -449,7 +449,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         
                         if !wasServerRunning {
                             // Server died - need full recovery
-                            NSLog("⚠️ [AppDelegate] Server not running, restarting...")
+                            print("⚠️ [AppDelegate] Server not running, restarting...")
                             AppDelegate.isVideoInfrastructureReady = false
                             
                             // Clear players because server will restart on a new port
@@ -459,26 +459,26 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             LocalHTTPServer.shared.startAndWait()
                             
                             let newPort = LocalHTTPServer.shared.currentPort
-                            NSLog("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
+                            print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
                             
                             AppDelegate.isVideoInfrastructureReady = true
                             
                             // Post notification for visible videos to reload with new port
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                            NSLog("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
+                            print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
                         } else {
                             // Server still running - KEEP PLAYERS INTACT!
-                            NSLog("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
+                            print("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
                             
                             // Just refresh video layers and reset connection pool
                             SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                             LocalHTTPServer.shared.resetConnectionPool()
                             
-                            NSLog("✅ [AppDelegate] Short background recovery complete - players preserved")
+                            print("✅ [AppDelegate] Short background recovery complete - players preserved")
                             
                             // Still post notification to refresh any stale players
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                            NSLog("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
+                            print("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
                         }
                     }
                 }
@@ -487,12 +487,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             // No background timestamp - this means app was just launched or killed
             // Server should already be started in didFinishLaunchingWithOptions
             // Just ensure it's running, but don't do full recovery
-            NSLog("🚀 [AppDelegate] App startup or crash recovery - ensuring server is running")
+            print("🚀 [AppDelegate] App startup or crash recovery - ensuring server is running")
             if !LocalHTTPServer.shared.isRunning {
                 // Fast non-blocking start for app startup
                 LocalHTTPServer.shared.start()
             } else {
-                NSLog("✅ [AppDelegate] Server already running - no recovery needed")
+                print("✅ [AppDelegate] Server already running - no recovery needed")
             }
             AppDelegate.isVideoInfrastructureReady = true
         }

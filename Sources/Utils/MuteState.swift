@@ -25,7 +25,7 @@ class MuteState: ObservableObject {
         // Initialize from saved preference
         refreshFromPreferences()
         
-        NSLog("🔇 [MUTE STATE INIT] MuteState initialized - isMuted: \(isMuted)")
+        print("🔇 [MUTE STATE INIT] MuteState initialized - isMuted: \(isMuted)")
         
         // Listen for UserDefaults changes to sync with database preference
         NotificationCenter.default.addObserver(

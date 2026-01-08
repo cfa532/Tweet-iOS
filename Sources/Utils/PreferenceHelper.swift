@@ -85,6 +85,6 @@ class PreferenceHelper {
     
     func setLocalHTTPServerPort(_ port: UInt16) {
         userDefaults.set(Int(port), forKey: "localHTTPServerPort")
-        NSLog("DEBUG: [PreferenceHelper] Saved LocalHTTPServer port: \(port)")
+        print("DEBUG: [PreferenceHelper] Saved LocalHTTPServer port: \(port)")
     }
 } 

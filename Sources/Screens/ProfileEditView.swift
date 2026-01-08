@@ -339,17 +339,17 @@ struct ProfileEditView: View {
     private var cropperView: some View {
         CircularImageCropperView(
             onCrop: { croppedImage in
-                NSLog("✅ [Avatar] User tapped Done, cropping image")
+                print("✅ [Avatar] User tapped Done, cropping image")
                 showImageCropper = false
                 uploadCroppedImage(croppedImage)
             },
             onCancel: {
-                NSLog("❌ [Avatar] User cancelled crop")
+                print("❌ [Avatar] User cancelled crop")
                 showImageCropper = false
             }
         )
         .onAppear {
-            NSLog("🎨 [Avatar] Presenting CircularImageCropperView")
+            print("🎨 [Avatar] Presenting CircularImageCropperView")
         }
     }
     
@@ -361,7 +361,7 @@ struct ProfileEditView: View {
             cropperView
         }
         .onChange(of: showImageCropper) { _, newValue in
-            NSLog("🔄 [Avatar] showImageCropper changed to: \(newValue)")
+            print("🔄 [Avatar] showImageCropper changed to: \(newValue)")
         }
         .onChange(of: showExitConfirmation) { _, newValue in
             // When confirmation dialog is dismissed without action, ensure we check changes again
@@ -418,10 +418,10 @@ struct ProfileEditView: View {
                 let fileName = "avatar_\(Int(Date().timeIntervalSince1970)).jpg"
                 let (uploaded, _) = try await hproseInstance.uploadToIPFS(data: data, typeIdentifier: typeIdentifier, fileName: fileName, referenceId: hproseInstance.appUser.mid)
                 
-                NSLog("DEBUG: [Avatar Upload] uploadToIPFS returned - uploaded: \(uploaded?.mid ?? "NIL"), isEmpty: \(uploaded?.mid.isEmpty ?? true)")
+                print("DEBUG: [Avatar Upload] uploadToIPFS returned - uploaded: \(uploaded?.mid ?? "NIL"), isEmpty: \(uploaded?.mid.isEmpty ?? true)")
                 
                 if let uploaded = uploaded, !uploaded.mid.isEmpty {
-                    NSLog("DEBUG: [Avatar Upload] Starting avatar update process")
+                    print("DEBUG: [Avatar Upload] Starting avatar update process")
                     
                     let oldAvatar = await MainActor.run { hproseInstance.appUser.avatar }
                     
@@ -429,29 +429,29 @@ struct ProfileEditView: View {
                     let confirmedAvatar = try await hproseInstance.setUserAvatar(user: hproseInstance.appUser, avatar: uploaded.mid)
                     
                     await MainActor.run {
-                        NSLog("🔄 [Avatar Upload] Old avatar: \(oldAvatar ?? "nil")")
-                        NSLog("🔄 [Avatar Upload] New confirmed avatar: \(confirmedAvatar)")
+                        print("🔄 [Avatar Upload] Old avatar: \(oldAvatar ?? "nil")")
+                        print("🔄 [Avatar Upload] New confirmed avatar: \(confirmedAvatar)")
                         
                         // Clear old avatar image cache
                         if let old = oldAvatar {
                             ImageCacheManager.shared.clearCache(for: old)
-                            NSLog("🗑️ [Avatar Upload] Cleared cache for old avatar: \(old)")
+                            print("🗑️ [Avatar Upload] Cleared cache for old avatar: \(old)")
                         }
                         
                         // Update appUser with server-confirmed avatar
                         hproseInstance.appUser.avatar = confirmedAvatar
-                        NSLog("✅ [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
+                        print("✅ [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
                     }
                     
                     // CRITICAL: Save synchronously to ensure Core Data has new avatar
-                    NSLog("💾 [Avatar Upload] Saving appUser to Core Data...")
+                    print("💾 [Avatar Upload] Saving appUser to Core Data...")
                     TweetCacheManager.shared.saveUserAndWait(hproseInstance.appUser)
-                    NSLog("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
+                    print("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
                     
                     // Pre-cache the uploaded image locally so Avatar doesn't show spinner
                     let avatarAttachment = MimeiFileType(mid: confirmedAvatar, mediaType: .image)
                     _ = ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment)
-                    NSLog("✅ [Avatar Upload] Pre-cached new avatar image locally")
+                    print("✅ [Avatar Upload] Pre-cached new avatar image locally")
                     
                     // Update UI state
                     await MainActor.run {
@@ -465,7 +465,7 @@ struct ProfileEditView: View {
                             object: nil,
                             userInfo: ["userId": hproseInstance.appUser.mid]
                         )
-                        NSLog("✅ [Avatar Upload] Complete")
+                        print("✅ [Avatar Upload] Complete")
                     }
                     onAvatarUploadSuccess?()
                 } else {

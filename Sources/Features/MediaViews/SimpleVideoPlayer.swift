@@ -389,6 +389,7 @@ struct SimpleVideoPlayer: View {
     @State private var isPlayerDetached = false  // Track background state
     @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
     @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
+    @State private var needsHealthCheckAfterForeground = false  // Only check health once after foreground entry
     @State private var isBuffering = false // Track buffering state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var isCoveredByOverlay: Bool = false
@@ -523,7 +524,7 @@ struct SimpleVideoPlayer: View {
             return
         }
 
-        NSLog("🔄 [RESUME] Seeking to cached time \(String(format: "%.2f", targetSeconds))s before play for \(mid)")
+        // Seeking to cached time before play
         player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
             guard finished else {
                 player.volume = 0
@@ -566,7 +567,7 @@ struct SimpleVideoPlayer: View {
                 let duration = playerItem.duration
                 if duration.isValid && duration.seconds > 0 {
                     if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
-                        NSLog("🔄 [TWEET DETAIL RESTORE] Video \(mid) finished in mediaCell - restarting from beginning")
+                        // Video finished in mediaCell - restarting from beginning
                         isApplyingDetailRestore = true
                         player.pause()
                         player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
@@ -610,7 +611,7 @@ struct SimpleVideoPlayer: View {
             if duration.isValid && duration.seconds > 0 {
                 // If saved position is within 0.5s of end, restart from beginning
                 if savedSeconds >= duration.seconds - 0.5 {
-                    NSLog("🔄 [TWEET DETAIL RESTORE] Video \(mid) saved position (\(String(format: "%.2f", savedSeconds))s) is near end (\(String(format: "%.2f", duration.seconds))s) - restarting from beginning")
+                    // Video saved position is near end - restarting from beginning
                     isApplyingDetailRestore = true
                     player.pause()
                     player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
@@ -642,7 +643,7 @@ struct SimpleVideoPlayer: View {
         
         isApplyingDetailRestore = true
         player.pause()
-        NSLog("🔄 [TWEET DETAIL RESTORE] Seeking \(mid) to \(String(format: "%.2f", savedSeconds))s")
+        // Seeking to saved position
         
         player.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
             Task { @MainActor in
@@ -684,7 +685,7 @@ struct SimpleVideoPlayer: View {
     private func recreatePlayer(reason: String, mid: String) {
         guard self.mid == mid else { return } // Ensure still same video
         
-        NSLog("🔄 [WATCHDOG] Recreating player for \(mid): \(reason)")
+        // Recreating player due to error
         
         captureLastFrameIfPossible(reason: "watchdog_\(reason)")
         
@@ -718,7 +719,7 @@ struct SimpleVideoPlayer: View {
         let baselinePlayer = self.player
         let baselineSeconds = baselinePlayer?.currentTime().seconds ?? 0
         
-        NSLog("🔍 [RECOVERY COVER] Starting polling for \(mid) (reason: \(reason)), baseline: \(baselineSeconds)s, rate: \(baselinePlayer?.rate ?? 0)")
+        // Starting recovery polling
 
         recoveryCoverTask = Task { @MainActor in
             var didRefreshLayer = false
@@ -726,29 +727,21 @@ struct SimpleVideoPlayer: View {
             // Poll for a short period; we release the cover only after we see fresh frames/time progress.
             for i in 0..<35 { // ~3.5s
                 guard !Task.isCancelled else { 
-                    NSLog("🔍 [RECOVERY COVER] Task cancelled for \(self.mid)")
                     return 
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
 
                 guard self.mode == .mediaCell, self.isVisible, self.isActuallyVisible else { 
-                    NSLog("🔍 [RECOVERY COVER] Not visible anymore for \(self.mid)")
                     return 
                 }
                 guard self.isHoldingRecoveryCover else { return }
                 guard !self.isPlayerDetached else { continue }
 
                 guard let player = self.player else { 
-                    if i % 10 == 0 {
-                        NSLog("🔍 [RECOVERY COVER] No player yet for \(self.mid) at iteration \(i)")
-                    }
                     continue 
                 }
                 if let bp = baselinePlayer, player !== bp { return } // player swapped; new flow will handle
                 guard let item = player.currentItem else { 
-                    if i % 10 == 0 {
-                        NSLog("🔍 [RECOVERY COVER] No currentItem for \(self.mid) at iteration \(i)")
-                    }
                     continue 
                 }
 
@@ -764,13 +757,8 @@ struct SimpleVideoPlayer: View {
                 let advanced = baselineSeconds.isFinite && nowSeconds.isFinite && nowSeconds > baselineSeconds + 0.15
                 let playing = player.timeControlStatus == .playing || player.rate > 0
                 
-                // Log status every 10 iterations (1 second)
-                if i % 10 == 0 {
-                    NSLog("🔍 [RECOVERY COVER] \(self.mid) at \(i/10)s: now=\(nowSeconds)s, baseline=\(baselineSeconds)s, rate=\(player.rate), status=\(player.timeControlStatus.rawValue), hasNewFrame=\(hasNewFrame)")
-                }
-
                 if hasNewFrame || (playing && advanced) {
-                    NSLog("✅ [RECOVERY COVER] Released for \(self.mid) (hasNewFrame: \(hasNewFrame), playing: \(playing), advanced: \(advanced))")
+                    // Recovery complete
                     withAnimation(.easeOut(duration: 0.15)) {
                         self.isHoldingRecoveryCover = false
                     }
@@ -782,7 +770,7 @@ struct SimpleVideoPlayer: View {
                     let waiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                     let bufferEmpty = item.isPlaybackBufferEmpty
                     let noRanges = item.loadedTimeRanges.isEmpty
-                    NSLog("🔄 [RECOVERY COVER] Refreshing layer for \(self.mid) (waiting: \(waiting), bufferEmpty: \(bufferEmpty), noRanges: \(noRanges))")
+                    // Refreshing layer for recovery
                     if waiting || bufferEmpty || noRanges {
                         didRefreshLayer = true
                         self.representableId += 1
@@ -792,7 +780,7 @@ struct SimpleVideoPlayer: View {
             }
 
             // If we still didn't see frames, keep the cover (spinner stays) and let watchdog/retry handle.
-            NSLog("⏳ [RECOVERY COVER] Still holding after 3.5s polling (reason: \(reason)) for \(self.mid) - player.rate: \(self.player?.rate ?? 0), status: \(self.player?.timeControlStatus.rawValue ?? 0)")
+            // Recovery polling timeout - video may still be loading
         }
     }
     
@@ -882,7 +870,6 @@ struct SimpleVideoPlayer: View {
             .modifier(lifecycleModifiers)
             .modifier(notificationModifiers)
             .modifier(gestureModifiers)
-            .task(id: loadingState) { await performPeriodicHealthCheck() }
     }
     
     private var lifecycleModifiers: AnyViewModifier {
@@ -1130,7 +1117,7 @@ struct SimpleVideoPlayer: View {
         // PERFORMANCE FIX: Remove ALL observers when off-screen to free resources
         // Previously kept video completion observers active for sequential playback,
         // but this caused excessive resource usage when many videos are off-screen
-        NSLog("DEBUG: [OBSERVER LIFECYCLE] Removing all observers for off-screen video: \(mid)")
+        // Removing observers for off-screen video
         removePlayerObservers()
 
         // Cache the current video state (MediaCell only, NOT TweetDetail or MediaBrowser)
@@ -1142,12 +1129,12 @@ struct SimpleVideoPlayer: View {
             // Don't save position if video is finished (at the end)
             // This prevents restoring to the end position when scrolling back
             if isVideoAtEnd(player) {
-                NSLog("🎬 [VIDEO CACHE] Skipping save - video finished at \(String(format: "%.2f", currentTime))s for \(mid)")
+                // Skipping save - video finished
             } else {
                 // For MediaCell mode, save the current global mute state
                 // For detail/fullscreen modes, we need to track the original global mute state
                 let originalMuteState = mode == .mediaCell ? isMuted : MuteState.shared.isMuted
-                NSLog("💾 [VIDEO CACHE] Saving position \(String(format: "%.2f", currentTime))s for \(mid) in handleOnDisappear")
+                // Saving video position on disappear
                 VideoStateCache.shared.cacheVideoState(
                     for: mid,
                     player: player,
@@ -1167,7 +1154,7 @@ struct SimpleVideoPlayer: View {
             // Ensure muteState is correct when pausing MediaCell
             if let player = player {
                 player.isMuted = MuteState.shared.isMuted
-                NSLog("🔇 [PLAYER MUTE] handleOnDisappear - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                // Applied mute state on disappear
             }
             
             // CRITICAL FIX: Stop buffering when video goes out of sight to prevent performance degradation
@@ -1179,7 +1166,7 @@ struct SimpleVideoPlayer: View {
                 if let cachingPlayerItem = playerItem as? CachingPlayerItem {
                     cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 }
-                NSLog("DEBUG: [SimpleVideoPlayer] Stopped buffering for out-of-sight video: \(mid)")
+                // Stopped buffering for out-of-sight video
             }
             
             // Also cancel loading tasks in SharedAssetCache for this video
@@ -1195,7 +1182,7 @@ struct SimpleVideoPlayer: View {
             if let player = player {
                 // Restore mute state to global state before returning to MediaCell
                 player.isMuted = MuteState.shared.isMuted
-                NSLog("🔇 [PLAYER MUTE] handleOnDisappear - Restored global mute state after exiting fullscreen: \(MuteState.shared.isMuted) for \(mid)")
+                // Restored mute state after exiting fullscreen
             }
         } else if mode == .tweetDetail {
             // TweetDetail: DO NOTHING.
@@ -1209,38 +1196,23 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleModeChange(oldMode: Mode, newMode: Mode) {
-        NSLog("DEBUG: [VIDEO MODE CHANGE] ========== MODE TRANSITION START ==========")
-        NSLog("DEBUG: [VIDEO MODE CHANGE] Transitioning \(mid) from \(oldMode) to \(newMode)")
-        NSLog("DEBUG: [VIDEO MODE CHANGE] Current player: \(player != nil)")
-        NSLog("DEBUG: [VIDEO MODE CHANGE] Player item: \(player?.currentItem != nil)")
-        NSLog("DEBUG: [VIDEO MODE CHANGE] Player item status: \(player?.currentItem?.status.rawValue ?? -999)")
-        NSLog("DEBUG: [VIDEO MODE CHANGE] Player rate: \(player?.rate ?? -1)")
-        NSLog("DEBUG: [VIDEO MODE CHANGE] Current representableId: \(representableId)")
-        
         // When mode changes, apply appropriate mute state
         guard let player = player else {
-            NSLog("DEBUG: [VIDEO MODE CHANGE] ⚠️ No player available during mode change for \(mid)")
             return
         }
         
         if newMode == .mediaBrowser {
             // Entering full screen - force unmute
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Entering fullscreen")
-            
             player.isMuted = false
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Unmuted player for fullscreen")
             
             // CRITICAL: Force layer detachment and increment representableId
             // This ensures the VideoPlayerRepresentable in MediaCell releases the layer
             // before AVPlayerViewController tries to use it, preventing black screen
             self.representableId += 1
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) to force layer detachment from MediaCell")
             
             // Don't pause here - let AVPlayerViewController handle play/pause
-            NSLog("DEBUG: [VIDEO MODE CHANGE] AVPlayerViewController will handle playback")
         } else if newMode == .mediaCell && oldMode == .mediaBrowser {
             // Exiting full screen to MediaCell - apply global mute state
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Exiting fullscreen to MediaCell")
             
             // Store playback state before transition
             let wasPlaying = player.rate > 0
@@ -1248,36 +1220,29 @@ struct SimpleVideoPlayer: View {
             
             // Pause player to allow clean layer detachment
             player.pause()
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Paused player for layer transition from fullscreen")
+            // Paused player for layer transition
             
             // Apply global mute state
             player.isMuted = MuteState.shared.isMuted
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Applied global mute state: \(MuteState.shared.isMuted)")
             
             // Force recreation of VideoPlayerRepresentable to ensure fresh layer attachment
             self.representableId += 1
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Incremented representableId to \(self.representableId) for fresh MediaCell layer")
             
             // Resume playback using proper completion handler instead of arbitrary delay
             if wasPlaying {
                 // CRITICAL: Always ensure muteState is correct before resuming playback in MediaCell
                 player.isMuted = MuteState.shared.isMuted
-                NSLog("🔇 [PLAYER MUTE] handleModeChange - Applied global mute state before resuming MediaCell: \(MuteState.shared.isMuted) for \(mid)")
                 
                 // Seek to current position with completion handler to ensure layer is ready
                 player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                     guard finished else { return }
-                    NSLog("DEBUG: [VIDEO MODE CHANGE] Layer ready, resuming playback in MediaCell")
                     player.play()
                 }
             }
         } else if newMode == .mediaCell {
             // Any other transition to MediaCell - apply global mute state
             player.isMuted = MuteState.shared.isMuted
-            NSLog("DEBUG: [VIDEO MODE CHANGE] Transitioned to MediaCell (\(oldMode) -> \(newMode)), applied global mute state: \(MuteState.shared.isMuted)")
         }
-        
-        NSLog("DEBUG: [VIDEO MODE CHANGE] ========== MODE TRANSITION END ==========")
     }
     
     private func handleMuteChange(newMuteState: Bool) {
@@ -1380,11 +1345,11 @@ struct SimpleVideoPlayer: View {
         if visible {
             // For fullscreen and detail modes, always allow setup regardless of shouldLoadVideo
             if mode == .mediaBrowser || mode == .tweetDetail {
-                NSLog("DEBUG: [VIDEO VISIBILITY] Fullscreen/Detail mode - checking state for \(mid)")
+                        // Fullscreen/Detail mode - checking state
                 
                 // Check if video failed and needs retry
                 if loadingState.hasFailed {
-                    NSLog("✅ [VIDEO VISIBILITY] Fullscreen video was in failed state, retrying load for \(mid)")
+                    // Fullscreen video was in failed state, retrying load
                     player = nil
                     loadingState = .idle
                     playbackState = .notStarted
@@ -1395,7 +1360,7 @@ struct SimpleVideoPlayer: View {
                 if player == nil {
                     // Reset loading state if stuck
                     if loadingState.isLoading {
-                        NSLog("DEBUG: [VIDEO VISIBILITY] loadingState stuck at .loading, resetting to .idle")
+                        // Loading state stuck, resetting
                         loadingState = .idle
                     }
                     setupPlayer()
@@ -1406,7 +1371,7 @@ struct SimpleVideoPlayer: View {
                         let isPlayerReady = playerItem.status == .readyToPlay || hasBufferedData
                         
                         if isPlayerReady {
-                            NSLog("✅ [VIDEO VISIBILITY] Fullscreen player ready with data for \(mid)")
+                            // Fullscreen player ready with data
                             if loadingState.isLoading {
                                 loadingState = .loaded
                             }
@@ -1415,7 +1380,7 @@ struct SimpleVideoPlayer: View {
                             if player?.rate == 0 {
                                 // For fullscreen mode, always unmute
                                 player?.isMuted = false
-                                NSLog("▶️ [VIDEO VISIBILITY] Starting fullscreen playback for \(mid)")
+                                // Starting fullscreen playback
                                 player?.play()
                                 playbackState = .playing
                             }
@@ -1489,7 +1454,7 @@ struct SimpleVideoPlayer: View {
                         // For MediaCell, always respect global muteState
                         if mode == .mediaCell {
                             player.isMuted = MuteState.shared.isMuted
-                            NSLog("🔇 [PLAYER MUTE] handleVisibilityChange - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                            // Applied mute state for MediaCell
                         }
                         player.volume = 0
                         player.play()
@@ -1544,7 +1509,7 @@ struct SimpleVideoPlayer: View {
                 // CRITICAL FIX: Reset finished videos when scrolled back into view
                 // This ensures finished videos restart from beginning when they become visible again
                 if mode == .mediaCell && playbackState == .finished {
-                    NSLog("🔄 [VIDEO RESET] Resetting finished video \(mid) to beginning on visibility")
+                    // Resetting finished video to beginning
                     VideoStateCache.shared.clearCachedState(for: mid)
                     playbackState = .notStarted
                     if let player = player {
@@ -1705,7 +1670,7 @@ struct SimpleVideoPlayer: View {
             // If we're currently *in* a TweetDetailView and this MediaCell is visible there (e.g. quoted tweet),
             // do NOT pause it. We only want to stop feed/background MediaCells.
             if NavigationStateManager.shared.isDetailViewActive && isVisible {
-                NSLog("DEBUG: [STOP ALL VIDEOS] Ignoring for visible MediaCell inside TweetDetailView: \(mid)")
+                // Ignoring stop for visible MediaCell inside TweetDetailView
                 return
             }
 
@@ -1719,7 +1684,7 @@ struct SimpleVideoPlayer: View {
                     // CRITICAL: Keep playbackState as .playing so we know it was playing
                     // Don't change to .paused - we'll use .playing to determine if we should resume
                     // Only pause the player, not the state
-                    NSLog("DEBUG: [STOP ALL VIDEOS] Paused \(mid) - was playing (keeping playbackState: .playing), will resume when fullscreen closes")
+                    // Paused - will resume when fullscreen closes
                 }
                 // PERFORMANCE FIX: Save position before pausing (Twitter-style)
                 // Pass wasPlaying explicitly to preserve state before pause
@@ -1834,27 +1799,27 @@ struct SimpleVideoPlayer: View {
             // CRITICAL: If video is at the end (finished), always restart from beginning
             // even if there's a cached position. This ensures finished videos restart properly.
             if isVideoAtEnd(player) {
-                NSLog("🔄 [SURVEY] Video \(mid) is at end (\(String(format: "%.2f", currentTime))s) - restarting from beginning")
+                // Video at end - restarting from beginning
                 VideoStateCache.shared.clearCachedState(for: mid)
                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             } else if hasCachedPosition && currentTime > 0.5 {
                 // Video was restored from cache - keep the current position
-                NSLog("🎬 [SURVEY] Video \(mid) has cached position (\(String(format: "%.2f", currentTime))s) - NOT seeking to zero")
+                // Video has cached position - NOT seeking to zero
             } else {
                 // New video or at beginning - start from zero for survey
-                NSLog("🎬 [SURVEY] Video \(mid) starting from beginning")
+                // Video starting from beginning
                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         } else if isPrimary {
             // Primary phase: continue from current position without interruption
             // CRITICAL: If already playing from survey phase, don't restart
             if isCurrentlyPlaying {
-                NSLog("🎬 [PRIMARY] Video \(mid) already playing - continuing seamlessly from \(String(format: "%.2f", player.currentTime().seconds))s")
+                // Video already playing - continuing seamlessly
                 // Update state but don't interrupt playback
                 playbackState = .playing
                 return
             }
-            NSLog("🎬 [PRIMARY] Playing video \(mid) from position \(String(format: "%.2f", player.currentTime().seconds))s")
+            // Playing video
         }
         
         // Only start/restart playback if not already playing
@@ -1924,7 +1889,10 @@ struct SimpleVideoPlayer: View {
         
         recoverFromBackground()
         
-        // Perform delayed health check after recovery
+        // Mark that we need a health check after this foreground entry
+        needsHealthCheckAfterForeground = true
+        
+        // Perform delayed health check after recovery (only once)
         performDelayedHealthCheck()
     }
     
@@ -1945,7 +1913,7 @@ struct SimpleVideoPlayer: View {
         // Check 1: Player must have a currentItem
         guard let playerItem = player.currentItem else {
             if !loadingState.isLoading {
-                NSLog("⚠️ [VIDEO VALIDATION] Player has no currentItem for \(mid) - recreating")
+                // Player has no currentItem - recreating
                 recoverFromInvalidPlayer()
             }
             return false
@@ -1955,7 +1923,7 @@ struct SimpleVideoPlayer: View {
         let currentSeconds = player.currentTime().seconds
         if !currentSeconds.isFinite {
             if !loadingState.isLoading {
-                NSLog("⚠️ [VIDEO VALIDATION] Player currentTime is invalid (\(currentSeconds)) for \(mid) - recreating")
+                // Player currentTime is invalid - recreating
                 recoverFromInvalidPlayer()
             }
             return false
@@ -1963,7 +1931,7 @@ struct SimpleVideoPlayer: View {
         
         // Check 3: Player item must not be in failed state
         if playerItem.status == .failed {
-            NSLog("⚠️ [VIDEO VALIDATION] Player item is in failed state for \(mid), triggering recovery")
+            // Player item is in failed state, triggering recovery
             handleError(strategy: .loadFailure)
             return false
         }
@@ -1985,8 +1953,15 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Delayed health check after recovery
         // Sometimes players appear healthy immediately after recovery but are actually broken
         // Check again after a short delay to catch these cases
+        // OPTIMIZATION: Only runs once after foreground entry, not continuously
         Task { @MainActor in
+            // Only proceed if we actually need a health check
+            guard self.needsHealthCheckAfterForeground else { return }
+            
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+            
+            // Clear the flag - health check completed
+            self.needsHealthCheckAfterForeground = false
             
             // Check if player is broken or stuck in loading
             if let player = self.player, let playerItem = player.currentItem {
@@ -2084,7 +2059,7 @@ struct SimpleVideoPlayer: View {
         
         // Check 7: Progressive player is stalled
         if shouldForceProgressiveReload(player: player, item: playerItem) {
-            NSLog("⚠️ [SANITY CHECK] Progressive player stalled, marking as broken for \(mid)")
+            // Progressive player stalled, marking as broken
             return true
         }
         
@@ -2153,8 +2128,7 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // Video still not ready after 10s - force full recreation
-                NSLog("⚠️ [VIDEO RECOVERY TIMEOUT] \(videoMid) failed to recover within 10s - forcing full recreation")
-                NSLog("⚠️ [VIDEO RECOVERY TIMEOUT] State: playing=\(isPlaying), ready=\(isReady), hasBuffer=\(hasBuffer), status=\(playerItem.status.rawValue)")
+                // Video failed to recover within 10s - forcing full recreation
                 
                 // Clean up observers
                 if let observer = self.timeObserver, let observerPlayer = self.timeObserverPlayer {
@@ -2174,10 +2148,10 @@ struct SimpleVideoPlayer: View {
                 
                 // Force recreation
                 if self.shouldLoadVideo || self.isVisible {
-                    NSLog("🔄 [VIDEO RECOVERY TIMEOUT] Recreating player for \(videoMid)")
+                    // Recreating player after timeout
                     self.setupPlayer()
                 } else {
-                    NSLog("⏸️ [VIDEO RECOVERY TIMEOUT] Not recreating player for \(videoMid) (not visible/not needed)")
+                    // Not recreating player (not visible)
                 }
                 
                 self.recoveryTimeoutTask = nil
@@ -2433,7 +2407,7 @@ struct SimpleVideoPlayer: View {
                     if approved && isVisible && noOverlaysActive && noDetailViewActive {
                         // CRITICAL: Always ensure muteState is correct before playing
                         player.isMuted = MuteState.shared.isMuted
-                        NSLog("🔇 [PLAYER MUTE] recoverFromBackground - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                        // Applied mute state after background recovery
                         
                         // Validate player is ready before playing
                         if playerItem.status == .readyToPlay {
@@ -2586,7 +2560,7 @@ struct SimpleVideoPlayer: View {
                     // CRITICAL: Always ensure muteState is correct before playing
                     if mode == .mediaCell, let player = player {
                         player.isMuted = MuteState.shared.isMuted
-                        NSLog("🔇 [PLAYER MUTE] handleVideoInfrastructureRestarted - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                        // Applied mute state after infrastructure restart
                     }
                     player?.play()
                     playbackState = .playing
@@ -2602,7 +2576,7 @@ struct SimpleVideoPlayer: View {
     private func handleReloadVisibleVideosOnly() {
         guard mode == .mediaCell else { return }
         guard isVisible, isActuallyVisible else { 
-            NSLog("🔍 [RELOAD VISIBLE] Skipping \(mid) - not visible (isVisible: \(isVisible), isActuallyVisible: \(isActuallyVisible))")
+            // Skipping - not visible
             return 
         }
 
@@ -2623,7 +2597,7 @@ struct SimpleVideoPlayer: View {
         let needsRecreation = (playerMissing && shouldLoadVideo) || broken
         let hasStuckLoading = loadingState.isLoading && (playerMissing || broken)
         
-        NSLog("🔍 [RELOAD VISIBLE] \(mid) - playerMissing: \(playerMissing), itemMissing: \(itemMissing), timeInvalid: \(timeInvalid), broken: \(broken), needsRecreation: \(needsRecreation), hasStuckLoading: \(hasStuckLoading)")
+        // Checking visible video state
 
         if needsRecreation || hasStuckLoading {
             // ONLY set recovery cover for videos that actually need recreation
@@ -2711,7 +2685,7 @@ struct SimpleVideoPlayer: View {
                playerItem.status == .readyToPlay, !playerItem.loadedTimeRanges.isEmpty {
                 let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player!)
                 if bufferedDuration >= firstFrameMinimumBuffer {
-                    NSLog("🔧 [RELOAD VISIBLE FIX] Loading state stuck after background for \(mid) - player is ready with \(String(format: "%.2f", bufferedDuration))s buffered, fixing")
+                    // Loading state stuck after background - fixing
                     loadingState = .loaded
                     retryAttempts = 0
                 }
@@ -2723,7 +2697,7 @@ struct SimpleVideoPlayer: View {
             let cachedState = VideoStateCache.shared.getCachedPlaybackInfo(for: self.mid)
             let wasPlayingBeforeBackground = cachedState?.wasPlaying ?? false
             
-            NSLog("🔍 [RELOAD VISIBLE INTACT] \(mid) - rate: \(player?.rate ?? -1), wasPlaying: \(wasPlayingBeforeBackground), currentAutoPlay: \(currentAutoPlay), loadingState: \(loadingState)")
+            // Reload visible - player intact
             
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             
@@ -2743,9 +2717,9 @@ struct SimpleVideoPlayer: View {
                         player.isMuted = MuteState.shared.isMuted
                         playWithResumeIfNeeded(player)
                         playbackState = .playing
-                        NSLog("▶️ [RELOAD VISIBLE INTACT] Resumed playback for \(mid) (wasPlaying: \(wasPlayingBeforeBackground))")
+                        // Resumed playback
                     } else {
-                        NSLog("⏸️ [RELOAD VISIBLE INTACT] Cannot resume \(mid) - approved: \(approved), visible: \(actuallyVisible), noDetail: \(noDetailViewActive), ready: \(isReady)")
+                        // Cannot resume - conditions not met
                     }
                 }
             }
@@ -3263,35 +3237,28 @@ struct SimpleVideoPlayer: View {
     // MARK: - Player Setup
     private func validateAndConfigureExistingPlayer() {
         guard let player = player else {
-            NSLog("DEBUG: [VIDEO VALIDATE] No player to validate for \(mid)")
+            // No player to validate
             return
         }
         
-        NSLog("DEBUG: [VIDEO VALIDATE] Validating existing player for \(mid), mode: \(mode)")
+        // Validating existing player
         
         // Check if player item exists and is valid
         if let playerItem = player.currentItem {
-            NSLog("DEBUG: [VIDEO VALIDATE] Player item status: \(playerItem.status.rawValue) for \(mid)")
             switch playerItem.status {
             case .readyToPlay:
-                NSLog("DEBUG: [VIDEO VALIDATE] Player item is ready to play for \(mid)")
                 configurePlayer(player)
             case .failed:
-                NSLog("DEBUG: [VIDEO VALIDATE] Player item failed for \(mid), attempting recovery")
                 handleError(strategy: .loadFailure)
             case .unknown:
-                NSLog("DEBUG: [VIDEO VALIDATE] Player item status unknown for \(mid), configuring anyway (KVO will play when ready)")
                 // Configure the player anyway - KVO in AVPlayerViewControllerRepresentable will trigger play when ready
                 configurePlayer(player)
             @unknown default:
-                NSLog("DEBUG: [VIDEO VALIDATE] Unknown player item status for \(mid)")
                 configurePlayer(player)
             }
         } else {
-            NSLog("DEBUG: [VIDEO VALIDATE] No player item for \(mid), setting up new player")
-            // Reset loading state if stuck
+            // No player item, setting up new player
             if loadingState.isLoading {
-                NSLog("DEBUG: [VIDEO VALIDATE] loadingState stuck at .loading, resetting to .idle")
                 loadingState = .idle
             }
             setupPlayer()
@@ -3330,13 +3297,12 @@ struct SimpleVideoPlayer: View {
             // CRITICAL: Check for cached player and reuse its asset to avoid network timeout
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
                let cachedPlayerItem = cachedPlayer.currentItem {
-                NSLog("DEBUG: [VIDEO SETUP] Found cached player for \(mid), creating new playerItem from cached asset")
                 let asset = cachedPlayerItem.asset
                 let playerItem = AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 newPlayer.isMuted = false
                 
-                NSLog("DEBUG: [VIDEO SETUP] Created independent AVPlayer for TweetDetail from cached asset, now storing in singleton...")
+                // Created independent AVPlayer, storing in singleton
                 
                 // Stop old singleton player if exists
                 DetailVideoManager.shared.currentPlayer?.pause()
@@ -3348,27 +3314,22 @@ struct SimpleVideoPlayer: View {
                 self.player = newPlayer
                 self.loadingState = .loaded
                 self.configurePlayer(newPlayer)
-                NSLog("DEBUG: [VIDEO SETUP] ✅ Stored new player in singleton for \(mid) (from cached asset)")
                 return
             }
             
             // No cached player - load fresh
             // Use .userInitiated for detail view (not in scrolling feed, user is focused on this video)
             Task.detached(priority: .userInitiated) {
-                NSLog("DEBUG: [VIDEO SETUP] Task started for \(mid) (no cached player)")
                 do {
-                    NSLog("DEBUG: [VIDEO SETUP] Creating fresh playerItem for TweetDetail...")
                     let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
                         for: uniquePlayerURL,
                         mediaID: mid,
                         mediaType: mediaType
                     )
                     let newPlayer = AVPlayer(playerItem: playerItem)
-                    NSLog("DEBUG: [VIDEO SETUP] Created independent AVPlayer for TweetDetail, now storing in singleton...")
                     newPlayer.isMuted = false
                     
                     await MainActor.run {
-                        NSLog("DEBUG: [VIDEO SETUP] On MainActor, storing player...")
                         // Stop old singleton player if exists
                         DetailVideoManager.shared.currentPlayer?.pause()
                         
@@ -3379,10 +3340,9 @@ struct SimpleVideoPlayer: View {
                         self.player = newPlayer
                         self.loadingState = .loaded
                         self.configurePlayer(newPlayer)
-                        NSLog("DEBUG: [VIDEO SETUP] ✅ Stored new player in singleton for \(mid)")
                     }
                 } catch {
-                    NSLog("DEBUG: [VIDEO SETUP] ❌ Failed to create singleton player: \(error.localizedDescription)")
+                    print("ERROR: Failed to create player: \(error.localizedDescription)")
                     await MainActor.run {
                         self.handleError(strategy: .loadFailure)
                     }
@@ -3397,20 +3357,17 @@ struct SimpleVideoPlayer: View {
             // CRITICAL: Check for cached player and reuse its asset to avoid network timeout
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
                let cachedPlayerItem = cachedPlayer.currentItem {
-                NSLog("DEBUG: [VIDEO SETUP] Found cached player for embeddedDetail \(mid), creating new playerItem from cached asset")
                 let asset = cachedPlayerItem.asset
                 let playerItem = AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 // Respect global mute state for embedded previews
                 newPlayer.isMuted = MuteState.shared.isMuted
                 self.configurePlayer(newPlayer)
-                NSLog("DEBUG: [VIDEO SETUP] ✅ Created embeddedDetail player from cached asset for \(mid)")
                 return
             }
             
             // No cached player - load fresh
             Task.detached(priority: .userInitiated) {
-                NSLog("DEBUG: [VIDEO SETUP] Task started for embeddedDetail \(mid) (no cached player)")
                 do {
                     let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
                         for: uniquePlayerURL,
@@ -3424,7 +3381,7 @@ struct SimpleVideoPlayer: View {
                         self.configurePlayer(newPlayer)
                     }
                 } catch {
-                    NSLog("DEBUG: [VIDEO SETUP] ❌ Failed to create embeddedDetail player: \(error.localizedDescription)")
+                    print("ERROR: Failed to create player: \(error.localizedDescription)")
                     await MainActor.run {
                         self.handleError(strategy: .loadFailure)
                     }
@@ -3438,7 +3395,7 @@ struct SimpleVideoPlayer: View {
         // TweetDetail has its own path above and doesn't use VideoStateCache at all
         // CRITICAL: Skip VideoStateCache during error retries to prevent infinite loops with broken cached players
         if retryAttempts == 0, let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
-            NSLog("DEBUG: [VIDEO CACHE] ✅ Found shared player for \(mid) in \(mode) mode")
+            // Found shared player
             
             // Apply mute state based on current mode
             if mode == .mediaCell {
@@ -3451,27 +3408,23 @@ struct SimpleVideoPlayer: View {
             // loadingState will be set to .loaded in restoreFromCache
             return
         } else if retryAttempts > 0 {
-            NSLog("DEBUG: [VIDEO RETRY] Skipping VideoStateCache check during retry #\(retryAttempts) for \(mid) - will load fresh")
+            // Skipping cache check during retry - will load fresh
         }
         
         // SECOND: Always try async loading - SharedAssetCache handles cache vs network internally
         // This avoids synchronous file system operations on the main thread during scrolling
         Task.detached(priority: .userInitiated) {
             do {
-                NSLog("DEBUG: [VIDEO SETUP] Starting async Task to load player for \(mid) in mode \(mode)")
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
-                NSLog("DEBUG: [VIDEO SETUP] getOrCreatePlayer returned successfully for \(mid)")
 
                 // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
                 // This prevents any brief moment where the player might start with wrong audio state
                 if await MainActor.run(body: { self.mode }) == .mediaCell {
                     let muteState = await MainActor.run { MuteState.shared.isMuted }
                     newPlayer.isMuted = muteState
-                    NSLog("🔇 [PLAYER MUTE] Applied global mute state for MediaCell - isMuted: \(muteState) for \(mid)")
                 } else {
                     newPlayer.isMuted = false
-                    NSLog("🔊 [PLAYER MUTE] Unmuted for fullscreen/detail mode - isMuted: false for \(mid)")
                 }
 
                 await MainActor.run {
@@ -3496,13 +3449,13 @@ struct SimpleVideoPlayer: View {
         
         // Early return if loading is disabled
         guard shouldLoadVideo else {
-            NSLog("DEBUG: [VIDEO CACHE] ⚠️ Loading disabled for \(mid), skipping cache restoration")
+            // Loading disabled, skipping cache restoration
             return
         }
         
         // Validate cached player before using it
         guard let playerItem = cachedState.player.currentItem else {
-            NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player has no currentItem; keeping playback info and creating new player for \(mid)")
+            // Cached player has no currentItem; creating new player
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
@@ -3512,7 +3465,7 @@ struct SimpleVideoPlayer: View {
         
         // Check if player item is in a failed state
         if playerItem.status == .failed {
-            NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item is in failed state; keeping playback info and creating new player for \(mid)")
+            // Cached player item is in failed state; creating new player
             SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
             loadingState = .idle  // Reset loading state before recreating
             setupPlayer()
@@ -3524,22 +3477,16 @@ struct SimpleVideoPlayer: View {
         
         // For fullscreen/detail modes, ensure player has buffered data
         if mode == .mediaBrowser || mode == .tweetDetail {
-            if playerItem.status != .readyToPlay {
-                NSLog("DEBUG: [VIDEO CACHE] ⚠️ Cached player item not ready yet (status: \(playerItem.status.rawValue)) for fullscreen/detail mode - TRUSTING IT and continuing")
-                NSLog("DEBUG: [VIDEO CACHE] Player was working in MediaCell, will use KVO observer in AVPlayerViewController to play when ready")
-            } else if !hasBufferedData {
-                NSLog("DEBUG: [VIDEO CACHE] ⚠️ Player ready but no buffered data yet for fullscreen - this may cause playback delays")
-                NSLog("DEBUG: [VIDEO CACHE] Will still use player but playback may take time to start")
-            }
+            // Fullscreen/detail mode - trust player state, KVO will handle ready state
         } else {
             // For MediaCell mode, check player readiness but trust players with buffered data
             if playerItem.status != .readyToPlay {
                 // If player has buffered data, it's transitioning and will be ready soon - use it!
                 if hasBufferedData {
-                    NSLog("DEBUG: [VIDEO CACHE] ⚠️ Player status not ready yet (status: \(playerItem.status.rawValue)) but HAS buffered data - will use it for MediaCell")
+                    // Player not ready but has buffered data - will use it
                 } else if playerItem.status == .failed {
                     // Only clear cache if player has FAILED, not if it's just loading
-                    NSLog("DEBUG: [VIDEO CACHE] ❌ Cached player item FAILED for MediaCell; keeping playback info and creating new player for \(mid)")
+                    // Cached player item FAILED; creating new player
                     SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
                     loadingState = .idle  // Reset loading state before recreating
                     setupPlayer()
@@ -3547,7 +3494,7 @@ struct SimpleVideoPlayer: View {
                 } else {
                     // Status is .unknown (0) - for HLS videos with cached playlists, this is normal
                     // The player needs time to fetch segments. Let KVO handle it.
-                    NSLog("DEBUG: [VIDEO CACHE] ⏳ Cached player item status: \(playerItem.status.rawValue), no buffer yet - giving it time to load segments for \(mid)")
+                    // Cached player item status not ready - giving it time to load
                 }
             } else {
             }
@@ -3559,7 +3506,7 @@ struct SimpleVideoPlayer: View {
             // Pause if playing to prevent audio bleed
             if cachedState.player.rate > 0 {
                 cachedState.player.pause()
-                NSLog("DEBUG: [VIDEO CACHE] Paused playing cached player before restoring for MediaCell")
+                // Paused playing cached player before restoring
             }
             cachedState.player.isMuted = MuteState.shared.isMuted
         } else {
@@ -3581,7 +3528,7 @@ struct SimpleVideoPlayer: View {
                 let durationSeconds = CMTimeGetSeconds(duration)
                 // If within 0.5s of end, consider it finished
                 if durationSeconds > 0 && currentSeconds >= durationSeconds - 0.5 {
-                    NSLog("🎬 [VIDEO CACHE] Video already at end (\(String(format: "%.1f", currentSeconds))s/\(String(format: "%.1f", durationSeconds))s): \(mid)")
+                    // Video already at end
                     videoAlreadyFinished = true
                 }
             }
@@ -3589,13 +3536,13 @@ struct SimpleVideoPlayer: View {
         
         // CRITICAL: Always set up observers for cached player
         // This is essential for sequential video playback - without observers, onVideoFinished never fires!
-        NSLog("DEBUG: [VIDEO CACHE] Setting up observers for cached player: \(mid)")
+        // Setting up observers for cached player
         removePlayerObservers()
         setupPlayerObservers(cachedState.player)
         
         // Verify observer was set up successfully
         if mode == .mediaCell && videoCompletionObserver == nil && cachedState.player.currentItem != nil {
-            NSLog("⚠️ [VIDEO CACHE] videoCompletionObserver is nil after setupPlayerObservers for \(mid) - retrying")
+            print("⚠️ [VIDEO CACHE] videoCompletionObserver is nil after setupPlayerObservers for \(mid) - retrying")
             setupPlayerObservers(cachedState.player)
         }
         
@@ -3604,7 +3551,7 @@ struct SimpleVideoPlayer: View {
         // OR if we need to advance sequential playback, let VideoManager handle it
         // Directly calling handleVideoFinished here causes duplicate callbacks
         if videoAlreadyFinished {
-            NSLog("🎬 [VIDEO CACHE] Video \(mid) was already finished - marking as finished, observer will handle completion")
+            // Video was already finished - marking as finished
             self.playbackState = .finished
             // DON'T call handleVideoFinished here - it will be called by the observer if video finishes again
             // Or VideoManager will handle advancing to next video if needed
@@ -3640,11 +3587,11 @@ struct SimpleVideoPlayer: View {
             
             // If player is at end or has invalid position, reset to beginning
             if isAtEnd || currentTime.seconds < 0 {
-                NSLog("DEBUG: [VIDEO CACHE] Player at end or invalid position - resetting to beginning")
+                // Player at end or invalid position - resetting to beginning
                 let videoMid = self.mid
                 cachedState.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                     if !finished {
-                        NSLog("⚠️ [VIDEO CACHE] Seek to start failed for \(videoMid) - player may be broken")
+                        print("⚠️ [VIDEO CACHE] Seek to start failed for \(videoMid) - player may be broken")
                         Task { @MainActor in
                             // If even seek to zero fails, player is likely broken - clear cache
                             VideoStateCache.shared.clearCache(for: videoMid)
@@ -3653,13 +3600,13 @@ struct SimpleVideoPlayer: View {
                 }
             } else if cachedState.time.seconds > 0 {
                 // If we have a cached position, seek to it
-                NSLog("DEBUG: [VIDEO CACHE] Seeking to cached position: \(cachedState.time.seconds)s for fullscreen")
+                // Seeking to cached position for fullscreen
                 let videoMid = self.mid
                 let seekTime = cachedState.time.seconds
                 cachedState.player.seek(to: cachedState.time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                     if !finished {
                         // Seek to saved position failed - just start from beginning instead
-                        NSLog("⚠️ [VIDEO CACHE] Seek to \(seekTime)s failed for \(videoMid) - starting from beginning")
+                        print("⚠️ [VIDEO CACHE] Seek to \(seekTime)s failed for \(videoMid) - starting from beginning")
                         Task { @MainActor in
                             VideoStateCache.shared.clearCache(for: videoMid)
                             cachedState.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
@@ -3690,20 +3637,17 @@ struct SimpleVideoPlayer: View {
             
             // Log if cached position exceeds known duration (metadata may still be loading)
             if seekTime > duration && duration > 0 {
-                NSLog("⚠️ [VIDEO CACHE] Cached position \(String(format: "%.2f", seekTime))s exceeds current known duration \(String(format: "%.2f", duration))s for \(videoMid) - seeking anyway (AVPlayer will clamp if needed)")
+                print("⚠️ [VIDEO CACHE] Cached position \(String(format: "%.2f", seekTime))s exceeds current known duration \(String(format: "%.2f", duration))s for \(videoMid) - seeking anyway (AVPlayer will clamp if needed)")
             }
             
             // Use seek with tolerance for better reliability
             // AVPlayer will clamp the seek position to valid range if metadata is still loading
             let tolerance = CMTime(seconds: 0.5, preferredTimescale: 600)
-            NSLog("🔄 [VIDEO CACHE] Seeking to cached position: \(String(format: "%.2f", seekTime))s for \(videoMid)")
             cachedState.player.seek(to: cachedState.time, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
-                if finished {
-                    NSLog("✅ [VIDEO CACHE] Seek completed for \(videoMid) at \(String(format: "%.2f", seekTime))s")
-                } else {
+                if !finished {
                     // CRITICAL: Seek failed (common after background transitions)
                     // Instead of recreating, just start from beginning - much faster!
-                    NSLog("⚠️ [VIDEO CACHE] Seek to \(cachedState.time.seconds)s failed for \(videoMid) - starting from beginning instead")
+                    print("⚠️ [VIDEO CACHE] Seek to \(cachedState.time.seconds)s failed for \(videoMid) - starting from beginning instead")
                     
                     Task { @MainActor in
                         // Clear cached position so we start fresh
@@ -3712,9 +3656,9 @@ struct SimpleVideoPlayer: View {
                         // Seek to beginning - this should succeed even if position seek failed
                         cachedState.player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { seekToZeroFinished in
                             if seekToZeroFinished {
-                                NSLog("✅ [VIDEO CACHE] Successfully reset to beginning for \(videoMid)")
+                                // Successfully reset to beginning
                             } else {
-                                NSLog("❌ [VIDEO CACHE] Even seek to zero failed for \(videoMid) - player may be broken, will recreate on next attempt")
+                                print("❌ [VIDEO CACHE] Even seek to zero failed for \(videoMid) - player may be broken, will recreate on next attempt")
                             }
                         }
                     }
@@ -3752,7 +3696,7 @@ struct SimpleVideoPlayer: View {
         if item.preferredForwardBufferDuration < target - 0.05 {
             item.preferredForwardBufferDuration = target
             let formatted = String(format: "%.1f", target)
-            NSLog("DEBUG: [BUFFER TARGET] Applied progressive buffer target \(formatted)s for \(mid)")
+            // Applied progressive buffer target
         }
     }
 
@@ -3763,7 +3707,7 @@ struct SimpleVideoPlayer: View {
         applyProgressiveBufferTarget(to: item)
         let newTarget = progressiveForwardBufferDuration
         let formatted = String(format: "%.1f", newTarget)
-        NSLog("⚙️ [BUFFER TARGET] Increased progressive buffer target to \(formatted)s for \(mid)")
+        // Increased progressive buffer target
     }
 
     private func resetProgressiveBufferTarget(for item: AVPlayerItem?) {
@@ -3772,7 +3716,7 @@ struct SimpleVideoPlayer: View {
         progressiveBufferTargetIndex = 0
         applyProgressiveBufferTarget(to: item)
         let formatted = String(format: "%.1f", progressiveForwardBufferDuration)
-        NSLog("⚙️ [BUFFER TARGET] Reset progressive buffer target to \(formatted)s for \(mid)")
+        // Reset progressive buffer target
     }
     
     private func configurePlayer(_ player: AVPlayer) {
@@ -3786,7 +3730,7 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Reset finished videos when they come back into view
         // Check both playbackState AND player position (SwiftUI view is recreated on scroll)
         if mode == .mediaCell && (playbackState == .finished || isVideoAtEnd(player)) {
-            NSLog("🔄 [VIDEO RESET] Resetting finished video \(mid) to beginning - atEnd=\(isVideoAtEnd(player)), finished=\(playbackState == .finished)")
+            // Resetting finished video to beginning
             // Clear any cached state and seek to beginning
             VideoStateCache.shared.clearCachedState(for: mid)
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: { _ in })
@@ -3834,7 +3778,7 @@ struct SimpleVideoPlayer: View {
            playerItem.status == .readyToPlay,
            !playerItem.loadedTimeRanges.isEmpty {
             self.loadingState = .loaded
-            NSLog("✅ [VIDEO CONFIGURE] Player already ready with buffered data, setting loadingState to .loaded for \(mid)")
+            // Player already ready with buffered data
         } else if !self.loadingState.isLoaded {
             self.loadingState = .loading  // Show spinner while video loads
         }
@@ -3851,7 +3795,7 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Verify observers are set up, retry if needed
         // This handles the case where setupPlayerObservers() returned early due to nil currentItem
         if mode == .mediaCell && videoCompletionObserver == nil && player.currentItem != nil {
-            NSLog("⚠️ [VIDEO CONFIGURE] videoCompletionObserver is nil but currentItem exists for \(mid) - retrying observer setup")
+            print("⚠️ [VIDEO CONFIGURE] videoCompletionObserver is nil but currentItem exists for \(mid) - retrying observer setup")
             setupPlayerObservers(player)
         }
         
@@ -3947,7 +3891,7 @@ struct SimpleVideoPlayer: View {
             originalMuteState: player.isMuted
         )
         
-        NSLog("💾 [VIDEO POSITION] Saved \(String(format: "%.2f", currentTime.seconds))s for \(mid) (wasPlaying: \(actuallyWasPlaying), reason: \(reason))")
+        // Saved video position
     }
     
     private func setupTimeObserver(for player: AVPlayer) {
@@ -3975,7 +3919,7 @@ struct SimpleVideoPlayer: View {
     
     private func setupPlayerObservers(_ player: AVPlayer) {
         guard let playerItem = player.currentItem else { 
-            NSLog("⚠️ [OBSERVER SETUP] Cannot setup observers for \(mid) - currentItem is nil")
+            print("⚠️ [OBSERVER SETUP] Cannot setup observers for \(mid) - currentItem is nil")
             return 
         }
         
@@ -3988,11 +3932,11 @@ struct SimpleVideoPlayer: View {
         let alreadySetup = (self.playerItem === playerItem && videoCompletionObserver != nil)
         
         if alreadySetup {
-            NSLog("✅ [OBSERVER SETUP] Observers already attached to this playerItem for \(mid) - skipping")
+            // Observers already attached - skipping
             return
         }
         
-        NSLog("✅ [OBSERVER SETUP] Setting up observers for \(mid), playerItem status: \(playerItem.status.rawValue)")
+        // Setting up observers
         
         // CRITICAL: Remove existing observers FIRST to prevent duplicates
         // This must happen before storing the new playerItem reference
@@ -4017,7 +3961,7 @@ struct SimpleVideoPlayer: View {
             }
         }
         
-        NSLog("✅ [OBSERVER SETUP] videoCompletionObserver attached for \(mid)")
+        // Video completion observer attached
         
         // Error observer
         videoErrorObserver = NotificationCenter.default.addObserver(
@@ -4035,13 +3979,13 @@ struct SimpleVideoPlayer: View {
             object: playerItem,
             queue: .main
         ) { [weak playerItem, weak player] _ in
-            NSLog("⚠️ [PLAYBACK STALL] Video stalled for \(self.mid), waiting for data...")
+            print("⚠️ [PLAYBACK STALL] Video stalled for \(self.mid), waiting for data...")
             self.bumpProgressiveBufferTarget(for: playerItem)
             
             // UX: Show spinner when stalled
             DispatchQueue.main.async {
                 self.loadingState = .loading
-                NSLog("🔄 [PLAYBACK STALL] Showing spinner")
+                // Showing spinner for stall
             }
             
             // Monitor when data becomes available again using KVO on loadedTimeRanges
@@ -4061,28 +4005,28 @@ struct SimpleVideoPlayer: View {
                 if bufferedAhead < requiredBuffer {
                     let aheadText = String(format: "%.2f", bufferedAhead)
                     let requiredText = String(format: "%.2f", requiredBuffer)
-                    NSLog("⏳ [PLAYBACK RESUME] Waiting for buffer for \(mid) - ahead: \(aheadText)s, need: \(requiredText)s")
+                    // Waiting for buffer
                     return
                 }
                 
                 let bufferedText = String(format: "%.2f", bufferedAhead)
-                NSLog("✅ [PLAYBACK RESUME] Data available, resuming playback for \(mid) (buffered: \(bufferedText)s)")
+                // Data available, resuming playback
                 DispatchQueue.main.async {
                     if resumePlayer.rate == 0 {
                         // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                         if self.mode == .mediaCell {
                             resumePlayer.isMuted = MuteState.shared.isMuted
-                            NSLog("🔇 [PLAYER MUTE] Playback resume - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                            // Applied mute state on playback resume
                         }
                         resumePlayer.play()
-                        NSLog("🔄 [PLAYBACK RESUME] Manually triggered play() for \(mid)")
+                        // Manually triggered play()
                     } else {
-                        NSLog("▶️ [PLAYBACK RESUME] Player already playing at rate \(resumePlayer.rate)")
+                        // Player already playing
                     }
                     
                     if self.loadingState.isLoading {
                         self.loadingState = .loaded
-                        NSLog("✅ [PLAYBACK RESUME] Hiding spinner")
+                        // Hiding spinner
                     }
                 }
                 
@@ -4100,11 +4044,11 @@ struct SimpleVideoPlayer: View {
             // Observe player status to know when it's ready
             playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { item, change in
                 
-                NSLog("🔍 [KVO STATUS] Fired for \(mid) - status: \(item.status.rawValue), buffered: \(!item.loadedTimeRanges.isEmpty)")
+                // KVO status updated
                 
                 // Check for failed status first
                 if item.status == .failed {
-                    NSLog("❌ [KVO STATUS] Player FAILED for \(mid) - error: \(item.error?.localizedDescription ?? "unknown")")
+                    print("❌ [KVO STATUS] Player FAILED for \(mid) - error: \(item.error?.localizedDescription ?? "unknown")")
                     DispatchQueue.main.async {
                         self.handleError(strategy: .loadFailure)
                     }
@@ -4112,7 +4056,7 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 guard item.status == .readyToPlay else { 
-                    NSLog("⏳ [KVO STATUS] Not ready yet for \(mid) - status: \(item.status.rawValue)")
+                    // Not ready yet
                     return 
                 }
                 
@@ -4120,7 +4064,7 @@ struct SimpleVideoPlayer: View {
                 // This handles the case where currentItem was nil during initial setupPlayerObservers() call
                 // which happens when restoring players from VideoStateCache
                 if self.videoCompletionObserver == nil {
-                    NSLog("⚠️ [KVO STATUS] Player ready but videoCompletionObserver is nil for \(mid) - setting up observers now")
+                    print("⚠️ [KVO STATUS] Player ready but videoCompletionObserver is nil for \(mid) - setting up observers now")
                     DispatchQueue.main.async {
                         if let player = self.player {
                             self.setupPlayerObservers(player)
@@ -4131,12 +4075,12 @@ struct SimpleVideoPlayer: View {
                 // CRITICAL: For HLS videos, .readyToPlay fires BEFORE data is buffered
                 // Check if we have buffered data before acting
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
-                NSLog("✅ [KVO STATUS] Player ready for \(mid) - buffered: \(hasBufferedData)")
+                // Player ready
                 
                 DispatchQueue.main.async {
                     // CRITICAL: Hide spinner if we have buffered data (buffer observer might have already fired)
                     if hasBufferedData && loadingState.isLoading {
-                        NSLog("📦 [STATUS READY] Data already buffered, hiding spinner for \(mid)")
+                        // Data already buffered, hiding spinner
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
                     }
@@ -4145,7 +4089,7 @@ struct SimpleVideoPlayer: View {
                         // CRITICAL: For MediaCell mode, NEVER auto-play on status ready
                         // VideoPlaybackCoordinator controls all playback via notifications
                         if self.mode == .mediaCell {
-                            NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - waiting for VideoPlaybackCoordinator command")
+                            // NOT auto-playing - waiting for coordinator
                         } else {
                             // Non-MediaCell modes: use old auto-play logic
                             let actuallyVisible = !self.isCoveredByOverlay
@@ -4154,25 +4098,25 @@ struct SimpleVideoPlayer: View {
                             if actuallyVisible && noDetailViewActive {
                                 // Check actual player state instead of time-based flag
                                 guard player.rate == 0 && self.playbackState != .playing else {
-                                    NSLog("⏭️ [VIDEO READY] Skipping playback start - already playing for \(mid)")
+                                    // Skipping playback start - already playing
                                     return
                                 }
                                 self.playWithResumeIfNeeded(player)
-                                NSLog("▶️ [VIDEO READY] Auto-playing \(mid) (non-MediaCell mode)")
+                                // Auto-playing (non-MediaCell mode)
                             } else if !actuallyVisible {
-                                NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - covered by overlay")
+                                // NOT auto-playing - covered by overlay
                             } else if !noDetailViewActive {
-                                NSLog("⏸️ [VIDEO READY] NOT auto-playing \(mid) - detail view active")
+                                // NOT auto-playing - detail view active
                             }
                         }
                     } else {
                         // Preroll to render first frame without playing
                         player.preroll(atRate: 0.0) { finished in
                             guard finished else { 
-                                NSLog("❌ [PREROLL] Failed for \(mid), keeping observers active")
+                                // Preroll failed, keeping observers active
                                 return 
                             }
-                            NSLog("🎬 [VIDEO READY] Prerolled first frame for \(mid)")
+                            // Prerolled first frame
                         }
                     }
                 }
@@ -4189,14 +4133,14 @@ struct SimpleVideoPlayer: View {
                     let hasEnoughData = hasBufferedData && bufferedDurationAhead >= firstFrameMinimumBuffer
                     
                     if hasEnoughData && loadingState.isLoading {
-                        NSLog("📦 [BUFFER DATA] Sufficient data arrived for \(mid) (\(String(format: "%.2f", bufferedDurationAhead))s buffered), showing first frame")
+                        // Sufficient data arrived, showing first frame
                         
                         // CRITICAL: For MediaCell mode, NEVER auto-play on load
                         // VideoPlaybackCoordinator will send explicit play commands via notifications
                         // This prevents multiple videos from playing simultaneously
                         // Only non-MediaCell modes (mediaBrowser, embeddedDetail) can auto-play
                         if self.mode == .mediaCell {
-                            NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - waiting for VideoPlaybackCoordinator command")
+                            // NOT auto-playing - waiting for coordinator
                             // First frame will render, but playback controlled by coordinator
                         } else {
                             // Non-MediaCell modes: use old auto-play logic
@@ -4207,11 +4151,11 @@ struct SimpleVideoPlayer: View {
                             // Check actual player state instead of time-based flag
                             if shouldPlay && player.rate == 0 && self.playbackState != .playing {
                                 self.playWithResumeIfNeeded(player)
-                                NSLog("▶️ [FIRST FRAME] Auto-playing \(mid) (non-MediaCell mode)")
+                                // Auto-playing (non-MediaCell mode)
                             } else if !actuallyVisible {
-                                NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - covered by overlay")
+                                // NOT auto-playing - covered by overlay
                             } else if !noDetailViewActive {
-                                NSLog("⏸️ [FIRST FRAME] NOT auto-playing \(mid) - detail view active")
+                                // NOT auto-playing - detail view active
                             }
                         }
                         
@@ -4224,7 +4168,7 @@ struct SimpleVideoPlayer: View {
                             
                             // CRITICAL: If coordinator commanded playback while video was loading, play now
                             if coordinatorWantsToPlay && player.rate == 0 {
-                                NSLog("▶️ [COORDINATOR DEFERRED] Video ready, playing as coordinator requested for \(mid)")
+                                // Playing as coordinator requested
                                 player.volume = 0
                                 player.play()
                                 UIView.animate(withDuration: 0.3) {
@@ -4245,17 +4189,17 @@ struct SimpleVideoPlayer: View {
                         
                         // Keep observer active to detect stalls - it will be cleaned up when view disappears
                     } else if hasBufferedData && bufferedDurationAhead < firstFrameMinimumBuffer && loadingState.isLoading {
-                        NSLog("⏳ [BUFFER DATA] Waiting for more data for \(mid) (\(String(format: "%.2f", bufferedDurationAhead))s buffered)...")
+                        // Waiting for more buffer data
                     }
                 }
             }
             
             // If already ready, trigger immediately
-            NSLog("🔍 [INITIAL CHECK] Player status: \(playerItem.status.rawValue), buffered: \(!playerItem.loadedTimeRanges.isEmpty) for \(mid)")
+            // Initial check of player status
             if playerItem.status == .readyToPlay {
                 let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
                 let bufferedDuration = self.bufferedTimeAhead(for: playerItem, player: player)
-                NSLog("✅ [INITIAL CHECK] Already ready for \(mid) - buffered: \(hasBufferedData), duration: \(String(format: "%.2f", bufferedDuration))s")
+                // Already ready with buffered data
                 
                 // Hide spinner if we have buffered data
                 // CRITICAL FIX: For cached players, trust non-empty loadedTimeRanges even if bufferedDuration is 0
@@ -4270,12 +4214,12 @@ struct SimpleVideoPlayer: View {
                         hasInitialized = true
                     }
                     if bufferedDuration == 0 && hasBufferedData {
-                        NSLog("🎬 [INITIAL CHECK] Cached player with buffered data but 0 duration - trusting it's ready for \(mid)")
+                        // Cached player with buffered data but 0 duration - trusting it's ready
                     } else {
-                        NSLog("🎬 [INITIAL CHECK] Hiding spinner immediately for \(mid)")
+                        // Hiding spinner immediately
                     }
                 } else {
-                    NSLog("⏳ [INITIAL CHECK] Ready but waiting for buffer data for \(mid)")
+                    // Ready but waiting for buffer data
                 }
                 
                 if shouldAutoPlay {
@@ -4287,30 +4231,30 @@ struct SimpleVideoPlayer: View {
                         // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                         if self.mode == .mediaCell {
                             player.isMuted = MuteState.shared.isMuted
-                            NSLog("🔇 [PLAYER MUTE] Initial check ready - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(self.mid)")
+                            // Applied mute state
                         }
                         self.playWithResumeIfNeeded(player)
-                        NSLog("▶️ [VIDEO SETUP] Already ready - auto-playing \(mid) (buffered: \(hasBufferedData)) - VideoManager approved")
+                        // Already ready - auto-playing (VideoManager approved)
                     } else {
-                        NSLog("⏸️ [VIDEO SETUP] NOT auto-playing \(mid) - not approved by VideoManager")
+                        // NOT auto-playing - not approved by VideoManager
                     }
                 } else {
                     player.preroll(atRate: 0.0) { finished in
                         guard finished else { 
-                            NSLog("❌ [PREROLL] Failed for \(mid), keeping observers active for retry")
+                            // Preroll failed, keeping observers active for retry
                             return 
                         }
-                        NSLog("🎬 [VIDEO SETUP] Already ready - prerolled \(mid)")
+                        // Already ready - prerolled
                     }
                 }
             } else {
-                NSLog("⏳ [INITIAL CHECK] Not ready yet for \(mid), waiting for KVO")
+                // Not ready yet, waiting for KVO
             }
         }
     }
     
     private func cleanupFailedPlayer() {
-        NSLog("DEBUG: [VIDEO CLEANUP] Cleaning up failed player for \(self.mid)")
+        // Cleaning up failed player
         
         // CRITICAL: Clear VideoStateCache first - this is checked FIRST in setupPlayer()
         // Force clear even if visible - we're cleaning up a failed player!
@@ -4488,7 +4432,7 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
             VideoStateCache.shared.clearCachedState(for: mid)
-            NSLog("🧹 [VIDEO FINISHED] Cleared cached state for \(mid) - will restart from beginning when scrolled back")
+            // Cleared cached state - will restart from beginning when scrolled back
         }
         
         // Notify the coordinator that video finished (for sequential playback)
@@ -4557,81 +4501,9 @@ struct SimpleVideoPlayer: View {
         return seconds
     }
     
-    /// Periodic health check to detect and fix stuck loading states while app is in foreground
-    /// This catches edge cases where KVO observers don't fire properly with cached players
-    @MainActor
-    private func performPeriodicHealthCheck() async {
-        // Run health check when:
-        // 1. In loading state (stuck loading detection)
-        // 2. Player exists but might be broken (silent failure detection)
-        let shouldCheckLoading = loadingState.isLoading
-        let shouldCheckBroken = (player != nil && mode == .mediaCell)
-        
-        guard shouldCheckLoading || shouldCheckBroken else { return }
-        
-        // Wait 3 seconds before checking - gives KVO observers time to fire normally
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        
-        // CASE 1: Stuck loading state detection
-        if loadingState.isLoading {
-            // Check if player is actually ready with buffered data
-            guard let player = player,
-                  let playerItem = player.currentItem,
-                  playerItem.status == .readyToPlay,
-                  !playerItem.loadedTimeRanges.isEmpty else {
-                // Player not ready yet or no buffered data - this is expected, keep waiting
-                return
-            }
-            
-            // Calculate buffered duration
-            let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player)
-            
-            // If we have enough buffered data, fix the stuck loading state
-            if bufferedDuration >= firstFrameMinimumBuffer {
-                NSLog("⚠️ [HEALTH CHECK] LoadingState stuck at .loading but player is ready with \(String(format: "%.2f", bufferedDuration))s buffered - fixing for \(mid)")
-                loadingState = .loaded
-                retryAttempts = 0
-                if mode == .mediaCell {
-                    hasInitialized = true
-                }
-                
-                // Check if video should be playing
-                if currentAutoPlay && isVisible {
-                    let approved = mode == .mediaCell ? (videoManager?.shouldPlayVideo(for: mid) ?? false) : true
-                    if approved && player.rate == 0 {
-                        if mode == .mediaCell {
-                            player.isMuted = MuteState.shared.isMuted
-                        }
-                        if mode == .mediaCell {
-                            playWithResumeIfNeeded(player)
-                        } else {
-                            player.play()
-                        }
-                        playbackState = .playing
-                        NSLog("▶️ [HEALTH CHECK] Started playback after fixing stuck state for \(mid)")
-                    }
-                }
-            } else {
-                NSLog("⏳ [HEALTH CHECK] Player ready but still buffering (\(String(format: "%.2f", bufferedDuration))s < \(String(format: "%.2f", firstFrameMinimumBuffer))s required) for \(mid)")
-            }
-        }
-        
-        // CASE 2: Silent broken player detection (for visible MediaCell videos only)
-        if mode == .mediaCell && isVisible {
-            guard let player = player, let playerItem = player.currentItem else { return }
-            
-            // Check for broken states that KVO might have missed
-            let isFailed = playerItem.status == .failed
-            let hasError = playerItem.error != nil || player.error != nil
-            
-            if isFailed || hasError {
-                NSLog("⚠️ [HEALTH CHECK] Detected silently broken player for \(mid) - triggering recovery")
-                await MainActor.run {
-                    self.handleError(strategy: .loadFailure)
-                }
-            }
-        }
-    }
+    /// REMOVED: Periodic health check that was running continuously
+    /// Health checks now only run ONCE after app enters foreground via performDelayedHealthCheck()
+    /// This eliminates continuous background processing and improves performance
     
     private func restoreCachedVideoState() {
         // Check if we have a cached state
@@ -4731,13 +4603,13 @@ struct SimpleVideoPlayer: View {
             // For MediaCell, always respect global mute state
             if mode == .mediaCell, let player = player {
                 player.isMuted = MuteState.shared.isMuted
-                NSLog("🔇 [PLAYER MUTE] checkPlaybackConditions - Applied global mute state for MediaCell: \(MuteState.shared.isMuted) for \(mid)")
+                // Applied mute state for MediaCell
             }
             
             // MediaCell: Trust player position - either at 0 (new player) or at cached position (from restoreFromCache)
             // DON'T seek to zero here - that would erase positions that restoreFromCache just set!
             if mode == .mediaCell && playbackState == .notStarted {
-                NSLog("🎬 [PLAYBACK] Player ready at current position for \(mid), letting VideoPlaybackCoordinator control playback")
+                // Player ready, letting VideoPlaybackCoordinator control playback
                 // Position is already correct - do nothing
             }
             
@@ -4745,11 +4617,11 @@ struct SimpleVideoPlayer: View {
             let currentTime = player!.currentTime().seconds
             let duration = player!.currentItem?.duration.seconds ?? 0
             let atEnd = isVideoAtEnd(player!)
-            NSLog("🔍 [PLAYBACK CHECK] Video \(mid): playbackState=\(playbackState), time=\(String(format: "%.2f", currentTime))s/\(String(format: "%.2f", duration))s, atEnd=\(atEnd)")
+            // Checking playback conditions
             
             // If video is at or near the end, rewind it FIRST
                 if atEnd {
-                    NSLog("🔄 [PLAYBACK REWIND] Video at end, rewinding to start before playing: \(mid)")
+                    // Video at end, rewinding to start
                     player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
                     playbackState = .notStarted
                     // Small delay to ensure seek completes
@@ -4765,7 +4637,7 @@ struct SimpleVideoPlayer: View {
                                 }
                             }
                             self.playbackState = .playing
-                            NSLog("▶️ [PLAYBACK] Playing after rewind: \(self.mid)")
+                            // Playing after rewind
                         }
                     }
                 } else if playbackState.hasFinished {
@@ -4899,9 +4771,9 @@ struct SimpleVideoPlayer: View {
                 wasPlaying: wasPlaying,
                 originalMuteState: isMuted
             )
-            NSLog("💾 [BACKGROUND CACHE] Saved state for \(mid): time=\(String(format: "%.2f", currentTime.seconds))s, wasPlaying=\(wasPlaying)")
+            // Saved state for background
         } else {
-            NSLog("🚫 [BACKGROUND CACHE] Skipping cache for \(mid) - finished=\(playbackState == .finished), atEnd=\(isVideoAtEnd(player))")
+            // Skipping cache - video finished
         }
         
         // Pause the player but keep it attached
@@ -4993,7 +4865,7 @@ struct SimpleVideoPlayer: View {
                                 // Only log once per playback session
                                 if !context.coordinator.hasLoggedPlayingStart {
                                     context.coordinator.hasLoggedPlayingStart = true
-                                    NSLog("✅ [AVPlayerViewController] Video started playing")
+                                    // Video started playing
                                 }
                             } else {
                                 // Paused - cancel pending show task and hide spinner
@@ -5041,13 +4913,13 @@ struct SimpleVideoPlayer: View {
                                 )
                             }
                         } else {
-                            NSLog("DEBUG: [AVPlayerViewController] ❌ Player item in failed state during makeUIViewController")
+                            // Player item in failed state
                         }
                     } else {
-                        NSLog("DEBUG: [AVPlayerViewController] ⚠️ Player has no current item in makeUIViewController")
+                        // Player has no current item
                     }
                 } else {
-                    NSLog("DEBUG: [AVPlayerViewController] ❌ Created with nil player - this shouldn't happen!")
+                    print("ERROR: AVPlayerViewController created with nil player!")
                 }
                 
                 return controller
@@ -5083,7 +4955,7 @@ struct SimpleVideoPlayer: View {
                                 // Only log once per playback session
                                 if !context.coordinator.hasLoggedPlayingStart {
                                     context.coordinator.hasLoggedPlayingStart = true
-                                    NSLog("✅ [AVPlayerViewController] Video started playing in updateUIViewController")
+                                    // Video started playing in updateUIViewController
                                 }
                             } else {
                                 context.coordinator.isBuffering = false
@@ -5161,10 +5033,10 @@ struct SimpleVideoPlayer: View {
                             }
                         }
                     } else {
-                        NSLog("DEBUG: [AVPlayerViewController] ❌ Player item in failed state")
+                        // Player item in failed state
                     }
                 } else if player != nil {
-                    NSLog("DEBUG: [AVPlayerViewController] ⚠️ Player provided but has no current item")
+                    // Player provided but has no current item
                 }
                 
             }

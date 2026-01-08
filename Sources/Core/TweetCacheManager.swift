@@ -555,7 +555,7 @@ extension Tweet {
                 // Replace tweet's author with the singleton
                 tweet.author = authorSingleton
                 
-                NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
+                print("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
                 
                 // Trigger fetchUser if baseUrl is nil to resolve IP
                 // (Rare case: old cache data before IP caching, or newly created user)
@@ -669,7 +669,7 @@ extension TweetCacheManager {
             cdUser.timeCached = Date()
             if let userData = try? JSONEncoder().encode(user) {
                 cdUser.userData = userData
-                NSLog("DEBUG: [saveUserAndWait] Saved user \(user.mid) with avatar: \(user.avatar ?? "nil")")
+                print("DEBUG: [saveUserAndWait] Saved user \(user.mid) with avatar: \(user.avatar ?? "nil")")
             }
             try? self.context.save()
         }
