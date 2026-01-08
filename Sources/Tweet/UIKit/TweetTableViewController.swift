@@ -61,14 +61,41 @@ class TweetTableViewController: UITableViewController {
     private var lastHeaderHeight: CGFloat = 0
     private var lastFooterHeight: CGFloat = 0
     
+    // Notification observer for scroll to top
+    private var scrollToTopObserver: NSObjectProtocol?
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
         setupTableView()
         setupRefreshControl()
+        setupScrollToTopObserver()
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
+    }
+    
+    deinit {
+        // Remove notification observer
+        if let observer = scrollToTopObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+    
+    private func setupScrollToTopObserver() {
+        scrollToTopObserver = NotificationCenter.default.addObserver(
+            forName: .scrollToTop,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scrollToTop()
+        }
+    }
+    
+    func scrollToTop() {
+        // Scroll to the top of the table view with animation
+        let topInset = tableView.adjustedContentInset.top
+        tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: true)
     }
     
     override func viewDidAppear(_ animated: Bool) {

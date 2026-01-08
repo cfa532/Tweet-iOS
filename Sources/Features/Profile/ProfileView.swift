@@ -528,7 +528,6 @@ struct ProfileView: View {
     private func scrollToTop() {
         // Scroll to top of the profile view
         // This will be handled by the ScrollViewReader in ProfileTweetsSection
-        print("DEBUG: [ProfileView] Scroll to top requested")
         NotificationCenter.default.post(name: .scrollToTop, object: nil)
     }
     

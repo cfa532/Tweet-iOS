@@ -284,7 +284,6 @@ struct TweetListDestinationView: View {
             title: listTitle(isAppUser: isTargetAppUser),
             tweets: $tweets,
             tweetFetcher: { page, size, isFromCache in
-                print("DEBUG: [TweetListDestinationView] Fetching \(destination.listType) - page: \(page), size: \(size), isFromCache: \(isFromCache)")
                 if isFromCache {
                     // Load from CoreData cache using prefixed key to avoid mixing with feed
                     // Use format: "bookmark_list_userId" or "favorite_list_userId"
@@ -297,12 +296,10 @@ struct TweetListDestinationView: View {
                         currentUserId: hproseInstance.appUser.mid,
                         isProfileView: false  // Don't filter by authorId - bookmarks/favorites can be from any author
                     )
-                    print("DEBUG: [TweetListDestinationView] Got \(cachedTweets.count) cached \(destination.listType) tweets")
                     return cachedTweets
                 } else {
                     let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
                     let fetchedTweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: tweetType, pageNumber: page, pageSize: size)
-                    print("DEBUG: [TweetListDestinationView] Got \(fetchedTweets.count) \(destination.listType) tweets")
                     return fetchedTweets
                 }
             },
@@ -311,7 +308,6 @@ struct TweetListDestinationView: View {
                     tweet: tweet,
                     showDeleteButton: isTargetAppUser,
                     onAvatarTap: { tappedUser in
-                        print("🔴 [TweetListDestinationView] Avatar tapped - user: \(tappedUser.username ?? "nil")")
                         navigationPath.append(tappedUser)
                     },
                     onTap: { tappedTweet in

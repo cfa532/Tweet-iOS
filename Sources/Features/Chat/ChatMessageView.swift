@@ -315,11 +315,6 @@ struct ChatImageThumbnail: View {
             }
         }
         .onAppear {
-            print("DEBUG: [ChatImageThumbnail] onAppear for attachment \(attachment.mid)")
-            print("DEBUG: [ChatImageThumbnail] attachment.url = \(attachment.url ?? "nil")")
-            print("DEBUG: [ChatImageThumbnail] baseUrl = \(baseUrl)")
-            print("DEBUG: [ChatImageThumbnail] attachment.getUrl(baseUrl) = \(attachment.getUrl(baseUrl)?.absoluteString ?? "nil")")
-            
             // Load image if not already loaded
             if image == nil {
                 loadImage()
@@ -337,13 +332,11 @@ struct ChatImageThumbnail: View {
         }
         .onChange(of: baseUrl) { _, newBaseUrl in
             // Reload image when baseUrl changes (e.g., when senderUser loads)
-            print("DEBUG: [ChatImageThumbnail] baseUrl changed, reloading image for \(attachment.mid)")
             loadImage()
         }
         .onChange(of: attachment.url) { _, newUrl in
             // Reload image when attachment URL becomes available
             if newUrl != nil && image == nil {
-                print("DEBUG: [ChatImageThumbnail] Attachment URL available, loading image for \(attachment.mid)")
                 loadImage()
             }
         }
@@ -486,36 +479,26 @@ struct ChatImageThumbnail: View {
     }
     
     private func loadImage() {
-        print("DEBUG: [ChatImageThumbnail] loadImage() called for \(attachment.mid)")
-        
         guard let url = attachment.getUrl(baseUrl) else {
-            print("DEBUG: [ChatImageThumbnail] No URL available for attachment \(attachment.mid)")
             return
         }
-        
-        print("DEBUG: [ChatImageThumbnail] Loading image from URL: \(url.absoluteString)")
         
         // First, try to get cached image immediately (disk check is OK in async context)
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
-            print("DEBUG: [ChatImageThumbnail] Found cached image for \(attachment.mid)")
             self.image = cachedImage
             return
         }
-        
-        print("DEBUG: [ChatImageThumbnail] No cached image, starting load for \(attachment.mid)")
         
         // If no cached image, start loading
         isLoading = true
         Task {
             if let loadedImage = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: attachment) {
                 await MainActor.run {
-                    print("DEBUG: [ChatImageThumbnail] Successfully loaded image for \(attachment.mid)")
                     self.image = loadedImage
                     self.isLoading = false
                 }
             } else {
                 await MainActor.run {
-                    print("DEBUG: [ChatImageThumbnail] Failed to load image for \(attachment.mid)")
                     self.isLoading = false
                 }
             }

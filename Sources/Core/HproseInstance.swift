@@ -812,7 +812,6 @@ final class HproseInstance: ObservableObject {
     ) async throws -> [Tweet?] {
         // If app is not initialized, only return cached tweets
         if !isInitializationComplete {
-            print("DEBUG: [fetchUserTweets] App not initialized, returning cached tweets only for user: \(user.mid)")
             let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
             return cachedTweets
         }
@@ -834,14 +833,14 @@ final class HproseInstance: ObservableObject {
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweets"])
         }
         
         // Check success status first
         guard let success = response["success"] as? Bool, success else {
             let errorMessage = response["message"] as? String ?? "Unknown error occurred"
-            print("[fetchUserTweet] Tweets loading failed for user \(user.mid): \(errorMessage)")
-            print("[fetchUserTweet] Response: \(response)")
+            print("[fetchUserTweets] Tweets loading failed for user \(user.mid): \(errorMessage)")
+            print("[fetchUserTweets] Response: \(response)")
             
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
@@ -849,9 +848,6 @@ final class HproseInstance: ObservableObject {
         // Extract tweets and originalTweets from the new response format
         let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
-        
-        print("[fetchUserTweet] Fetching tweets for user: \(user.mid), page: \(pageNumber), size: \(pageSize)")
-        print("[fetchUserTweet] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
         
         // Cache original tweets first - cache under their authorId, not appUser.mid
         // This applies to all users, not just appUser, to ensure consistent caching
@@ -877,9 +873,7 @@ final class HproseInstance: ObservableObject {
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
                     TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
-                    print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid) under authorId: \(originalTweet.authorId)")
                 } catch {
-                    print("[fetchUserTweet] Error caching original tweet: \(error)")
                 }
             }
         }
@@ -904,7 +898,6 @@ final class HproseInstance: ObservableObject {
                     TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                     tweets.append(tweet)
                 } catch {
-                    print("[fetchUserTweet] Error processing tweet: \(error)")
                     tweets.append(nil)
                 }
             } else {
@@ -912,8 +905,6 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        let validTweets = tweets.compactMap{ $0 }
-        print("[fetchUserTweet] Returning \(tweets.count) tweets, valid=\(validTweets.count) for \(user.mid) \(pageNumber) \(pageSize)")
         return tweets
     }
     
