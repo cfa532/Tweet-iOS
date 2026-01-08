@@ -643,8 +643,9 @@ struct VideoTimerOverlay: View {
     private func startTimer() {
         // Request immediate update
         requestUpdate()
-        
+
         // Setup repeating timer for updates (use .common mode to fire during scroll)
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in onDisappear
         let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [videoMid] _ in
             // Request update from SimpleVideoPlayer
             NotificationCenter.default.post(
@@ -660,11 +661,12 @@ struct VideoTimerOverlay: View {
     private func startHideTimer() {
         // Cancel any existing hide timer
         hideTimer?.invalidate()
-        
+
         // Hide after 5 seconds
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated properly
         let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
             Task { @MainActor in
-                self.isVisible = false
+                isVisible = false
             }
         }
         RunLoop.main.add(timer, forMode: .common)

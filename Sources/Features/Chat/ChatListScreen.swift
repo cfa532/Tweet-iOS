@@ -165,6 +165,7 @@ struct ChatListScreen: View {
     
     private func startPeriodicMessageCheck() {
         // Check for new messages every 60 seconds
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in stopPeriodicMessageCheck()
         messageCheckTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
             Task {
                 await chatSessionManager.checkBackendForNewMessages()

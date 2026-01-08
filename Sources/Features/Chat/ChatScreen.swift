@@ -936,6 +936,7 @@ struct ChatScreen: View {
         stopPeriodicMessageRefresh()
 
         // Start timer to refresh messages every 15 seconds
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in stopPeriodicMessageRefresh()
         messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { _ in
             Task {
                 await refreshMessagesFromBackend()
@@ -959,6 +960,7 @@ struct ChatScreen: View {
         guard isChatScreenVisible else { return }
 
         // Start timer to check video visibility every 1.5 seconds (further reduced frequency)
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in stopVisibilityCheckTimer()
         visibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
             Task { @MainActor in
                 checkVisibleVideos()

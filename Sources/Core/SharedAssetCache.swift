@@ -102,7 +102,9 @@ class SharedAssetCache: ObservableObject {
     
     private func startBackgroundCleanup() {
         // PERFORMANCE FIX: Reduced cleanup interval from 30s to 15s for more aggressive cleanup
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
+        // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping SharedAssetCache alive forever
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             Task { @MainActor in
                 self.performCleanup()
             }
@@ -111,7 +113,9 @@ class SharedAssetCache: ObservableObject {
     
     private func startMemoryMonitoring() {
         // PERFORMANCE FIX: Monitor memory more frequently (every 5 seconds) to catch rapid growth
-        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+        // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping SharedAssetCache alive forever
+        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             Task { @MainActor in
                 self.checkMemoryPressure()
             }
@@ -587,26 +591,39 @@ class SharedAssetCache: ObservableObject {
     
     /// Clear player and associated assets for a specific mediaID (for failed players)
     @MainActor func clearPlayerForMediaID(_ mediaID: String) {
-        // Pause and remove player
+        // CRITICAL: Properly release player to free memory (not just pause!)
         if let player = playerCache.removeValue(forKey: mediaID) {
-            player.pause()
+            releasePlayer(player) // ✅ Calls replaceCurrentItem(nil) to release memory
         }
-        
+
         // Clear associated data
         assetCache.removeValue(forKey: mediaID)
         cacheTimestamps.removeValue(forKey: mediaID)
         cachingPlayerDelegates.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
-        
+
         // CRITICAL: Clear disk cache status so retry doesn't think there's cached content
         diskCacheStatus.removeValue(forKey: mediaID)
-        
+
         // Cancel any pending loading tasks
         if let task = loadingTasks.removeValue(forKey: mediaID) {
             task.cancel()
         }
-        
+
+        // CRITICAL: Delete disk cache files (segments, playlists) to free disk space
+        // This prevents memory leak from cached segments staying in memory
+        Task.detached {
+            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            let mediaDir = cacheDir.appendingPathComponent(mediaID)
+            try? FileManager.default.removeItem(at: mediaDir)
+            
+            await MainActor.run {
+                CachingPlayerItem.clearHLSCache(for: mediaID)
+            }
+        }
+
+        print("🗑️ [MEMORY LEAK FIX] Properly released failed player and disk cache for \(mediaID)")
     }
     
     /// Get cached player or create new one with asset

@@ -491,6 +491,7 @@ struct MediaBrowserView: View {
             return
         }
         
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated properly
         controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
             // Hide close button for ALL content types after 3 seconds
             // but only if share sheet isn't visible anymore

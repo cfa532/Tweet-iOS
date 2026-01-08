@@ -709,6 +709,7 @@ struct TweetDetailView: View {
         refreshTweet()
         
         // Set up periodic refresh timer (every 5 minutes)
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in onDisappear
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
                 refreshTweet()

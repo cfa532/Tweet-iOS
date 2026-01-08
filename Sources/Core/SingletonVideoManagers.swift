@@ -1640,13 +1640,21 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         currentVideoMid = nil
         isPlaying = false
         
-        // CRITICAL FIX: Remove the player from SharedAssetCache
-        // This ensures complete isolation. Since MediaCell uses a different cache key,
-        // removing the "tweetDetail_" prefixed key won't affect MediaCell.
+        // CRITICAL FIX: Remove the player from SharedAssetCache AND cancel all downloads
+        // This ensures complete isolation and prevents memory leaks from timed-out downloads
+        // Since MediaCell uses a different cache key, removing the "tweetDetail_" prefixed key won't affect MediaCell.
+        if let rawMediaID = currentVideoMid {
+            Task { @MainActor in
+                // Cancel ALL downloads and clear player (prevents 90s timeout memory leak!)
+                SharedAssetCache.shared.clearPlayerForMediaID(rawMediaID)
+                print("DEBUG: [DetailVideoManager] Cancelled downloads and removed player for: \(rawMediaID)")
+            }
+        }
+        
+        // Also remove the prefixed cache key
         if let key = cacheKey {
             Task { @MainActor in
                 SharedAssetCache.shared.removeInvalidPlayer(for: key)
-                print("DEBUG: [DetailVideoManager] Removed player from SharedAssetCache with key: \(key)")
             }
         }
     }

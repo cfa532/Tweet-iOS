@@ -221,7 +221,9 @@ class VideoLoadingManager: ObservableObject {
     
     private func setupBasicMonitoring() {
         // Reset load count every minute
-        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
+        // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping VideoLoadingManager alive forever
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             Task { @MainActor in
                 self.loadCountInLastMinute = 0
             }
@@ -231,7 +233,9 @@ class VideoLoadingManager: ObservableObject {
     
     /// Start background cancellation timer to process cancellations without blocking main actor
     private func startBackgroundCancellationTimer() {
-        backgroundCancellationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+        // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping VideoLoadingManager alive forever
+        backgroundCancellationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             Task { @MainActor in
                 self.processBackgroundCancellations()
             }

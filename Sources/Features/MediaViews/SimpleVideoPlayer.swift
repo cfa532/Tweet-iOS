@@ -4336,12 +4336,12 @@ struct SimpleVideoPlayer: View {
             // Automatic retry once only
             if retryAttempts < 1 {
                 let retryDelay = 2.0 // 2 second delay
-                
+
                 // Keep showing spinner during retry by staying in loading state
                 loadingState = .loading
                 player = nil
                 retryAttempts += 1
-                
+
                 Task { @MainActor in
                     // Check author health first
                     if let authorId = self.authorId {
@@ -4351,22 +4351,28 @@ struct SimpleVideoPlayer: View {
                         } catch {
                         }
                     }
-                    
+
                     try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
-                    
+
                     // Only retry if still visible and should load
                     guard self.isVisible && self.shouldLoadVideo else {
                         return
                     }
-                    
+
                     self.loadingState = .idle
                     self.playbackState = .notStarted
                     self.setupPlayer()
                 }
             } else {
-                // After 1 retry, still keep showing spinner (never show error)
-                loadingState = .loading
-                player = nil
+                // CRITICAL: After 1 retry fails, mark as FAILED (not loading forever!)
+                // This prevents memory leak from infinite retry attempts
+                self.loadingState = .failed(retryCount: self.retryAttempts)
+                self.player = nil
+                
+                // Clear all resources to prevent memory leak
+                SharedAssetCache.shared.clearPlayerForMediaID(self.mid)
+                
+                print("❌ [MEMORY LEAK FIX] Player failed after retry, marked as failed: \(self.mid)")
             }
             
             // For fullscreen, try to restore from cache as last resort
