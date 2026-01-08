@@ -1469,12 +1469,17 @@ struct SimpleVideoPlayer: View {
                 if isPlayerReady {
                     
                     // Update loading state to show video is ready
+                    // CRITICAL FIX: Check buffered duration to ensure we have enough data before hiding spinner
+                    // This prevents hiding spinner too early and fixes stuck loading states after background
                     if loadingState.isLoading {
-                        loadingState = .loaded
-                        retryAttempts = 0  // Reset retry counter on successful load
-                        // Mark as initialized to prevent recomposition when scrolling
-                        if mode == .mediaCell {
-                            hasInitialized = true
+                        let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player)
+                        if bufferedDuration >= firstFrameMinimumBuffer {
+                            loadingState = .loaded
+                            retryAttempts = 0  // Reset retry counter on successful load
+                            // Mark as initialized to prevent recomposition when scrolling
+                            if mode == .mediaCell {
+                                hasInitialized = true
+                            }
                         }
                     }
                     
@@ -1517,6 +1522,23 @@ struct SimpleVideoPlayer: View {
                     loadingState = .idle
                     playbackState = .notStarted
                     setupPlayer()
+                    return
+                }
+                
+                // CRITICAL FIX: Reset finished videos when scrolled back into view
+                // This ensures finished videos restart from beginning when they become visible again
+                if mode == .mediaCell && playbackState == .finished {
+                    NSLog("🔄 [VIDEO RESET] Resetting finished video \(mid) to beginning on visibility")
+                    VideoStateCache.shared.clearCachedState(for: mid)
+                    playbackState = .notStarted
+                    if let player = player {
+                        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                            // After seeking, check playback conditions to start if appropriate
+                            Task { @MainActor in
+                                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: true)
+                            }
+                        }
+                    }
                     return
                 }
                 
@@ -2667,13 +2689,25 @@ struct SimpleVideoPlayer: View {
             // Use delayed check to detect if layer is actually stale (similar to recoverFromBackground).
             // Most intact players will work fine without view refresh.
             
+            // CRITICAL FIX: Check if loading state is stuck even though player is ready
+            // This can happen after long background when KVO observers don't fire properly
+            if loadingState.isLoading, let playerItem = player?.currentItem,
+               playerItem.status == .readyToPlay, !playerItem.loadedTimeRanges.isEmpty {
+                let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player!)
+                if bufferedDuration >= firstFrameMinimumBuffer {
+                    NSLog("🔧 [RELOAD VISIBLE FIX] Loading state stuck after background for \(mid) - player is ready with \(String(format: "%.2f", bufferedDuration))s buffered, fixing")
+                    loadingState = .loaded
+                    retryAttempts = 0
+                }
+            }
+            
             // CRITICAL FIX: Check if video was playing before background and resume it
             // When app returns from background, handleStopAllVideos pauses the video but saves wasPlaying=true
             // We need to check this saved state and resume playback
             let cachedState = VideoStateCache.shared.getCachedPlaybackInfo(for: self.mid)
             let wasPlayingBeforeBackground = cachedState?.wasPlaying ?? false
             
-            NSLog("🔍 [RELOAD VISIBLE INTACT] \(mid) - rate: \(player?.rate ?? -1), wasPlaying: \(wasPlayingBeforeBackground), currentAutoPlay: \(currentAutoPlay)")
+            NSLog("🔍 [RELOAD VISIBLE INTACT] \(mid) - rate: \(player?.rate ?? -1), wasPlaying: \(wasPlayingBeforeBackground), currentAutoPlay: \(currentAutoPlay), loadingState: \(loadingState)")
             
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
             
