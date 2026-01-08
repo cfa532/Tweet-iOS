@@ -443,20 +443,27 @@ class ImageCacheManager: @unchecked Sendable {
             return nil
         }
         
-        // Create compressed version (under 300KB)
-        let compressedImage = compressImageToSize(targetImage, maxSize: maxCompressedImageSize)
-        let compressedFileURL = getCompressedCacheFileURL(for: key)
-        
-        // Write compressed data to disk
-        do {
-            try compressedImage.write(to: compressedFileURL)
-        } catch {
-            print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
+        // CRITICAL: Move compression to background to avoid blocking main thread
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            
+            // Create compressed version (under 300KB) on background thread
+            let compressedImage = self.compressImageToSize(targetImage, maxSize: self.maxCompressedImageSize)
+            let compressedFileURL = self.getCompressedCacheFileURL(for: key)
+
+            // Write compressed data to disk
+            do {
+                try compressedImage.write(to: compressedFileURL)
+            } catch {
+                print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
+            }
+
+            // Add to memory cache
+            self.cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
+            print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
         }
         
-        // Add to memory cache
-        cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
-        print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
+        // Return immediately without waiting for compression
         return targetImage
     }
     
@@ -468,11 +475,16 @@ class ImageCacheManager: @unchecked Sendable {
             // Image is already opaque, use as-is
             opaqueImage = image
         } else {
-            // Re-render without alpha channel to ensure opaque format
-            UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
-            image.draw(in: CGRect(origin: .zero, size: image.size))
-            opaqueImage = UIGraphicsGetImageFromCurrentImageContext() ?? image
-            UIGraphicsEndImageContext()
+            // MODERN API: Use UIGraphicsImageRenderer instead of old UIGraphicsBeginImageContext
+            // This is more efficient and thread-safe
+            let renderer = UIGraphicsImageRenderer(size: image.size, format: UIGraphicsImageRendererFormat.default())
+            opaqueImage = renderer.image { context in
+                // Set opaque background
+                UIColor.white.setFill()
+                context.fill(CGRect(origin: .zero, size: image.size))
+                // Draw image on top
+                image.draw(in: CGRect(origin: .zero, size: image.size))
+            }
         }
         
         var compression: CGFloat = 1.0

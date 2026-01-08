@@ -671,15 +671,11 @@ struct MediaGridView: View, Equatable {
                 VideoTimerOverlay(videoMid: attachment.mid)
                     .padding(.leading, 12)
                     .padding(.bottom, 12)
-                    .onAppear {
-                        print("🕐 [TIMER OVERLAY CONTAINER] Timer overlay container appeared for \(attachment.mid)")
-                    }
+                    // Removed repetitive timer overlay log
             } else {
                 // Debug: show why timer is not displayed
                 Color.clear
-                    .onAppear {
-                        print("🕐 [TIMER OVERLAY CONTAINER] Timer not shown - attachments.count=\(attachments.count), hasVideo=\(attachments.first?.type == .video || attachments.first?.type == .hls_video)")
-                    }
+                    // Removed repetitive timer log
             }
         }
         .onAppear {

@@ -397,38 +397,37 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         print("🎬 [VideoOrchestrator] Primary video identified: \(primary.videoMid)")
-        
-        // Check if primary video is already playing to avoid unnecessary play commands
-        let primaryAlreadyPlaying = currentlyPlayingVideoIds.contains(primary.identifier)
-        
+
         // Pause all non-primary videos
         for video in visibleVideos where video != primary {
             pauseVideo(video)
         }
-        
+
         // Update state to primary phase
         primaryVideoId = primary.identifier
         currentlyPlayingVideoIds = [primary.identifier]
         phase = .primaryPlaying
-        
-        // Only send play command if video is not already playing
-        // This prevents unnecessary notifications that could cause flicker
-        if !primaryAlreadyPlaying {
-            print("🎬 [VideoOrchestrator] Primary video was not playing, sending play command")
-            NotificationCenter.default.post(
-                name: .shouldPlayVideo,
-                object: nil,
-                userInfo: [
-                    "tweetId": primary.tweetId,
-                    "videoMid": primary.videoMid,
-                    "videoIndex": primary.index,
-                    "isPrimary": true
-                ]
-            )
-        } else {
-            print("🎬 [VideoOrchestrator] Primary video already playing, no play command needed")
-        }
-        
+
+        // CRITICAL: Always send play command for primary video, even if we think it's "already playing"
+        // This ensures playback starts even if player creation failed during survey phase (e.g., network errors)
+        // 
+        // Why this is safe (NO JITTER):
+        // - SimpleVideoPlayer checks `player.rate > 0` before playing
+        // - If ACTUALLY playing, it returns immediately without seeking/restarting
+        // - If NOT playing (failed creation), it starts playback
+        // - This gives us reliability (handles failures) without jitter (idempotent)
+        print("🎬 [VideoOrchestrator] Sending play command to ensure primary video plays")
+        NotificationCenter.default.post(
+            name: .shouldPlayVideo,
+            object: nil,
+            userInfo: [
+                "tweetId": primary.tweetId,
+                "videoMid": primary.videoMid,
+                "videoIndex": primary.index,
+                "isPrimary": true
+            ]
+        )
+
         print("🎬 [VideoOrchestrator] Transitioned to primary playback phase")
     }
     

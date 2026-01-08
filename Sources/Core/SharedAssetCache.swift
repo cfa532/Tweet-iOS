@@ -1178,27 +1178,57 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
+    /// Properly release an AVPlayer instance to prevent memory leaks
+    /// Based on Apple best practices and Stack Overflow recommendations
+    private func releasePlayer(_ player: AVPlayer) {
+        // CRITICAL: Stop playback and set rate to 0
+        player.pause()
+        player.rate = 0.0
+        
+        // CRITICAL: Replace current item with nil to release memory
+        // This is the #1 fix from web research - ALWAYS do this, no conditions!
+        player.replaceCurrentItem(with: nil)
+        
+        // Note: AVPlayerLayer automatically releases player when layer is deallocated
+        // No need to manually access playerLayer property (causes crash)
+    }
+    
+    /// PUBLIC: Aggressively release all players to free memory
+    /// Call this when navigating away from video pages
+    func releaseAllPlayers() {
+        print("🗑️ [MEMORY] Releasing ALL players (\(playerCache.count) total)")
+        
+        let playersToRelease = playerCache.values
+        let count = playersToRelease.count
+        
+        // Release each player properly
+        for player in playersToRelease {
+            releasePlayer(player)
+        }
+        
+        // Clear all caches
+        playerCache.removeAll()
+        cachingPlayerItems.removeAll()
+        resourceLoaderDelegates.removeAll()
+        
+        // Keep timestamps and asset cache for faster recovery
+        
+        print("✅ [MEMORY] Released \(count) players successfully")
+    }
+    
     private func managePlayerCacheSize() {
         // Normal LRU eviction - 30 players is fine, just enforce the limit
         if playerCache.count > maxPlayerCacheSize {
             print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - removing oldest")
-            
+
             // Remove least recently used players
             let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
             let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)
-            
+
             for key in keysToRemove {
                 if let player = playerCache[key] {
-                    // Check if player is paused with content before removing
-                    let isPausedWithContent = player.rate == 0.0 && player.currentItem != nil
-                    
-                    player.pause()
-                    
-                    // Only remove the item if it wasn't already paused with content
-                    // This prevents black screens on finished videos that are still visible
-                    if !isPausedWithContent {
-                        player.replaceCurrentItem(with: nil)
-                    }
+                    // CRITICAL: Properly release player to prevent memory leaks
+                    releasePlayer(player)
                 }
                 playerCache.removeValue(forKey: key)
                 cacheTimestamps.removeValue(forKey: key)
@@ -1207,31 +1237,24 @@ class SharedAssetCache: ObservableObject {
                 // PERFORMANCE FIX: Clean up tweet URL mappings
                 cleanupTweetMappings(for: key)
             }
-            
+
             if !keysToRemove.isEmpty {
+                print("🗑️ [PLAYER CACHE] Released \(keysToRemove.count) players to free memory")
             }
         }
-        
+
         // PERFORMANCE FIX: Also remove players not accessed in last 10 minutes
         // Increased from 5 to 10 minutes to prevent cleanup of waiting videos during long video playback
         let now = Date()
         let inactiveThreshold: TimeInterval = 600 // 10 minutes
         let inactiveKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > inactiveThreshold }.map { $0.key }
-        
+
         if !inactiveKeys.isEmpty {
+            print("🗑️ [PLAYER CACHE] Removing \(inactiveKeys.count) inactive players (>10min old)")
             for key in inactiveKeys {
                 if let player = playerCache[key] {
-                    // Check if player is paused BEFORE calling pause()
-                    // If paused with content, keep the item to prevent black screens on finished videos
-                    let isPausedWithContent = player.rate == 0.0 && player.currentItem != nil
-                    
-                    player.pause()
-                    
-                    // Only remove the item if it wasn't already paused with content
-                    // This prevents black screens on finished videos that are still visible
-                    if !isPausedWithContent {
-                        player.replaceCurrentItem(with: nil)
-                    }
+                    // CRITICAL: Properly release player to prevent memory leaks
+                    releasePlayer(player)
                 }
                 playerCache.removeValue(forKey: key)
                 cacheTimestamps.removeValue(forKey: key)
@@ -1278,18 +1301,30 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Proactive memory pressure check - runs every 10 seconds
+    private var lastMemoryWarningTime: Date?
+    private let memoryWarningCooldown: TimeInterval = 30 // 30 seconds cooldown between warnings
+    
     private func checkMemoryPressure() {
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
-        // Log memory usage for monitoring
-        if memoryUsageMB > 500 { // Log when memory exceeds 500MB
-        }
-        
-        // Take action if memory exceeds 800MB (more aggressive than 1GB)
-        if memoryUsageMB > 800 {
+        // CRITICAL: iOS can handle 1GB+ safely on modern devices
+        // Only trigger cleanup at genuinely high memory levels
+        if memoryUsageMB > 900 {
+            // Check cooldown to prevent repeated cleanups
+            if let lastWarning = lastMemoryWarningTime,
+               Date().timeIntervalSince(lastWarning) < memoryWarningCooldown {
+                // Still in cooldown period
+                return
+            }
+            
+            print("⚠️ [MEMORY] Critical usage: \(memoryUsageMB)MB - triggering cleanup")
+            lastMemoryWarningTime = Date()
             handleMemoryWarning()
+        } else if memoryUsageMB > 800 {
+            print("📊 [MEMORY] High usage: \(memoryUsageMB)MB (monitoring)")
         }
+        // Silent monitoring below 800MB
     }
     
     // MARK: - Memory Warning Handling
@@ -1301,9 +1336,24 @@ class SharedAssetCache: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.handleMemoryWarning()
+                self?.handleSystemMemoryWarning()
             }
         }
+    }
+    
+    /// Handle SYSTEM memory warning (more aggressive than proactive checks)
+    private func handleSystemMemoryWarning() {
+        print("🚨 [SYSTEM MEMORY WARNING] iOS sent memory warning - aggressive cleanup")
+        
+        if UploadProgressManager.shared.isProcessingVideo {
+            return
+        }
+        
+        // System warning means iOS is serious - be more aggressive
+        cancelAllLoadingTasks()
+        releasePartialCache(percentage: 60) // Release 60% (not 100% - preserve some UX)
+        
+        print("✅ [SYSTEM MEMORY WARNING] Released 60% of cache")
     }
     
     private func handleMemoryWarning() {        // CRITICAL: Check if video upload is in progress
@@ -1315,20 +1365,31 @@ class SharedAssetCache: ObservableObject {
             return
         }
         
-        // Check if memory usage exceeds 1.4GB before taking action
+        // Check current memory usage
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
-        // Only release cache if memory usage exceeds 1.4GB (preventive cleanup threshold)
-        if memoryUsageMB > 1400 {
-            // CRITICAL: Cancel active downloads to prevent memory from growing further
+        print("⚠️ [MEMORY WARNING] Current usage: \(memoryUsageMB)MB")
+        
+        // CRITICAL: Be conservative with player cleanup - players are NOT the main memory consumer
+        // Based on logs: releasing ALL players (10 total) didn't reduce memory (752MB -> 886MB!)
+        // The real culprits are: images, video segments, LocalHTTPServer cache
+        
+        if memoryUsageMB > 900 {
+            print("🗑️ [MEMORY WARNING] Over 900MB - moderate cleanup (preserve UX)")
+            
+            // Cancel active downloads first (prevents memory growth)
             cancelAllLoadingTasks()
             
-            // Release 30% of cache (less aggressive)
+            // MODERATE: Release only 30% of players (not ALL - terrible UX!)
+            // This preserves most videos while freeing some memory
             releasePartialCache(percentage: 30)
+            
+            print("✅ [MEMORY WARNING] Cleanup complete - released 30% of cache")
         }
         
         // Don't clear URL mapping - preserve user's browsing context
+        // NEVER release ALL players unless system sends memory warning
     }
     
     // MARK: - App Lifecycle Handling

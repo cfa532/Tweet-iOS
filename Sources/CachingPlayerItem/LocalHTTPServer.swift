@@ -952,7 +952,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 } else {
                     // File not ready yet - on slow networks (20+ second downloads), waiting would timeout the connection
                     // Better to start an independent download for this connection
-                    print("⚠️ [DEDUP] File not cached yet, starting independent download for this connection: \(fullRealURL.lastPathComponent)")
                     fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
                 }
             }

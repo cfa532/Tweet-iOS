@@ -51,8 +51,7 @@ class VideoManager: ObservableObject {
             }
         }
         notificationObservers.append(tweetDeletedObserver)
-        
-        print("DEBUG: [VideoManager] Setup notification observers for cache cleanup")
+        // Removed repetitive setup log
     }
     
     func setupSequentialPlayback(for mids: [String], tweetId: String? = nil) async {
@@ -71,7 +70,7 @@ class VideoManager: ObservableObject {
                     if savedIndex >= 0 && savedIndex < mids.count {
                         currentVideoIndex = savedIndex
                         Self.updateLastAccess(for: tweetId)
-                        print("DEBUG: [VideoManager] Restored saved video index \(savedIndex) for tweet \(tweetId) (same sequence)")
+                        // Removed repetitive restore log
                     } else {
                         // Invalid saved index - start from beginning
                         currentVideoIndex = 0
@@ -91,7 +90,7 @@ class VideoManager: ObservableObject {
                     // Save initial state
                     Self.saveState(tweetId: tweetId, mids: mids, index: 0)
                 }
-                print("DEBUG: [VideoManager] Setup sequential playback for \(mids.count) videos - starting at index 0")
+                // Removed repetitive setup log
             }
         }
     }
@@ -100,7 +99,7 @@ class VideoManager: ObservableObject {
     func saveCurrentIndex(for tweetId: String) {
         guard currentVideoIndex >= 0 && currentVideoIndex < videoMids.count else { return }
         Self.saveState(tweetId: tweetId, mids: videoMids, index: currentVideoIndex)
-        print("DEBUG: [VideoManager] Saved video index \(currentVideoIndex) for tweet \(tweetId)")
+        // Removed repetitive save log
     }
     
     // Clear saved state for a tweet (when tweet is deleted or sequence changes)
