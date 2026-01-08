@@ -381,9 +381,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     /// Start the server synchronously and WAIT until it's ready
-    /// Use this for app launch and background recovery to ensure server is ready before videos load
+    /// ⚠️ DEPRECATED: Use startAndWaitAsync() instead to avoid blocking main thread
+    /// This method is kept for backwards compatibility but should not be used
     public func startAndWait() {
-        print("[LocalHTTPServer] startAndWait() called")
+        print("[LocalHTTPServer] ⚠️ startAndWait() DEPRECATED - use startAndWaitAsync() instead!")
         
         // If already running, return immediately
         if isRunning {
@@ -391,46 +392,65 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        let semaphore = DispatchSemaphore(value: 0)
-        var didStart = false
-        
+        // DON'T block with semaphore - just start async
         queue.async { [weak self] in
-            guard let self = self else {
-                semaphore.signal()
-                return
-            }
+            guard let self = self else { return }
             
-            // Wait for any stop operation (reduced wait time for faster recovery)
-            var stopWaitCount = 0
-            while self.isStopping && stopWaitCount < 20 { // Max 1 second (20 * 0.05s)
-                Thread.sleep(forTimeInterval: 0.05)
-                stopWaitCount += 1
+            if !self.isRunning {
+                self.startServer()
             }
-            if self.isStopping {
-                print("[LocalHTTPServer] Stop operation still in progress, proceeding anyway")
-            }
-            
-            if self.isRunning {
-                didStart = true
-                semaphore.signal()
-                return
-            }
-            
-            self.startServer()
-            didStart = self.isRunning
-            semaphore.signal()
         }
         
-        // OPTIMIZATION: Reduced timeout from 5s to 2s for faster recovery
-        // Server start is usually very fast (<100ms), 2s is plenty
-        let result = semaphore.wait(timeout: .now() + .seconds(2))
+        // Give it a moment to start (don't block with semaphore!)
+        Thread.sleep(forTimeInterval: 0.1)
         
-        if result == .timedOut {
-            print("[LocalHTTPServer] ❌ startAndWait() TIMEOUT after 2s!")
-        } else if didStart {
-            print("[LocalHTTPServer] ✅ startAndWait() SUCCESS - Server ready on port \(port)")
+        if isRunning {
+            print("[LocalHTTPServer] ✅ Server started")
         } else {
-            print("[LocalHTTPServer] ❌ startAndWait() FAILED - Server not running")
+            print("[LocalHTTPServer] ⚠️ Server starting in background...")
+        }
+    }
+    
+    /// Start the server asynchronously and WAIT until it's ready (non-blocking)
+    /// Use this instead of startAndWait() to avoid blocking the main thread
+    public func startAndWaitAsync() async {
+        print("[LocalHTTPServer] startAndWaitAsync() called")
+        
+        // If already running, return immediately
+        if isRunning {
+            print("[LocalHTTPServer] Already running on port \(port)")
+            return
+        }
+        
+        // Use async/await instead of semaphores (doesn't block thread!)
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume()
+                    return
+                }
+                
+                // Wait for any stop operation
+                var stopWaitCount = 0
+                while self.isStopping && stopWaitCount < 20 { // Max 1 second
+                    Thread.sleep(forTimeInterval: 0.05)
+                    stopWaitCount += 1
+                }
+                
+                if self.isRunning {
+                    continuation.resume()
+                    return
+                }
+                
+                self.startServer()
+                continuation.resume()
+            }
+        }
+        
+        if isRunning {
+            print("[LocalHTTPServer] ✅ startAndWaitAsync() SUCCESS - Server ready on port \(port)")
+        } else {
+            print("[LocalHTTPServer] ❌ startAndWaitAsync() FAILED - Server not running")
         }
     }
     

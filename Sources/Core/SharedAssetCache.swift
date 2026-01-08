@@ -789,9 +789,7 @@ class SharedAssetCache: ObservableObject {
         guard let mediaID = extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
-        
-        let startTime = Date()
-        
+                
         // Check if we have cached content first to avoid network requests
         let cachedResolvedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url)
         

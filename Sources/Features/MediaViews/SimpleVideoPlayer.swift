@@ -1124,8 +1124,6 @@ struct SimpleVideoPlayer: View {
         // TweetDetail uses DetailVideoManager singleton and should not share players with MediaCell
         // MediaBrowser uses FullScreenVideoManager singleton and should not share players with MediaCell
         if mode == .mediaCell, let player = player {
-            let currentTime = player.currentTime().seconds
-            
             // Don't save position if video is finished (at the end)
             // This prevents restoring to the end position when scrolling back
             if isVideoAtEnd(player) {
@@ -2103,7 +2101,6 @@ struct SimpleVideoPlayer: View {
         // Start 10-second timeout for MediaCell recovery
         // If video doesn't get ready and start playing within 10s, force full recreation
         if mode == .mediaCell {
-            let videoMid = mid // Capture for closure
             recoveryTimeoutTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
                 
@@ -3695,8 +3692,6 @@ struct SimpleVideoPlayer: View {
         let target = max(progressiveForwardBufferDuration, firstFrameMinimumBuffer)
         if item.preferredForwardBufferDuration < target - 0.05 {
             item.preferredForwardBufferDuration = target
-            let formatted = String(format: "%.1f", target)
-            // Applied progressive buffer target
         }
     }
 
@@ -3705,9 +3700,6 @@ struct SimpleVideoPlayer: View {
         guard progressiveBufferTargetIndex + 1 < progressiveBufferTargets.count else { return }
         progressiveBufferTargetIndex += 1
         applyProgressiveBufferTarget(to: item)
-        let newTarget = progressiveForwardBufferDuration
-        let formatted = String(format: "%.1f", newTarget)
-        // Increased progressive buffer target
     }
 
     private func resetProgressiveBufferTarget(for item: AVPlayerItem?) {
@@ -3715,8 +3707,6 @@ struct SimpleVideoPlayer: View {
         guard progressiveBufferTargetIndex != 0 else { return }
         progressiveBufferTargetIndex = 0
         applyProgressiveBufferTarget(to: item)
-        let formatted = String(format: "%.1f", progressiveForwardBufferDuration)
-        // Reset progressive buffer target
     }
     
     private func configurePlayer(_ player: AVPlayer) {
@@ -3860,10 +3850,9 @@ struct SimpleVideoPlayer: View {
     ///   - reason: Debug reason for logging
     private func saveCurrentPosition(player: AVPlayer, wasPlaying: Bool? = nil, reason: String) {
         guard mode == .mediaCell else { return }
-        guard let currentItem = player.currentItem else { return }
+        guard player.currentItem != nil else { return }
         
         let currentTime = player.currentTime()
-        let duration = currentItem.duration.seconds
         
         // Only save if time is valid and video is not at the end
         guard currentTime.seconds.isFinite, currentTime.seconds > 0.25 else { return }
@@ -4003,13 +3992,9 @@ struct SimpleVideoPlayer: View {
                 let requiredBuffer = self.stallRecoveryMinimumBuffer
                 
                 if bufferedAhead < requiredBuffer {
-                    let aheadText = String(format: "%.2f", bufferedAhead)
-                    let requiredText = String(format: "%.2f", requiredBuffer)
-                    // Waiting for buffer
                     return
                 }
                 
-                let bufferedText = String(format: "%.2f", bufferedAhead)
                 // Data available, resuming playback
                 DispatchQueue.main.async {
                     if resumePlayer.rate == 0 {
@@ -4620,8 +4605,6 @@ struct SimpleVideoPlayer: View {
             }
             
             // CRITICAL: Check actual player position before playing
-            let currentTime = player!.currentTime().seconds
-            let duration = player!.currentItem?.duration.seconds ?? 0
             let atEnd = isVideoAtEnd(player!)
             // Checking playback conditions
             

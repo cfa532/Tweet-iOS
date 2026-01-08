@@ -45,30 +45,25 @@ extension VideoPlayerLifecycleManager {
     /// Default implementation: Check if player is broken
     func isPlayerBroken() -> Bool {
         guard let player = getPlayer() else {
-            let managerName = String(describing: type(of: self))
             return true
         }
         
         guard let currentItem = player.currentItem else {
-            let managerName = String(describing: type(of: self))
             return true
         }
         
         // Check if player item is in failed state
         if currentItem.status == .failed {
-            let managerName = String(describing: type(of: self))
             return true
         }
         
         // Check if player item has an error (even if status isn't .failed yet)
-        if let error = currentItem.error {
-            let managerName = String(describing: type(of: self))
+        if currentItem.error != nil {
             return true
         }
         
         // Check if player has an error
-        if let error = player.error {
-            let managerName = String(describing: type(of: self))
+        if player.error != nil {
             return true
         }
         
@@ -78,11 +73,9 @@ extension VideoPlayerLifecycleManager {
         if currentItem.status == .readyToPlay && 
            currentItem.loadedTimeRanges.isEmpty && 
            !currentItem.duration.isValid {
-            let managerName = String(describing: type(of: self))
             return true
         }
         
-        let managerName = String(describing: type(of: self))
         return false
     }
     
@@ -193,8 +186,7 @@ extension VideoPlayerLifecycleManager {
     }
     
     func handleAppWillEnterForeground() {
-        let managerName = String(describing: type(of: self))
-        print("DEBUG: [\(managerName)] App entering foreground, recovering from background")
+        print("DEBUG: [\(String(describing: type(of: self)))] App entering foreground, recovering from background")
         recoverFromBackground()
     }
     
@@ -225,9 +217,9 @@ extension VideoPlayerLifecycleManager {
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
             
             guard let self = self else { return }
-            let managerName = String(describing: type(of: self))
             
             // Check if player is broken
+            let managerName = String(describing: type(of: self))
             if self.isPlayerBroken() {
                 print("⚠️ [\(managerName)] Delayed health check: Player is broken after recovery, clearing")
                 self.clearBrokenPlayer()
@@ -355,7 +347,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         initializePlayerEarly()
 
         prewarmTask?.cancel()
-        prewarmTask = Task.detached(priority: .utility) { [mediaID] in
+        prewarmTask = Task.detached(priority: .utility) {
             // Just accessing the item warms up the asset cache
             // The item will be cached and ready for quick loading later
             await MainActor.run {
@@ -1336,7 +1328,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 return
             }
             
-            let isBufferEmpty = playerItem.isPlaybackBufferEmpty
             let loadedRanges = playerItem.loadedTimeRanges
             let hasBuffer = !loadedRanges.isEmpty
             var bufferedDuration: Double = 0

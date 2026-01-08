@@ -307,9 +307,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             await self.refreshAppUserIP()
                             print("[AppDelegate] ✅ AppUser IP refresh complete")
                             
-                            // Restart server in background
-                            LocalHTTPServer.shared.startAndWait()
-                            
+                            // Restart server in background (async - doesn't block!)
+                            await LocalHTTPServer.shared.startAndWaitAsync()
+
                             // Hide loading indicator and notify visible videos to reload
                             await MainActor.run {
                                 self.hideLoadingOverlay()
@@ -442,34 +442,38 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     await self.refreshAppUserIP()
                     print("[AppDelegate] ✅ AppUser IP refresh complete")
                     
-                    await MainActor.run {
-                        // Check if server is still running on the same port
-                        let wasServerRunning = LocalHTTPServer.shared.isRunning
-                        let oldPort = LocalHTTPServer.shared.currentPort
+                    // Check if server is still running on the same port
+                    let wasServerRunning = LocalHTTPServer.shared.isRunning
+                    let oldPort = LocalHTTPServer.shared.currentPort
+                    
+                    if !wasServerRunning {
+                        // Server died - need full recovery
+                        print("⚠️ [AppDelegate] Server not running, restarting...")
                         
-                        if !wasServerRunning {
-                            // Server died - need full recovery
-                            print("⚠️ [AppDelegate] Server not running, restarting...")
+                        await MainActor.run {
                             AppDelegate.isVideoInfrastructureReady = false
-                            
                             // Clear players because server will restart on a new port
                             SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                            
-                            // Restart server
-                            LocalHTTPServer.shared.startAndWait()
-                            
-                            let newPort = LocalHTTPServer.shared.currentPort
-                            print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
-                            
+                        }
+                        
+                        // Restart server (async - doesn't block!)
+                        await LocalHTTPServer.shared.startAndWaitAsync()
+
+                        let newPort = LocalHTTPServer.shared.currentPort
+                        print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
+                        
+                        await MainActor.run {
                             AppDelegate.isVideoInfrastructureReady = true
                             
                             // Post notification for visible videos to reload with new port
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
-                        } else {
-                            // Server still running - KEEP PLAYERS INTACT!
-                            print("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
-                            
+                        }
+                    } else {
+                        // Server still running - KEEP PLAYERS INTACT!
+                        print("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
+                        
+                        await MainActor.run {
                             // Just refresh video layers and reset connection pool
                             SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                             LocalHTTPServer.shared.resetConnectionPool()
@@ -651,7 +655,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Restart the server - use faster method if possible
         // OPTIMIZATION: If server is already running (rare), skip restart
         if !LocalHTTPServer.shared.isRunning {
-            LocalHTTPServer.shared.startAndWait()
+            await LocalHTTPServer.shared.startAndWaitAsync()  // ✅ Async - doesn't block!
         } else {
             print("[AppDelegate] Server already running - skipping restart")
         }
