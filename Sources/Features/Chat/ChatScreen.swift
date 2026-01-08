@@ -413,12 +413,23 @@ struct ChatScreen: View {
     private func handleMessageSent(_ notification: Notification) {
         if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
             print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
+            print("[ChatScreen] Message content: \(sentMessage.content ?? "nil")")
+            print("[ChatScreen] Message attachments count: \(sentMessage.attachments?.count ?? 0)")
+            if let attachments = sentMessage.attachments {
+                for (index, attachment) in attachments.enumerated() {
+                    print("[ChatScreen] Attachment \(index): type=\(attachment.type.rawValue), mid=\(attachment.mid), url=\(attachment.url ?? "nil")")
+                }
+            }
+            
             if !messages.contains(where: { $0.id == sentMessage.id }) {
-                messages.append(sentMessage)
-                allCachedMessages.append(sentMessage)
+                // Create new arrays to force SwiftUI to detect the change and refresh views
+                messages = messages + [sentMessage]
+                allCachedMessages = allCachedMessages + [sentMessage]
                 chatRepository.addMessagesToCoreData([sentMessage])
                 shouldAnimateScroll = true
                 shouldScrollToBottom = true
+                
+                print("[ChatScreen] Added new message to list. Total messages: \(messages.count)")
                 
                 Task {
                     await chatSessionManager.updateOrCreateChatSession(
@@ -489,8 +500,9 @@ struct ChatScreen: View {
         )
         
         // Add new message to UI and cache immediately
-        messages.append(newMessage)
-        allCachedMessages.append(newMessage)
+        // Create new arrays to force SwiftUI to detect the change
+        messages = messages + [newMessage]
+        allCachedMessages = allCachedMessages + [newMessage]
         
         // Scroll to bottom for sent message
         shouldAnimateScroll = true
@@ -585,8 +597,9 @@ struct ChatScreen: View {
         messageText = ""
         
         // Add message to UI and cache immediately
-        messages.append(message)
-        allCachedMessages.append(message)
+        // Create new arrays to force SwiftUI to detect the change
+        messages = messages + [message]
+        allCachedMessages = allCachedMessages + [message]
         
         // Scroll to bottom for sent message
         shouldAnimateScroll = true
