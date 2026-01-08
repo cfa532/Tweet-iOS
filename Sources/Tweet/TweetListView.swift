@@ -543,19 +543,23 @@ struct TweetListView<RowView: View>: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
                 await videoLoadingManager.endStartupPhase()
             }
-            
-            // Step 2: Load from server to get the most up-to-date data
-            await loadFromServer(page: page, pageSize: pageSize) { _ in }
-            
-            // Step 3: Auto-load additional pages if there are more tweets on server
-            // This ensures all new tweets are loaded when app opens, not just first page
-            await autoLoadRemainingNewTweets()
-            
         } catch {
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
             }
+        }
+        
+        // CRITICAL: Let UI render cached tweets BEFORE fetching from server
+        // If we await server fetch in same function, SwiftUI batches updates and only renders once
+        // By launching server fetch in separate Task, cached tweets render immediately
+        Task {
+            // Step 2: Load from server to get the most up-to-date data (in background)
+            await loadFromServer(page: page, pageSize: pageSize) { _ in }
+            
+            // Step 3: Auto-load additional pages if there are more tweets on server
+            // This ensures all new tweets are loaded when app opens, not just first page
+            await autoLoadRemainingNewTweets()
         }
     }
     
