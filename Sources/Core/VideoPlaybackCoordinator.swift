@@ -384,12 +384,16 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Start survey phase - play all visible videos for 2s each
     private func startSurveyPhase() {
+        NSLog("🎬 [VideoOrchestrator] startSurveyPhase called (NSLog)")
+        
         // Guard against starting survey if not in idle phase
         guard phase == .idle else {
+            NSLog("🎬 [VideoOrchestrator] Cannot start survey - already in \(phase) phase")
             print("🎬 [VideoOrchestrator] Cannot start survey - already in \(phase) phase")
             return
         }
         
+        NSLog("🎬 [VideoOrchestrator] Starting survey phase with \(visibleVideos.count) videos")
         phase = .surveying
         currentlyPlayingVideoIds.removeAll()
         
@@ -634,6 +638,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Handle foreground recovery - intelligently decide whether to preserve or reset state
     /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
     @objc private func handleForegroundRecovery(_ notification: Notification) {
+        NSLog("🔄 [VideoOrchestrator] Foreground recovery START (NSLog)")
         print("🔄 [VideoOrchestrator] Foreground recovery - checking if state should be preserved")
         
         // CRITICAL: Use flag instead of comparing IDs
@@ -661,22 +666,61 @@ class VideoPlaybackCoordinator: ObservableObject {
                 
                 if let primaryVideoMid = primaryVideoMid,
                    let primary = visibleVideos.first(where: { $0.videoMid == primaryVideoMid }) {
-                    // Update primaryVideoId to new identifier (tweet list refreshed)
-                    print("🔄 [VideoOrchestrator] Found primary video, updating identifier from \(primaryVideoId!) to \(primary.identifier)")
-                    primaryVideoId = primary.identifier
-                    currentlyPlayingVideoIds = [primary.identifier]
                     
-                    print("🔄 [VideoOrchestrator] Sending play command to primary: \(primary.videoMid)")
-                    NotificationCenter.default.post(
-                        name: .shouldPlayVideo,
-                        object: nil,
-                        userInfo: [
-                            "tweetId": primary.tweetId,
-                            "videoMid": primary.videoMid,
-                            "videoIndex": primary.index,
-                            "isPrimary": true
-                        ]
-                    )
+                    // CRITICAL: If primary is not the first visible video, restart from first
+                    // This ensures playback always starts from top when multiple videos are visible
+                    let primaryIndex = visibleVideos.firstIndex(where: { $0.videoMid == primaryVideoMid }) ?? 0
+                    
+                    if primaryIndex > 0 && visibleVideos.count > 1 {
+                        // Primary is not first - restart from first video
+                        print("🔄 [VideoOrchestrator] Primary video is at index \(primaryIndex), restarting from first video")
+                        
+                        // CRITICAL: Clear stale coordinatorWantsToPlay flags from other videos
+                        // Send pause commands to all videos except the first one
+                        for (index, video) in visibleVideos.enumerated() where index > 0 {
+                            print("🔄 [VideoOrchestrator] Clearing stale flag for video at index \(index): \(video.videoMid)")
+                            NotificationCenter.default.post(
+                                name: .shouldPauseVideo,
+                                object: nil,
+                                userInfo: [
+                                    "videoMid": video.videoMid
+                                ]
+                            )
+                        }
+                        
+                        let firstVideo = visibleVideos[0]
+                        primaryVideoId = firstVideo.identifier
+                        currentlyPlayingVideoIds = [firstVideo.identifier]
+                        
+                        print("🔄 [VideoOrchestrator] Sending play command to first video: \(firstVideo.videoMid)")
+                        NotificationCenter.default.post(
+                            name: .shouldPlayVideo,
+                            object: nil,
+                            userInfo: [
+                                "tweetId": firstVideo.tweetId,
+                                "videoMid": firstVideo.videoMid,
+                                "videoIndex": firstVideo.index,
+                                "isPrimary": true
+                            ]
+                        )
+                    } else {
+                        // Primary is first or only video - resume it
+                        print("🔄 [VideoOrchestrator] Found primary video, updating identifier from \(primaryVideoId!) to \(primary.identifier)")
+                        primaryVideoId = primary.identifier
+                        currentlyPlayingVideoIds = [primary.identifier]
+
+                        print("🔄 [VideoOrchestrator] Sending play command to primary: \(primary.videoMid)")
+                        NotificationCenter.default.post(
+                            name: .shouldPlayVideo,
+                            object: nil,
+                            userInfo: [
+                                "tweetId": primary.tweetId,
+                                "videoMid": primary.videoMid,
+                                "videoIndex": primary.index,
+                                "isPrimary": true
+                            ]
+                        )
+                    }
                 } else {
                     // Primary video no longer in list (scrolled out), restart survey
                     print("🔄 [VideoOrchestrator] Primary video (\(primaryVideoMid ?? "unknown")) no longer visible - restarting survey")

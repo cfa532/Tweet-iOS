@@ -390,6 +390,7 @@ struct SimpleVideoPlayer: View {
     @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
     @State private var needsHealthCheckAfterForeground = false  // Only check health once after foreground entry
     @State private var isSeekingToBeginning = false  // Track if we're seeking to beginning (don't check health during seek)
+    @State private var isWaitingForPlayerReady = false  // Track if we're waiting for player to be ready (prevent concurrent tasks)
     @State private var isBuffering = false // Track buffering state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var isCoveredByOverlay: Bool = false
@@ -1766,9 +1767,57 @@ struct SimpleVideoPlayer: View {
             return
         }
         
-        // Only play if player is ready
+        // If player not ready, wait for it
         guard let player = player, loadingState == .loaded else {
-            print("⏸️ [COORDINATOR] Play command received but player not ready (loaded:\(loadingState == .loaded), hasPlayer:\(player != nil))")
+            print("⏸️ [COORDINATOR] Play command received but player not ready (loaded:\(loadingState == .loaded), hasPlayer:\(player != nil)) - waiting")
+            
+            // CRITICAL: Prevent concurrent waiting tasks
+            guard !isWaitingForPlayerReady else {
+                print("⏸️ [COORDINATOR] Already waiting for player - ignoring duplicate wait")
+                return
+            }
+            
+            isWaitingForPlayerReady = true
+            
+            // CRITICAL: Wait for player to be ready, then play (max 3 seconds)
+            Task { @MainActor in
+                defer { 
+                    self.isWaitingForPlayerReady = false 
+                }
+                
+                var attempts = 0
+                while (self.player == nil || self.loadingState != .loaded) && attempts < 30 {
+                    do {
+                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                    } catch {
+                        print("⚠️ [COORDINATOR] Task cancelled for \(self.mid)")
+                        return
+                    }
+                    attempts += 1
+                }
+                
+                // Double-check coordinator still wants this video to play
+                guard self.coordinatorWantsToPlay else {
+                    print("⏸️ [COORDINATOR] Coordinator no longer wants \(self.mid) to play")
+                    return
+                }
+                
+                if self.loadingState == .loaded, let player = self.player {
+                    print("▶️ [COORDINATOR] Ready after \(attempts * 100)ms - playing \(self.mid)")
+                    player.volume = 0
+                    player.play()
+                    UIView.animate(withDuration: 0.3) {
+                        player.volume = 1.0
+                    }
+                    self.playbackState = .playing
+                    
+                    if self.isHoldingRecoveryCover {
+                        self.isHoldingRecoveryCover = false
+                    }
+                } else {
+                    print("⚠️ [COORDINATOR] Timeout waiting for \(self.mid) (loaded:\(self.loadingState == .loaded))")
+                }
+            }
             return
         }
         
@@ -1821,22 +1870,6 @@ struct SimpleVideoPlayer: View {
             if isHoldingRecoveryCover {
                 print("🔓 [COORDINATOR] Releasing recovery cover for \(mid)")
                 isHoldingRecoveryCover = false
-            }
-            
-            // Debug: Log player state after play() is called
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-                if let player = self.player {
-                    let rate = player.rate
-                    let itemStatus = player.currentItem?.status.rawValue ?? -1
-                    let hasItem = player.currentItem != nil
-                    let loadingState = self.loadingState
-                    let recoveryCover = self.isHoldingRecoveryCover
-                    let playbackState = self.playbackState
-                    print("🔍 [COORDINATOR DEBUG] \(self.mid) after 0.5s: rate=\(rate), itemStatus=\(itemStatus), hasItem=\(hasItem), loadingState=\(loadingState), playbackState=\(playbackState), recoveryCover=\(recoveryCover)")
-                } else {
-                    print("🔍 [COORDINATOR DEBUG] \(self.mid) after 0.5s: player is nil!")
-                }
             }
         } else {
             print("▶️ [COORDINATOR] Already playing \(mid) - continuing")
@@ -2777,6 +2810,13 @@ struct SimpleVideoPlayer: View {
             // Don't resume independently - coordinator preserves its own state
             // For detail/fullscreen, resume based on saved state (no coordinator)
             if mode == .mediaCell {
+                // CRITICAL: Release recovery cover for all ready videos, not just commanded ones
+                // Non-primary videos should show paused frame, not spinner
+                if loadingState == .loaded && isHoldingRecoveryCover {
+                    print("🔓 [FOREGROUND RECOVERY] Releasing recovery cover for ready video \(mid)")
+                    isHoldingRecoveryCover = false
+                }
+                
                 // MediaCell: Coordinator owns playback decisions
                 // Check if coordinator already sent command (might arrive before reloadVisibleVideosOnly)
                 if coordinatorWantsToPlay && loadingState == .loaded {
@@ -2789,11 +2829,6 @@ struct SimpleVideoPlayer: View {
                         } else {
                             print("▶️ [FOREGROUND RECOVERY] MediaCell \(mid) already playing (rate:\(player.rate))")
                             playbackState = .playing
-                        }
-                        // CRITICAL: Release recovery cover if player is playing
-                        if isHoldingRecoveryCover {
-                            print("🔓 [FOREGROUND RECOVERY] Releasing recovery cover for playing video \(mid)")
-                            isHoldingRecoveryCover = false
                         }
                     }
                 } else {

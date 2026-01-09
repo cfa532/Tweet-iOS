@@ -379,11 +379,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// - Note: Duration-based recovery is more reliable than isRunning checks
     /// - Note: Only visible videos reload automatically; off-screen videos load when scrolled into view
     @objc private func handleAppWillEnterForeground() {
+        // CRITICAL: Log immediately to catch early crashes
+        NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND ===== (NSLog)")
         print("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
-        
+
         // CRITICAL: Skip recovery routine on app startup - server is already started in didFinishLaunchingWithOptions
         // willEnterForeground can be called immediately after launch, so check if we've finished launching
         if !hasFinishedLaunching {
+            NSLog("🚀 [AppDelegate] App still launching - skipping recovery")
             print("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
             return
         }
@@ -429,6 +432,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         
                         // Post notification for visible videos to reload
                         // Coordinator will intelligently decide whether to preserve or reset state
+                        NSLog("[AppDelegate] Posting reloadVisibleVideosOnly after long background")
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                         print("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
                     }
