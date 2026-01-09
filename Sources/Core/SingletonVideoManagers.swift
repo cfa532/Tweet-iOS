@@ -79,6 +79,7 @@ extension VideoPlayerLifecycleManager {
         return false
     }
     
+    // Default implementation - subclasses can override to store observers
     func setupAppLifecycleNotifications() {
         NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
@@ -199,37 +200,13 @@ extension VideoPlayerLifecycleManager {
             print("DEBUG: [\(managerName)] Recovering from screen lock in didBecomeActive")
             recoverFromBackground()
         } else {
-            print("DEBUG: [\(managerName)] Already recovered in willEnterForeground, checking for broken player")
-            // Even if we already recovered, check if player is broken (e.g., after video finished)
-            if isPlayerBroken() {
-                clearBrokenPlayer()
-                
-                // CRITICAL: Force reload of visible videos after clearing broken player
-                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                print("⚠️ [\(managerName)] Posted reloadVisibleVideosOnly to restart cleared video")
-            }
+            print("DEBUG: [\(managerName)] Already recovered in willEnterForeground")
+            // No additional checks needed - if player is broken, the view will handle it
         }
         
-        // CRITICAL: Delayed health check after recovery
-        // Sometimes players appear healthy immediately after recovery but are actually broken
-        // Check again after a short delay to catch these cases
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
-            
-            guard let self = self else { return }
-            
-            // Check if player is broken
-            let managerName = String(describing: type(of: self))
-            if self.isPlayerBroken() {
-                print("⚠️ [\(managerName)] Delayed health check: Player is broken after recovery, clearing")
-                self.clearBrokenPlayer()
-                
-                // CRITICAL: Force reload of visible videos after clearing broken player
-                // This ensures the VideoOrchestrator restarts the video instead of thinking it's "already playing"
-                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                print("⚠️ [\(managerName)] Posted reloadVisibleVideosOnly to restart cleared video")
-            }
-        }
+        // DON'T do delayed health checks
+        // If manager is active, it manages its own player directly
+        // If manager is inactive, it shouldn't be running checks at all
     }
 }
 
@@ -239,7 +216,85 @@ extension VideoPlayerLifecycleManager {
 class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     static let shared = FullScreenVideoManager()
     private init() {
-        setupAppLifecycleNotifications()
+        // DON'T setup lifecycle notifications in init
+        // They're registered when fullscreen becomes active
+    }
+    
+    // MARK: - Lifecycle Management
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var isActive: Bool = false
+    
+    /// Activate manager when fullscreen view appears
+    func activateForFullscreen() {
+        guard !isActive else { return }
+        isActive = true
+        registerLifecycleObservers()
+        print("🎬 [FullScreenVideoManager] Activated - lifecycle observers registered")
+    }
+    
+    /// Deactivate manager when fullscreen view disappears
+    func deactivate() {
+        guard isActive else { return }
+        isActive = false
+        teardownAppLifecycleNotifications()
+        clearSingletonPlayer()
+        print("🎬 [FullScreenVideoManager] Deactivated - lifecycle observers removed, player cleared")
+    }
+    
+    private func teardownAppLifecycleNotifications() {
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lifecycleObservers.removeAll()
+    }
+    
+    // Register lifecycle observers and store tokens for later removal
+    private func registerLifecycleObservers() {
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppWillResignActive()
+                }
+            }
+        )
+        
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppDidEnterBackground()
+                }
+            }
+        )
+        
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppWillEnterForeground()
+                }
+            }
+        )
+        
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppDidBecomeActive()
+                }
+            }
+        )
     }
     
     // MARK: - VideoPlayerLifecycleManager Protocol
@@ -1373,8 +1428,87 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     static let shared = DetailVideoManager()
     private override init() {
         super.init()
-        setupAppLifecycleNotifications()
+        // DON'T setup lifecycle notifications in init
+        // They're registered when detail view becomes active
         setupAudioInterruptionNotifications()
+    }
+    
+    // MARK: - Lifecycle Management
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var isActive: Bool = false
+    
+    /// Activate manager when detail view appears
+    func activateForDetail() {
+        guard !isActive else { return }
+        isActive = true
+        registerLifecycleObservers()
+        beginDetailViewSession()
+        print("📱 [DetailVideoManager] Activated - lifecycle observers registered")
+    }
+    
+    /// Deactivate manager when all detail views disappear
+    func deactivate() {
+        guard isActive else { return }
+        isActive = false
+        teardownAppLifecycleNotifications()
+        endDetailViewSession()
+        print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed")
+    }
+    
+    private func teardownAppLifecycleNotifications() {
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lifecycleObservers.removeAll()
+    }
+    
+    // Register lifecycle observers and store tokens for later removal
+    private func registerLifecycleObservers() {
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppWillResignActive()
+                }
+            }
+        )
+        
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppDidEnterBackground()
+                }
+            }
+        )
+        
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppWillEnterForeground()
+                }
+            }
+        )
+        
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleAppDidBecomeActive()
+                }
+            }
+        )
     }
 
     // MARK: - DetailView lifecycle coordination

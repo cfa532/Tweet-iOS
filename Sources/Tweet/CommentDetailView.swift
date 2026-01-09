@@ -169,10 +169,16 @@ struct CommentDetailView: View {
         .onAppear {
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
+            
+            // Activate detail video manager
+            DetailVideoManager.shared.activateForDetail()
         }
         .onDisappear {
             // Mark detail view as inactive
             NavigationStateManager.shared.setDetailViewActive(false)
+            
+            // Deactivate detail video manager
+            DetailVideoManager.shared.deactivate()
         }
         .task {
             // Refresh comment after a short delay

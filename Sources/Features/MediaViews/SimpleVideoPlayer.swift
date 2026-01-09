@@ -389,6 +389,7 @@ struct SimpleVideoPlayer: View {
     @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
     @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
     @State private var needsHealthCheckAfterForeground = false  // Only check health once after foreground entry
+    @State private var isSeekingToBeginning = false  // Track if we're seeking to beginning (don't check health during seek)
     @State private var isBuffering = false // Track buffering state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var isCoveredByOverlay: Bool = false
@@ -2131,7 +2132,14 @@ struct SimpleVideoPlayer: View {
         // CONSERVATIVE RECOVERY STRATEGY:
         // Only recreate players that are actually broken, leave healthy ones alone
         // This prevents unnecessary work and potential issues with working players
-        
+
+        // CRITICAL: Don't check player health during seek operations
+        // Seeking puts player in transitional state that looks "broken" but is actually just mid-seek
+        if isSeekingToBeginning {
+            print("⏭️ [VIDEO RECOVERY] Skipping health check - video is seeking to beginning")
+            return
+        }
+
         // Check if player is broken first - this handles missing player/item, failed status, etc.
         if isPlayerBroken() {
             print("⚠️ [VIDEO RECOVERY] Player is broken, recreating for \(mid)")
@@ -2625,8 +2633,15 @@ struct SimpleVideoPlayer: View {
                     }
                 }
                 
-                // If video should be playing, ensure it starts (coordinator controls MediaCell)
-                if self.currentAutoPlay && self.loadingState.isLoaded {
+                // CRITICAL: Check if coordinator commanded playback while loading
+                // This handles the case where play command arrives before player is ready
+                if self.mode == .mediaCell && self.coordinatorWantsToPlay && self.loadingState.isLoaded && player.rate == 0 {
+                    print("▶️ [FOREGROUND RECOVERY] Playing video as coordinator requested (delayed)")
+                    player.isMuted = MuteState.shared.isMuted
+                    player.play()
+                    self.playbackState = .playing
+                } else if self.currentAutoPlay && self.loadingState.isLoaded {
+                    // Fallback: If video should be playing, ensure it starts
                     let noOverlaysActive = !self.isCoveredByOverlay
                     let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
 
@@ -2656,20 +2671,75 @@ struct SimpleVideoPlayer: View {
                 }
             }
             
+            // CRITICAL FIX: Reset finished videos to beginning after foreground recovery
+            // For short backgrounds, players are preserved but positions stay at the end
+            // This causes videos to show spinner but not play (they're already finished)
+            var needsSeekBeforePlay = false
+            if let player = player, let item = player.currentItem, item.status == .readyToPlay {
+                let duration = item.duration.seconds
+                let currentTime = player.currentTime().seconds
+                
+                // Check if video is finished (within 0.5s of end)
+                if !duration.isNaN && !duration.isInfinite && duration > 0 {
+                    let isFinished = currentTime >= (duration - 0.5)
+                    if isFinished {
+                        print("🔄 [FOREGROUND RECOVERY] Resetting finished video \(mid) from \(String(format: "%.1f", currentTime))s to beginning")
+                        needsSeekBeforePlay = true
+                        isSeekingToBeginning = true  // Mark as seeking to prevent health checks
+                        
+                        // CRITICAL: Seek is async - must wait for completion before playing
+                        // Otherwise player is still at old position when play() is called, causing immediate finish
+                        let shouldPlay = mode == .mediaCell && coordinatorWantsToPlay && loadingState == .loaded
+                        let videoMid = mid  // Capture for logging
+                        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
+                            guard completed else {
+                                Task { @MainActor in
+                                    self.isSeekingToBeginning = false  // Clear flag even on failure
+                                }
+                                return
+                            }
+                            Task { @MainActor in
+                                self.playbackState = .notStarted  // Clear finished state after seek completes
+                                self.isSeekingToBeginning = false  // Seek complete, safe to check health again
+                                print("✅ [FOREGROUND RECOVERY] Seek completed for \(videoMid)")
+                                
+                                // Now play if coordinator wants to
+                                if shouldPlay, let player = self.player, player.rate == 0 {
+                                    print("▶️ [FOREGROUND RECOVERY] Playing video after seek completion")
+                                    player.isMuted = MuteState.shared.isMuted
+                                    player.play()
+                                    self.playbackState = .playing
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
             // CRITICAL FIX: Check if video was playing before background and resume it
             // When app returns from background, handleStopAllVideos pauses the video but saves wasPlaying=true
             // We need to check this saved state and resume playback
             let cachedState = VideoStateCache.shared.getCachedPlaybackInfo(for: self.mid)
             let wasPlayingBeforeBackground = cachedState?.wasPlaying ?? false
             
-            // Reload visible - player intact
-            
-            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+            // CRITICAL FIX: For MediaCell, check if coordinator wants to play
+            // DON'T play immediately if we're seeking - wait for seek completion
+            if !needsSeekBeforePlay && mode == .mediaCell && coordinatorWantsToPlay && loadingState == .loaded {
+                if let player = player, player.rate == 0 {
+                    print("▶️ [FOREGROUND RECOVERY] Playing intact video as coordinator requested")
+                    player.isMuted = MuteState.shared.isMuted
+                    player.play()
+                    playbackState = .playing
+                }
+            } else if !needsSeekBeforePlay {
+                // Fallback: normal playback condition check (only if not seeking)
+                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+            }
             
             // CRITICAL FIX: After returning from background, explicitly restart playback if it was playing
             if let player = self.player, player.rate == 0 {
-                // Check if video was playing before background OR should autoplay
-                let shouldResume = wasPlayingBeforeBackground || currentAutoPlay
+                // Check if video was playing before background OR coordinator wants to play
+                let shouldResume = wasPlayingBeforeBackground || (mode == .mediaCell && coordinatorWantsToPlay) || currentAutoPlay
                 
                 if shouldResume {
                     // Check if video should be playing (coordinator controls MediaCell approval)

@@ -464,8 +464,8 @@ struct TweetDetailView: View {
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
 
-            // Coordinate singleton lifecycle across nested detail navigations (quoted -> original).
-            DetailVideoManager.shared.beginDetailViewSession()
+            // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
+            DetailVideoManager.shared.activateForDetail()
             
             // Detail view playback position is persisted independently (not seeded from feed positions).
         }
@@ -480,9 +480,8 @@ struct TweetDetailView: View {
             // Mark detail view as inactive
             NavigationStateManager.shared.setDetailViewActive(false)
 
-            // End session: we pause immediately, and clear only if no other detail view appears shortly.
-            // This avoids black flashes when pushing from one detail view to another.
-            DetailVideoManager.shared.endDetailViewSession()
+            // Deactivate manager - this handles session end and lifecycle teardown
+            DetailVideoManager.shared.deactivate()
             
             // Reset top navigation visibility when view disappears
             withAnimation(.easeInOut(duration: 0.3)) {

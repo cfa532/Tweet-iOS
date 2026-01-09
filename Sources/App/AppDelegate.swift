@@ -280,7 +280,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                         LocalHTTPServer.shared.resetConnectionPool()
                         print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
-                        // Post notification for ONLY visible videos to reload
+                        // Post notification for visible videos to check health (they skip if seeking)
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                         print("[AppDelegate] Short screen lock recovery - posted reloadVisibleVideosOnly notification")
                     } else {
