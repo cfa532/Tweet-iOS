@@ -147,8 +147,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         var videos: [VideoPlaybackInfo] = []
         var seenVideoIdentifiers = Set<String>() // Track seen video identifiers (tweetId_videoMid) to prevent duplicates
         
-        print("🟢 [BUILD VIDEO LIST] Called with \(tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
-        
         // Process pinned tweets first (they appear at the top)
         for (_, tweet) in pinnedTweets.enumerated() {
             guard let attachments = tweet.attachments else { continue }
@@ -163,11 +161,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                     
                     // Skip if we've already added this exact video (same tweet + same video)
                     if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                        print("🟢 [BUILD VIDEO LIST] Skipping duplicate PINNED video: identifier=\(videoInfo.identifier)")
                         continue
                     }
                     
-                    print("🟢 [BUILD VIDEO LIST] Adding PINNED video: tweetId=\(tweet.mid), videoMid=\(attachment.mid)")
                     videos.append(videoInfo)
                     seenVideoIdentifiers.insert(videoInfo.identifier)
                 }
@@ -197,11 +193,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                             )
                             
                             if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                print("🟢 [BUILD VIDEO LIST] Skipping duplicate RETWEETED video: identifier=\(videoInfo.identifier)")
                                 continue
                             }
                             
-                            print("🟢 [BUILD VIDEO LIST] Adding RETWEETED video: tweetId=\(tweet.mid), videoMid=\(attachment.mid), identifier=\(videoInfo.identifier)")
                             videos.append(videoInfo)
                             seenVideoIdentifiers.insert(videoInfo.identifier)
                         }
@@ -223,12 +217,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                             )
                             
                             if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                print("🟢 [BUILD VIDEO LIST] Skipping duplicate video: identifier=\(videoInfo.identifier)")
                                 continue
                             }
                             
                             let tweetType = isQuotedTweet ? "QUOTED TWEET (own content)" : "REGULAR"
-                            print("🟢 [BUILD VIDEO LIST] Adding \(tweetType) video: tweetId=\(tweet.mid), videoMid=\(attachment.mid), identifier=\(videoInfo.identifier)")
                             videos.append(videoInfo)
                             seenVideoIdentifiers.insert(videoInfo.identifier)
                         }
