@@ -384,16 +384,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Start survey phase - play all visible videos for 2s each
     private func startSurveyPhase() {
-        NSLog("🎬 [VideoOrchestrator] startSurveyPhase called (NSLog)")
-        
         // Guard against starting survey if not in idle phase
         guard phase == .idle else {
-            NSLog("🎬 [VideoOrchestrator] Cannot start survey - already in \(phase) phase")
             print("🎬 [VideoOrchestrator] Cannot start survey - already in \(phase) phase")
             return
         }
         
-        NSLog("🎬 [VideoOrchestrator] Starting survey phase with \(visibleVideos.count) videos")
         phase = .surveying
         currentlyPlayingVideoIds.removeAll()
         
@@ -638,7 +634,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Handle foreground recovery - intelligently decide whether to preserve or reset state
     /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
     @objc private func handleForegroundRecovery(_ notification: Notification) {
-        NSLog("🔄 [VideoOrchestrator] Foreground recovery START (NSLog)")
         print("🔄 [VideoOrchestrator] Foreground recovery - checking if state should be preserved")
         
         // CRITICAL: Use flag instead of comparing IDs
