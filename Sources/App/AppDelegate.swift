@@ -266,7 +266,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         await MainActor.run {
                             self.hideLoadingOverlay()
                             AppDelegate.isVideoInfrastructureReady = true
-                            // Post notification for ONLY visible videos to reload
+                            // Post notification for visible videos to reload
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
                         }
@@ -314,7 +314,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             await MainActor.run {
                                 self.hideLoadingOverlay()
                                 AppDelegate.isVideoInfrastructureReady = true
-                                // Post notification for ONLY visible videos to reload
+                                // Post notification for visible videos to reload
                                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                                 print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
                             }
@@ -426,7 +426,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     await MainActor.run {
                         self.hideLoadingOverlay()
                         AppDelegate.isVideoInfrastructureReady = true
-                        // Post notification for ONLY visible videos to reload
+                        
+                        // Post notification for visible videos to reload
+                        // Coordinator will intelligently decide whether to preserve or reset state
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                         print("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
                     }
@@ -464,7 +466,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         
                         await MainActor.run {
                             AppDelegate.isVideoInfrastructureReady = true
-                            
+
                             // Post notification for visible videos to reload with new port
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
