@@ -1753,6 +1753,10 @@ struct SimpleVideoPlayer: View {
         
         print("📥 [COORDINATOR] Play command received by \(mid) (survey:\(isSurvey), primary:\(isPrimary), loaded:\(loadingState == .loaded), seeking:\(isSeekingToBeginning))")
         
+        // CRITICAL: Reset finish flag when starting playback
+        // This allows video to finish again if it plays multiple times (e.g. survey -> primary)
+        isHandlingFinishEvent = false
+        
         // Set flag to play when ready (will be checked after seek completes if seeking)
         coordinatorWantsToPlay = true
         
