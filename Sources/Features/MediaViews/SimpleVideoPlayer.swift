@@ -2689,8 +2689,8 @@ struct SimpleVideoPlayer: View {
                         
                         // CRITICAL: Seek is async - must wait for completion before playing
                         // Otherwise player is still at old position when play() is called, causing immediate finish
-                        let shouldPlay = mode == .mediaCell && coordinatorWantsToPlay && loadingState == .loaded
                         let videoMid = mid  // Capture for logging
+                        let videoMode = mode  // Capture mode
                         player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { completed in
                             guard completed else {
                                 Task { @MainActor in
@@ -2703,7 +2703,9 @@ struct SimpleVideoPlayer: View {
                                 self.isSeekingToBeginning = false  // Seek complete, safe to check health again
                                 print("✅ [FOREGROUND RECOVERY] Seek completed for \(videoMid)")
                                 
-                                // Now play if coordinator wants to
+                                // CRITICAL: Check coordinator flag NOW (not at capture time)
+                                // Coordinator might send play command while seek is in progress
+                                let shouldPlay = videoMode == .mediaCell && self.coordinatorWantsToPlay && self.loadingState == .loaded
                                 if shouldPlay, let player = self.player, player.rate == 0 {
                                     print("▶️ [FOREGROUND RECOVERY] Playing video after seek completion")
                                     player.isMuted = MuteState.shared.isMuted
