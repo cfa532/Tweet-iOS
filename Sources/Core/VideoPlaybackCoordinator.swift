@@ -176,7 +176,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             let hasTweetContent = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
             let hasOriginalTweet = tweet.originalTweetId != nil
             let isPureRetweet = hasOriginalTweet && !hasTweetContent // Has original but no own content
-            let isQuotedTweet = hasOriginalTweet && hasTweetContent // Has both original and own content (quoted tweet)
             
             if isPureRetweet {
                 // PURE RETWEET: Get attachments from original tweet, use retweet's ID for positioning
@@ -220,7 +219,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                                 continue
                             }
                             
-                            let tweetType = isQuotedTweet ? "QUOTED TWEET (own content)" : "REGULAR"
                             videos.append(videoInfo)
                             seenVideoIdentifiers.insert(videoInfo.identifier)
                         }
