@@ -30,6 +30,8 @@ struct MediaCell: View, Equatable {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
+    let shouldLoadVideo: Bool
+    let onVideoFinished: (() -> Void)?
     let isEmbedded: Bool
     let sourceTweetId: String?  // ID of tweet user is viewing (retweet ID for retweets)
     
@@ -37,25 +39,22 @@ struct MediaCell: View, Equatable {
     @State private var isLoading = false
     @State private var showFullScreen = false
     @State private var isVisible = false
-    @State private var shouldLoadVideo: Bool
-    @State private var onVideoFinished: (() -> Void)?
     @State private var preloadTask: Task<Void, Never>?
     @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
     @State private var shouldAutoPlay = false // Track if video should autoplay
     @State private var effectiveBaseUrl: URL // Reactive baseUrl that updates when author's baseUrl changes
     @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
-    @ObservedObject var videoManager: VideoManager
+    @State private var videoReloadTrigger = false // Trigger for video reload
     @ObservedObject private var muteState = MuteState.shared
-    
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager, isEmbedded: Bool = false, sourceTweetId: String? = nil) {
+
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, sourceTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
         self._isVisible = State(initialValue: isVisible)
-        self.videoManager = videoManager
         self.isEmbedded = isEmbedded
         self.sourceTweetId = sourceTweetId
         
@@ -66,16 +65,20 @@ struct MediaCell: View, Equatable {
         self._effectiveBaseUrl = State(initialValue: initialBaseUrl)
         
         // Initialize shouldAutoPlay based on initial conditions
+        // Global VideoPlaybackCoordinator manages all video playback via notifications
+        // Videos will receive .shouldPlayVideo notifications when they should play
         if let attachments = parentTweet.attachments,
            attachmentIndex >= 0 && attachmentIndex < attachments.count {
             let attachment = attachments[attachmentIndex]
             let isVideo = attachment.type == .video || attachment.type == .hls_video
             if isVideo {
                 if isEmbedded {
-                    // Embedded/quoted tweet preview: allow autoplay for the first attachment only.
-                    self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible && attachmentIndex == 0)
+                    // Embedded/quoted tweet preview: simple autoplay when visible
+                    self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible)
                 } else {
-                    self._shouldAutoPlay = State(initialValue: videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo && isVisible)
+                    // Regular videos: coordinator sends notifications to control playback
+                    // Initial state is false, coordinator will send play command when appropriate
+                    self._shouldAutoPlay = State(initialValue: false)
                 }
             } else {
                 self._shouldAutoPlay = State(initialValue: false)
@@ -120,7 +123,8 @@ struct MediaCell: View, Equatable {
                     videoPlayerViewContent(url: url)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .audio:
-                    SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
+                    // Audio autoplay controlled by visibility
+                    SimpleAudioPlayer(url: url, autoPlay: isVisible)
                         .environmentObject(MuteState.shared)
                         .onTapGesture {
                             if !isEmbedded {
@@ -193,28 +197,10 @@ struct MediaCell: View, Equatable {
             // Update effectiveBaseUrl in case author's baseUrl has been resolved since init
             updateEffectiveBaseUrl()
             
-            // For video attachments, update autoplay state based on current conditions
-            if isVideoAttachment {
-                if isEmbedded {
-                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
-                } else {
-                    let managerSays = videoManager.shouldPlayVideo(for: attachment.mid)
-                    shouldAutoPlay = managerSays && shouldLoadVideo
-                    
-                    // CRITICAL FIX: If this is a new grid that just appeared and has videos,
-                    // ensure VideoManager knows to play the first video
-                    if !managerSays && shouldLoadVideo {
-                        // Check if this video is in the manager's list
-                        if let videoIndex = videoManager.videoMids.firstIndex(of: attachment.mid) {
-                            // This video is in the list but not set to play
-                            // If it's the current index, we should play it
-                            if videoIndex == videoManager.currentVideoIndex {
-                                print("⚠️ [MediaCell] VideoManager has video at current index but shouldPlayVideo=false. Forcing shouldAutoPlay=true")
-                                shouldAutoPlay = true
-                            }
-                        }
-                    }
-                }
+            // For video attachments, embedded videos autoplay when visible
+            // Regular videos wait for coordinator notifications
+            if isVideoAttachment && isEmbedded {
+                shouldAutoPlay = shouldLoadVideo
             }
             
             // Load image if not already loaded - ONLY for image attachments
@@ -252,23 +238,17 @@ struct MediaCell: View, Equatable {
             }
             
             // Update autoplay state when visibility changes for video attachments
-            if isVideoAttachment && newValue {
-                if isEmbedded {
-                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
-                } else {
-                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo
-                }
+            // Only for embedded videos - regular videos wait for coordinator
+            if isVideoAttachment && newValue && isEmbedded {
+                shouldAutoPlay = shouldLoadVideo
             }
         }
         
         .onChange(of: shouldLoadVideo) { _, newValue in
-            // Update autoplay state when shouldLoadVideo changes for video attachments
-            if isVideoAttachment && isVisible && newValue {
-                if isEmbedded {
-                    shouldAutoPlay = attachmentIndex == 0
-                } else {
-                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid)
-                }
+            // Update autoplay state when shouldLoadVideo changes for embedded videos only
+            // Regular videos wait for coordinator notifications
+            if isVideoAttachment && isVisible && newValue && isEmbedded {
+                shouldAutoPlay = true
             }
         }
         
@@ -473,7 +453,6 @@ struct MediaCell: View, Equatable {
                 mediaType: attachment.type,
                 authorId: parentTweet.authorId, // Pass authorId for health check
                 autoPlay: shouldAutoPlay, // Use state variable instead of computed value
-                videoManager: isEmbedded ? nil : videoManager,
                 onVideoFinished: onVideoFinished,
                 cellAspectRatio: CGFloat(aspectRatio),
                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
@@ -492,6 +471,7 @@ struct MediaCell: View, Equatable {
                 shouldLoadVideo: shouldLoadVideo,
                 mode: isEmbedded ? .embeddedDetail : .mediaCell
             )
+            .id("video_\(attachment.mid)_\(videoReloadTrigger)")
             .overlay(
                 // Invisible overlay to prevent tap propagation to parent views and add long press
                 Color.clear
@@ -550,15 +530,10 @@ struct MediaCell: View, Equatable {
             }
         }
         
-        // Force reload by clearing cache and resetting state
-        // The state change will trigger proper reload through onChange observer
-        shouldLoadVideo = false
-        // Use Task to avoid blocking
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay
-            shouldLoadVideo = true
-            print("✅ [VIDEO RELOAD] Video reload initiated")
-        }
+        // Force reload by toggling the reload trigger
+        // This will force SimpleVideoPlayer to reinitialize
+        videoReloadTrigger.toggle()
+        print("✅ [VIDEO RELOAD] Video reload initiated")
     }
 }
 

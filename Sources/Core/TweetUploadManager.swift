@@ -1432,18 +1432,6 @@ extension TweetUploadManager {
                 return
             }
             
-            // No video jobs - images only, send message immediately
-            print("✅ [Chat Upload] All image attachments uploaded. Caching images before sending...")
-            
-            // Cache the images immediately so they're available when the message appears in chat
-            for (index, attachment) in uploadedAttachments.enumerated() where attachment.type == .image {
-                if index < itemData.count, let image = ImageCacheManager.shared.cacheImageData(itemData[index].data, for: attachment) {
-                    print("✅ [Chat Upload] Cached image for \(attachment.mid)")
-                } else {
-                    print("⚠️ [Chat Upload] Failed to cache image for \(attachment.mid)")
-                }
-            }
-            
             var finalMessage = message
             finalMessage.attachments = uploadedAttachments
             

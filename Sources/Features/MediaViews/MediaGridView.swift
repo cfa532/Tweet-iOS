@@ -32,9 +32,7 @@ struct MediaGridView: View, Equatable {
     @State private var shouldLoadVideo: Bool
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
-    @State private var hasSetupSequentialPlayback = false // Track if we've already set up sequential playback
     @State private var hasInitialized = false // Track if we've done initial setup
-    @StateObject private var videoManager = VideoManager()
     @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
     // Cache screen-based calculations to avoid repeated UIScreen.main calls
@@ -78,25 +76,8 @@ struct MediaGridView: View, Equatable {
         }?.offset ?? -1
     }
     
-    private func shouldPlayVideo(for index: Int) -> Bool {
-        guard index < attachments.count else { return false }
-        let attachment = attachments[index]
-        
-        // Check if this is a video
-        let isVideo = attachment.type == .video || attachment.type == .hls_video
-        guard isVideo else { return false }
-        
-        // Use VideoManager to determine if this video should play
-        let shouldPlay = videoManager.shouldPlayVideo(for: attachment.mid)
-        
-        return shouldPlay
-    }
-    
-    private func onVideoFinished() {
-        Task {
-            await videoManager.onVideoFinished(tweetId: parentTweet.mid)
-        }
-    }
+    // Removed shouldPlayVideo and onVideoFinished methods
+    // Videos are now controlled by global VideoPlaybackCoordinator via notifications
     
     var body: some View {
         // Use cached dimensions to prevent repeated UIScreen.main calls
@@ -114,8 +95,6 @@ struct MediaGridView: View, Equatable {
                         attachmentIndex: 0,
                         aspectRatio: Float(gridAspectRatio),
                         shouldLoadVideo: shouldLoadVideo,
-                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -156,8 +135,6 @@ struct MediaGridView: View, Equatable {
                                 attachmentIndex: 0,
                                 aspectRatio: Float(width0 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -170,8 +147,6 @@ struct MediaGridView: View, Equatable {
                                 attachmentIndex: 1,
                                 aspectRatio: Float(width1 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -202,8 +177,6 @@ struct MediaGridView: View, Equatable {
                                 attachmentIndex: 0,
                                 aspectRatio: Float(actualWidth / height0),
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -216,8 +189,6 @@ struct MediaGridView: View, Equatable {
                                 attachmentIndex: 1,
                                 aspectRatio: Float(actualWidth / height1),
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -249,8 +220,6 @@ struct MediaGridView: View, Equatable {
                                 attachmentIndex: 0,
                                 aspectRatio: Float(width0 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -263,8 +232,6 @@ struct MediaGridView: View, Equatable {
                                 attachmentIndex: 1,
                                 aspectRatio: Float(width1 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
-                                onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -309,8 +276,6 @@ struct MediaGridView: View, Equatable {
                                     attachmentIndex: 0,
                                     aspectRatio: Float(heroWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -325,8 +290,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 1,
                                         aspectRatio: Float(sideWidth / height1),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -339,8 +302,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 2,
                                         aspectRatio: Float(sideWidth / height2),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -371,8 +332,6 @@ struct MediaGridView: View, Equatable {
                                     attachmentIndex: 0,
                                     aspectRatio: Float(actualWidth / heroHeight),
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -387,8 +346,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 1,
                                         aspectRatio: Float(width1 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -401,8 +358,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 2,
                                         aspectRatio: Float(width2 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -441,8 +396,6 @@ struct MediaGridView: View, Equatable {
                                     attachmentIndex: 0,
                                     aspectRatio: Float(leftWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -457,8 +410,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 1,
                                         aspectRatio: Float(rightWidth / height1),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -471,8 +422,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 2,
                                         aspectRatio: Float(rightWidth / height2),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -511,8 +460,6 @@ struct MediaGridView: View, Equatable {
                                     attachmentIndex: 0,
                                     aspectRatio: Float(actualWidth / topHeight),
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -527,8 +474,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 1,
                                         aspectRatio: Float(width1 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -541,8 +486,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: 2,
                                         aspectRatio: Float(width2 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -567,8 +510,6 @@ struct MediaGridView: View, Equatable {
                                     attachmentIndex: idx,
                                     aspectRatio: cellAspectRatio,
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -584,8 +525,6 @@ struct MediaGridView: View, Equatable {
                                         attachmentIndex: idx,
                                         aspectRatio: cellAspectRatio,
                                         shouldLoadVideo: shouldLoadVideo,
-                                        onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -606,8 +545,6 @@ struct MediaGridView: View, Equatable {
                                     aspectRatio: Float((actualWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
-                                    onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -624,9 +561,7 @@ struct MediaGridView: View, Equatable {
                                             attachmentIndex: idx,
                                             aspectRatio: Float((actualWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                             
-                                            shouldLoadVideo: shouldLoadVideo,
-                                            onVideoFinished: onVideoFinished,
-                        videoManager: videoManager,
+                                    shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
                         sourceTweetId: sourceTweetId
                     )
@@ -684,84 +619,12 @@ struct MediaGridView: View, Equatable {
             // No state changes, no checks, no work - just mark as visible
             if hasInitialized {
                 isVisible = true
-                
-                // CRITICAL FIX: Even though initialized, we need to ensure VideoManager state
-                // is correct when grid reappears (e.g., after scrolling away and back)
-                let videoMids = attachments.enumerated().compactMap { index, attachment in
-                    if attachment.type == .video || attachment.type == .hls_video {
-                        return attachment.mid
-                    }
-                    return nil
-                }
-                
-                if videoMids.count >= 1 {
-                    // Check if VideoManager needs to be re-initialized for this tweet
-                    let needsReinit = videoManager.videoMids != videoMids || videoManager.videoMids.isEmpty
-                    if needsReinit {
-                        Task {
-                            await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
-                        }
-                    }
-                }
-                
                 return
             }
             
             // Mark as initialized immediately to prevent any future work
             hasInitialized = true
             isVisible = true
-            
-            // Simulator video playback disabled - uncomment to re-enable
-            // #if targetEnvironment(simulator)
-            // shouldLoadVideo = false
-            // return
-            // #endif
-            
-            // Setup sequential playback for videos
-            let videoMids = attachments.enumerated().compactMap { index, attachment in
-                if attachment.type == .video || attachment.type == .hls_video {
-                    return attachment.mid
-                }
-                return nil
-            }
-            
-            // Only stop sequential playback if we're switching to a different video set
-            // This preserves state when multiple MediaGrids exist during scrolling
-            let isSwitchingVideoSet = videoManager.videoMids != videoMids && !videoManager.videoMids.isEmpty
-            if isSwitchingVideoSet {
-                Task {
-                    await videoManager.stopSequentialPlayback()
-                }
-                hasSetupSequentialPlayback = false // Reset flag when switching
-            }
-            
-            // Setup sequential playback for all videos (1 or more)
-            // Single video is just sequential playback with 1 item
-            // CRITICAL: Only setup if not already set up for this exact sequence to prevent duplicate calls
-            // This prevents recomposition when scrolling up past retweets
-            if videoMids.count >= 1 {
-                let alreadySetup = videoManager.videoMids == videoMids && videoManager.currentVideoIndex >= 0
-                
-                if !alreadySetup && !hasSetupSequentialPlayback {
-                    hasSetupSequentialPlayback = true
-
-                    // Defer video manager setup to avoid blocking main thread during startup
-                    Task.detached(priority: .background) {
-                        await videoManager.setupSequentialPlayback(for: videoMids, tweetId: parentTweet.mid)
-                        await MainActor.run {
-
-                            // If all videos were finished (saved index >= count), restart from beginning
-                            if videoManager.currentVideoIndex >= videoMids.count {
-                                videoManager.currentVideoIndex = 0
-                                videoManager.saveCurrentIndex(for: parentTweet.mid)
-                            }
-                        }
-                    }
-                } else if alreadySetup {
-                    // Already set up - mark as done to prevent future checks
-                    hasSetupSequentialPlayback = true
-                }
-            }
             
             // Start media loading if this grid contains videos or audio
             let hasVideos = attachments.contains(where: { $0.type == .video || $0.type == .hls_video })
@@ -794,24 +657,12 @@ struct MediaGridView: View, Equatable {
             }
         }
         .onDisappear {
-            // CRITICAL: Only update visibility, don't do any other work
-            // This prevents state changes that cause recomposition when scrolling
-            // State saving is handled by SimpleVideoPlayer's handleOnDisappear
+            // Update visibility when grid disappears
+            // Global VideoPlaybackCoordinator handles video state
             isVisible = false
-            
-            // Save current video index to resume later (only if we have valid state)
-            // Do this silently without logging to reduce overhead
-            if videoManager.currentVideoIndex >= 0 && !videoManager.videoMids.isEmpty {
-                videoManager.saveCurrentIndex(for: parentTweet.mid)
-            }
-            
-            // Don't stop sequential playback state - preserve it so videos resume correctly when scrolling back
-            // SimpleVideoPlayer will handle pausing the actual playback when it becomes invisible
         }
         .onChange(of: isVisible) { _, newVisibility in
-            // Handle visibility changes
-            // Don't stop sequential playback state when visibility changes
-            // SimpleVideoPlayer handles pausing/resuming the actual playback based on visibility
+            // Visibility changes handled by global coordinator
         }
         .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
             if let tweetId = notification.userInfo?["tweetId"] as? String,
@@ -822,7 +673,6 @@ struct MediaGridView: View, Equatable {
                     return
                 }
                 shouldLoadVideo = false
-                // DON'T stop sequential playback here; it breaks resume after overlays.
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
@@ -836,7 +686,7 @@ struct MediaGridView: View, Equatable {
             // Handle audio interruptions (calls, alarms, etc.) from AudioSessionManager
             // Fullscreen opening now uses visibility detection instead of this notification
             shouldLoadVideo = false
-            // DON'T call videoManager.stopSequentialPlayback() - this clears state
+            // Videos controlled by global coordinator
             // Videos will be paused by SimpleVideoPlayer.handleStopAllVideos()
             // And resumed when audio session is restored
         }

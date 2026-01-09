@@ -366,7 +366,6 @@ struct SimpleVideoPlayer: View {
     
     // MARK: Optional Parameters
     var autoPlay: Bool = true
-    var videoManager: VideoManager? = nil // Optional VideoManager for reactive playback
     var onVideoFinished: (() -> Void)? = nil
     var cellAspectRatio: CGFloat? = nil
     var videoAspectRatio: CGFloat? = nil
@@ -676,7 +675,7 @@ struct SimpleVideoPlayer: View {
         // 1. KVO observers detect failed/stalled items
         // 2. onAppear/onDisappear lifecycle handles state transitions
         // 3. Conservative recreatePlayer() for actually broken players
-        // 4. VideoManager handles sequential playback approval
+        // 4. VideoPlaybackCoordinator handles playback approval via notifications
         return
     }
     
@@ -811,21 +810,18 @@ struct SimpleVideoPlayer: View {
         return ar < 1.0
     }
     
-    // Reactive autoPlay state - use VideoManager if available, otherwise use static autoPlay
-    // For fullscreen and detail modes, always use static autoPlay (bypass VideoManager)
-    // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls all playback
+    // Reactive autoPlay state
+    // For fullscreen and detail modes, use static autoPlay parameter
+    // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls all playback via notifications
     private var currentAutoPlay: Bool {
         if mode == .mediaBrowser || mode == .tweetDetail || mode == .embeddedDetail {
             return autoPlay
         }
-        // MediaCell mode: always return false - coordinator controls playback via notifications
+        // MediaCell mode: coordinator controls playback via notifications
         if mode == .mediaCell {
             return false
         }
-        // Fallback for other modes
-        if let videoManager = videoManager {
-            return videoManager.shouldPlayVideo(for: mid)
-        }
+        // For other modes, use autoPlay parameter
         return autoPlay
     }
     
@@ -897,9 +893,7 @@ struct SimpleVideoPlayer: View {
                         stopTimeRemainingDisplayCycle()
                     }
                 }
-                .modifier(VideoManagerObserverModifier(videoManager: videoManager, mid: mid, mode: mode) { shouldAutoPlay in
-                    handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay)
-                })
+                // VideoManager removed - videos now controlled by global VideoPlaybackCoordinator
         }
     }
     
@@ -1264,17 +1258,14 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleAutoPlayChange(shouldAutoPlay: Bool) {
-        // Handle autoPlay state changes (reactive to VideoManager)
+        // Handle autoPlay state changes
         // DON'T pause here - shared players might be in use by fullscreen/detail
-        // Let visibility changes and VideoManager's sequential playback handle pausing
+        // MediaCell videos are controlled by coordinator notifications
         if mode == .mediaCell {
-            // Check if this video should play according to VideoManager
-            let shouldPlayAccordingToManager = videoManager?.shouldPlayVideo(for: mid) ?? false
-            
-            // CRITICAL: If video just finished and is no longer approved, immediately pause and stop
-            // This prevents flicker by ensuring finished videos don't try to restart or cause view updates
-            if !shouldPlayAccordingToManager && playbackState == .finished {
-                // Video finished and is no longer the active video - ensure it's paused
+            // For MediaCell, coordinator controls via notifications
+            // If video just finished, ensure it's paused
+            if playbackState == .finished {
+                // Video finished - ensure it's paused
                 // Don't do ANYTHING else - no state changes, no view updates, just keep it paused
                 // This prevents flicker during sequential video transitions
                 if (player?.rate ?? 0) > 0 {
@@ -1284,16 +1275,14 @@ struct SimpleVideoPlayer: View {
             }
             
             // CRITICAL: Also skip if video is finished and shouldAutoPlay is false
-            // This handles the case where VideoManager updates but the finished video shouldn't react
+            // This handles the case where coordinator updates but the finished video shouldn't react
             if playbackState == .finished && !shouldAutoPlay {
                 return
             }
             
             // CRITICAL: If already initialized and player is set up, skip work to prevent recomposition
             // This is key for smooth scrolling - once a video is initialized, don't recompose it
-            // BUT: Always allow state changes for sequential playback transitions
-            let isSequentialTransition = shouldPlayAccordingToManager && shouldAutoPlay
-            let shouldSkip = hasInitialized && player != nil && loadingState.isLoaded && !isSequentialTransition
+            let shouldSkip = hasInitialized && player != nil && loadingState.isLoaded
             
             if shouldSkip {
                 // Only update if the playback state actually needs to change
@@ -1302,22 +1291,6 @@ struct SimpleVideoPlayer: View {
                 
                 // If state matches, do nothing to prevent recomposition
                 if currentShouldPlay == isCurrentlyPlaying {
-                    return
-                }
-            }
-            
-            // CRITICAL: For sequential playback transitions, ensure player is ready before playing
-            // This prevents flicker and ensures smooth transitions
-            if shouldAutoPlay && isVisible && isSequentialTransition {
-                // Ensure player is loaded and ready
-                if player == nil || !loadingState.isLoaded {
-                    // Player will start automatically when ready via checkPlaybackConditions
-                    return
-                }
-                
-                // If player exists but item is not ready, wait a bit
-                if let playerItem = player?.currentItem, playerItem.status != .readyToPlay {
-                    // Will retry when status changes
                     return
                 }
             }
@@ -1531,7 +1504,7 @@ struct SimpleVideoPlayer: View {
                 
                 // Player is healthy, restore cached state
                 // CRITICAL: Don't call checkPlaybackConditions here - let the normal flow handle it
-                // Just like the first time, KVO handlers will fire when ready and check VideoManager
+                // Just like the first time, KVO handlers will fire when ready and handle playback
                 restoreCachedVideoState()
                 // checkPlaybackConditions will be called by KVO handlers or handleAutoPlayChange
             }
@@ -1585,7 +1558,7 @@ struct SimpleVideoPlayer: View {
         } else {
             // Video is no longer covered.
             // If it was playing before it got covered (fullscreen/login/sheet), resume immediately
-            // (don't depend on VideoManager approval here, since sequential state can be stale/cleared).
+            // (don't depend on coordinator here, since state can be stale/cleared).
             if isVisible, let player = player {
                 let wasPlayingBeforeCover = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
                 let shouldResume = wasPlayingBeforeCover || playbackState == .playing
@@ -1644,7 +1617,7 @@ struct SimpleVideoPlayer: View {
                         playbackState = .playing
                     }
                 } else {
-                    // Otherwise, re-check playback conditions on uncover (VideoManager decides).
+                    // Otherwise, re-check playback conditions on uncover (coordinator decides).
                     if player.rate == 0 {
                         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                     }
@@ -2207,13 +2180,12 @@ struct SimpleVideoPlayer: View {
                                 guard finished else { return }
                                 Task { @MainActor in
                                     // Resume playback if was playing
-                                    // For MediaCell, check VideoManager approval AND no overlays/detail active
+                                    // For MediaCell, check no overlays/detail active (coordinator controls approval)
                                     if self.mode == .mediaCell {
                                         player.isMuted = MuteState.shared.isMuted
-                                        let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
                                         let noOverlaysActive = !self.isCoveredByOverlay
                                         let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-                                        if approved && self.isVisible && noOverlaysActive && noDetailViewActive {
+                                        if self.isVisible && noOverlaysActive && noDetailViewActive {
                                             player.play()
                                             self.playbackState = .playing
                                             // Cancel recovery timeout - video is playing successfully
@@ -2237,10 +2209,9 @@ struct SimpleVideoPlayer: View {
                             // Video was playing but no time to restore - just resume
                             if self.mode == .mediaCell {
                                 player.isMuted = MuteState.shared.isMuted
-                                let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
                                 let noOverlaysActive = !self.isCoveredByOverlay
                                 let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-                                if approved && self.isVisible && noOverlaysActive && noDetailViewActive {
+                                if self.isVisible && noOverlaysActive && noDetailViewActive {
                                     player.play()
                                     self.playbackState = .playing
                                     // Cancel recovery timeout - video is playing successfully
@@ -2393,15 +2364,14 @@ struct SimpleVideoPlayer: View {
             }
             
             // CRITICAL: Resume video if it was playing before backgrounding
-            // For MediaCell, check VideoManager approval AND no overlays (fullscreen/detail view)
+            // For MediaCell, check no overlays (fullscreen/detail view) - coordinator controls approval
             // For other modes, resume if was playing and should load
             if cachedState.wasPlaying {
                 if mode == .mediaCell {
-                    // For MediaCell, check VideoManager approval AND that no overlays/detail views are active
-                    let approved = videoManager?.shouldPlayVideo(for: mid) ?? false
+                    // For MediaCell, check that no overlays/detail views are active (coordinator controls approval)
                     let noOverlaysActive = !isCoveredByOverlay
                     let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-                    if approved && isVisible && noOverlaysActive && noDetailViewActive {
+                    if isVisible && noOverlaysActive && noDetailViewActive {
                         // CRITICAL: Always ensure muteState is correct before playing
                         player.isMuted = MuteState.shared.isMuted
                         // Applied mute state after background recovery
@@ -2415,13 +2385,12 @@ struct SimpleVideoPlayer: View {
                             Task { @MainActor in
                                 let noOverlaysActive = !self.isCoveredByOverlay
                                 let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-                                let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
                                 var attempts = 0
                                 while self.playerItem?.status != .readyToPlay && attempts < 50 {
                                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                                     attempts += 1
                                 }
-                                if self.playerItem?.status == .readyToPlay && self.isVisible && approved && noOverlaysActive && noDetailViewActive {
+                                if self.playerItem?.status == .readyToPlay && self.isVisible && noOverlaysActive && noDetailViewActive {
                                     player.isMuted = MuteState.shared.isMuted
                                     player.play()
                                     self.playbackState = .playing
@@ -2656,12 +2625,11 @@ struct SimpleVideoPlayer: View {
                     }
                 }
                 
-                // If video should be playing according to VideoManager, ensure it starts
-                let shouldPlay = self.videoManager?.shouldPlayVideo(for: self.mid) ?? false
-                if shouldPlay && self.currentAutoPlay && self.loadingState.isLoaded {
+                // If video should be playing, ensure it starts (coordinator controls MediaCell)
+                if self.currentAutoPlay && self.loadingState.isLoaded {
                     let noOverlaysActive = !self.isCoveredByOverlay
                     let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-                    
+
                     if noOverlaysActive && noDetailViewActive {
                         self.checkPlaybackConditions(autoPlay: true, isVisible: true)
                     }
@@ -2704,13 +2672,12 @@ struct SimpleVideoPlayer: View {
                 let shouldResume = wasPlayingBeforeBackground || currentAutoPlay
                 
                 if shouldResume {
-                    // Check if video should be playing according to VideoManager
-                    let approved = self.videoManager?.shouldPlayVideo(for: self.mid) ?? true
+                    // Check if video should be playing (coordinator controls MediaCell approval)
                     let actuallyVisible = !self.isCoveredByOverlay
                     let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
                     let isReady = player.currentItem?.status == .readyToPlay
-                    
-                    if approved && actuallyVisible && noDetailViewActive && isReady {
+
+                    if actuallyVisible && noDetailViewActive && isReady {
                         player.isMuted = MuteState.shared.isMuted
                         playWithResumeIfNeeded(player)
                         playbackState = .playing
@@ -3545,13 +3512,13 @@ struct SimpleVideoPlayer: View {
         
         // CRITICAL: If video already finished, DON'T trigger callback here
         // The observer is already set up and will fire when the video finishes again
-        // OR if we need to advance sequential playback, let VideoManager handle it
+        // OR if we need to advance sequential playback, coordinator handles it
         // Directly calling handleVideoFinished here causes duplicate callbacks
         if videoAlreadyFinished {
             // Video was already finished - marking as finished
             self.playbackState = .finished
             // DON'T call handleVideoFinished here - it will be called by the observer if video finishes again
-            // Or VideoManager will handle advancing to next video if needed
+            // Or coordinator will handle advancing to next video if needed
         }
         
         // Restore the cached player (AFTER setting mute state and observers)
@@ -4208,10 +4175,10 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 if shouldAutoPlay {
-                    // CRITICAL: For MediaCell, check VideoManager before playing (same as first time)
-                    // This ensures only the current video plays in sequential playback
-                    let approved = self.mode == .mediaCell ? (self.videoManager?.shouldPlayVideo(for: self.mid) ?? false) : true
-                    
+                    // For MediaCell, coordinator controls which video plays
+                    // For other modes, approve by default
+                    let approved = self.mode != .mediaCell
+
                     if approved {
                         // CRITICAL: Always ensure muteState is correct before playing in MediaCell
                         if self.mode == .mediaCell {
@@ -4219,9 +4186,9 @@ struct SimpleVideoPlayer: View {
                             // Applied mute state
                         }
                         self.playWithResumeIfNeeded(player)
-                        // Already ready - auto-playing (VideoManager approved)
+                        // Already ready - auto-playing (coordinator approved)
                     } else {
-                        // NOT auto-playing - not approved by VideoManager
+                        // NOT auto-playing - not approved by coordinator
                     }
                 } else {
                     player.preroll(atRate: 0.0) { finished in
@@ -4554,16 +4521,16 @@ struct SimpleVideoPlayer: View {
         
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {
             
-            // CRITICAL: For sequential playback, check with VideoManager before playing
-            // This prevents videos that finished prematurely from restarting
+            // For MediaCell, coordinator controls playback via notifications
+            // This prevents videos from auto-restarting - they wait for coordinator commands
             if mode == .mediaCell {
-                // Check if this video is approved by VideoManager for sequential playback
-                let approved = videoManager?.shouldPlayVideo(for: mid) ?? true
-                if !approved {
-                    return
-                }
-                
-                // CRITICAL: If video was finished but is now approved to play (next in sequence),
+                // MediaCell videos don't auto-restart - wait for coordinator notification
+                return
+            }
+            
+            // For other modes, allow restart
+            if mode != .mediaCell {
+                // CRITICAL: If video was finished but should play again,
                 // reset it ONLY if the video actually played to completion (no cached position exists)
                 // This allows videos that were paused mid-playback to resume from their saved position
                 if playbackState == .finished {
@@ -4668,7 +4635,7 @@ struct SimpleVideoPlayer: View {
             // autoPlay is false
             // For MediaCell mode: Videos should pause when off-screen (handled by visibility changes)
             // This preserves resources while maintaining playback state for correct resume
-            // The sequential playback state is preserved in VideoManager, so when user scrolls back,
+            // The playback state is managed by VideoPlaybackCoordinator, so when user scrolls back,
             // the correct video will resume from where it was paused
             if mode == .mediaCell {
                 // Don't reset finished videos here - they may have legitimately played to completion
@@ -5069,49 +5036,6 @@ struct AVPlayerLayerView: UIViewRepresentable {
         
         var playerLayer: AVPlayerLayer {
             return layer as! AVPlayerLayer
-        }
-    }
-}
-
-// MARK: - VideoManager Observer Modifier
-struct VideoManagerObserverModifier: ViewModifier {
-    let videoManager: VideoManager?
-    let mid: String
-    let mode: Mode
-    let onVideoIndexChanged: (Bool) -> Void
-    @State private var lastShouldAutoPlay: Bool? = nil
-    @State private var lastVideoMids: [String] = []
-    
-    func body(content: Content) -> some View {
-        if let videoManager = videoManager {
-            content
-                .onReceive(videoManager.$currentVideoIndex) { _ in
-                    // When currentVideoIndex changes, re-evaluate autoPlay state
-                    // Only trigger if the result actually changed to prevent unnecessary recomposition
-                    if mode == .mediaCell {
-                        let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
-                        // Only call callback if the value actually changed
-                        if lastShouldAutoPlay != shouldAutoPlay {
-                            lastShouldAutoPlay = shouldAutoPlay
-                            onVideoIndexChanged(shouldAutoPlay)
-                        }
-                    }
-                }
-                .onReceive(videoManager.$videoMids) { newVideoMids in
-                    // Also listen to videoMids changes (when sequence changes)
-                    // Only trigger if sequence actually changed to prevent unnecessary recomposition
-                    if mode == .mediaCell && newVideoMids != lastVideoMids {
-                        lastVideoMids = newVideoMids
-                        let shouldAutoPlay = videoManager.shouldPlayVideo(for: mid)
-                        // Only update if value changed
-                        if lastShouldAutoPlay != shouldAutoPlay {
-                            lastShouldAutoPlay = shouldAutoPlay
-                            onVideoIndexChanged(shouldAutoPlay)
-                        }
-                    }
-                }
-        } else {
-            content
         }
     }
 }

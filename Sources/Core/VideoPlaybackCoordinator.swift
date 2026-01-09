@@ -124,7 +124,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Build video list from tweets (including pinned tweets)
     func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = []) {
         var videos: [VideoPlaybackInfo] = []
-        var seenVideoMids = Set<String>() // Track seen video mids to prevent duplicates
+        var seenVideoIdentifiers = Set<String>() // Track seen video identifiers (tweetId_videoMid) to prevent duplicates
         
         print("🟢 [BUILD VIDEO LIST] Called with \(tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
         
@@ -134,59 +134,84 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             for (index, attachment) in attachments.enumerated() {
                 if attachment.type == .video || attachment.type == .hls_video {
-                    // Skip if we've already added this video
-                    if seenVideoMids.contains(attachment.mid) {
-                        print("🟢 [BUILD VIDEO LIST] Skipping duplicate PINNED video: videoMid=\(attachment.mid)")
+                    let videoInfo = VideoPlaybackInfo(
+                        tweetId: tweet.mid,
+                        videoMid: attachment.mid,
+                        index: index
+                    )
+                    
+                    // Skip if we've already added this exact video (same tweet + same video)
+                    if seenVideoIdentifiers.contains(videoInfo.identifier) {
+                        print("🟢 [BUILD VIDEO LIST] Skipping duplicate PINNED video: identifier=\(videoInfo.identifier)")
                         continue
                     }
                     
                     print("🟢 [BUILD VIDEO LIST] Adding PINNED video: tweetId=\(tweet.mid), videoMid=\(attachment.mid)")
-                    videos.append(VideoPlaybackInfo(
-                        tweetId: tweet.mid,
-                        videoMid: attachment.mid,
-                        index: index
-                    ))
-                    seenVideoMids.insert(attachment.mid)
+                    videos.append(videoInfo)
+                    seenVideoIdentifiers.insert(videoInfo.identifier)
                 }
             }
         }
         
         // Then process regular tweets
         for (_, tweet) in tweets.enumerated() {
-            // For retweets, get attachments from original tweet but use retweet's ID for positioning
-            let attachments: [MimeiFileType]?
-            let isRetweet = tweet.originalTweetId != nil && tweet.attachments == nil
+            // Determine if this is a pure retweet (no own content, just forwarding)
+            let hasTweetContent = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
+            let hasOriginalTweet = tweet.originalTweetId != nil
+            let isPureRetweet = hasOriginalTweet && !hasTweetContent // Has original but no own content
+            let isQuotedTweet = hasOriginalTweet && hasTweetContent // Has both original and own content (quoted tweet)
             
-            if let originalTweetId = tweet.originalTweetId, tweet.attachments == nil {
-                // This is a retweet - try to get original tweet from singleton cache
-                if let originalTweet = Tweet.getInstance(for: originalTweetId) {
-                    attachments = originalTweet.attachments
+            if isPureRetweet {
+                // PURE RETWEET: Get attachments from original tweet, use retweet's ID for positioning
+                if let originalTweetId = tweet.originalTweetId,
+                   let originalTweet = Tweet.getInstance(for: originalTweetId),
+                   let originalAttachments = originalTweet.attachments {
+                    
+                    for (index, attachment) in originalAttachments.enumerated() {
+                        if attachment.type == .video || attachment.type == .hls_video {
+                            let videoInfo = VideoPlaybackInfo(
+                                tweetId: tweet.mid,  // Use retweet's ID for positioning
+                                videoMid: attachment.mid,
+                                index: index
+                            )
+                            
+                            if seenVideoIdentifiers.contains(videoInfo.identifier) {
+                                print("🟢 [BUILD VIDEO LIST] Skipping duplicate RETWEETED video: identifier=\(videoInfo.identifier)")
+                                continue
+                            }
+                            
+                            print("🟢 [BUILD VIDEO LIST] Adding RETWEETED video: tweetId=\(tweet.mid), videoMid=\(attachment.mid), identifier=\(videoInfo.identifier)")
+                            videos.append(videoInfo)
+                            seenVideoIdentifiers.insert(videoInfo.identifier)
+                        }
+                    }
                 } else {
-                    // Original tweet not in cache yet - skip for now, will be added when it loads
-                    continue
+                    print("🟢 [BUILD VIDEO LIST] Skipping pure retweet \(tweet.mid) - original tweet not cached yet")
                 }
             } else {
-                attachments = tweet.attachments
-                if isRetweet {
-                }
-            }
-            
-            guard let attachments = attachments else { continue }
-            
-            for (index, attachment) in attachments.enumerated() {
-                if attachment.type == .video || attachment.type == .hls_video {
-                    // Skip if we've already added this video (e.g., it was pinned)
-                    if seenVideoMids.contains(attachment.mid) {
-                        print("🟢 [BUILD VIDEO LIST] Skipping duplicate video: videoMid=\(attachment.mid)")
-                        continue
+                // REGULAR TWEET or QUOTED TWEET: Process the tweet's own attachments
+                // NOTE: For quoted tweets, we DON'T process the embedded tweet's videos
+                // because they use independent autoplay logic (not coordinated)
+                if let attachments = tweet.attachments {
+                    for (index, attachment) in attachments.enumerated() {
+                        if attachment.type == .video || attachment.type == .hls_video {
+                            let videoInfo = VideoPlaybackInfo(
+                                tweetId: tweet.mid,
+                                videoMid: attachment.mid,
+                                index: index
+                            )
+                            
+                            if seenVideoIdentifiers.contains(videoInfo.identifier) {
+                                print("🟢 [BUILD VIDEO LIST] Skipping duplicate video: identifier=\(videoInfo.identifier)")
+                                continue
+                            }
+                            
+                            let tweetType = isQuotedTweet ? "QUOTED TWEET (own content)" : "REGULAR"
+                            print("🟢 [BUILD VIDEO LIST] Adding \(tweetType) video: tweetId=\(tweet.mid), videoMid=\(attachment.mid), identifier=\(videoInfo.identifier)")
+                            videos.append(videoInfo)
+                            seenVideoIdentifiers.insert(videoInfo.identifier)
+                        }
                     }
-                    
-                    videos.append(VideoPlaybackInfo(
-                        tweetId: tweet.mid,  // Use retweet's ID so positioning matches user's view
-                        videoMid: attachment.mid,
-                        index: index
-                    ))
-                    seenVideoMids.insert(attachment.mid)
                 }
             }
         }
