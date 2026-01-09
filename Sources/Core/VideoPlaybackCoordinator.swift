@@ -561,7 +561,40 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
         
-        print("🔄 [VideoOrchestrator] Cleared playback state - videos will receive fresh play commands")
+        // CRITICAL FIX: Reset phase to idle to allow restart
+        phase = .idle
+        
+        // Cancel all timers to clean state
+        surveyTimer?.invalidate()
+        surveyTimer = nil
+        playbackDebounceTimer?.invalidate()
+        playbackDebounceTimer = nil
+        scrollStopTimer?.invalidate()
+        scrollStopTimer = nil
+        
+        print("🔄 [VideoOrchestrator] Cleared playback state - checking for visible videos")
+        
+        // CRITICAL FIX: If there are visible videos on screen, restart the survey phase
+        // This ensures videos on screen get play commands after foreground return
+        if !visibleVideos.isEmpty {
+            print("🔄 [VideoOrchestrator] Found \(visibleVideos.count) visible videos - restarting survey phase")
+            
+            // Use a small delay to ensure the video infrastructure is fully ready
+            // This prevents race conditions where players aren't ready yet
+            let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    if self.phase == .idle && !self.visibleVideos.isEmpty {
+                        print("🔄 [VideoOrchestrator] Starting survey phase after foreground recovery")
+                        self.startSurveyPhase()
+                    }
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            playbackDebounceTimer = timer
+        } else {
+            print("🔄 [VideoOrchestrator] No visible videos - waiting for scroll updates")
+        }
     }
 }
 
