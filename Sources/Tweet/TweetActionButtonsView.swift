@@ -890,6 +890,34 @@ struct TweetActionButtonsView: View {
             print("DEBUG: [SHARE] In feed/grid context, using cache key: \(cacheKey)")
         }
         
+        // CRITICAL: TweetDetailView uses DetailVideoManager singleton, not SharedAssetCache
+        // Check DetailVideoManager first when in detail view context
+        if isInDetailView,
+           let detailPlayer = DetailVideoManager.shared.currentPlayer,
+           DetailVideoManager.shared.currentVideoMid == mediaID,
+           let playerItem = detailPlayer.currentItem {
+            print("DEBUG: [SHARE] Found DetailVideoManager singleton player for: \(mediaID)")
+            
+            let duration = try? await playerItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+                print("DEBUG: [SHARE] DetailVideoManager player duration: \(durationSeconds)s, currentTime: \(currentTime)s")
+                
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    // Use current position, or fallback to 1s if at beginning
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    print("DEBUG: [SHARE] Capturing frame from DetailVideoManager at \(String(format: "%.2f", captureTime))s")
+                    
+                    if let image = await captureFrameFromPlayer(detailPlayer, at: captureTime) {
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        print("DEBUG: [SHARE] Preview generated from DetailVideoManager in \(String(format: "%.2f", elapsed))s")
+                        return image
+                    }
+                }
+            }
+        }
+        
         // For HLS videos, try to use cached player first
         if isHLS {
             print("DEBUG: [SHARE] HLS video detected, checking for cached player with key: \(cacheKey)...")
