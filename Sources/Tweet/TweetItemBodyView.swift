@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // Conditional modifier extension
 extension View {
@@ -12,15 +13,6 @@ extension View {
     }
 }
 
-// PreferenceKey for detecting text truncation
-struct TruncationPreferenceKey: PreferenceKey {
-    static var defaultValue: Bool = false
-    
-    static func reduce(value: inout Bool, nextValue: () -> Bool) {
-        value = value || nextValue()
-    }
-}
-
 @available(iOS 16.0, *)
 struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
@@ -31,6 +23,7 @@ struct TweetItemBodyView: View {
     var onTweetBodyTap: (() -> Void)? = nil // Callback to navigate to tweet detail
     @State private var showLoginSheet = false
     @State private var isTruncated = false
+    @State private var truncationTask: Task<Void, Never>? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Cache screen dimensions to avoid repeated UIScreen.main calls
@@ -38,6 +31,37 @@ struct TweetItemBodyView: View {
         let screenWidth = UIScreen.main.bounds.width
         return max(10, screenWidth - 32)
     }()
+    
+    // MARK: - Off-Thread Truncation Detection
+    
+    /// Calculate if text will be truncated at given line limit without rendering
+    /// This runs off the main thread to avoid blocking UI
+    private func checkTextTruncation(text: String, maxLines: Int) async -> Bool {
+        // Use the same width as the text view (screen width - padding)
+        let availableWidth = UIScreen.main.bounds.width - 32 // Match frame padding
+        
+        // Use UIFont that matches SwiftUI's .body font
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        
+        // Create NSAttributedString with the font
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        
+        // Calculate the size needed for unlimited lines
+        let constraintSize = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
+        let boundingRect = attributedString.boundingRect(
+            with: constraintSize,
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil
+        )
+        
+        // Calculate the size for limited lines
+        let lineHeight = font.lineHeight
+        let maxHeight = lineHeight * CGFloat(maxLines)
+        
+        // If the full text height exceeds the max height, it's truncated
+        return boundingRect.height > maxHeight
+    }
 
     /// Caption text for a single-video media grid: prefers tweet title, falls back to video file name (without extension)
     private func singleVideoCaption(for attachments: [MimeiFileType]) -> String? {
@@ -85,28 +109,26 @@ struct TweetItemBodyView: View {
                     .if(enableTap) { $0.contentShape(Rectangle()) }
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
-                    .background(
-                        // Hidden view to detect truncation
-                        GeometryReader { geometry in
-                            Text(content)
-                                .font(.body)
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .background(GeometryReader { fullGeometry in
-                                    Color.clear.preference(
-                                        key: TruncationPreferenceKey.self,
-                                        value: fullGeometry.size.height > geometry.size.height
-                                    )
-                                })
-                        }
-                        .hidden()
-                    )
-                    .onPreferenceChange(TruncationPreferenceKey.self) { truncated in
-                        isTruncated = truncated
-                    }
                     .onTapGesture {
                         // Tap to open tweet detail
                         onTweetBodyTap?()
+                    }
+                    .task(id: content) {
+                        // Cancel previous task if content changed
+                        truncationTask?.cancel()
+                        
+                        // Calculate truncation off main thread
+                        truncationTask = Task.detached(priority: .userInitiated) {
+                            let truncated = await checkTextTruncation(text: content, maxLines: 7)
+                            
+                            // Check if task was cancelled
+                            guard !Task.isCancelled else { return }
+                            
+                            // Update UI on main thread
+                            await MainActor.run {
+                                isTruncated = truncated
+                            }
+                        }
                     }
                 
                 if isTruncated {
@@ -171,6 +193,10 @@ struct TweetItemBodyView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .onDisappear {
+            // Cancel truncation task when view disappears
+            truncationTask?.cancel()
         }
     }
     

@@ -23,9 +23,6 @@ extension Notification.Name {
     /// Posted when a tweet is deleted
     static let tweetDeleted = Notification.Name("tweetDeleted")
     
-    /// Posted when a tweet's content height changes (e.g., expand/collapse)
-    static let tweetHeightDidChange = Notification.Name("tweetHeightDidChange")
-    
     /// Posted when a tweet deletion fails and needs to be restored
     static let tweetRestored = Notification.Name("TweetRestored")
     

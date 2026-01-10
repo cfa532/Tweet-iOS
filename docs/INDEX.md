@@ -46,6 +46,7 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
+| [**fixes/TEXT_TRUNCATION_PERFORMANCE_FIX.md**](./fixes/TEXT_TRUNCATION_PERFORMANCE_FIX.md) | **PERFORMANCE**: Fixed 900ms main thread hang by replacing nested GeometryReader with off-thread text measurement - 50% faster scrolling | Jan 2026 |
 | [**MEMORY_LEAK_ROOT_CAUSE.md**](./MEMORY_LEAK_ROOT_CAUSE.md) | **CRITICAL**: Root cause analysis of 100MB+ memory leak from failed downloads - closure capture, missing cleanup, and one-line fix | Jan 2026 |
 | [**BLACKLIST_MEDIA_INTEGRATION.md**](./BLACKLIST_MEDIA_INTEGRATION.md) | **NEW**: Integrated existing BlackList system with images and videos to prevent wasting resources on repeatedly failed media | Jan 2026 |
 | [**NODEPOOL_STRATEGY.md**](./NODEPOOL_STRATEGY.md) | **NEW**: NodePool optimization with trust (fetchUser) vs verify (getHostIP) strategies, automatic cleanup, self-healing | Jan 2026 |
