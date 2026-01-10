@@ -461,6 +461,15 @@ class ImageCacheManager: @unchecked Sendable {
             // Add to memory cache
             self.cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
             print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
+            
+            // Notify Avatar views that this image is now cached
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: .imageCached,
+                    object: nil,
+                    userInfo: ["avatarId": key]
+                )
+            }
         }
         
         // Return immediately without waiting for compression

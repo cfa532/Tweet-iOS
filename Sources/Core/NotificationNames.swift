@@ -96,6 +96,8 @@ extension Notification.Name {
     static let cacheCleared = Notification.Name("CacheCleared")
     /// Posted when video infrastructure is restarted after background recovery
     static let videoInfrastructureRestarted = Notification.Name("VideoInfrastructureRestarted")
+    /// Posted when an image is successfully cached (avatarId in userInfo)
+    static let imageCached = Notification.Name("ImageCached")
     
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
