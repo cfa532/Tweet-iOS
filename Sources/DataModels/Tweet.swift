@@ -541,33 +541,72 @@ extension Array where Element == Tweet {
         return lowerBound
     }
     
-    /// Core merge implementation shared by both merge variants.
+    /// Core merge implementation - optimized for layout stability
+    /// Updates tweet properties in place, letting SwiftUI recompose naturally
+    /// Only inserts truly new tweets, avoiding array mutations that cause scroll jumps
     private mutating func mergeTweetsInternal(_ newTweets: [Tweet]) {
         guard !newTweets.isEmpty else { return }
         
+        // Build dictionary index map for O(1) lookups
+        var indexMap: [String: Int] = [:]
+        for (index, tweet) in self.enumerated() {
+            indexMap[tweet.mid] = index
+        }
+        
         var processedIds = Set<String>()
+        var tweetsToInsert: [Tweet] = []
         
         for newTweet in newTweets {
             guard processedIds.insert(newTweet.mid).inserted else { continue }
             
-            if let existingIndex = firstIndex(where: { $0.mid == newTweet.mid }) {
-                let previousNeighbor = existingIndex > 0 ? self[existingIndex - 1] : nil
-                let nextNeighbor = existingIndex + 1 < count ? self[existingIndex + 1] : nil
+            if let existingIndex = indexMap[newTweet.mid] {
+                // Tweet exists - update its properties in place
+                // The singleton pattern ensures all references see the update
+                // SwiftUI's @ObservedObject will trigger recomposition automatically
+                let existingTweet = self[existingIndex]
                 
-                let shouldMoveUp = previousNeighbor.map { shouldPlace(newTweet, before: $0) } ?? false
-                let shouldMoveDown = nextNeighbor.map { shouldPlace($0, before: newTweet) } ?? false
-                
-                if shouldMoveUp || shouldMoveDown {
-                    remove(at: existingIndex)
-                    let insertionIndex = orderedInsertionIndex(for: newTweet)
-                    insert(newTweet, at: insertionIndex)
-                } else {
-                    self[existingIndex] = newTweet
+                // Update all properties that might have changed
+                if let content = newTweet.content {
+                    existingTweet.content = content
                 }
+                if let title = newTweet.title {
+                    existingTweet.title = title
+                }
+                existingTweet.timestamp = newTweet.timestamp
+                if let author = newTweet.author {
+                    existingTweet.author = author
+                }
+                if let favorites = newTweet.favorites {
+                    existingTweet.favorites = favorites
+                }
+                existingTweet.favoriteCount = newTweet.favoriteCount
+                existingTweet.bookmarkCount = newTweet.bookmarkCount
+                existingTweet.retweetCount = newTweet.retweetCount
+                existingTweet.commentCount = newTweet.commentCount
+                if let attachments = newTweet.attachments {
+                    existingTweet.attachments = attachments
+                }
+                if let isPrivate = newTweet.isPrivate {
+                    existingTweet.isPrivate = isPrivate
+                }
+                if let downloadable = newTweet.downloadable {
+                    existingTweet.downloadable = downloadable
+                }
+                
+                // No array mutation - tweet stays at same index, SwiftUI recomposes
             } else {
-                let insertionIndex = orderedInsertionIndex(for: newTweet)
-                insert(newTweet, at: insertionIndex)
+                // New tweet - collect for insertion
+                tweetsToInsert.append(newTweet)
             }
+        }
+        
+        // Insert new tweets at their correct positions
+        // Process in sorted order to maintain correct positions as we insert
+        let sortedNewTweets = tweetsToInsert.sorted { shouldPlace($0, before: $1) }
+        
+        for newTweet in sortedNewTweets {
+            let insertionIndex = orderedInsertionIndex(for: newTweet)
+            insert(newTweet, at: insertionIndex)
         }
     }
     
