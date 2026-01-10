@@ -229,6 +229,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
                     isInProfile: true,
                     showDeleteButton: user.mid == hproseInstance.appUser.mid,
+                    isLastItem: viewModel.tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
                     onAvatarTap: { user in
                         onUserSelect(user)
                     },

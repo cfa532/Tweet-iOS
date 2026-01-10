@@ -24,6 +24,8 @@ class TweetTableViewController: UITableViewController {
     // Spinner timing
     private var loadingSpinnerStartTime: Date? = nil
     private let minimumSpinnerDisplayTime: TimeInterval = 0.5  // 500ms minimum
+    private var loadingTimeoutTimer: Timer?
+    private let maximumLoadingTime: TimeInterval = 30.0  // 30 second timeout
     
     // No more tweets message state
     private var isShowingNoMoreTweetsMessage: Bool = false
@@ -87,8 +89,9 @@ class TweetTableViewController: UITableViewController {
             NotificationCenter.default.removeObserver(observer)
         }
         
-        // Clean up timer
+        // Clean up timers
         noMoreTweetsMessageTimer?.invalidate()
+        loadingTimeoutTimer?.invalidate()
     }
     
     private func setupScrollToTopObserver() {
@@ -453,14 +456,27 @@ class TweetTableViewController: UITableViewController {
         if isLoadingMore {
             // Record when spinner was shown
             loadingSpinnerStartTime = Date()
-            print("⏳ [FOOTER SPINNER] Showing spinner with animation")
+            print("⏳ [FOOTER SPINNER] Showing spinner with animation at \(Date())")
             
-            // Match message height for consistency
-            let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 44))
+            // Start timeout timer as safety measure (30 second timeout)
+            loadingTimeoutTimer?.invalidate()
+            loadingTimeoutTimer = Timer.scheduledTimer(withTimeInterval: maximumLoadingTime, repeats: false) { [weak self] _ in
+                guard let self = self else { return }
+                print("⚠️ [TIMEOUT] Loading took longer than \(Int(self.maximumLoadingTime))s - forcing spinner to hide")
+                
+                // Force hide spinner and reset state
+                if self.isLoadingMore {
+                    self.updateLoadingState(isLoadingMore: false, hasMoreTweets: self.hasMoreTweets)
+                }
+            }
+            
+            // Use taller footer to position spinner just above bottom nav bar
+            let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 80))
             footerView.backgroundColor = .clear
             
             let spinner = UIActivityIndicatorView(style: .medium)
-            spinner.center = CGPoint(x: footerView.bounds.width / 2, y: 22) // Center in 44pt height
+            // Position spinner in lower part of footer, closer to bottom nav
+            spinner.center = CGPoint(x: footerView.bounds.width / 2, y: 30)
             spinner.startAnimating()
             footerView.addSubview(spinner)
             
@@ -510,7 +526,12 @@ class TweetTableViewController: UITableViewController {
     }
     
     private func hideSpinner(shouldShowMessage: Bool) {
+        // Cancel timeout timer since loading completed normally
+        loadingTimeoutTimer?.invalidate()
+        loadingTimeoutTimer = nil
+        
         guard let footerView = tableView.tableFooterView else {
+            print("✅ [FOOTER SPINNER] No footer view to hide")
             loadingSpinnerStartTime = nil
             if shouldShowMessage {
                 showNoMoreTweetsMessage()
@@ -518,7 +539,12 @@ class TweetTableViewController: UITableViewController {
             return
         }
         
-        print("✅ [FOOTER SPINNER] Hiding spinner with animation")
+        if let startTime = loadingSpinnerStartTime {
+            let displayDuration = Date().timeIntervalSince(startTime)
+            print("✅ [FOOTER SPINNER] Hiding spinner with animation (displayed for \(String(format: "%.2f", displayDuration * 1000))ms)")
+        } else {
+            print("✅ [FOOTER SPINNER] Hiding spinner with animation (no start time)")
+        }
         
         // Fade out and slide down animation
         UIView.animate(withDuration: 0.2, animations: {
@@ -528,11 +554,13 @@ class TweetTableViewController: UITableViewController {
             guard let self = self else { return }
             if self.tableView.tableFooterView === footerView {
                 self.tableView.tableFooterView = nil
+                print("✅ [FOOTER SPINNER] Footer view removed from table")
             }
             self.loadingSpinnerStartTime = nil
             
             // Show message after spinner clears
             if shouldShowMessage {
+                print("📭 [TRANSITION] Showing 'no more tweets' message after spinner")
                 self.showNoMoreTweetsMessage()
             }
         }
@@ -828,6 +856,17 @@ class TweetTableViewController: UITableViewController {
     }
     
     // MARK: - Bottom Pull-to-Load
+    //
+    // Flow when user pulls at bottom:
+    // - WITH server call: Spinner shows minimum 500ms, waits for server response
+    //   - If server responds: Spinner hides after response (minimum 500ms enforced)
+    //   - If timeout (30s): Spinner force-hides with warning log
+    // - WITHOUT server call (no more tweets):
+    //   1. Show spinner for exactly 500ms
+    //   2. Hide spinner with animation
+    //   3. Show "no more tweets" message for exactly 2s
+    //   4. Hide message with animation
+    //   5. Apply 2s cooldown before showing message again
     
     /// Programmatically trigger load more (e.g., from external button or gesture)
     func triggerLoadMore() {
@@ -847,14 +886,15 @@ class TweetTableViewController: UITableViewController {
         
         // Check if there are no more tweets to load
         if !hasMoreTweets {
-            print("📭 [BOTTOM PULL] No more tweets - showing spinner then message")
+            print("📭 [BOTTOM PULL] No more tweets - showing spinner for 500ms then message for 2s")
             
-            // Show spinner first for minimum 500ms, then show message
+            // Show spinner first for exactly 500ms
             updateLoadingState(isLoadingMore: true, hasMoreTweets: false)
             
-            // After minimum spinner time, hide spinner and show message
+            // After 500ms, hide spinner (which will trigger message if conditions are met)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self = self else { return }
+                print("⏰ [TIMING] 500ms elapsed - hiding spinner and showing message")
                 self.updateLoadingState(isLoadingMore: false, hasMoreTweets: false)
                 
                 // Reset flag to allow next pull
@@ -891,10 +931,10 @@ class TweetTableViewController: UITableViewController {
         // Cancel any existing timer
         noMoreTweetsMessageTimer?.invalidate()
         
-        print("📭 [NO MORE TWEETS] Showing message with animation")
+        print("📭 [NO MORE TWEETS] Showing message with animation at \(Date())")
         
-        // Create footer view with message - reduced height for better visibility
-        let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 44))
+        // Create footer view with message - match spinner height
+        let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 80))
         footerView.backgroundColor = .clear
         
         let messageLabel = UILabel()
@@ -906,9 +946,10 @@ class TweetTableViewController: UITableViewController {
         
         footerView.addSubview(messageLabel)
         
+        // Position message in lower part of footer, matching spinner position
         NSLayoutConstraint.activate([
             messageLabel.centerXAnchor.constraint(equalTo: footerView.centerXAnchor),
-            messageLabel.topAnchor.constraint(equalTo: footerView.topAnchor, constant: 12)
+            messageLabel.topAnchor.constraint(equalTo: footerView.topAnchor, constant: 20)
         ])
         
         // Fade in and slide up animation (matching Android)
@@ -921,15 +962,16 @@ class TweetTableViewController: UITableViewController {
             footerView.transform = .identity
         }
         
-        // Auto-hide after 1 second
-        print("📭 [NO MORE TWEETS] Setting 1-second timer")
-        noMoreTweetsMessageTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] timer in
+        // Auto-hide after 2 seconds
+        let messageDisplayDuration: TimeInterval = 2.0
+        print("📭 [NO MORE TWEETS] Setting \(messageDisplayDuration)-second timer")
+        noMoreTweetsMessageTimer = Timer.scheduledTimer(withTimeInterval: messageDisplayDuration, repeats: false) { [weak self] timer in
             guard let self = self else {
                 print("📭 [NO MORE TWEETS] Timer fired but self is nil")
                 return
             }
             
-            print("📭 [NO MORE TWEETS] Timer fired - hiding message with animation (2s cooldown active)")
+            print("📭 [NO MORE TWEETS] Timer fired at \(Date()) - hiding message with animation (2s cooldown active)")
             
             // Fade out and slide up animation
             UIView.animate(withDuration: 0.3, animations: {
@@ -938,7 +980,7 @@ class TweetTableViewController: UITableViewController {
             }) { _ in
                 if self.tableView.tableFooterView === footerView {
                     self.tableView.tableFooterView = nil
-                    print("📭 [NO MORE TWEETS] Message hidden and removed from table")
+                    print("📭 [NO MORE TWEETS] Message hidden and removed from table at \(Date())")
                 }
                 self.isShowingNoMoreTweetsMessage = false
             }

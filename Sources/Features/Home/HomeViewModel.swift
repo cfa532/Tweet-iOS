@@ -307,6 +307,7 @@ struct TweetListDestinationView: View {
                 TweetItemView(
                     tweet: tweet,
                     showDeleteButton: isTargetAppUser,
+                    isLastItem: tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
                     onAvatarTap: { tappedUser in
                         navigationPath.append(tappedUser)
                     },

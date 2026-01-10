@@ -6,6 +6,7 @@ struct TweetItemView: View, Equatable {
     var isPinned: Bool = false
     var isInProfile: Bool = false
     var showDeleteButton: Bool = false
+    var isLastItem: Bool = false  // Hide separator on last item
     var onAvatarTap: ((User) -> Void)? = nil
     var onTap: ((Tweet) -> Void)? = nil
     var onAvatarTapInProfile: ((User) -> Void)? = nil
@@ -98,11 +99,13 @@ struct TweetItemView: View, Equatable {
                 }
             }
             
-            // Bottom separator with shadow
-            Rectangle()
-                .fill(Color(.systemGray).opacity(0.2))
-                .frame(height: 1)
-                .padding(.horizontal, 2)
+            // Bottom separator with shadow (hidden on last item)
+            if !isLastItem {
+                Rectangle()
+                    .fill(Color(.systemGray).opacity(0.2))
+                    .frame(height: 1)
+                    .padding(.horizontal, 2)
+            }
         }
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
@@ -489,6 +492,7 @@ struct TweetItemView: View, Equatable {
                lhs.isPinned == rhs.isPinned &&
                lhs.isInProfile == rhs.isInProfile &&
                lhs.showDeleteButton == rhs.showDeleteButton &&
+               lhs.isLastItem == rhs.isLastItem &&
                lhs.hideActions == rhs.hideActions &&
                lhs.backgroundColor == rhs.backgroundColor &&
                lhs.originalTweet?.mid == rhs.originalTweet?.mid &&

@@ -69,6 +69,7 @@ struct FollowingsTweetView: View {
                     isPinned: false,
                     isInProfile: false,
                     showDeleteButton: true,
+                    isLastItem: viewModel.tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
                     onAvatarTap: { user in
                         onAvatarTap(user)
                     },
