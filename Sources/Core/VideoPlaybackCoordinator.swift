@@ -131,7 +131,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This flag will be cleared if user explicitly scrolls
         if phase != .idle {
             shouldPreserveStateOnForeground = true
-            print("🔄 [VideoOrchestrator] App backgrounded with active state - will preserve on foreground")
         }
     }
     
@@ -205,7 +204,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                             }
                         }
                     } else {
-                        print("🟢 [BUILD VIDEO LIST] Skipping pure retweet \(tweet.mid) - original tweet not in any cache")
                     }
                 }
             } else {
@@ -382,7 +380,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func startSurveyPhase() {
         // Guard against starting survey if not in idle phase
         guard phase == .idle else {
-            print("🎬 [VideoOrchestrator] Cannot start survey - already in \(phase) phase")
             return
         }
         
@@ -424,7 +421,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func endSurveyPhase() {
         // Guard against ending survey if not in surveying phase
         guard phase == .surveying else {
-            print("🎬 [VideoOrchestrator] Ignoring endSurvey - not in surveying phase (current: \(phase))")
             return
         }
         
@@ -434,7 +430,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         // Identify primary video (most visible/centered)
         guard let primary = identifyPrimaryVideo() else {
-            print("🎬 [VideoOrchestrator] No primary video found, stopping all")
             stopAllVideos()
             return
         }
@@ -457,7 +452,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // - If ACTUALLY playing, it returns immediately without seeking/restarting
         // - If NOT playing (failed creation), it starts playback
         // - This gives us reliability (handles failures) without jitter (idempotent)
-        print("🎬 [VideoOrchestrator] Sending play command to ensure primary video plays")
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
             object: nil,
@@ -545,37 +539,29 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Play next visible video after primary finishes
     private func playNextVisibleVideo() {
         guard let currentPrimary = primaryVideoId else {
-            print("🎬 [VideoOrchestrator] No primary video to advance from")
             return
         }
 
-        print("🎬 [VideoOrchestrator] Advancing from primary: \(currentPrimary)")
-        print("🎬 [VideoOrchestrator] Visible videos: \(visibleVideos.map { $0.identifier })")
 
         // Find current primary in visible videos list
         guard let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentPrimary }) else {
-            print("🎬 [VideoOrchestrator] Current primary not in visible list - stopping all")
             stopAllVideos()
             return
         }
 
         // Find next video
         let nextIndex = currentIndex + 1
-        print("🎬 [VideoOrchestrator] Current index: \(currentIndex), next index: \(nextIndex), total videos: \(visibleVideos.count)")
         
         guard nextIndex < visibleVideos.count else {
-            print("🎬 [VideoOrchestrator] No more videos to play - stopping all")
             stopAllVideos()
             return
         }
 
         let nextVideo = visibleVideos[nextIndex]
         let currentVideo = visibleVideos[currentIndex]
-        print("🎬 [VideoOrchestrator] Advancing to next video: \(nextVideo.videoMid)")
 
         // CRITICAL: Clear coordinatorWantsToPlay flag for finished video
         // This prevents it from auto-playing on next foreground recovery
-        print("🎬 [VideoOrchestrator] Sending pause command to finished video: \(currentVideo.videoMid)")
         NotificationCenter.default.post(
             name: .shouldPauseVideo,
             object: nil,
@@ -588,7 +574,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         primaryVideoId = nextVideo.identifier
         currentlyPlayingVideoIds = [nextVideo.identifier]
 
-        print("🎬 [VideoOrchestrator] Sending play command to next video")
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
             object: nil,
@@ -604,14 +589,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Handle video finished notification
     @objc private func handleVideoFinished(_ notification: Notification) {
         guard let videoMid = notification.userInfo?["videoMid"] as? String else {
-            print("⚠️ [VideoOrchestrator] Video finished notification received but no videoMid in userInfo")
             return
         }
 
         // If in survey phase, a video finishing means it's short or was near end
         // Immediately end survey and make it (or next one) primary
         if phase == .surveying {
-            print("🎬 [VideoOrchestrator] Video finished during survey - ending survey early")
             endSurveyPhase()
             return
         }
@@ -620,17 +603,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId,
            primaryId.contains(videoMid) {
-            print("🎬 [VideoOrchestrator] Primary video finished - advancing to next")
             playNextVisibleVideo()
         } else {
-            print("🎬 [VideoOrchestrator] Non-primary video finished (phase:\(phase), hasPrimary:\(primaryVideoId != nil)) - ignoring")
         }
     }
     
     /// Handle foreground recovery - intelligently decide whether to preserve or reset state
     /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
     @objc private func handleForegroundRecovery(_ notification: Notification) {
-        print("🔄 [VideoOrchestrator] Foreground recovery - checking if state should be preserved")
         
         // CRITICAL: Use flag instead of comparing IDs
         // Tweet list might refresh (new IDs) even though user is at same position
@@ -641,19 +621,15 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         if shouldPreserveState {
             // PRESERVE STATE: User didn't scroll away, just resume
-            print("🔄 [VideoOrchestrator] State preservation flag set (phase:\(phase)) - preserving playback state")
             
             // Clear flag now that we've used it
             shouldPreserveStateOnForeground = false
             
             if phase == .primaryPlaying, let primaryId = primaryVideoId {
                 // Resume primary video - find by videoMid (stable across refreshes)
-                print("🔄 [VideoOrchestrator] Resuming primary video after foreground (primaryId: \(primaryId))")
                 
                 // Extract videoMid from identifier (format: tweetId_videoMid)
                 let primaryVideoMid = primaryId.split(separator: "_").last.map(String.init)
-                print("🔄 [VideoOrchestrator] Extracted videoMid: \(primaryVideoMid ?? "nil") from primaryId")
-                print("🔄 [VideoOrchestrator] Current visible videos: \(visibleVideos.map { $0.videoMid })")
                 
                 if let primaryVideoMid = primaryVideoMid,
                    let primary = visibleVideos.first(where: { $0.videoMid == primaryVideoMid }) {
@@ -664,12 +640,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                     
                     if primaryIndex > 0 && visibleVideos.count > 1 {
                         // Primary is not first - restart from first video
-                        print("🔄 [VideoOrchestrator] Primary video is at index \(primaryIndex), restarting from first video")
                         
                         // CRITICAL: Clear stale coordinatorWantsToPlay flags from other videos
                         // Send pause commands to all videos except the first one
                         for (index, video) in visibleVideos.enumerated() where index > 0 {
-                            print("🔄 [VideoOrchestrator] Clearing stale flag for video at index \(index): \(video.videoMid)")
                             NotificationCenter.default.post(
                                 name: .shouldPauseVideo,
                                 object: nil,
@@ -683,7 +657,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                         primaryVideoId = firstVideo.identifier
                         currentlyPlayingVideoIds = [firstVideo.identifier]
                         
-                        print("🔄 [VideoOrchestrator] Sending play command to first video: \(firstVideo.videoMid)")
                         NotificationCenter.default.post(
                             name: .shouldPlayVideo,
                             object: nil,
@@ -696,11 +669,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                         )
                     } else {
                         // Primary is first or only video - resume it
-                        print("🔄 [VideoOrchestrator] Found primary video, updating identifier from \(primaryVideoId!) to \(primary.identifier)")
                         primaryVideoId = primary.identifier
                         currentlyPlayingVideoIds = [primary.identifier]
 
-                        print("🔄 [VideoOrchestrator] Sending play command to primary: \(primary.videoMid)")
                         NotificationCenter.default.post(
                             name: .shouldPlayVideo,
                             object: nil,
@@ -714,8 +685,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     }
                 } else {
                     // Primary video no longer in list (scrolled out), restart survey
-                    print("🔄 [VideoOrchestrator] Primary video (\(primaryVideoMid ?? "unknown")) no longer visible - restarting survey")
-                    print("🔄 [VideoOrchestrator] Available videos: \(visibleVideos.map { $0.videoMid })")
                     phase = .idle
                     primaryVideoId = nil
                     currentlyPlayingVideoIds.removeAll()
@@ -725,7 +694,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 }
             } else if phase == .surveying {
                 // Continue survey phase
-                print("🔄 [VideoOrchestrator] Continuing survey phase after foreground")
                 // Re-send play commands to ensure survey continues
                 for video in visibleVideos {
                     playVideoForSurvey(video)
@@ -733,8 +701,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         } else {
             // RESET STATE: User scrolled away or no active state
-            print("🔄 [VideoOrchestrator] User scrolled or no active state - restarting survey")
-            print("🔄 [VideoOrchestrator] (hasActive:\(hasActiveState), preserveFlag:\(shouldPreserveStateOnForeground))")
             
             // Clear flag
             shouldPreserveStateOnForeground = false
@@ -754,14 +720,12 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             // If there are visible videos, restart survey
             if !visibleVideos.isEmpty {
-                print("🔄 [VideoOrchestrator] Found \(visibleVideos.count) visible videos - restarting survey phase")
                 
                 // Small delay to ensure video infrastructure is ready
                 let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self = self else { return }
                         if self.phase == .idle && !self.visibleVideos.isEmpty {
-                            print("🔄 [VideoOrchestrator] Starting survey phase after foreground recovery")
                             self.startSurveyPhase()
                         }
                     }
@@ -769,7 +733,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 RunLoop.main.add(timer, forMode: .common)
                 playbackDebounceTimer = timer
             } else {
-                print("🔄 [VideoOrchestrator] No visible videos - waiting for scroll updates")
             }
         }
     }
