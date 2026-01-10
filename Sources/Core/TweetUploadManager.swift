@@ -1493,6 +1493,15 @@ extension TweetUploadManager {
                           typeIdLower.contains("avi") ||
                           typeIdLower.contains("mov")
             
+            // Determine if this is an image for local caching
+            let isImage = typeIdLower.contains("image") ||
+                          typeIdLower.contains("jpeg") ||
+                          typeIdLower.contains("jpg") ||
+                          typeIdLower.contains("png") ||
+                          typeIdLower.contains("gif") ||
+                          typeIdLower.contains("heic") ||
+                          typeIdLower.contains("heif")
+            
             do {
                 let (result, jobId) = try await uploadToIPFS(
                     data: item.data,
@@ -1524,6 +1533,18 @@ extension TweetUploadManager {
                 if let fileType = result {
                     uploadedAttachments.append(fileType)
                     print("✅ [Upload] Item \(itemNumber)/\(totalItems) uploaded as \(fileType.type.rawValue), fileName=\(fileType.fileName ?? "nil")")
+                    
+                    // CRITICAL FIX: For images, create local cache immediately after upload
+                    // This allows ChatImageThumbnail to display from cache instead of downloading from server
+                    // This is similar to how videos work - they cache locally via LocalHTTPServer
+                    if isImage {
+                        // Cache the image immediately so it's available for display
+                        // Use Task to avoid blocking the upload flow
+                        Task.detached(priority: .userInitiated) {
+                            ImageCacheManager.shared.cacheImageData(item.data, for: fileType)
+                            print("💾 [Upload] Cached image locally for immediate display: \(fileType.mid)")
+                        }
+                    }
                 }
                 
                 if let jobId = jobId {

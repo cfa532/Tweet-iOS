@@ -50,7 +50,6 @@ struct Avatar: View {
                 .frame(width: size, height: size)
                 .clipShape(Circle())
                 .onAppear {
-                    let viewId = "\(user.mid)_\(user.avatar ?? "noavatar")_\(user.baseUrl?.absoluteString ?? "nourl")"
                     // Try to load from cache first when view appears
                     // Always check cache even if loadFailed is true, as the avatar might have been loaded elsewhere
                     if cachedImage == nil {
