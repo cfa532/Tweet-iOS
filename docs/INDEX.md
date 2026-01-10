@@ -46,6 +46,8 @@
 ### Recent Critical Fixes
 | Document | Description | Date |
 |----------|-------------|------|
+| [**MEMORY_LEAK_ROOT_CAUSE.md**](./MEMORY_LEAK_ROOT_CAUSE.md) | **CRITICAL**: Root cause analysis of 100MB+ memory leak from failed downloads - closure capture, missing cleanup, and one-line fix | Jan 2026 |
+| [**BLACKLIST_MEDIA_INTEGRATION.md**](./BLACKLIST_MEDIA_INTEGRATION.md) | **NEW**: Integrated existing BlackList system with images and videos to prevent wasting resources on repeatedly failed media | Jan 2026 |
 | [**NODEPOOL_STRATEGY.md**](./NODEPOOL_STRATEGY.md) | **NEW**: NodePool optimization with trust (fetchUser) vs verify (getHostIP) strategies, automatic cleanup, self-healing | Jan 2026 |
 | [**fixes/LAYOUT_STABILITY_IMPROVEMENTS.md**](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) | **COMPREHENSIVE**: All layout stability mechanisms - retweet placeholders, scroll debouncing, GeometryReader removal, fixed sizes, drawing groups | Dec 2025 |
 | [**fixes/CACHE_KEY_MIGRATION_DEC_2025.md**](./fixes/CACHE_KEY_MIGRATION_DEC_2025.md) | Cache key migration from "main_feed" to appUser.mid with persistence across logouts | Dec 2025 |

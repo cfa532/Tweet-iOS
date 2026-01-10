@@ -79,6 +79,10 @@ class SharedAssetCache: ObservableObject {
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
     
+    // MARK: - Retry Management (ID-based to avoid memory leaks)
+    private var videoRetryCount: [String: Int] = [:] // mediaID -> retry count
+    private var scheduledVideoRetries: [String: Task<Void, Never>] = [:] // mediaID -> retry task
+    
     // MARK: - Disk Cache Status Cache (to avoid repeated disk I/O)
     private var diskCacheStatus: [String: (exists: Bool, timestamp: Date)] = [:] // mediaID -> (cache exists, check timestamp)
     private let diskCacheStatusTTL: TimeInterval = 60 // Cache disk status for 60 seconds
@@ -632,6 +636,14 @@ class SharedAssetCache: ObservableObject {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
         
+        // ✅ CHECK BLACKLIST FIRST - Don't waste resources on known-bad videos
+        let mimeiId = MimeiId(mediaID)
+        if BlackList.shared.isBlacklisted(mimeiId) {
+            print("🚫 [VIDEO BLACKLIST] Skipping blacklisted video: \(mediaID)")
+            throw NSError(domain: "SharedAssetCache", code: -2, 
+                         userInfo: [NSLocalizedDescriptionKey: "Video is blacklisted due to repeated failures"])
+        }
+        
         // CRITICAL: Cache key must ALWAYS be the mediaID (video attachment mid).
         // tweetId must never affect player caching; it caused incorrect reuse/eviction behavior.
         let cacheKey = mediaID
@@ -729,56 +741,157 @@ class SharedAssetCache: ObservableObject {
         }
         
         if isHLSVideo {
-            // Use CachingPlayerItem for HLS videos
+            // Use CachingPlayerItem for HLS videos WITH RETRY
             do {
-                let player = try await createCachingPlayer(for: url, tweetId: tweetId)
+                let player = try await createCachingPlayerWithRetry(for: url, mediaID: mediaID, tweetId: tweetId)
                 // Notify success
                 await MainActor.run {
                     VideoLoadingManager.shared.videoLoadCompleted()
+                    // Clear retry count on success
+                    videoRetryCount.removeValue(forKey: mediaID)
+                    // ✅ RECORD SUCCESS TO BLACKLIST
+                    BlackList.shared.recordSuccess(MimeiId(mediaID))
                 }
                 return player
             } catch {
                 // Notify failure
                 await MainActor.run {
                     VideoLoadingManager.shared.videoLoadCompleted()
+                    // ❌ RECORD FAILURE TO BLACKLIST
+                    BlackList.shared.recordFailure(MimeiId(mediaID))
                 }
                 throw error
             }
         } else {
-            // For progressive videos, use LocalHTTPServer to proxy and fix Content-Type
-            
-            // Remove query parameters
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            components?.query = nil
-            let cleanURL = components?.url ?? url
-            
-            // Start LocalHTTPServer
-            LocalHTTPServer.shared.start()
-            
-            // Register real URL and get localhost proxy URL
-            let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
-            print("🔗 [PROGRESSIVE VIDEO] Original URL: \(url.absoluteString)")
-            
-            // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
-            let asset = AVURLAsset(url: localURL)
-            let playerItem = AVPlayerItem(asset: asset)
-            let player = AVPlayer(playerItem: playerItem)
-            
-            // CRITICAL: Mute player at creation - will be unmuted by mode if needed
-            player.isMuted = true
-            
-            // Optimize buffering for progressive video playback
-            player.automaticallyWaitsToMinimizeStalling = false
-            playerItem.preferredForwardBufferDuration = 30.0  // Buffer 30 seconds ahead to reduce spinner frequency
-            
-            // Cache the player
-            await MainActor.run { 
-                cachePlayer(player, for: mediaID)
-                // Notify completion
-                VideoLoadingManager.shared.videoLoadCompleted()
+            // For progressive videos, use LocalHTTPServer to proxy and fix Content-Type WITH RETRY
+            do {
+                let player = try await createProgressivePlayerWithRetry(for: url, mediaID: mediaID)
+                // Notify success
+                await MainActor.run {
+                    VideoLoadingManager.shared.videoLoadCompleted()
+                    // Clear retry count on success
+                    videoRetryCount.removeValue(forKey: mediaID)
+                    // ✅ RECORD SUCCESS TO BLACKLIST
+                    BlackList.shared.recordSuccess(MimeiId(mediaID))
+                }
+                return player
+            } catch {
+                // Notify failure
+                await MainActor.run {
+                    VideoLoadingManager.shared.videoLoadCompleted()
+                    // ❌ RECORD FAILURE TO BLACKLIST
+                    BlackList.shared.recordFailure(MimeiId(mediaID))
+                }
+                throw error
             }
-            
+        }
+    }
+    
+    /// Create progressive video player with 1 retry on failure
+    private func createProgressivePlayerWithRetry(for url: URL, mediaID: String) async throws -> AVPlayer {
+        let currentRetry = await MainActor.run { videoRetryCount[mediaID] ?? 0 }
+        
+        do {
+            // Try to create player
+            let player = try await createProgressivePlayer(for: url, mediaID: mediaID)
             return player
+        } catch {
+            // Check if we can retry (max 1 retry)
+            if currentRetry < 1 {
+                await MainActor.run {
+                    videoRetryCount[mediaID] = currentRetry + 1
+                }
+                print("🔄 [PROGRESSIVE VIDEO RETRY] Attempt #\(currentRetry + 1) for: \(mediaID)")
+                
+                // Wait 2 seconds before retry
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                
+                // Check if cancelled during sleep
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
+                
+                // Retry once
+                return try await createProgressivePlayer(for: url, mediaID: mediaID)
+            } else {
+                print("❌ [PROGRESSIVE VIDEO] Failed after 1 retry: \(mediaID)")
+                throw error
+            }
+        }
+    }
+    
+    /// Create progressive video player (no retry logic, called by retry wrapper)
+    private func createProgressivePlayer(for url: URL, mediaID: String) async throws -> AVPlayer {
+        // Remove query parameters
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.query = nil
+        let cleanURL = components?.url ?? url
+        
+        // Start LocalHTTPServer
+        LocalHTTPServer.shared.start()
+        
+        // Register real URL and get localhost proxy URL
+        let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
+        print("🔗 [PROGRESSIVE VIDEO] Original URL: \(url.absoluteString)")
+        
+        // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
+        let asset = AVURLAsset(url: localURL)
+        
+        // Load asset properties to validate it's playable
+        guard let _ = try? await asset.load(.isPlayable) else {
+            throw NSError(domain: "SharedAssetCache", code: -1, 
+                         userInfo: [NSLocalizedDescriptionKey: "Progressive video asset not playable"])
+        }
+        
+        let playerItem = AVPlayerItem(asset: asset)
+        let player = AVPlayer(playerItem: playerItem)
+        
+        // CRITICAL: Mute player at creation - will be unmuted by mode if needed
+        player.isMuted = true
+        
+        // Optimize buffering for progressive video playback
+        player.automaticallyWaitsToMinimizeStalling = false
+        playerItem.preferredForwardBufferDuration = 30.0  // Buffer 30 seconds ahead to reduce spinner frequency
+        
+        // Cache the player
+        await MainActor.run { 
+            cachePlayer(player, for: mediaID)
+        }
+        
+        return player
+    }
+    
+    /// Create HLS video player with 1 retry on failure (tries master.m3u8 then playlist.m3u8, retries sequence once)
+    private func createCachingPlayerWithRetry(for url: URL, mediaID: String, tweetId: String?) async throws -> AVPlayer {
+        let currentRetry = await MainActor.run { videoRetryCount[mediaID] ?? 0 }
+        
+        do {
+            // Try to create player (already tries master.m3u8 then playlist.m3u8)
+            let player = try await createCachingPlayer(for: url, tweetId: tweetId)
+            return player
+        } catch {
+            // Check if we can retry (max 1 retry)
+            if currentRetry < 1 {
+                await MainActor.run {
+                    videoRetryCount[mediaID] = currentRetry + 1
+                }
+                print("🔄 [HLS VIDEO RETRY] Attempt #\(currentRetry + 1) for: \(mediaID)")
+                print("🔄 [HLS VIDEO RETRY] Will try master.m3u8 then playlist.m3u8 again")
+                
+                // Wait 2 seconds before retry
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                
+                // Check if cancelled during sleep
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
+                
+                // Retry once (will try master.m3u8 -> playlist.m3u8 again)
+                return try await createCachingPlayer(for: url, tweetId: tweetId)
+            } else {
+                print("❌ [HLS VIDEO] Failed after 1 retry (tried master.m3u8 and playlist.m3u8 twice): \(mediaID)")
+                throw error
+            }
         }
     }
     
@@ -981,12 +1094,12 @@ class SharedAssetCache: ObservableObject {
         
         
         // Step 1: Try master.m3u8 first (wait for completion before proceeding)
-        if await urlExists(masterURL, timeout: 15.0) {
+        if await urlExists(masterURL, timeout: 8.0) {
             return masterURL
         }
         
         // Step 2: Only if master.m3u8 failed, try playlist.m3u8 (sequential, not simultaneous)
-        if await urlExists(playlistURL, timeout: 15.0) {
+        if await urlExists(playlistURL, timeout: 8.0) {
             return playlistURL
         }
         
@@ -995,7 +1108,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Check if URL exists with configurable timeout
-    private func urlExists(_ url: URL, timeout: TimeInterval = 15.0) async -> Bool {
+    private func urlExists(_ url: URL, timeout: TimeInterval = 8.0) async -> Bool {
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "HEAD"
@@ -1031,6 +1144,13 @@ class SharedAssetCache: ObservableObject {
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
         
+        // Clear retry tasks
+        for task in scheduledVideoRetries.values {
+            task.cancel()
+        }
+        scheduledVideoRetries.removeAll()
+        videoRetryCount.removeAll()
+        
         // Clear timestamps
         cacheTimestamps.removeAll()
         
@@ -1058,6 +1178,13 @@ class SharedAssetCache: ObservableObject {
             task.cancel()
         }
         preloadTasks.removeAll()
+        
+        // Cancel all retry tasks
+        for (_, task) in scheduledVideoRetries {
+            task.cancel()
+        }
+        scheduledVideoRetries.removeAll()
+        videoRetryCount.removeAll()
     }
     
     /// Release a percentage of cache to free memory (preserves current playing videos)
