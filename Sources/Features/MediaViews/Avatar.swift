@@ -124,19 +124,19 @@ struct Avatar: View {
             loadAvatar(from: avatarUrl)
         }
         .onReceive(NotificationCenter.default.publisher(for: .imageCached)) { notification in
-            // When an image is cached, check if it's this avatar and reload from cache
+            // When an image is cached, check if it's this avatar and reload from memory cache
             guard let avatarId = notification.userInfo?["avatarId"] as? String,
                   avatarId == user.avatar,
                   cachedImage == nil,
                   !isLoading else { return }
-            
-            print("👤 [AVATAR.imageCached] Image cached for current avatar, reloading from disk...")
-            // Image is now cached, try loading from disk
+
+            print("👤 [AVATAR.imageCached] Image cached for current avatar, checking memory cache...")
+            // Image is now cached, try loading from memory (should be instant)
             let cacheKey = user.avatar ?? ""
             let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
-            
-            if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
-                print("👤 [AVATAR.imageCached] ✅ Successfully loaded from disk cache")
+
+            if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
+                print("👤 [AVATAR.imageCached] ✅ Successfully loaded from memory cache")
                 cachedImage = cached
                 loadFailed = false
             }
