@@ -145,6 +145,7 @@
 
 // MARK: - Tweet Actions
 "Show more" = "Show more";
+"More..." = "More...";
 "Forwarded by %@" = "Forwarded by %@";
 "Forwarded by you" = "Forwarded by you";
 "Quote Tweet" = "Quote Tweet";

@@ -133,6 +133,7 @@
 
 // MARK: - Tweet Actions
 "Show more" = "显示更多";
+"More..." = "更多...";
 "Forwarded by %@" = "由 %@ 转发";
 "Forwarded by you" = "由你转发";
 "Quote Tweet" = "引用推文";

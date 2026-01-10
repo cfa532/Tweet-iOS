@@ -130,6 +130,7 @@
 
 // MARK: - Tweet Actions
 "Show more" = "もっと見る";
+"More..." = "続きを見る...";
 "Forwarded by %@" = "%@がリツイート";
 "Forwarded by you" = "あなたがリツイート";
 "Quote Tweet" = "ツイートを引用";

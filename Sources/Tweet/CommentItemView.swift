@@ -61,7 +61,17 @@ struct CommentItemView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
-                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
+                TweetItemBodyView(
+                    tweet: comment,
+                    enableTap: false,
+                    isVisible: isVisible,
+                    onTweetBodyTap: {
+                        // Navigate to comment detail when body is tapped
+                        if let callback = onTap {
+                            callback(comment)
+                        }
+                    }
+                )
                 
                 TweetActionButtonsView(tweet: comment, commentsVM: commentsVM, parentTweet: parentTweet)
                     .padding(.top, 8)

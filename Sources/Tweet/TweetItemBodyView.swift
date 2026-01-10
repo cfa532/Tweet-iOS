@@ -12,6 +12,15 @@ extension View {
     }
 }
 
+// PreferenceKey for detecting text truncation
+struct TruncationPreferenceKey: PreferenceKey {
+    static var defaultValue: Bool = false
+    
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 @available(iOS 16.0, *)
 struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
@@ -19,8 +28,9 @@ struct TweetItemBodyView: View {
     var isVisible: Bool = true
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
     var sourceTweetId: String? = nil // ID of tweet user is viewing (retweet ID for retweets)
-    @State private var isExpanded = false
+    var onTweetBodyTap: (() -> Void)? = nil // Callback to navigate to tweet detail
     @State private var showLoginSheet = false
+    @State private var isTruncated = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Cache screen dimensions to avoid repeated UIScreen.main calls
@@ -71,28 +81,41 @@ struct TweetItemBodyView: View {
                 Text(content)
                     .font(.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(isExpanded ? nil : 7)
+                    .lineLimit(7)
                     .if(enableTap) { $0.contentShape(Rectangle()) }
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
-                    .animation(nil, value: isExpanded)  // Disable animation for instant layout
-                    .onTapGesture {
-                        // Tap to collapse when expanded
-                        if isExpanded {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                isExpanded = false
-                            }
+                    .background(
+                        // Hidden view to detect truncation
+                        GeometryReader { geometry in
+                            Text(content)
+                                .font(.body)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .background(GeometryReader { fullGeometry in
+                                    Color.clear.preference(
+                                        key: TruncationPreferenceKey.self,
+                                        value: fullGeometry.size.height > geometry.size.height
+                                    )
+                                })
                         }
+                        .hidden()
+                    )
+                    .onPreferenceChange(TruncationPreferenceKey.self) { truncated in
+                        isTruncated = truncated
+                    }
+                    .onTapGesture {
+                        // Tap to open tweet detail
+                        onTweetBodyTap?()
                     }
                 
-                if content.count > 500 && !isExpanded {
+                if isTruncated {
                     Button(action: { 
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isExpanded = true 
-                        }
+                        // Navigate to detail view
+                        onTweetBodyTap?()
                     }) {
-                        Text(LocalizedStringKey("Show more"))
-                            .font(.subheadline)
+                        Text(LocalizedStringKey("More..."))
+                            .font(.body)
                             .foregroundColor(.blue)
                     }
                 }

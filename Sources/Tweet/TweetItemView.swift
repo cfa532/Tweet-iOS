@@ -258,9 +258,19 @@ struct TweetItemView: View, Equatable {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
-                        TweetItemBodyView(tweet: originalTweet, isVisible: isVisible, sourceTweetId: tweet.mid)
-                            // STABILITY: Layout priority for tweet body prevents shifting
-                            .layoutPriority(1)
+                        TweetItemBodyView(
+                            tweet: originalTweet,
+                            isVisible: isVisible,
+                            sourceTweetId: tweet.mid,
+                            onTweetBodyTap: {
+                                // Navigate to original tweet detail when body is tapped
+                                if let callback = onTap {
+                                    callback(originalTweet)
+                                }
+                            }
+                        )
+                        // STABILITY: Layout priority for tweet body prevents shifting
+                        .layoutPriority(1)
                         
                         TweetActionButtonsView(tweet: originalTweet)
                             .padding(.top, 8)
@@ -294,9 +304,19 @@ struct TweetItemView: View, Equatable {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
-                            // STABILITY: Layout priority for tweet body prevents shifting
-                            .layoutPriority(1)
+                        TweetItemBodyView(
+                            tweet: tweet,
+                            enableTap: false,
+                            isVisible: isVisible,
+                            onTweetBodyTap: {
+                                // Navigate to tweet detail when body is tapped
+                                if let callback = onTap {
+                                    callback(tweet)
+                                }
+                            }
+                        )
+                        // STABILITY: Layout priority for tweet body prevents shifting
+                        .layoutPriority(1)
                         
                         // Embedded original tweet with darker background, no left border, and aligned avatar
                         EmbeddedTweetView(
@@ -353,9 +373,19 @@ struct TweetItemView: View, Equatable {
                     
                     // Show tweet content if available
                     if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
-                            // STABILITY: Layout priority for tweet body prevents shifting
-                            .layoutPriority(1)
+                        TweetItemBodyView(
+                            tweet: tweet,
+                            enableTap: false,
+                            isVisible: isVisible,
+                            onTweetBodyTap: {
+                                // Navigate to tweet detail when body is tapped
+                                if let callback = onTap {
+                                    callback(tweet)
+                                }
+                            }
+                        )
+                        // STABILITY: Layout priority for tweet body prevents shifting
+                        .layoutPriority(1)
                     }
                     
                     // STABILITY: Placeholder for embedded tweet with fixed height
@@ -419,9 +449,19 @@ struct TweetItemView: View, Equatable {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     
-                    TweetItemBodyView(tweet: tweet, enableTap: false, isVisible: isVisible)
-                        // STABILITY: Layout priority for tweet body prevents shifting
-                        .layoutPriority(1)
+                    TweetItemBodyView(
+                        tweet: tweet,
+                        enableTap: false,
+                        isVisible: isVisible,
+                        onTweetBodyTap: {
+                            // Navigate to tweet detail when body is tapped
+                            if let callback = onTap {
+                                callback(tweet)
+                            }
+                        }
+                    )
+                    // STABILITY: Layout priority for tweet body prevents shifting
+                    .layoutPriority(1)
                     
                     if !hideActions {
                         TweetActionButtonsView(tweet: tweet)
@@ -532,7 +572,13 @@ struct EmbeddedTweetView: View, Equatable {
                     tweet: tweet,
                     enableTap: false,
                     isVisible: isVisible,
-                    isEmbedded: isEmbedded
+                    isEmbedded: isEmbedded,
+                    onTweetBodyTap: {
+                        // Navigate to embedded tweet detail when body is tapped
+                        if let callback = onTap {
+                            callback(tweet)
+                        }
+                    }
                 )
                 // STABILITY: Layout priority for embedded tweet body
                 .layoutPriority(1)

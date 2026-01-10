@@ -61,6 +61,8 @@ class TweetTableViewController: UITableViewController {
     
     // Notification observer for scroll to top
     private var scrollToTopObserver: NSObjectProtocol?
+    // Notification observer for tweet height changes
+    private var tweetHeightObserver: NSObjectProtocol?
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -68,14 +70,18 @@ class TweetTableViewController: UITableViewController {
         setupTableView()
         setupRefreshControl()
         setupScrollToTopObserver()
+        setupTweetHeightObserver()
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
     }
     
     deinit {
-        // Remove notification observer
+        // Remove notification observers
         if let observer = scrollToTopObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = tweetHeightObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }
@@ -90,10 +96,43 @@ class TweetTableViewController: UITableViewController {
         }
     }
     
+    private func setupTweetHeightObserver() {
+        tweetHeightObserver = NotificationCenter.default.addObserver(
+            forName: .tweetHeightDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleTweetHeightChange(notification)
+        }
+    }
+    
     func scrollToTop() {
         // Scroll to the top of the table view with animation
         let topInset = tableView.adjustedContentInset.top
         tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: true)
+    }
+    
+    private func handleTweetHeightChange(_ notification: Notification) {
+        guard let tweetId = notification.userInfo?["tweetId"] as? String else { return }
+        
+        // Find the index path for this tweet
+        var indexPath: IndexPath?
+        
+        // Check pinned tweets first
+        if let pinnedIndex = pinnedTweets.firstIndex(where: { $0.mid == tweetId }) {
+            indexPath = IndexPath(row: pinnedIndex, section: 0)
+        }
+        // Then check regular tweets
+        else if let regularIndex = tweets.firstIndex(where: { $0.mid == tweetId }) {
+            indexPath = IndexPath(row: pinnedTweets.count + regularIndex, section: 0)
+        }
+        
+        guard let indexPath = indexPath else { return }
+        
+        // Use beginUpdates/endUpdates to animate height change without reloading content
+        tableView.performBatchUpdates({
+            // This triggers heightForRowAt to be called again
+        }, completion: nil)
     }
     
     override func viewDidAppear(_ animated: Bool) {
