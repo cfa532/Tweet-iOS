@@ -27,10 +27,22 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     class Coordinator {
         var lastTweetIds: [String] = []
         var lastPinnedTweetIds: [String] = []
+        weak var controller: TweetTableViewController?
+        
+        func triggerLoadMore() {
+            controller?.triggerLoadMore()
+        }
+        
+        func showNoMoreTweetsMessage() {
+            controller?.showNoMoreTweetsMessageIfNeeded()
+        }
     }
     
     func makeUIViewController(context: Context) -> TweetTableViewController {
         let controller = TweetTableViewController()
+        
+        // Store controller reference in coordinator
+        context.coordinator.controller = controller
         
         controller.loadMoreTweets = loadMoreTweets
         controller.onRefresh = onRefresh

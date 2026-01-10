@@ -1716,8 +1716,6 @@ struct SimpleVideoPlayer: View {
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
 
-        print("⏸️ [COORDINATOR] Pause command received by \(mid)")
-
         coordinatorWantsToPlay = false
         if let player = player {
             // CRITICAL: Capture wasPlaying state BEFORE pausing
@@ -1751,8 +1749,6 @@ struct SimpleVideoPlayer: View {
         
         let isSurvey = notification.userInfo?["isSurvey"] as? Bool ?? false
         let isPrimary = notification.userInfo?["isPrimary"] as? Bool ?? false
-        
-        print("📥 [COORDINATOR] Play command received by \(mid) (survey:\(isSurvey), primary:\(isPrimary), loaded:\(loadingState == .loaded), seeking:\(isSeekingToBeginning))")
         
         // CRITICAL: Reset finish flag when starting playback
         // This allows video to finish again if it plays multiple times (e.g. survey -> primary)
@@ -1803,7 +1799,6 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 if self.loadingState == .loaded, let player = self.player {
-                    print("▶️ [COORDINATOR] Ready after \(attempts * 100)ms - playing \(self.mid)")
                     player.volume = 0
                     player.play()
                     UIView.animate(withDuration: 0.3) {
@@ -1864,19 +1859,14 @@ struct SimpleVideoPlayer: View {
             UIView.animate(withDuration: 0.3) {
                 player.volume = 1.0
             }
-            print("▶️ [COORDINATOR] Started playback for \(mid)")
             
             // CRITICAL: Release recovery cover when playback starts
             if isHoldingRecoveryCover {
-                print("🔓 [COORDINATOR] Releasing recovery cover for \(mid)")
                 isHoldingRecoveryCover = false
             }
         } else {
-            print("▶️ [COORDINATOR] Already playing \(mid) - continuing")
-            
             // CRITICAL: Release recovery cover even if already playing
             if isHoldingRecoveryCover {
-                print("🔓 [COORDINATOR] Releasing recovery cover for already-playing \(mid)")
                 isHoldingRecoveryCover = false
             }
         }

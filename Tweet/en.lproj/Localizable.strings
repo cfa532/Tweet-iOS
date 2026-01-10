@@ -490,6 +490,7 @@
 "Yesterday" = "Yesterday";
 "%@ %@" = "%@ %@";
 "No more messages" = "No more messages";
+"No more tweets" = "No more tweets";
 
 // MARK: - Video Player
 "Failed to load video" = "Failed to load video";
