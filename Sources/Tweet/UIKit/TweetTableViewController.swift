@@ -242,22 +242,42 @@ class TweetTableViewController: UITableViewController {
             return
         }
         
-        // No change
-        if oldCount == newTweets.count && oldTweets.map({ $0.mid }) == newTweets.map({ $0.mid }) {
-            videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
-            return
+        // No change - use early exit to avoid allocations
+        if oldCount == newTweets.count {
+            var hasChange = false
+            for i in 0..<oldCount {
+                if oldTweets[i].mid != newTweets[i].mid {
+                    hasChange = true
+                    break
+                }
+            }
+            if !hasChange {
+                videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+                return
+            }
         }
         
         // Smart update: Check for common patterns
-        let oldIds = oldTweets.map { $0.mid }
-        let newIds = newTweets.map { $0.mid }
+        // Lazy evaluation - only create ID arrays when needed
+        var oldIds: [String]?
+        var newIds: [String]?
+        
+        func getOldIds() -> [String] {
+            if oldIds == nil { oldIds = oldTweets.map { $0.mid } }
+            return oldIds!
+        }
+        
+        func getNewIds() -> [String] {
+            if newIds == nil { newIds = newTweets.map { $0.mid } }
+            return newIds!
+        }
         
         // Case 1: Tweets prepended (new tweets at top) - most common for new posts
         if newTweets.count > oldCount {
             let potentialPrependCount = newTweets.count - oldCount
-            let afterNewOnes = Array(newIds.dropFirst(potentialPrependCount))
+            let afterNewOnes = Array(getNewIds().dropFirst(potentialPrependCount))
             
-            if afterNewOnes == oldIds {
+            if afterNewOnes == getOldIds() {
                 // Preflight: estimate heights for new tweets to reduce layout jumps
                 let prependedTweets = Array(newTweets.prefix(potentialPrependCount))
                 
@@ -270,9 +290,9 @@ class TweetTableViewController: UITableViewController {
         
         // Case 2: Tweets appended (pagination) - common for load more
         if newTweets.count > oldCount {
-            let newIdsPrefix = Array(newIds.prefix(oldCount))
+            let newIdsPrefix = Array(getNewIds().prefix(oldCount))
             
-            if newIdsPrefix == oldIds {
+            if newIdsPrefix == getOldIds() {
                 // Preflight: estimate heights for new tweets to reduce layout jumps
                 let appendedTweets = Array(newTweets[oldCount...])
                 
@@ -284,8 +304,10 @@ class TweetTableViewController: UITableViewController {
         }
         
         // Case 3: Single tweet removed - common for delete
+        // OPTIMIZED: Use Set for O(1) lookup instead of O(n)
         if newTweets.count == oldCount - 1 {
-            if let removedIndex = oldIds.firstIndex(where: { id in !newIds.contains(id) }) {
+            let newIdsSet = Set(getNewIds())
+            if let removedIndex = getOldIds().firstIndex(where: { !newIdsSet.contains($0) }) {
                 tableView.deleteRows(at: [IndexPath(row: removedIndex, section: 0)], with: .automatic)
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
