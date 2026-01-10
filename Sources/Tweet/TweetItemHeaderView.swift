@@ -227,6 +227,12 @@ struct TweetMenu: View {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(isPressed ? Color.secondary.opacity(0.2) : Color.clear)
                     )
+                    // IMPROVED: Expand touch area using background (doesn't affect layout)
+                    .background(
+                        Color.clear
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    )
                     .scaleEffect(isPressed ? 0.95 : 1.0)
                     .animation(.easeInOut(duration: 0.1), value: isPressed)
                     .accessibilityLabel("Tweet options")

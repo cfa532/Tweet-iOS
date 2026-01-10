@@ -45,6 +45,12 @@ struct CommentMenu: View {
                 .foregroundColor(.secondary)
                 .padding(12)
                 .contentShape(Rectangle())
+                // IMPROVED: Expand touch area using background (doesn't affect layout)
+                .background(
+                    Color.clear
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                )
         }
         .alert(NSLocalizedString("Delete Comment", comment: "Delete comment alert title"), isPresented: $showAlert) {
             Button(NSLocalizedString("OK", comment: "OK button"), role: .cancel) { }
