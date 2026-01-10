@@ -82,6 +82,9 @@ class VideoLoadingManager: ObservableObject {
     func updateVisibleTweetIndex(_ index: Int) {
         guard index >= 0 && index < allTweetIds.count else { return }
         
+        // Skip if index hasn't changed (reduces redundant work during rapid .onAppear calls)
+        guard index != currentVisibleTweetIndex else { return }
+        
         currentVisibleTweetIndex = index
         
         

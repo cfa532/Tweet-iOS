@@ -102,15 +102,18 @@ struct TweetListView<RowView: View>: View {
         let sourceTweet = allTweets[sourceTweetIdx]
         
         // Get media tweet (handle retweets)
-        // Optimization: Only fetch if retweet doesn't already have attachments
+        // Optimization: Check cache first, skip if not available (don't block on network)
         let mediaTweet: Tweet
         if let originalTweetId = sourceTweet.originalTweetId,
-           let originalAuthorId = sourceTweet.originalAuthorId,
            sourceTweet.attachments == nil {
-            // This is a retweet without attachments - need to fetch original
-            if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+            // This is a retweet without attachments - check cache (singleton + Core Data)
+            let original = Tweet.getInstance(for: originalTweetId)
+                ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
+            
+            if let original = original {
                 mediaTweet = original
             } else {
+                // Original not in cache - skip to next tweet instead of blocking on network
                 mediaTweet = sourceTweet
             }
         } else {
@@ -138,14 +141,18 @@ struct TweetListView<RowView: View>: View {
             let nextTweet = allTweets[idx]
             
             // Get media tweet (handle retweets)
-            // Optimization: Only fetch if retweet doesn't already have attachments
+            // Optimization: Check cache first, skip if not available (don't block on network)
             let nextMediaTweet: Tweet
             if let originalTweetId = nextTweet.originalTweetId,
-               let originalAuthorId = nextTweet.originalAuthorId,
                nextTweet.attachments == nil {
-                if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
+                // This is a retweet without attachments - check cache (singleton + Core Data)
+                let original = Tweet.getInstance(for: originalTweetId)
+                    ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
+                
+                if let original = original {
                     nextMediaTweet = original
                 } else {
+                    // Original not in cache - skip to next tweet instead of blocking on network
                     nextMediaTweet = nextTweet
                 }
             } else {

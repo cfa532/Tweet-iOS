@@ -2396,12 +2396,18 @@ struct SimpleVideoPlayer: View {
                 let hasBufferedData = !item.loadedTimeRanges.isEmpty
                 let bufferedAhead = self.bufferedTimeAhead(for: item, player: player)
                 
-                // Heuristic: refresh only if we're "ready" but have no frames buffered,
-                // or if we were previously playing and are stuck waiting with insufficient buffer.
+                // Heuristic: refresh if layer might be stale
+                // 1. Ready but no frames buffered
+                // 2. Was playing and stuck waiting with insufficient buffer  
+                // 3. CRITICAL: Audio playing (rate > 0) but video might be frozen
+                //    This catches the "audio plays but video frozen with spinner" bug
                 let stuckWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate || item.isPlaybackBufferEmpty
+                let audioPlayingButPossiblyFrozen = player.rate > 0 && (stuckWaiting || !hasBufferedData)
+                
                 let shouldRefresh =
                     (statusReady && !hasBufferedData) ||
-                    (wasPlayingBeforeBackground && stuckWaiting && bufferedAhead < self.firstFrameMinimumBuffer)
+                    (wasPlayingBeforeBackground && stuckWaiting && bufferedAhead < self.firstFrameMinimumBuffer) ||
+                    audioPlayingButPossiblyFrozen
                 
                 if shouldRefresh {
                     self.representableId += 1

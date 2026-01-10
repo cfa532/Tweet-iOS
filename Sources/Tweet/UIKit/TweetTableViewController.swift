@@ -697,47 +697,57 @@ class TweetTableViewController: UITableViewController {
         
         // Add quoted/retweeted tweet height if present
         if let originalTweetId = tweet.originalTweetId {
-            // Fetch the original tweet from cache to calculate accurate height
-            if let originalTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-                // Calculate embedded tweet height accurately
-                var embeddedHeight: CGFloat = 60 // Author info in embedded view (smaller)
-                
-                // Embedded tweet text
-                if let embeddedContent = originalTweet.content, !embeddedContent.isEmpty {
-                    let font = UIFont.systemFont(ofSize: 15, weight: .regular) // Slightly smaller font for embedded
-                    let screenWidth = UIScreen.main.bounds.width
-                    let embeddedTextWidth = screenWidth - 140 // Embedded tweets have more padding
-                    
-                    let maxSize = CGSize(width: embeddedTextWidth, height: .greatestFiniteMagnitude)
-                    let textRect = (embeddedContent as NSString).boundingRect(
-                        with: maxSize,
-                        options: [.usesLineFragmentOrigin, .usesFontLeading],
-                        attributes: [.font: font],
-                        context: nil
-                    )
-                    embeddedHeight += ceil(textRect.height) + 8
-                }
-                
-                // Embedded tweet media
-                if let embeddedAttachments = originalTweet.attachments, !embeddedAttachments.isEmpty {
-                    let screenWidth = UIScreen.main.bounds.width
-                    let embeddedMediaWidth = max(10, screenWidth - 140)
-                    let aspectRatio = MediaGridViewModel.aspectRatio(for: embeddedAttachments)
-                    let embeddedMediaHeight = max(10, embeddedMediaWidth / aspectRatio)
-                    embeddedHeight += embeddedMediaHeight + 8
-                }
-                
-                // Border and padding for embedded container
-                embeddedHeight += 20
-                estimatedHeight += embeddedHeight
+            // Try to get from height cache first (fast path)
+            if let cachedEmbeddedHeight = heightCache["embedded_\(originalTweetId)"] {
+                estimatedHeight += cachedEmbeddedHeight
             } else {
-                // Original tweet not cached yet - this shouldn't happen often
-                // since tweets are usually cached before display, but provide fallback
-                // Use conservative estimate based on whether retweet shows media
-                if let attachments = tweet.attachments, !attachments.isEmpty {
-                    estimatedHeight += 350 // Text + media fallback
+                // Cache miss - try to fetch original tweet from singleton first (no Core Data access)
+                if let originalTweet = Tweet.getInstance(for: originalTweetId) {
+                    // Calculate embedded tweet height accurately
+                    var embeddedHeight: CGFloat = 60 // Author info in embedded view (smaller)
+                    
+                    // Embedded tweet text
+                    if let embeddedContent = originalTweet.content, !embeddedContent.isEmpty {
+                        let font = UIFont.systemFont(ofSize: 15, weight: .regular)
+                        let screenWidth = UIScreen.main.bounds.width
+                        let embeddedTextWidth = screenWidth - 140
+                        
+                        let maxSize = CGSize(width: embeddedTextWidth, height: .greatestFiniteMagnitude)
+                        let textRect = (embeddedContent as NSString).boundingRect(
+                            with: maxSize,
+                            options: [.usesLineFragmentOrigin, .usesFontLeading],
+                            attributes: [.font: font],
+                            context: nil
+                        )
+                        embeddedHeight += ceil(textRect.height) + 8
+                    }
+                    
+                    // Embedded tweet media
+                    if let embeddedAttachments = originalTweet.attachments, !embeddedAttachments.isEmpty {
+                        let screenWidth = UIScreen.main.bounds.width
+                        let embeddedMediaWidth = max(10, screenWidth - 140)
+                        let aspectRatio = MediaGridViewModel.aspectRatio(for: embeddedAttachments)
+                        let embeddedMediaHeight = max(10, embeddedMediaWidth / aspectRatio)
+                        embeddedHeight += embeddedMediaHeight + 8
+                    }
+                    
+                    // Border and padding for embedded container
+                    embeddedHeight += 20
+                    
+                    // Cache the embedded height for future use
+                    heightCache["embedded_\(originalTweetId)"] = embeddedHeight
+                    estimatedHeight += embeddedHeight
                 } else {
-                    estimatedHeight += 150 // Text only fallback
+                    // Original tweet not in singleton - use intelligent fallback WITHOUT Core Data access
+                    // This prevents scroll stuttering from synchronous Core Data calls
+                    // The height will be cached after first render anyway
+                    let fallbackHeight: CGFloat
+                    if let attachments = tweet.attachments, !attachments.isEmpty {
+                        fallbackHeight = 350 // Text + media fallback
+                    } else {
+                        fallbackHeight = 200 // Text only fallback
+                    }
+                    estimatedHeight += fallbackHeight
                 }
             }
         }
