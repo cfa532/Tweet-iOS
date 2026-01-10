@@ -56,11 +56,13 @@ class TweetTableViewController: UITableViewController {
     private var lastScrollOffset: CGFloat = 0
     private var hasCompletedInitialLayout: Bool = false
     private var hasAdjustedInitialPosition: Bool = false
+    private var lastScrollCallbackTime: Date?
+    private let scrollCallbackThrottleInterval: TimeInterval = 0.1 // 100ms throttle for scroll callbacks
     
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: Date?
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms throttle
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.25 // 250ms throttle - reduced frequency
     
     // Cached main content rect to avoid recalculating on every visibility check
     private var cachedMainContentRect: CGRect?
@@ -241,6 +243,12 @@ class TweetTableViewController: UITableViewController {
         let oldCount = tweets.count
         let oldTweets = tweets
         tweets = newTweets
+
+        // Cleanup old tweet instances to prevent memory growth
+        Task.detached(priority: .background) {
+            let activeTweetIds = Set(newTweets.map { $0.mid })
+            Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+        }
         
         
         // Handle initial load
@@ -723,15 +731,22 @@ class TweetTableViewController: UITableViewController {
         // Track scroll offset and delta for toolbar hiding
         let currentOffset = scrollView.contentOffset.y
         let delta = currentOffset - lastScrollOffset
-        
+
+        // Time-based throttling: don't send callbacks too frequently
+        let shouldThrottleByTime = lastScrollCallbackTime.map { now.timeIntervalSince($0) < scrollCallbackThrottleInterval } ?? false
+
         // Only forward significant changes to reduce jitter (matching old SwiftUI implementation)
-        let headerThreshold: CGFloat = 20
-        guard abs(delta) >= headerThreshold else { return }
-        
+        // Increased threshold to reduce CPU usage during rapid scrolling
+        let headerThreshold: CGFloat = 30
+        let shouldThrottleByDistance = abs(delta) < headerThreshold
+
+        guard !shouldThrottleByTime && !shouldThrottleByDistance else { return }
+
         // Call the onScroll callback with accumulated delta
         onScroll?(currentOffset, delta)
-        
+
         lastScrollOffset = currentOffset
+        lastScrollCallbackTime = now
     }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -754,30 +769,16 @@ class TweetTableViewController: UITableViewController {
     
     private func updateVisibleTweetsForVideoPlayback() {
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
-        
-        // Calculate main content area (excluding header and footer) for row visibility
-        let mainContentRect = calculateMainContentRect()
-        
-        // Get visible cells and check visibility
+
+        // OPTIMIZATION: Use simpler visibility calculation to reduce CPU usage
+        // Instead of complex intersection calculations, use index-based approximation
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
+
+        // Convert visible index paths to tweet IDs more efficiently
         let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
             let totalRows = pinnedTweets.count + tweets.count
             guard indexPath.row < totalRows else { return nil }
-            
-            // Get the cell for this index path
-            guard let cell = tableView.cellForRow(at: indexPath) else { return nil }
-            
-            // Convert cell frame to table view coordinates
-            let cellFrame = tableView.convert(cell.frame, to: tableView)
-            
-            // Check if cell intersects with main content area
-            let intersection = cellFrame.intersection(mainContentRect)
-            
-            // Only consider cells that have at least 30% of their height visible in main content area
-            // This ensures videos are sufficiently visible before starting playback
-            let visibilityRatio = intersection.height / cellFrame.height
-            guard visibilityRatio >= 0.3 else { return nil }
-            
+
             // Determine which tweet this row represents
             if indexPath.row < pinnedTweets.count {
                 return pinnedTweets[indexPath.row].mid
@@ -787,8 +788,9 @@ class TweetTableViewController: UITableViewController {
                 return tweets[regularIndex].mid
             }
         })
-        
-        // Update coordinator
+
+        // Update coordinator with visible tweets
+        // The coordinator can handle its own visibility filtering if needed
         videoCoordinator.updateVisibleTweets(visibleTweetIds)
     }
     

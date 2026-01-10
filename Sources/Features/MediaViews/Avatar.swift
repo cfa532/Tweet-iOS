@@ -51,30 +51,23 @@ struct Avatar: View {
                 .clipShape(Circle())
                 .onAppear {
                     let viewId = "\(user.mid)_\(user.avatar ?? "noavatar")_\(user.baseUrl?.absoluteString ?? "nourl")"
-                    print("👤 [AVATAR.onAppear] VIEW ID: \(viewId)")
-                    print("👤 [AVATAR.onAppear] user: \(user.mid), username: \(user.username ?? "nil"), avatar: \(user.avatar ?? "nil"), baseUrl: \(user.baseUrl?.absoluteString ?? "nil"), avatarUrl: \(avatarUrl)")
                     // Try to load from cache first when view appears
                     // Always check cache even if loadFailed is true, as the avatar might have been loaded elsewhere
                     if cachedImage == nil {
                         let cacheKey = user.avatar ?? (URL(string: avatarUrl)?.lastPathComponent ?? avatarUrl)
                         let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
                         
-                        print("👤 [AVATAR.onAppear] cacheKey: \(cacheKey), checking memory cache...")
                         // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
                         if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                             // Found in cache - use it and reset failed state
-                            print("👤 [AVATAR.onAppear] ✅ Found in memory cache")
                             cachedImage = cached
                             loadFailed = false
                         } else {
                             // Not in memory cache - always try loading (checks disk cache + network)
                             // Reset loadFailed since we have a valid URL now
-                            print("👤 [AVATAR.onAppear] ❌ Not in memory cache, calling loadAvatar...")
                             loadFailed = false
                             loadAvatar(from: avatarUrl)
                         }
-                    } else {
-                        print("👤 [AVATAR.onAppear] Already have cachedImage, skipping load")
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .avatarDidChange)) { notification in
@@ -145,8 +138,6 @@ struct Avatar: View {
     }
     
     private func loadAvatar(from urlString: String) {
-        print("👤 [AVATAR.loadAvatar] START - user: \(user.mid), urlString: \(urlString), isLoading: \(isLoading)")
-        
         guard !isLoading else {
             print("👤 [AVATAR.loadAvatar] Already loading, returning")
             return 
@@ -162,16 +153,12 @@ struct Avatar: View {
             mediaType: .image
         )
         
-        print("👤 [AVATAR.loadAvatar] cacheKey: \(cacheKey), checking disk cache...")        
         // Check cache first (disk check is OK in async context like onAppear/loadAvatar)
         if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
-            print("👤 [AVATAR.loadAvatar] ✅ Found in disk cache")
             cachedImage = cached
             return
         }
         
-        // Load from network using regular image loading (no special avatar treatment)
-        print("👤 [AVATAR.loadAvatar] ❌ Not in disk cache, loading from network...")
         isLoading = true
         Task {
             // Use standard image loading with deduplication
@@ -188,7 +175,6 @@ struct Avatar: View {
             
             await MainActor.run {
                 if let image = result {
-                    print("👤 [AVATAR.loadAvatar] ✅ Network load SUCCESS, setting cachedImage")
                     cachedImage = image
                     loadFailed = false
                 } else {

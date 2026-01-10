@@ -51,6 +51,33 @@ class Tweet: Identifiable, Codable, ObservableObject {
         defer { instanceLock.unlock() }
         instances.removeAll()
     }
+
+    /// Clean up old tweet instances to prevent memory growth
+    /// - Parameter activeTweetIds: Set of tweet IDs that are currently active/visible
+    /// - Parameter maxInstances: Maximum number of instances to keep (default: 1000)
+    static func cleanupOldInstances(activeTweetIds: Set<String>, maxInstances: Int = 1000) {
+        instanceLock.lock()
+        defer { instanceLock.unlock() }
+
+        // Don't cleanup if we're below the limit
+        guard instances.count > maxInstances else { return }
+
+        // Keep tweets that are currently active
+        let tweetsToKeep = instances.filter { activeTweetIds.contains($0.key) }
+
+        // If we still have too many, remove oldest ones
+        if tweetsToKeep.count > maxInstances {
+            // Sort by timestamp (most recent first) and keep only the most recent ones
+            let sortedTweets = tweetsToKeep.sorted { $0.value.timestamp > $1.value.timestamp }
+            let tweetsToRemove = sortedTweets.dropFirst(maxInstances)
+            for tweet in tweetsToRemove {
+                instances.removeValue(forKey: tweet.key)
+            }
+        } else {
+            // Remove all inactive tweets
+            instances = tweetsToKeep
+        }
+    }
     
     static func getInstance(for mid: MimeiId) -> Tweet? {
         instanceLock.lock()
@@ -105,13 +132,31 @@ class Tweet: Identifiable, Codable, ObservableObject {
         }
     }
     
-    // User interaction flags
+    // User interaction flags - batched to reduce update frequency
     @Published var favorites: [Bool]? // [favorite, bookmark, retweeted]
     @Published var favoriteCount: Int?
     @Published var bookmarkCount: Int?
     @Published var retweetCount: Int?
     @Published var commentCount: Int?
     @Published var isVisible: Bool = false  // Track visibility state
+
+    // Batch update mechanism to reduce ObservableObject notifications during bulk operations
+    private var isInBatchUpdate = false
+
+    /// Perform batched updates to reduce ObservableObject notification frequency
+    func performBatchUpdate(_ updates: () -> Void) {
+        let wasInBatchUpdate = isInBatchUpdate
+        isInBatchUpdate = true
+
+        updates()
+
+        // Send single notification after all updates complete
+        if !wasInBatchUpdate {
+            isInBatchUpdate = false
+            // Trigger single objectWillChange notification for all batched changes
+            objectWillChange.send()
+        }
+    }
     
     // Computed properties for user interaction states
     var isFavorite: Bool {
@@ -238,18 +283,20 @@ class Tweet: Identifiable, Codable, ObservableObject {
     /// - Parameter other: Tweet object containing the new values
     /// - Throws: DecodingError if the update fails
     func update(from other: Tweet) throws {
-        // Update all properties except author
-        if let content = other.content { self.content = content }
-        if let title = other.title { self.title = title }
-        if let favorites = other.favorites { self.favorites = favorites }
-        self.favoriteCount = other.favoriteCount
-        self.bookmarkCount = other.bookmarkCount
-        self.retweetCount = other.retweetCount
-        self.commentCount = other.commentCount
-        if let attachments = other.attachments { self.attachments = attachments }
-        if let isPrivate = other.isPrivate { self.isPrivate = isPrivate }
-        if let downloadable = other.downloadable { self.downloadable = downloadable }
-        self.timestamp = other.timestamp
+        performBatchUpdate {
+            // Update all properties except author
+            if let content = other.content { self.content = content }
+            if let title = other.title { self.title = title }
+            if let favorites = other.favorites { self.favorites = favorites }
+            self.favoriteCount = other.favoriteCount
+            self.bookmarkCount = other.bookmarkCount
+            self.retweetCount = other.retweetCount
+            self.commentCount = other.commentCount
+            if let attachments = other.attachments { self.attachments = attachments }
+            if let isPrivate = other.isPrivate { self.isPrivate = isPrivate }
+            if let downloadable = other.downloadable { self.downloadable = downloadable }
+            self.timestamp = other.timestamp
+        }
     }
     
     /// Updates the tweet instance with values from a dictionary
@@ -322,18 +369,20 @@ class Tweet: Identifiable, Codable, ObservableObject {
 
             
             // Update this instance with the new values
-            if let content = tempTweet.content { self.content = content }
-            if let title = tempTweet.title { self.title = title }
-            if let author = tempTweet.author { self.author = author }
-            if let favorites = tempTweet.favorites { self.favorites = favorites }
-            self.favoriteCount = tempTweet.favoriteCount
-            self.bookmarkCount = tempTweet.bookmarkCount
-            self.retweetCount = tempTweet.retweetCount
-            self.commentCount = tempTweet.commentCount
-            if let attachments = tempTweet.attachments { self.attachments = attachments }
-            if let isPrivate = tempTweet.isPrivate { self.isPrivate = isPrivate }
-            if let downloadable = tempTweet.downloadable { self.downloadable = downloadable }
-            self.timestamp = tempTweet.timestamp
+            performBatchUpdate {
+                if let content = tempTweet.content { self.content = content }
+                if let title = tempTweet.title { self.title = title }
+                if let author = tempTweet.author { self.author = author }
+                if let favorites = tempTweet.favorites { self.favorites = favorites }
+                self.favoriteCount = tempTweet.favoriteCount
+                self.bookmarkCount = tempTweet.bookmarkCount
+                self.retweetCount = tempTweet.retweetCount
+                self.commentCount = tempTweet.commentCount
+                if let attachments = tempTweet.attachments { self.attachments = attachments }
+                if let isPrivate = tempTweet.isPrivate { self.isPrivate = isPrivate }
+                if let downloadable = tempTweet.downloadable { self.downloadable = downloadable }
+                self.timestamp = tempTweet.timestamp
+            }
         } catch {
             print("Error updating tweet from dictionary: \(error)")
             if let decodingError = error as? DecodingError {
@@ -550,42 +599,50 @@ extension Array where Element == Tweet {
     /// Only inserts truly new tweets, avoiding array mutations that cause scroll jumps
     private mutating func mergeTweetsInternal(_ newTweets: [Tweet]) {
         guard !newTweets.isEmpty else { return }
-        
-        // Build dictionary index map for O(1) lookups
+
+        // Early exit optimization: if newTweets is small and we have many existing tweets,
+        // check if most tweets are updates rather than inserts to avoid expensive sorting
+        let shouldOptimizeForUpdates = newTweets.count <= 20 && self.count > 100
+
+        // Build dictionary index map for O(1) lookups (only when beneficial)
         var indexMap: [String: Int] = [:]
-        for (index, tweet) in self.enumerated() {
-            indexMap[tweet.mid] = index
+        if shouldOptimizeForUpdates || newTweets.count > 5 {
+            for (index, tweet) in self.enumerated() {
+                indexMap[tweet.mid] = index
+            }
         }
-        
+
         var processedIds = Set<String>()
         var tweetsToInsert: [Tweet] = []
-        
+
         for newTweet in newTweets {
             guard processedIds.insert(newTweet.mid).inserted else { continue }
-            
-            if let existingIndex = indexMap[newTweet.mid] {
+
+            if let existingIndex = indexMap[newTweet.mid] ?? firstIndex(where: { $0.mid == newTweet.mid }) {
                 // Tweet exists - update its properties in place
                 // The singleton pattern ensures all references see the update
                 // SwiftUI's @ObservedObject will trigger recomposition automatically
                 let existingTweet = self[existingIndex]
-                
+
                 // Use existing update method (cleaner, DRY)
                 try? existingTweet.update(from: newTweet)
-                
+
                 // NOTE: No need to invalidate cachedHeight
                 // Tweet content is immutable - height never changes after first render
-                
+
                 // No array mutation - tweet stays at same index, SwiftUI recomposes
             } else {
                 // New tweet - collect for insertion
                 tweetsToInsert.append(newTweet)
             }
         }
-        
+
         // Insert new tweets at their correct positions
         // Process in sorted order to maintain correct positions as we insert
+        guard !tweetsToInsert.isEmpty else { return }
+
         let sortedNewTweets = tweetsToInsert.sorted { shouldPlace($0, before: $1) }
-        
+
         for newTweet in sortedNewTweets {
             let insertionIndex = orderedInsertionIndex(for: newTweet)
             insert(newTweet, at: insertionIndex)

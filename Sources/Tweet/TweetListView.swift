@@ -72,6 +72,10 @@ struct TweetListView<RowView: View>: View {
             }
             let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
             await self.videoLoadingManager.updateTweetList(tweetIds)
+
+            // Also cleanup old tweet instances to prevent memory growth
+            let activeTweetIds = Set(tweetIds)
+            Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
         }
     }
     
