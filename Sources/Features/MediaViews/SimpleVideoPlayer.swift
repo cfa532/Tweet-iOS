@@ -2411,6 +2411,12 @@ struct SimpleVideoPlayer: View {
                 
                 if shouldRefresh {
                     self.representableId += 1
+                    // CRITICAL: Reapply mute state after view refresh
+                    // The view refresh creates a new AVPlayerLayerView, and we need to ensure
+                    // the player's mute state is correctly synced with global state
+                    if let player = self.player {
+                        self.applyMuteState(to: player)
+                    }
                 } else {
                 }
             }

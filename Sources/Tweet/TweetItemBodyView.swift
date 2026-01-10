@@ -75,9 +75,22 @@ struct TweetItemBodyView: View {
                     .if(enableTap) { $0.contentShape(Rectangle()) }
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
+                    .animation(nil, value: isExpanded)  // Disable animation for instant layout
+                    .onTapGesture {
+                        // Tap to collapse when expanded
+                        if isExpanded {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isExpanded = false
+                            }
+                        }
+                    }
                 
                 if content.count > 500 && !isExpanded {
-                    Button(action: { isExpanded = true }) {
+                    Button(action: { 
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isExpanded = true 
+                        }
+                    }) {
                         Text(LocalizedStringKey("Show more"))
                             .font(.subheadline)
                             .foregroundColor(.blue)

@@ -729,14 +729,14 @@ class TweetTableViewController: UITableViewController {
                     heightCache["embedded_\(originalTweetId)"] = embeddedHeight
                     estimatedHeight += embeddedHeight
                 } else {
-                    // Original tweet truly not available - use fallback
-                    let fallbackHeight: CGFloat
-                    if let attachments = tweet.attachments, !attachments.isEmpty {
-                        fallbackHeight = 350
-                    } else {
-                        fallbackHeight = 200
-                    }
-                    estimatedHeight += fallbackHeight
+                    // Original tweet truly not available - use placeholder height
+                    // Matches the fixed placeholder shown in TweetItemView (line 372)
+                    let placeholderHeight: CGFloat = 60 // Base placeholder frame
+                    let paddingTop: CGFloat = (tweet.content?.isEmpty ?? true) ? 0 : 8 // Conditional top padding
+                    let paddingBottom: CGFloat = 8 // Bottom padding
+                    
+                    // Total: 60pt placeholder + padding (matches actual rendered placeholder)
+                    estimatedHeight += placeholderHeight + paddingTop + paddingBottom
                 }
             }
         }
