@@ -695,16 +695,58 @@ class TweetTableViewController: UITableViewController {
             estimatedHeight += mediaHeight + 8 // Media + padding
         }
         
-        // Add quoted tweet height if present
-        if tweet.originalTweetId != nil {
-            estimatedHeight += 120 // Approximate quoted tweet height
+        // Add quoted/retweeted tweet height if present
+        if let originalTweetId = tweet.originalTweetId {
+            // Fetch the original tweet from cache to calculate accurate height
+            if let originalTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
+                // Calculate embedded tweet height accurately
+                var embeddedHeight: CGFloat = 60 // Author info in embedded view (smaller)
+                
+                // Embedded tweet text
+                if let embeddedContent = originalTweet.content, !embeddedContent.isEmpty {
+                    let font = UIFont.systemFont(ofSize: 15, weight: .regular) // Slightly smaller font for embedded
+                    let screenWidth = UIScreen.main.bounds.width
+                    let embeddedTextWidth = screenWidth - 140 // Embedded tweets have more padding
+                    
+                    let maxSize = CGSize(width: embeddedTextWidth, height: .greatestFiniteMagnitude)
+                    let textRect = (embeddedContent as NSString).boundingRect(
+                        with: maxSize,
+                        options: [.usesLineFragmentOrigin, .usesFontLeading],
+                        attributes: [.font: font],
+                        context: nil
+                    )
+                    embeddedHeight += ceil(textRect.height) + 8
+                }
+                
+                // Embedded tweet media
+                if let embeddedAttachments = originalTweet.attachments, !embeddedAttachments.isEmpty {
+                    let screenWidth = UIScreen.main.bounds.width
+                    let embeddedMediaWidth = max(10, screenWidth - 140)
+                    let aspectRatio = MediaGridViewModel.aspectRatio(for: embeddedAttachments)
+                    let embeddedMediaHeight = max(10, embeddedMediaWidth / aspectRatio)
+                    embeddedHeight += embeddedMediaHeight + 8
+                }
+                
+                // Border and padding for embedded container
+                embeddedHeight += 20
+                estimatedHeight += embeddedHeight
+            } else {
+                // Original tweet not cached yet - this shouldn't happen often
+                // since tweets are usually cached before display, but provide fallback
+                // Use conservative estimate based on whether retweet shows media
+                if let attachments = tweet.attachments, !attachments.isEmpty {
+                    estimatedHeight += 350 // Text + media fallback
+                } else {
+                    estimatedHeight += 150 // Text only fallback
+                }
+            }
         }
         
         // Actions bar height
         estimatedHeight += 40
         
         // Clamp to reasonable bounds to prevent extreme estimates
-        return min(max(estimatedHeight, 150), 1000)
+        return min(max(estimatedHeight, 150), 1500) // Increased max to 1500 for retweets with media
     }
     
     // MARK: - Video Playback Coordination

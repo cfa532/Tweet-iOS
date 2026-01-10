@@ -83,10 +83,11 @@ struct TweetListView<RowView: View>: View {
     func findNextVideoInList(sourceTweetId: String, currentVideoIndex: Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
         
         // Combined tweet list: pinned tweets first, then regular tweets
-        // Explicitly capture pinned and regular tweets from self
-        let allTweets = await MainActor.run { [pinnedTweets, tweets] in pinnedTweets + tweets }
-        let pinnedCount = await MainActor.run { [pinnedTweets] in pinnedTweets.count }
-        let regularCount = await MainActor.run { [tweets] in tweets.count }
+        // Consolidate MainActor calls into one to avoid multiple context switches
+        let (allTweets, pinnedCount, regularCount) = await MainActor.run { [pinnedTweets, tweets] in
+            let combined = pinnedTweets + tweets
+            return (combined, pinnedTweets.count, tweets.count)
+        }
         print("🔍 [FIND NEXT VIDEO] Searching for next video after sourceTweetId: \(sourceTweetId), videoIndex: \(currentVideoIndex)")
         print("🔍 [FIND NEXT VIDEO] Total tweets to search: \(allTweets.count) (pinned: \(pinnedCount), regular: \(regularCount))")
         
@@ -254,30 +255,27 @@ struct TweetListView<RowView: View>: View {
                         }
                         // Special case: tweetId notifications send String instead of Tweet
                         if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
+                            // Find tweet once for efficiency (avoid multiple O(n) searches)
+                            let tweetIndex = tweets.firstIndex(where: { $0.mid == tweetId })
+                            
                             if notification.name == .tweetDeleted {
                                 // For tweet deletion, handle directly in TweetListView
-                                tweets.removeAll { $0.mid == tweetId }
+                                if let index = tweetIndex {
+                                    tweets.remove(at: index)
+                                }
                                 TweetCacheManager.shared.deleteTweet(mid: tweetId)
                             } else if notification.name == .tweetPrivacyChanged {
                                 // For privacy changes, handle removal directly here
-                                // Find the tweet first before removing it
-                                let tweetToRemove = tweets.first(where: { $0.mid == tweetId })
-                                let countBefore = tweets.count
-                                tweets.removeAll { $0.mid == tweetId }
-                                let countAfter = tweets.count
-                                
-                                if countBefore != countAfter {
-                                    // Also call custom handler with the tweet that was removed
-                                    if let tweet = tweetToRemove {
-                                        notification.action(tweet)
-                                    }
-                                } else {
+                                if let index = tweetIndex {
+                                    let tweetToRemove = tweets[index]
+                                    tweets.remove(at: index)
+                                    // Call custom handler with the tweet that was removed
+                                    notification.action(tweetToRemove)
                                 }
                             } else {
                                 // For other notifications, call the custom handler
-                                // Find the actual tweet in the list and pass it to the handler
-                                if let actualTweet = tweets.first(where: { $0.mid == tweetId }) {
-                                    notification.action(actualTweet)
+                                if let index = tweetIndex {
+                                    notification.action(tweets[index])
                                 }
                             }
                         }

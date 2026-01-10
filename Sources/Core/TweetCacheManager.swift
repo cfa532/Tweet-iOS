@@ -267,6 +267,50 @@ extension TweetCacheManager {
     /// - Original tweets are cached under their authorId
     /// - Retweets are cached under appUser.mid
     /// - When we only have a tweet mid, we don't know which user's cache it's in
+    /// Synchronously fetch tweet from cache (in-memory singleton or Core Data)
+    /// Used for height estimation and other synchronous operations
+    /// Returns nil if tweet is not cached
+    func fetchTweetSync(mid: String) -> Tweet? {
+        // First check in-memory singleton
+        if let tweetInstance = Tweet.getInstance(for: mid) {
+            return tweetInstance
+        }
+        
+        // Otherwise, load from Core Data cache synchronously
+        return context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@", mid)
+            
+            guard let cdTweet = try? context.fetch(request).first else {
+                return nil
+            }
+            
+            do {
+                let tweet = try Tweet.from(cdTweet: cdTweet)
+                
+                // Load author from cache if available
+                if tweet.author == nil {
+                    let authorSingleton = User.getInstance(mid: tweet.authorId)
+                    
+                    if authorSingleton.username == nil {
+                        let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                        userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+                        if let cdUser = try? context.fetch(userRequest).first {
+                            _ = User.from(cdUser: cdUser)
+                        }
+                    }
+                    
+                    tweet.author = User.getInstance(mid: tweet.authorId)
+                }
+                
+                return tweet
+            } catch {
+                print("Error processing tweet synchronously: \(error)")
+                return nil
+            }
+        }
+    }
+    
     func fetchTweet(mid: String) async -> Tweet? {
         return await withCheckedContinuation { continuation in
             // First check in-memory singleton
