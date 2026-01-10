@@ -179,28 +179,34 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             if isPureRetweet {
                 // PURE RETWEET: Get attachments from original tweet, use retweet's ID for positioning
-                if let originalTweetId = tweet.originalTweetId,
-                   let originalTweet = Tweet.getInstance(for: originalTweetId),
-                   let originalAttachments = originalTweet.attachments {
+                // Use fetchTweetSync to check both singleton cache AND Core Data cache
+                if let originalTweetId = tweet.originalTweetId {
+                    // Try singleton first (fast), then Core Data (still synchronous)
+                    let originalTweet = Tweet.getInstance(for: originalTweetId) 
+                        ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
                     
-                    for (index, attachment) in originalAttachments.enumerated() {
-                        if attachment.type == .video || attachment.type == .hls_video {
-                            let videoInfo = VideoPlaybackInfo(
-                                tweetId: tweet.mid,  // Use retweet's ID for positioning
-                                videoMid: attachment.mid,
-                                index: index
-                            )
-                            
-                            if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                continue
+                    if let originalTweet = originalTweet,
+                       let originalAttachments = originalTweet.attachments {
+                        
+                        for (index, attachment) in originalAttachments.enumerated() {
+                            if attachment.type == .video || attachment.type == .hls_video {
+                                let videoInfo = VideoPlaybackInfo(
+                                    tweetId: tweet.mid,  // Use retweet's ID for positioning
+                                    videoMid: attachment.mid,
+                                    index: index
+                                )
+                                
+                                if seenVideoIdentifiers.contains(videoInfo.identifier) {
+                                    continue
+                                }
+                                
+                                videos.append(videoInfo)
+                                seenVideoIdentifiers.insert(videoInfo.identifier)
                             }
-                            
-                            videos.append(videoInfo)
-                            seenVideoIdentifiers.insert(videoInfo.identifier)
                         }
+                    } else {
+                        print("🟢 [BUILD VIDEO LIST] Skipping pure retweet \(tweet.mid) - original tweet not in any cache")
                     }
-                } else {
-                    print("🟢 [BUILD VIDEO LIST] Skipping pure retweet \(tweet.mid) - original tweet not cached yet")
                 }
             } else {
                 // REGULAR TWEET or QUOTED TWEET: Process the tweet's own attachments
