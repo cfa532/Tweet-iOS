@@ -304,6 +304,8 @@ class TweetTableViewController: UITableViewController {
         }
         
         // Complex change: fallback to full reload
+        // CRITICAL: Preflight heights to prevent scroll jumps on complex updates
+        preflightHeightEstimates(for: newTweets)
         tableView.reloadData()
         videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
     }
@@ -531,40 +533,17 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
         
-        let tweetId = tweet.mid
-        
-        // Use cached height if available for better estimation
-        if let cachedHeight = heightCache[tweetId] {
-            return cachedHeight
-        }
-        
-        // Otherwise, estimate based on tweet content
+        // Always estimate - let auto-layout handle actual measurement
         return estimateHeight(for: tweet)
     }
     
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Cache the actual rendered height for future estimations
-        let totalRows = pinnedTweets.count + tweets.count
-        guard indexPath.row < totalRows else { return }
-        
-        // Determine which tweet this row represents
-        let tweetId: String
-        if indexPath.row < pinnedTweets.count {
-            tweetId = pinnedTweets[indexPath.row].mid
-        } else {
-            let regularIndex = indexPath.row - pinnedTweets.count
-            guard regularIndex < tweets.count else { return }
-            tweetId = tweets[regularIndex].mid
-        }
-        
-        heightCache[tweetId] = cell.frame.height
-        
-        // Auto-load disabled - only manual pull-to-load at bottom
+        // Don't cache in willDisplay - the estimate will be used first time,
+        // then auto-layout will measure correctly. No need to cache.
     }
     
     override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Keep height cached even after cell disappears
-        // Height cache persists for better scroll stability
+        // Keep cached heights - they persist for better scroll stability
     }
     
     
@@ -641,9 +620,17 @@ class TweetTableViewController: UITableViewController {
     private func preflightHeightEstimates(for tweets: [Tweet]) {
         // Calculate estimated heights for new tweets before first layout
         // This provides better initial estimates and reduces jumps
-        for tweet in tweets where heightCache[tweet.mid] == nil {
+        // CRITICAL: Also preflight embedded tweet heights to prevent scroll jumps on retweets
+        for tweet in tweets {
+            // Skip if already cached
+            guard heightCache[tweet.mid] == nil else { continue }
+            
+            // Calculate and cache full tweet height
             let estimated = estimateHeight(for: tweet)
             heightCache[tweet.mid] = estimated
+            
+            // IMPORTANT: estimateHeight() internally caches embedded heights
+            // in heightCache["embedded_\(originalTweetId)"], so retweets are fully preflighted
         }
     }
     
@@ -701,8 +688,12 @@ class TweetTableViewController: UITableViewController {
             if let cachedEmbeddedHeight = heightCache["embedded_\(originalTweetId)"] {
                 estimatedHeight += cachedEmbeddedHeight
             } else {
-                // Cache miss - try to fetch original tweet from singleton first (no Core Data access)
-                if let originalTweet = Tweet.getInstance(for: originalTweetId) {
+                // Cache miss - get original tweet (singleton first, then Core Data)
+                // Accept Core Data cost for accurate heights - eliminates scroll jumps
+                let originalTweet = Tweet.getInstance(for: originalTweetId)
+                    ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
+                
+                if let originalTweet = originalTweet {
                     // Calculate embedded tweet height accurately
                     var embeddedHeight: CGFloat = 60 // Author info in embedded view (smaller)
                     
@@ -738,14 +729,12 @@ class TweetTableViewController: UITableViewController {
                     heightCache["embedded_\(originalTweetId)"] = embeddedHeight
                     estimatedHeight += embeddedHeight
                 } else {
-                    // Original tweet not in singleton - use intelligent fallback WITHOUT Core Data access
-                    // This prevents scroll stuttering from synchronous Core Data calls
-                    // The height will be cached after first render anyway
+                    // Original tweet truly not available - use fallback
                     let fallbackHeight: CGFloat
                     if let attachments = tweet.attachments, !attachments.isEmpty {
-                        fallbackHeight = 350 // Text + media fallback
+                        fallbackHeight = 350
                     } else {
-                        fallbackHeight = 200 // Text only fallback
+                        fallbackHeight = 200
                     }
                     estimatedHeight += fallbackHeight
                 }

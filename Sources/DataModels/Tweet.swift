@@ -545,66 +545,28 @@ extension Array where Element == Tweet {
     private mutating func mergeTweetsInternal(_ newTweets: [Tweet]) {
         guard !newTweets.isEmpty else { return }
         
-        // For large merges, use bulk rebuild strategy for better performance
-        let shouldUseBulkStrategy = newTweets.count > Swift.max(10, count / 5)
+        var processedIds = Set<String>()
         
-        if shouldUseBulkStrategy {
-            // Bulk strategy: merge all at once and rebuild
-            var existingMap = [String: Tweet](minimumCapacity: count)
-            for tweet in self {
-                existingMap[tweet.mid] = tweet
-            }
+        for newTweet in newTweets {
+            guard processedIds.insert(newTweet.mid).inserted else { continue }
             
-            // Update with new tweets
-            for newTweet in newTweets {
-                existingMap[newTweet.mid] = newTweet
-            }
-            
-            // Rebuild sorted array
-            let mergedTweets = Array(existingMap.values).sorted { shouldPlace($0, before: $1) }
-            self = mergedTweets
-        } else {
-            // Incremental strategy for small updates
-            var indexMap: [String: Int] = [:]
-            for (index, tweet) in enumerated() {
-                indexMap[tweet.mid] = index
-            }
-            
-            var processedIds = Set<String>()
-            var needsFullRebuild = false
-            
-            for newTweet in newTweets {
-                guard processedIds.insert(newTweet.mid).inserted else { continue }
+            if let existingIndex = firstIndex(where: { $0.mid == newTweet.mid }) {
+                let previousNeighbor = existingIndex > 0 ? self[existingIndex - 1] : nil
+                let nextNeighbor = existingIndex + 1 < count ? self[existingIndex + 1] : nil
                 
-                if let existingIndex = indexMap[newTweet.mid] {
-                    let previousNeighbor = existingIndex > 0 ? self[existingIndex - 1] : nil
-                    let nextNeighbor = existingIndex + 1 < count ? self[existingIndex + 1] : nil
-                    
-                    let shouldMoveUp = previousNeighbor.map { shouldPlace(newTweet, before: $0) } ?? false
-                    let shouldMoveDown = nextNeighbor.map { shouldPlace($0, before: newTweet) } ?? false
-                    
-                    if shouldMoveUp || shouldMoveDown {
-                        remove(at: existingIndex)
-                        let insertionIndex = orderedInsertionIndex(for: newTweet)
-                        insert(newTweet, at: insertionIndex)
-                        needsFullRebuild = true
-                    } else {
-                        self[existingIndex] = newTweet
-                    }
-                } else {
+                let shouldMoveUp = previousNeighbor.map { shouldPlace(newTweet, before: $0) } ?? false
+                let shouldMoveDown = nextNeighbor.map { shouldPlace($0, before: newTweet) } ?? false
+                
+                if shouldMoveUp || shouldMoveDown {
+                    remove(at: existingIndex)
                     let insertionIndex = orderedInsertionIndex(for: newTweet)
                     insert(newTweet, at: insertionIndex)
-                    needsFullRebuild = true
+                } else {
+                    self[existingIndex] = newTweet
                 }
-                
-                // Defer index map rebuild until after all operations
-                if needsFullRebuild {
-                    indexMap.removeAll(keepingCapacity: true)
-                    for (index, tweet) in enumerated() {
-                        indexMap[tweet.mid] = index
-                    }
-                    needsFullRebuild = false
-                }
+            } else {
+                let insertionIndex = orderedInsertionIndex(for: newTweet)
+                insert(newTweet, at: insertionIndex)
             }
         }
     }
