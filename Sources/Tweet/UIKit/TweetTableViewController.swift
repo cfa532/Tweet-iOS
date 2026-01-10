@@ -25,7 +25,7 @@ class TweetTableViewController: UITableViewController {
     private var loadingSpinnerStartTime: Date? = nil
     private let minimumSpinnerDisplayTime: TimeInterval = 0.5  // 500ms minimum
     private var loadingTimeoutTimer: Timer?
-    private let maximumLoadingTime: TimeInterval = 30.0  // 30 second timeout
+    private let maximumLoadingTime: TimeInterval = 10.0  // 10 second timeout
     
     // No more tweets message state
     private var isShowingNoMoreTweetsMessage: Bool = false
@@ -860,7 +860,7 @@ class TweetTableViewController: UITableViewController {
     // Flow when user pulls at bottom:
     // - WITH server call: Spinner shows minimum 500ms, waits for server response
     //   - If server responds: Spinner hides after response (minimum 500ms enforced)
-    //   - If timeout (30s): Spinner force-hides with warning log
+    //   - If timeout (10s): Spinner force-hides with warning log
     // - WITHOUT server call (no more tweets):
     //   1. Show spinner for exactly 500ms
     //   2. Hide spinner with animation
