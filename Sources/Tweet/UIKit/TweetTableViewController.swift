@@ -49,8 +49,6 @@ class TweetTableViewController: UITableViewController {
     private var hasAdjustedInitialPosition: Bool = false
     
     // Height cache for layout stability (prevents jumps when cells with videos load)
-    private var heightCache: [String: CGFloat] = [:]
-    
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: Date?
     private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms throttle
@@ -231,16 +229,9 @@ class TweetTableViewController: UITableViewController {
         let oldTweets = tweets
         tweets = newTweets
         
-        // Clean up height cache for tweets no longer in the list (memory optimization)
-        let currentTweetIds = Set(newTweets.map { $0.mid })
-        heightCache = heightCache.filter { currentTweetIds.contains($0.key) }
         
         // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
-            // Preflight: estimate heights for new tweets before layout
-            // This reduces first-time layout jumps by providing better initial estimates
-            preflightHeightEstimates(for: newTweets)
-            
             tableView.reloadData()
             videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
             
@@ -269,7 +260,6 @@ class TweetTableViewController: UITableViewController {
             if afterNewOnes == oldIds {
                 // Preflight: estimate heights for new tweets to reduce layout jumps
                 let prependedTweets = Array(newTweets.prefix(potentialPrependCount))
-                preflightHeightEstimates(for: prependedTweets)
                 
                 let indexPaths = (0..<potentialPrependCount).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .automatic)
@@ -285,7 +275,6 @@ class TweetTableViewController: UITableViewController {
             if newIdsPrefix == oldIds {
                 // Preflight: estimate heights for new tweets to reduce layout jumps
                 let appendedTweets = Array(newTweets[oldCount...])
-                preflightHeightEstimates(for: appendedTweets)
                 
                 let indexPaths = (oldCount..<newTweets.count).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .none)
@@ -304,8 +293,6 @@ class TweetTableViewController: UITableViewController {
         }
         
         // Complex change: fallback to full reload
-        // CRITICAL: Preflight heights to prevent scroll jumps on complex updates
-        preflightHeightEstimates(for: newTweets)
         tableView.reloadData()
         videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
     }
@@ -533,17 +520,60 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
         
-        // Always estimate - let auto-layout handle actual measurement
-        return estimateHeight(for: tweet)
+        // Use tweet's cached height if available (best estimate!)
+        if let cachedHeight = tweet.cachedHeight {
+            return cachedHeight
+        }
+        
+        // First time: fallback estimate
+        return 250
+    }
+    
+    override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        let totalRows = pinnedTweets.count + tweets.count
+        guard indexPath.row < totalRows else { return UITableView.automaticDimension }
+        
+        // Determine which tweet this row represents
+        let tweet: Tweet
+        if indexPath.row < pinnedTweets.count {
+            tweet = pinnedTweets[indexPath.row]
+        } else {
+            let regularIndex = indexPath.row - pinnedTweets.count
+            guard regularIndex < tweets.count else { return UITableView.automaticDimension }
+            tweet = tweets[regularIndex]
+        }
+        
+        // CRITICAL: If we have cached height, use it as FIXED height
+        // This prevents re-measurement and eliminates scroll jumps when scrolling UP
+        if let cachedHeight = tweet.cachedHeight {
+            return cachedHeight
+        }
+        
+        // First time rendering: let auto-layout measure
+        return UITableView.automaticDimension
     }
     
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Don't cache in willDisplay - the estimate will be used first time,
-        // then auto-layout will measure correctly. No need to cache.
+        let totalRows = pinnedTweets.count + tweets.count
+        guard indexPath.row < totalRows else { return }
+        
+        // Get the tweet
+        let tweet: Tweet
+        if indexPath.row < pinnedTweets.count {
+            tweet = pinnedTweets[indexPath.row]
+        } else {
+            let regularIndex = indexPath.row - pinnedTweets.count
+            guard regularIndex < tweets.count else { return }
+            tweet = tweets[regularIndex]
+        }
+        
+        // Cache the rendered height on the tweet object itself
+        // This will be used as FIXED height when scrolling back
+        tweet.cachedHeight = cell.frame.height
     }
     
     override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Keep cached heights - they persist for better scroll stability
+        // Heights are cached on tweet objects - nothing to do here
     }
     
     
@@ -617,136 +647,6 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Height Estimation
     
     /// Preflight height estimates for new tweets to reduce initial layout jumps
-    private func preflightHeightEstimates(for tweets: [Tweet]) {
-        // Calculate estimated heights for new tweets before first layout
-        // This provides better initial estimates and reduces jumps
-        // CRITICAL: Also preflight embedded tweet heights to prevent scroll jumps on retweets
-        for tweet in tweets {
-            // Skip if already cached
-            guard heightCache[tweet.mid] == nil else { continue }
-            
-            // Calculate and cache full tweet height
-            let estimated = estimateHeight(for: tweet)
-            heightCache[tweet.mid] = estimated
-            
-            // IMPORTANT: estimateHeight() internally caches embedded heights
-            // in heightCache["embedded_\(originalTweetId)"], so retweets are fully preflighted
-        }
-    }
-    
-    /// Estimate cell height based on tweet content for better layout stability
-    private func estimateHeight(for tweet: Tweet) -> CGFloat {
-        var estimatedHeight: CGFloat = 0
-        
-        // Base tweet content height (author info, text, actions)
-        estimatedHeight += 80 // Author row + padding
-        
-        // Estimate text height using actual font metrics (more accurate than character count)
-        if let content = tweet.content, !content.isEmpty {
-            // Use actual system font to calculate height
-            let font = UIFont.systemFont(ofSize: 17, weight: .regular) // Default tweet text font
-            let screenWidth = UIScreen.main.bounds.width
-            let textWidth = screenWidth - (leadingPadding + trailingPadding) - 16 // Account for padding and margins
-            
-            // Calculate bounding rect for text
-            let maxSize = CGSize(width: textWidth, height: .greatestFiniteMagnitude)
-            let textRect = (content as NSString).boundingRect(
-                with: maxSize,
-                options: [.usesLineFragmentOrigin, .usesFontLeading],
-                attributes: [.font: font],
-                context: nil
-            )
-            
-            estimatedHeight += ceil(textRect.height) + 8 // Add padding
-        }
-        
-        // Add media height if present
-        if let attachments = tweet.attachments, !attachments.isEmpty {
-            // CRITICAL: Use EXACT same calculation as MediaGridView to prevent layout shifts
-            // MediaGridView uses: cachedScreenWidth - 32 - 32 (for TweetListView padding)
-            let screenWidth = UIScreen.main.bounds.width
-            let isEmbedded = tweet.originalTweetId != nil && tweet.attachments == nil // This is a quoted/embedded tweet
-            
-            // Match MediaGridView's exact width calculations
-            let gridWidth: CGFloat
-            if isEmbedded {
-                gridWidth = max(10, screenWidth - 140) // Embedded tweets (quoted tweets)
-            } else {
-                gridWidth = max(10, screenWidth - 32 - 32) // Regular tweets (32pt padding on each side)
-            }
-            
-            // Get aspect ratio from MediaGridViewModel - uses attachment.aspectRatio if available
-            let aspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-            let mediaHeight = max(10, gridWidth / aspectRatio)
-            
-            estimatedHeight += mediaHeight + 8 // Media + padding
-        }
-        
-        // Add quoted/retweeted tweet height if present
-        if let originalTweetId = tweet.originalTweetId {
-            // Try to get from height cache first (fast path)
-            if let cachedEmbeddedHeight = heightCache["embedded_\(originalTweetId)"] {
-                estimatedHeight += cachedEmbeddedHeight
-            } else {
-                // Cache miss - get original tweet (singleton first, then Core Data)
-                // Accept Core Data cost for accurate heights - eliminates scroll jumps
-                let originalTweet = Tweet.getInstance(for: originalTweetId)
-                    ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
-                
-                if let originalTweet = originalTweet {
-                    // Calculate embedded tweet height accurately
-                    var embeddedHeight: CGFloat = 60 // Author info in embedded view (smaller)
-                    
-                    // Embedded tweet text
-                    if let embeddedContent = originalTweet.content, !embeddedContent.isEmpty {
-                        let font = UIFont.systemFont(ofSize: 15, weight: .regular)
-                        let screenWidth = UIScreen.main.bounds.width
-                        let embeddedTextWidth = screenWidth - 140
-                        
-                        let maxSize = CGSize(width: embeddedTextWidth, height: .greatestFiniteMagnitude)
-                        let textRect = (embeddedContent as NSString).boundingRect(
-                            with: maxSize,
-                            options: [.usesLineFragmentOrigin, .usesFontLeading],
-                            attributes: [.font: font],
-                            context: nil
-                        )
-                        embeddedHeight += ceil(textRect.height) + 8
-                    }
-                    
-                    // Embedded tweet media
-                    if let embeddedAttachments = originalTweet.attachments, !embeddedAttachments.isEmpty {
-                        let screenWidth = UIScreen.main.bounds.width
-                        let embeddedMediaWidth = max(10, screenWidth - 140)
-                        let aspectRatio = MediaGridViewModel.aspectRatio(for: embeddedAttachments)
-                        let embeddedMediaHeight = max(10, embeddedMediaWidth / aspectRatio)
-                        embeddedHeight += embeddedMediaHeight + 8
-                    }
-                    
-                    // Border and padding for embedded container
-                    embeddedHeight += 20
-                    
-                    // Cache the embedded height for future use
-                    heightCache["embedded_\(originalTweetId)"] = embeddedHeight
-                    estimatedHeight += embeddedHeight
-                } else {
-                    // Original tweet truly not available - use placeholder height
-                    // Matches the fixed placeholder shown in TweetItemView (line 372)
-                    let placeholderHeight: CGFloat = 60 // Base placeholder frame
-                    let paddingTop: CGFloat = (tweet.content?.isEmpty ?? true) ? 0 : 8 // Conditional top padding
-                    let paddingBottom: CGFloat = 8 // Bottom padding
-                    
-                    // Total: 60pt placeholder + padding (matches actual rendered placeholder)
-                    estimatedHeight += placeholderHeight + paddingTop + paddingBottom
-                }
-            }
-        }
-        
-        // Actions bar height
-        estimatedHeight += 40
-        
-        // Clamp to reasonable bounds to prevent extreme estimates
-        return min(max(estimatedHeight, 150), 1500) // Increased max to 1500 for retweets with media
-    }
     
     // MARK: - Video Playback Coordination
     

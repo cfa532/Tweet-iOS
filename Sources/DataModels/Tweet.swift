@@ -93,6 +93,10 @@ class Tweet: Identifiable, Codable, ObservableObject {
         }
     }
     
+    // TRANSIENT: Cached rendered height (not persisted)
+    // Used for scroll stability - once a tweet is rendered, we remember its exact height
+    var cachedHeight: CGFloat?
+    
     /// Update all attachments to observe the current author's baseUrl
     private func updateAttachmentsAuthor() {
         guard let author = author else { return }
@@ -565,33 +569,11 @@ extension Array where Element == Tweet {
                 // SwiftUI's @ObservedObject will trigger recomposition automatically
                 let existingTweet = self[existingIndex]
                 
-                // Update all properties that might have changed
-                if let content = newTweet.content {
-                    existingTweet.content = content
-                }
-                if let title = newTweet.title {
-                    existingTweet.title = title
-                }
-                existingTweet.timestamp = newTweet.timestamp
-                if let author = newTweet.author {
-                    existingTweet.author = author
-                }
-                if let favorites = newTweet.favorites {
-                    existingTweet.favorites = favorites
-                }
-                existingTweet.favoriteCount = newTweet.favoriteCount
-                existingTweet.bookmarkCount = newTweet.bookmarkCount
-                existingTweet.retweetCount = newTweet.retweetCount
-                existingTweet.commentCount = newTweet.commentCount
-                if let attachments = newTweet.attachments {
-                    existingTweet.attachments = attachments
-                }
-                if let isPrivate = newTweet.isPrivate {
-                    existingTweet.isPrivate = isPrivate
-                }
-                if let downloadable = newTweet.downloadable {
-                    existingTweet.downloadable = downloadable
-                }
+                // Use existing update method (cleaner, DRY)
+                try? existingTweet.update(from: newTweet)
+                
+                // NOTE: No need to invalidate cachedHeight
+                // Tweet content is immutable - height never changes after first render
                 
                 // No array mutation - tweet stays at same index, SwiftUI recomposes
             } else {
