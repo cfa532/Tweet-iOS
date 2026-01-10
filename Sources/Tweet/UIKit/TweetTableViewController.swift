@@ -114,7 +114,6 @@ class TweetTableViewController: UITableViewController {
         if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 {
             tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
             lastScrollOffset = -topInset
-        } else {
         }
     }
     
