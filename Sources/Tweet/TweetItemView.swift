@@ -12,7 +12,15 @@ struct TweetItemView: View, Equatable {
     var currentProfileUser: User? = nil
     var hideActions: Bool = false
     var backgroundColor: Color = Color(.systemBackground)
-    @State private var originalTweet: Tweet?
+    @State private var originalTweet: Tweet? {
+        didSet {
+            // CRITICAL: When original tweet loads, clear cached height
+            // The tweet will re-render with full content, needs new height measurement
+            if originalTweet != nil {
+                tweet.cachedHeight = nil
+            }
+        }
+    }
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
