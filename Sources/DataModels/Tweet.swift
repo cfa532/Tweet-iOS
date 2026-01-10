@@ -545,12 +545,18 @@ extension Array where Element == Tweet {
     private mutating func mergeTweetsInternal(_ newTweets: [Tweet]) {
         guard !newTweets.isEmpty else { return }
         
+        // Build index map for O(1) lookups instead of O(n) per tweet
+        var indexMap: [String: Int] = [:]
+        for (index, tweet) in enumerated() {
+            indexMap[tweet.mid] = index
+        }
+        
         var processedIds = Set<String>()
         
         for newTweet in newTweets {
             guard processedIds.insert(newTweet.mid).inserted else { continue }
             
-            if let existingIndex = firstIndex(where: { $0.mid == newTweet.mid }) {
+            if let existingIndex = indexMap[newTweet.mid] {
                 let previousNeighbor = existingIndex > 0 ? self[existingIndex - 1] : nil
                 let nextNeighbor = existingIndex + 1 < count ? self[existingIndex + 1] : nil
                 
@@ -559,14 +565,30 @@ extension Array where Element == Tweet {
                 
                 if shouldMoveUp || shouldMoveDown {
                     remove(at: existingIndex)
+                    // Invalidate index map after removal
+                    indexMap.removeAll(keepingCapacity: true)
+                    for (index, tweet) in enumerated() {
+                        indexMap[tweet.mid] = index
+                    }
                     let insertionIndex = orderedInsertionIndex(for: newTweet)
                     insert(newTweet, at: insertionIndex)
+                    // Update index map after insertion
+                    indexMap.removeAll(keepingCapacity: true)
+                    for (index, tweet) in enumerated() {
+                        indexMap[tweet.mid] = index
+                    }
                 } else {
                     self[existingIndex] = newTweet
                 }
             } else {
                 let insertionIndex = orderedInsertionIndex(for: newTweet)
                 insert(newTweet, at: insertionIndex)
+                // Update index map after insertion
+                indexMap[newTweet.mid] = insertionIndex
+                // Shift indices for tweets after insertion point
+                for idx in (insertionIndex + 1)..<count {
+                    indexMap[self[idx].mid] = idx
+                }
             }
         }
     }

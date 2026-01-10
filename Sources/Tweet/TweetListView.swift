@@ -61,6 +61,20 @@ struct TweetListView<RowView: View>: View {
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
     
+    // MARK: - Helper Methods
+    
+    /// Update VideoLoadingManager with current tweet list
+    /// Centralized method to avoid code duplication
+    private func updateVideoLoadingManager(delay: TimeInterval = 0) {
+        Task.detached(priority: .background) {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+            await self.videoLoadingManager.updateTweetList(tweetIds)
+        }
+    }
+    
     // MARK: - Video Navigation for Fullscreen
     
     /// Find next video in tweet list starting from given SOURCE tweet (visible in feed) and video index
@@ -87,10 +101,12 @@ struct TweetListView<RowView: View>: View {
         let sourceTweet = allTweets[sourceTweetIdx]
         
         // Get media tweet (handle retweets)
+        // Optimization: Only fetch if retweet doesn't already have attachments
         let mediaTweet: Tweet
         if let originalTweetId = sourceTweet.originalTweetId,
-           let originalAuthorId = sourceTweet.originalAuthorId {
-            // This is a retweet - fetch original tweet
+           let originalAuthorId = sourceTweet.originalAuthorId,
+           sourceTweet.attachments == nil {
+            // This is a retweet without attachments - need to fetch original
             if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                 mediaTweet = original
             } else {
@@ -121,9 +137,11 @@ struct TweetListView<RowView: View>: View {
             let nextTweet = allTweets[idx]
             
             // Get media tweet (handle retweets)
+            // Optimization: Only fetch if retweet doesn't already have attachments
             let nextMediaTweet: Tweet
             if let originalTweetId = nextTweet.originalTweetId,
-               let originalAuthorId = nextTweet.originalAuthorId {
+               let originalAuthorId = nextTweet.originalAuthorId,
+               nextTweet.attachments == nil {
                 if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                     nextMediaTweet = original
                 } else {
@@ -341,9 +359,11 @@ struct TweetListView<RowView: View>: View {
                     let sourceTweet = allTweets[sourceTweetIdx]
                     
                     // Get media tweet (handle retweets)
+                    // Optimization: Only fetch if retweet doesn't already have attachments
                     let mediaTweet: Tweet
                     if let originalTweetId = sourceTweet.originalTweetId,
-                       let originalAuthorId = sourceTweet.originalAuthorId {
+                       let originalAuthorId = sourceTweet.originalAuthorId,
+                       sourceTweet.attachments == nil {
                         if let original = try? await hproseRef.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                             mediaTweet = original
                         } else {
@@ -371,9 +391,11 @@ struct TweetListView<RowView: View>: View {
                     for idx in (sourceTweetIdx + 1)..<allTweets.count {
                         let nextTweet = allTweets[idx]
                         
+                        // Optimization: Only fetch if retweet doesn't already have attachments
                         let nextMediaTweet: Tweet
                         if let originalTweetId = nextTweet.originalTweetId,
-                           let originalAuthorId = nextTweet.originalAuthorId {
+                           let originalAuthorId = nextTweet.originalAuthorId,
+                           nextTweet.attachments == nil {
                             if let original = try? await hproseRef.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
                                 nextMediaTweet = original
                             } else {
@@ -455,10 +477,7 @@ struct TweetListView<RowView: View>: View {
                     hasMoreTweets = freshTweets.count >= pageSize
                     
                     // Update video manager in background
-                    Task.detached(priority: .background) {
-                        let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
-                        await self.videoLoadingManager.updateTweetList(tweetIds)
-                    }
+                    updateVideoLoadingManager()
                     
                     print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
                 } else {
@@ -490,14 +509,8 @@ struct TweetListView<RowView: View>: View {
                     // Set hasMoreTweets based on cache - if we got a full page, there might be more
                     hasMoreTweets = tweetsFromCache.count >= pageSize
 
-                    // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
-                    // Defer during initial startup to prevent hangs
-                    Task.detached(priority: .background) {
-                        // Wait 1 second after cache load before updating video manager
-                        try? await Task.sleep(nanoseconds: 1_000_000_000)
-                        let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
-                        await self.videoLoadingManager.updateTweetList(tweetIds)
-                    }
+                    // Update VideoLoadingManager with delay for startup
+                    updateVideoLoadingManager(delay: 1.0)
 
                     // Don't mark as loaded yet - wait for server fetch to complete
                     // This prevents "No tweet yet" from showing prematurely if cached tweets
@@ -597,10 +610,7 @@ struct TweetListView<RowView: View>: View {
                         self.hasMoreTweets = tweets.count >= self.pageSize
                         
                         // Update video manager in background
-                        Task.detached(priority: .background) {
-                            let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
-                            await self.videoLoadingManager.updateTweetList(tweetIds)
-                        }
+                        self.updateVideoLoadingManager()
                     } else {
                         // No valid tweets - stop loading
                         self.hasMoreTweets = false
@@ -659,21 +669,16 @@ struct TweetListView<RowView: View>: View {
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
                     
-                    // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
-                    Task.detached(priority: .background) {
-                        let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
-                        await self.videoLoadingManager.updateTweetList(tweetIds)
-                    }
+                    // Update VideoLoadingManager
+                    updateVideoLoadingManager()
                     } else {
                         // Only clear if server returned no valid tweets AND we have no cached tweets
                         if tweets.isEmpty {
                             tweets = []
                             hasMoreTweets = false
 
-                            // Update VideoLoadingManager with empty tweet list (background task to avoid blocking)
-                            Task.detached(priority: .background) {
-                                await self.videoLoadingManager.updateTweetList([])
-                            }
+                            // Update VideoLoadingManager with empty list
+                            updateVideoLoadingManager()
                         } else {
                         // Keep cached tweets if server returned no valid tweets
                         hasMoreTweets = false
@@ -743,11 +748,8 @@ struct TweetListView<RowView: View>: View {
                             hasMoreTweets = true
                         }
                         
-                        // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
-                        Task.detached(priority: .background) {
-                            let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
-                            await self.videoLoadingManager.updateTweetList(tweetIds)
-                        }
+                        // Update VideoLoadingManager
+                        updateVideoLoadingManager()
                     }
                     print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
@@ -839,11 +841,8 @@ struct TweetListView<RowView: View>: View {
                 tweets.mergeTweets(validServerTweets)
             }
             
-            // Update VideoLoadingManager with new tweet list (background task to avoid blocking)
-            Task.detached(priority: .background) {
-                let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
-                await self.videoLoadingManager.updateTweetList(tweetIds)
-            }
+            // Update VideoLoadingManager
+            updateVideoLoadingManager()
 
             currentPage = page
 
@@ -874,10 +873,8 @@ struct TweetListView<RowView: View>: View {
             // Server returned fewer than pageSize tweets (or empty), so no more pages
             if page == 0 {
                 if tweets.isEmpty {
-                    // Update VideoLoadingManager with empty tweet list (background task to avoid blocking)
-                    Task.detached(priority: .background) {
-                        await self.videoLoadingManager.updateTweetList([])
-                    }
+                    // Update VideoLoadingManager with empty list
+                    updateVideoLoadingManager()
                     isLoading = false
                     initialLoadComplete = true
                 } else {
