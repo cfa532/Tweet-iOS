@@ -5,6 +5,25 @@
 //  Created by AI Assistant on 2025/01/27.
 //  Singleton video managers for detail and fullscreen contexts
 //
+//  MEMORY LEAK PREVENTION INTEGRATION
+//  ==================================
+//
+//  These managers integrate with the SharedAssetCache memory leak prevention system:
+//
+//  DetailVideoManager:
+//  - Uses SharedAssetCache for video loading (inherits debouncing)
+//  - Saves playback state before clearing (PersistentVideoStateManager)
+//  - Cancels downloads on deactivation
+//
+//  FullScreenVideoManager:
+//  - Uses SharedAssetCache with bypassDebounce: true (instant response)
+//  - Auto-advances require immediate loading (no debounce tolerance)
+//  - Clears and cancels on deactivation
+//
+//  For complete memory leak prevention documentation:
+//  - See: MEMORY_LEAK_PREVENTION.md (comprehensive guide)
+//  - See: MEMORY_LEAK_QUICK_REFERENCE.md (quick usage guide)
+//
 
 import Foundation
 import AVFoundation

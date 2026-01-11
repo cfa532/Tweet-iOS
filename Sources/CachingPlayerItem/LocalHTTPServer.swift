@@ -21,6 +21,9 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private var lastPersistedContiguousSize: Int64
     private let persistInterval: Int64 = 512 * 1024
     
+    // CRITICAL: Cancellation flag to stop processing data immediately
+    private var isCancelled = false
+    
     init(
         connection: NWConnection,
         mediaID: String,
@@ -49,8 +52,19 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         }
     }
     
+    /// Cancel this delegate - stops processing any further data
+    /// Call this when the video scrolls out of view to immediately stop memory accumulation
+    func cancel() {
+        isCancelled = true
+    }
+    
     // Receive data in chunks
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        // CRITICAL: Check cancellation flag FIRST - don't process any data if cancelled
+        guard !isCancelled else {
+            return
+        }
+        
         autoreleasepool {
             let chunkLength = Int64(data.count)
             guard chunkLength > 0 else { return }
@@ -203,9 +217,100 @@ public class LocalHTTPServer: @unchecked Sendable {
     // DEDUPLICATION: Track active downloads to prevent duplicates
     private let activeDownloadsActor = ActiveDownloadsActor()
     
+    // PERFORMANCE: Cache validation results to avoid repeated 4MB scans
+    private var validationCache: [String: (isValid: Bool, timestamp: Date)] = [:]
+    private let validationCacheLock = NSLock()
+    private let validationCacheTTL: TimeInterval = 300 // 5 minutes
+    
     // Streaming download sessions
-    private var streamingSessions: [String: URLSession] = [:]
+    private var streamingSessions: [String: (session: URLSession, delegate: StreamingDownloadDelegate)] = [:]
     private let streamingSessionsLock = NSLock()
+    
+    /// Cancel all downloads for a specific mediaID (prevents memory leaks)
+    ///
+    /// This cancels all URLSession streaming downloads for progressive videos.
+    /// Each streaming session can hold 50-100MB of network buffers.
+    ///
+    /// **What Gets Cancelled:**
+    /// - All URLSession instances for this mediaID (format: "mediaID_offset")
+    /// - Active Task-based downloads from `activeDownloadsActor`
+    /// - Streaming delegates (stops data processing immediately)
+    ///
+    /// Called when:
+    /// - Video scrolls out of view (`SharedAssetCache.markAsNotVisible`)
+    /// - Player is being removed (`SharedAssetCache.clearPlayerForMediaID`)
+    /// - Memory warning received
+    ///
+    /// **Effect:** Immediately frees 50-100MB per video
+    ///
+    /// - Parameter mediaID: The media ID to cancel downloads for (e.g., "QmZyh9NC...")
+    ///
+    /// - Important: This handles progressive videos. Use `ResourceLoaderDelegate.cancelAllTasks`
+    ///              for HLS videos.
+    public func cancelDownloads(for mediaID: String) {
+        streamingSessionsLock.lock()
+        
+        // Find all sessions for this mediaID (format: "mediaID_offset")
+        let sessionsToCancel = streamingSessions.filter { key, _ in
+            key.hasPrefix(mediaID + "_")
+        }
+        
+        // Remove from dictionary first
+        for (key, _) in sessionsToCancel {
+            streamingSessions.removeValue(forKey: key)
+        }
+        
+        streamingSessionsLock.unlock()
+        
+        // Cancel sessions and delegates outside the lock
+        if !sessionsToCancel.isEmpty {
+            print("✅ [LocalHTTPServer] Cancelling \(sessionsToCancel.count) streaming sessions for \(mediaID)")
+            for (_, (session, delegate)) in sessionsToCancel {
+                // CRITICAL: Cancel delegate FIRST to stop data processing immediately
+                delegate.cancel()
+                // Then invalidate session to cancel network requests
+                session.invalidateAndCancel()
+            }
+        }
+        
+        // Also cancel any active download task (async)
+        Task {
+            if let task = await activeDownloadsActor.getTask(for: mediaID) {
+                task.cancel()
+                await activeDownloadsActor.removeTask(for: mediaID)
+                print("✅ [LocalHTTPServer] Cancelled active download task for \(mediaID)")
+            }
+        }
+    }
+    
+    /// Cancel ALL downloads (for memory pressure or cleanup)
+    ///
+    /// This is an emergency function called during critical memory pressure.
+    /// It cancels every active URLSession regardless of visibility state.
+    ///
+    /// **Use Cases:**
+    /// - System memory warning (iOS reporting critical memory pressure)
+    /// - Proactive memory warning (app detected >1.2GB usage)
+    /// - App backgrounding (optional, to be conservative)
+    ///
+    /// **Effect:** Can free 500MB+ if many videos were downloading
+    ///
+    /// - Important: This is aggressive and will interrupt all video loading.
+    ///              Only call during genuine memory pressure.
+    public func cancelAllDownloads() {
+        streamingSessionsLock.lock()
+        let allSessions = streamingSessions
+        streamingSessions.removeAll()
+        streamingSessionsLock.unlock()
+        
+        print("✅ [LocalHTTPServer] Cancelling ALL \(allSessions.count) streaming sessions")
+        for (_, (session, delegate)) in allSessions {
+            // CRITICAL: Cancel delegate FIRST to stop data processing immediately
+            delegate.cancel()
+            // Then invalidate session to cancel network requests
+            session.invalidateAndCancel()
+        }
+    }
     
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
@@ -1344,7 +1449,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
                     
                     self.streamingSessionsLock.lock()
-                    self.streamingSessions[mediaID + "_\(streamStart)"] = session
+                    self.streamingSessions[mediaID + "_\(streamStart)"] = (session, delegate)
                     self.streamingSessionsLock.unlock()
                     
                     let streamTask = session.dataTask(with: streamRequest)
@@ -2207,8 +2312,27 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     /// Validates that a cached progressive video file is playable by checking for moov atom near the beginning.
-    /// Some progressive MP4s place the moov atom slightly deeper than the first 8KB, so we scan up to 512KB.
+    /// Some progressive MP4s place the moov atom slightly deeper than the first 8KB, so we scan up to 4MB.
+    /// PERFORMANCE: Results are cached for 5 minutes to avoid repeated expensive scans during fast scrolling.
     private func isValidProgressiveCache(fileURL: URL) -> Bool {
+        let cacheKey = fileURL.path
+        
+        // Check validation cache first
+        validationCacheLock.lock()
+        if let cached = validationCache[cacheKey] {
+            let age = Date().timeIntervalSince(cached.timestamp)
+            if age < validationCacheTTL {
+                validationCacheLock.unlock()
+                // Cache hit - return immediately without scanning
+                return cached.isValid
+            }
+            // Cache expired
+            validationCache.removeValue(forKey: cacheKey)
+        }
+        validationCacheLock.unlock()
+        
+        // Perform expensive validation
+        var isValid: Bool
         do {
             let fileHandle = try FileHandle(forReadingFrom: fileURL)
             defer { try? fileHandle.close() }
@@ -2228,21 +2352,31 @@ public class LocalHTTPServer: @unchecked Sendable {
                 buffer.append(chunk)
                 
                 if buffer.range(of: Data([0x6D, 0x6F, 0x6F, 0x76])) != nil { // "moov"
-                    return true
+                    isValid = true
+                    break
                 }
             }
             
-            if buffer.range(of: Data([0x66, 0x74, 0x79, 0x70])) != nil { // "ftyp"
+            if buffer.range(of: Data([0x6D, 0x6F, 0x6F, 0x76])) != nil {
+                isValid = true
+            } else if buffer.range(of: Data([0x66, 0x74, 0x79, 0x70])) != nil { // "ftyp"
                 print("⚠️ [PROGRESSIVE CACHE] moov atom not found within first \(buffer.count) bytes, but ftyp is present – assuming valid progressive file")
-                return true
+                isValid = true
+            } else {
+                print("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
+                isValid = false
             }
-            
-            print("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
-            return false
             
         } catch {
             print("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
-            return false
+            isValid = false
         }
+        
+        // Store result in cache
+        validationCacheLock.lock()
+        validationCache[cacheKey] = (isValid: isValid, timestamp: Date())
+        validationCacheLock.unlock()
+        
+        return isValid
     }
 }

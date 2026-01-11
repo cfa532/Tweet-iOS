@@ -53,6 +53,11 @@
 		465553CA2E55F6A900702AFF /* ContentFilterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C82E55F6A900702AFF /* ContentFilterView.swift */; };
 		465553CB2E55F6A900702AFF /* ReportTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 465553C92E55F6A900702AFF /* ReportTweetView.swift */; };
 		466934712F134B2800D3AF1F /* RESOURCE_CANCELLATION_IMPROVEMENTS.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934702F134B2800D3AF1F /* RESOURCE_CANCELLATION_IMPROVEMENTS.md */; };
+		4669347F2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 4669347E2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md */; };
+		466934812F139E1200D3AF1F /* MEMORY_LEAK_QUICK_REFERENCE.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934802F139E1200D3AF1F /* MEMORY_LEAK_QUICK_REFERENCE.md */; };
+		466934832F139E7500D3AF1F /* CHANGELOG_MEMORY_LEAK_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934822F139E7500D3AF1F /* CHANGELOG_MEMORY_LEAK_FIX.md */; };
+		466934852F13A07900D3AF1F /* MEMORY_LEAK_FIX_DELEGATE.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934842F13A07900D3AF1F /* MEMORY_LEAK_FIX_DELEGATE.md */; };
+		466934872F13A23D00D3AF1F /* MEMORY_OPTIMIZATION_PHASE2.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934862F13A23D00D3AF1F /* MEMORY_OPTIMIZATION_PHASE2.md */; };
 		466E00942E7023460068D968 /* MemoryWarningManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 466E00932E7023460068D968 /* MemoryWarningManager.swift */; };
 		46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46704DE12DD8CEF7001D69B9 /* MediaType.swift */; };
 		4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */; };
@@ -193,6 +198,11 @@
 		465553C82E55F6A900702AFF /* ContentFilterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentFilterView.swift; sourceTree = "<group>"; };
 		465553C92E55F6A900702AFF /* ReportTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportTweetView.swift; sourceTree = "<group>"; };
 		466934702F134B2800D3AF1F /* RESOURCE_CANCELLATION_IMPROVEMENTS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = RESOURCE_CANCELLATION_IMPROVEMENTS.md; sourceTree = "<group>"; };
+		4669347E2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MEMORY_LEAK_PREVENTION.md; sourceTree = "<group>"; };
+		466934802F139E1200D3AF1F /* MEMORY_LEAK_QUICK_REFERENCE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MEMORY_LEAK_QUICK_REFERENCE.md; sourceTree = "<group>"; };
+		466934822F139E7500D3AF1F /* CHANGELOG_MEMORY_LEAK_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CHANGELOG_MEMORY_LEAK_FIX.md; sourceTree = "<group>"; };
+		466934842F13A07900D3AF1F /* MEMORY_LEAK_FIX_DELEGATE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MEMORY_LEAK_FIX_DELEGATE.md; sourceTree = "<group>"; };
+		466934862F13A23D00D3AF1F /* MEMORY_OPTIMIZATION_PHASE2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MEMORY_OPTIMIZATION_PHASE2.md; sourceTree = "<group>"; };
 		466E00932E7023460068D968 /* MemoryWarningManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryWarningManager.swift; sourceTree = "<group>"; };
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
 		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
@@ -392,6 +402,8 @@
 				464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */,
 				464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */,
 				465209852EEC5FEB00FA6DBA /* HproseClientPool.swift */,
+				466934842F13A07900D3AF1F /* MEMORY_LEAK_FIX_DELEGATE.md */,
+				466934862F13A23D00D3AF1F /* MEMORY_OPTIMIZATION_PHASE2.md */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -493,6 +505,9 @@
 				4612ED182E924A18005D5B8B /* ResourceLoaderDelegate.swift */,
 				4612ED192E924A18005D5B8B /* URLExtension.swift */,
 				4612ED1A2E924A18005D5B8B /* URLResponseExtension.swift */,
+				4669347E2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md */,
+				466934802F139E1200D3AF1F /* MEMORY_LEAK_QUICK_REFERENCE.md */,
+				466934822F139E7500D3AF1F /* CHANGELOG_MEMORY_LEAK_FIX.md */,
 			);
 			path = CachingPlayerItem;
 			sourceTree = "<group>";
@@ -706,13 +721,18 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				466934812F139E1200D3AF1F /* MEMORY_LEAK_QUICK_REFERENCE.md in Resources */,
+				466934872F13A23D00D3AF1F /* MEMORY_OPTIMIZATION_PHASE2.md in Resources */,
 				460680F62E1660C700D9D15A /* Localizable.strings in Resources */,
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
 				46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */,
+				466934832F139E7500D3AF1F /* CHANGELOG_MEMORY_LEAK_FIX.md in Resources */,
 				466934712F134B2800D3AF1F /* RESOURCE_CANCELLATION_IMPROVEMENTS.md in Resources */,
 				46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */,
+				4669347F2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md in Resources */,
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
+				466934852F13A07900D3AF1F /* MEMORY_LEAK_FIX_DELEGATE.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
