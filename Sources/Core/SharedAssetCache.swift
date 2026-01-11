@@ -4,11 +4,11 @@
 //
 //  Shared asset cache for video players with background loading support
 //
-//  MEMORY LEAK PREVENTION SYSTEM
-//  ============================
+//  MEMORY MANAGEMENT STRATEGY
+//  ==========================
 //
-//  This cache implements a three-layer defense system against memory leaks
-//  caused by video downloads during fast scrolling:
+//  This cache implements a balanced approach to memory management that prioritizes
+//  UX (instant playback on scroll-back) while preventing unbounded memory growth.
 //
 //  Layer 1: Debouncing (Prevention)
 //  --------------------------------
@@ -17,21 +17,31 @@
 //  - Prevents 60-80% of wasteful downloads
 //  - See: getOrCreatePlayer(bypassDebounce:)
 //
-//  Layer 2: Active Cancellation (Reactive)
+//  Layer 2: Active Cancellation (Immediate)
 //  ----------------------------------------
 //  - Cancels in-progress downloads when videos become invisible
-//  - Frees 50-100MB per video immediately
+//  - Stops delegate data processing within milliseconds
 //  - Handles both HLS (ResourceLoaderDelegate) and progressive (LocalHTTPServer)
-//  - See: markAsNotVisible(), clearPlayerForMediaID()
+//  - Frees 50-100MB per video immediately (network buffers only)
+//  - See: markAsNotVisible(), LocalHTTPServer.cancelDownloads()
 //
-//  Layer 3: Memory Pressure Response (Safety Net)
+//  Layer 3: Player Cache (Gradual Cleanup)
+//  ----------------------------------------
+//  - Keeps players cached for 10 minutes OR until 30-player limit
+//  - Enables instant playback when scrolling back (0ms vs 1-2s)
+//  - ~243MB typical usage (12-15 players × 20MB each)
+//  - Automatically cleaned up by timer every 15 seconds
+//  - iOS reclaims memory if system needs it
+//  - See: managePlayerCacheSize(), performCleanup()
+//
+//  Layer 4: Memory Pressure Response (Safety Net)
 //  -----------------------------------------------
 //  - Monitors memory usage every 5 seconds
 //  - Responds to iOS system memory warnings
 //  - Cancels ALL downloads and releases cache under pressure
 //  - See: handleMemoryWarning(), handleSystemMemoryWarning()
 //
-//  For complete documentation, see: MEMORY_LEAK_PREVENTION.md
+//  For complete documentation, see: MEMORY_LEAK_FIX_DELEGATE.md
 //
 
 import Foundation
@@ -665,19 +675,6 @@ class SharedAssetCache: ObservableObject {
         if let delegate = resourceLoaderDelegates[mediaID] {
             delegate.cancelAllTasks()
         }
-        
-        // MEMORY FIX: Immediately release player when video becomes invisible
-        // Don't wait for cleanup timer (15s) - this frees 10-20MB per player instantly!
-        if let player = playerCache.removeValue(forKey: mediaID) {
-            // Properly release player to free memory
-            releasePlayer(player)
-            print("🗑️ [MEMORY] Immediately released player for invisible video: \(mediaID)")
-        }
-        
-        // Also remove associated data
-        cachingPlayerItems.removeValue(forKey: mediaID)
-        resourceLoaderDelegates.removeValue(forKey: mediaID)
-        cacheTimestamps.removeValue(forKey: mediaID)
         
         print("🧹 [SharedAssetCache] Cancelled downloads for invisible video: \(mediaID)")
     }

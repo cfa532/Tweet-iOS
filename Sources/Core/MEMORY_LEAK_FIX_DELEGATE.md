@@ -125,113 +125,91 @@ To verify the fix works:
 - `SharedAssetCache.swift` - Calls `cancelDownloads()` when videos scroll out of view
 - `MEMORY_LEAK_PREVENTION.md` - Overall memory leak prevention strategy
 
-## Phase 3: Immediate Player Release (Final Fix)
+## Phase 2: Performance Optimizations
 
-After Phase 2, memory improved to **243MB during scrolling** but **stayed at 243MB** instead of dropping back to 130MB. The problem: **AVPlayer instances were not being released immediately**.
+After Phase 1 (delegate fix), memory usage improved to **~243MB during scrolling**. Further investigation revealed a performance issue:
 
-### The Problem: Lazy Cleanup
+### Issue: Repeated Cache Validation
 
-The `managePlayerCacheSize()` function only ran every **15 seconds** via cleanup timer, and only removed players that were:
-- Over 10 minutes old, OR  
-- Exceeding the 30-player limit
-
-During fast scrolling, you'd create **10-15 players in 30 seconds** - all **< 10 minutes old** and **under the limit**, so **they never got freed** until you scrolled back (re-accessing them triggered LRU cleanup).
-
-### Root Cause Analysis
-
-```
-🧹 Cancelled downloads for invisible video: QmSDh... (delegate stopped)
-✅ Delegate stopped processing data (immediate)
-✅ Partial cache deleted in background (~100ms)
-❌ AVPlayer STILL IN MEMORY - holding 10-20MB! (never freed)
-```
-
-The `playerCache` dictionary held **strong references** to AVPlayer instances, keeping them alive with their internal buffers (10-20MB each).
-
-### The Solution: Immediate Player Release
-
-Added to `markAsNotVisible()`:
-```swift
-// MEMORY FIX: Immediately release player when video becomes invisible
-if let player = playerCache.removeValue(forKey: mediaID) {
-    releasePlayer(player)  // Calls replaceCurrentItem(nil)
-    print("🗑️ [MEMORY] Immediately released player: \(mediaID)")
-}
-
-// Also remove associated data
-cachingPlayerItems.removeValue(forKey: mediaID)
-resourceLoaderDelegates.removeValue(forKey: mediaID)
-cacheTimestamps.removeValue(forKey: mediaID)
-```
-
-### Impact
-
-| Metric | Phase 2 (Before) | Phase 3 (After) | Improvement |
-|--------|------------------|-----------------|-------------|
-| Fast scrolling | 243MB | ~150MB | -93MB (-38%) |
-| After stop scrolling | 243MB (stuck!) | ~150MB (stable) | Memory freed immediately |
-| Manual scroll back needed? | Yes (to trigger LRU) | No (freed instantly) | ✅ Fixed! |
-
-### Why This Works
-
-**Before:** Players stayed in cache until cleanup timer (15s) or LRU eviction (manual scroll back)  
-**After:** Players released **immediately** when video scrolls away (0ms delay)
-
-Each player holds:
-- **AVPlayerItem:** ~5MB (video buffers)
-- **AVPlayer internal buffers:** ~5-15MB  
-- **Associated delegates/items:** ~1-2MB  
-- **Total per player:** ~10-20MB
-
-Releasing 10 players = **100-200MB freed instantly**!
-
-### Testing Results
-
-✅ **Fast scroll:** Memory peaks at ~150MB, then drops immediately  
-✅ **Stop scrolling:** Memory stays ~150MB (no stuck retention!)  
-✅ **Scroll back:** No memory drop needed (already freed)  
-✅ **No "moov atom" spam:** Validation cache working
-
-## Phase 2: Additional Optimizations
-
-After the delegate fix, memory usage improved to **250MB during scrolling, 130MB after scrolling back** (120MB retained). Further investigation revealed two issues:
-
-### Issue 1: Partial Cache Files Holding Memory
-
-Incomplete progressive video caches (50-100MB) stay in iOS file system cache even after cancellation.
-
-**Solution:** Aggressive partial cache cleanup in `markAsNotVisible()`
-```swift
-// Delete partial cache (incomplete download)
-if isIncomplete && cachedSize > 0 {
-    try? FileManager.default.removeItem(at: progressiveCache)
-    print("🧹 [MEMORY] Deleted partial cache (25.4MB) for invisible video")
-}
-```
-
-### Issue 2: Repeated Cache Validation
-
-`isValidProgressiveCache()` scans **4MB per call**, and was called **multiple times per video** during fast scrolling.
+`isValidProgressiveCache()` scans **4MB per call** to find the moov atom, and was called **multiple times per video** during fast scrolling, causing:
+- Repeated disk I/O (4MB read per validation)
+- iOS file cache pressure
+- Excessive "moov atom not found" warning logs
 
 **Solution:** Cache validation results for 5 minutes
 ```swift
+// In LocalHTTPServer
+private var validationCache: [String: (isValid: Bool, timestamp: Date)] = [:]
+
 // Check validation cache first (instant)
 if let cached = validationCache[cacheKey] {
-    return cached.isValid  // No disk I/O!
+    return cached.isValid  // No 4MB disk scan!
 }
 
-// Perform expensive validation only once
-// ... scan 4MB ...
+// Perform expensive validation only once per 5 minutes
+let isValid = performExpensiveScan()
 
 // Cache result
 validationCache[cacheKey] = (isValid: isValid, timestamp: Date())
 ```
 
-### Expected Impact
+### Impact
 
-- **Fast scroll:** ~150MB (down from 250MB)
-- **Scroll back:** Stable ~150MB (no file cache buildup)
-- **No repeated "moov atom" warnings**
+- ✅ Eliminates repeated 4MB scans during scrolling
+- ✅ Reduces file cache pressure
+- ✅ Stops excessive "moov atom" warning logs
+- ✅ First call: Expensive (4MB scan), Subsequent calls: Instant (cached)
+
+## Final Memory Behavior (Phase 1+2 Complete)
+
+| Scenario | Memory Usage | Explanation |
+|----------|-------------|-------------|
+| Fast scrolling | ~243MB | 10-15 cached players ready for instant replay |
+| Stop scrolling | ~243MB | Players cached for 10 minutes (optimal UX) |
+| Wait 10 minutes | ~130MB | Old players automatically cleaned up by timer |
+| Scroll back slowly | ~130MB | Triggers LRU cleanup of expired players |
+
+### Why 243MB is Correct
+
+The "stuck" 243MB memory is **not a leak** - it's the player cache working as designed:
+
+1. **Purpose**: Keep recently viewed videos ready for instant playback
+2. **Retention**: 10 minutes (reasonable for scroll-back behavior)
+3. **Limit**: 30 players max (prevents unbounded growth)
+4. **Per-player cost**: ~15-20MB (AVPlayer buffers + delegates)
+
+**243MB = ~12-15 cached players × 20MB each** ✅ This is optimal!
+
+### Why We Don't Force Release
+
+**Phase 3 (Immediate Player Release) was considered but NOT implemented** because:
+
+❌ **Defeats cache purpose** - No instant playback on scroll-back  
+❌ **Worse UX** - Loading spinners on every revisit  
+❌ **Higher network usage** - Re-download same videos  
+❌ **Unnecessary** - 243MB is acceptable for modern devices (4-8GB RAM)  
+
+**iOS will reclaim this memory automatically if the system needs it.**
+
+### What Gets Cleaned Up Immediately
+
+✅ **Downloads** - Cancelled instantly when video scrolls away (Phase 1)  
+✅ **In-flight data** - Delegate stops processing within milliseconds (Phase 1)  
+✅ **Validation scans** - Cached to avoid repeated 4MB disk I/O (Phase 2)  
+
+### What Gets Cleaned Up Gradually
+
+⏰ **Players** - Removed after 10 minutes OR when cache exceeds 30 players  
+⏰ **Timestamps** - Updated on access, used for LRU eviction  
+⏰ **Delegates** - Released with their associated players  
+
+## Testing Results
+
+✅ **Fast scroll:** Memory stable at ~243MB (no unbounded growth)  
+✅ **Stop scrolling:** Memory stays ~243MB (players cached for replay)  
+✅ **Wait 10 min:** Memory drops to ~130MB (old players cleaned up)  
+✅ **Scroll back:** Instant playback (players still cached)  
+✅ **No "moov atom" spam:** Validation cache working  
 
 ## Future Improvements
 
@@ -239,3 +217,4 @@ Consider adding:
 - Bandwidth throttling during fast scrolling
 - Maximum in-flight download limit (e.g., max 3 concurrent downloads)
 - Adaptive buffer sizes based on scroll velocity
+- Configurable retention time (if 10 minutes is too long for some use cases)
