@@ -195,6 +195,16 @@ struct ProfileView: View {
     }
     
     private func handleViewDisappear() {
+        // CRITICAL: Stop all video playback when navigating away from profile
+        // This prevents videos from playing in the background when switching profiles
+        VideoPlaybackCoordinator.shared.stopAllVideos()
+        
+        // CRITICAL: Clean up video resources to free memory
+        // This aggressively removes all cached players/assets when leaving the profile
+        SharedAssetCache.shared.cleanupForNavigation()
+        
+        print("🧹 [ProfileView] View disappeared - stopped all videos and cleaned up resources")
+        
         // Reset navigation visibility when view disappears
         withAnimation(.easeInOut(duration: 0.3)) {
             isNavigationVisible = true

@@ -334,6 +334,15 @@ struct TweetListView<RowView: View>: View {
             setupVideoSearchFunction()
         }
         .onDisappear {
+            // CRITICAL: Stop all video playback when navigating away
+            // This prevents videos from playing in the background when switching between screens
+            VideoPlaybackCoordinator.shared.stopAllVideos()
+            
+            // CRITICAL: Clean up video resources to free memory
+            SharedAssetCache.shared.cleanupForNavigation()
+            
+            print("🧹 [TweetListView] View disappeared - stopped all videos and cleaned up resources")
+            
             // Clean up foreground observer
             if let observer = foregroundObserver {
                 NotificationCenter.default.removeObserver(observer)
