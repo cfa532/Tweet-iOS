@@ -8,15 +8,17 @@
 import SwiftUI
 
 struct Avatar: View {
-    @ObservedObject var user: User
+    let user: User // Changed from @ObservedObject to let - we'll observe specific fields only
     let size: CGFloat
     @State private var cachedImage: UIImage?
     @State private var isLoading = false
     @State private var loadFailed = false // Track if load failed/timed out
+    @State private var avatarId: String? // Track avatar field changes manually
     
     init(user: User, size: CGFloat = 40) {
         self.user = user
         self.size = size
+        self._avatarId = State(initialValue: user.avatar) // Initialize with current avatar
     }
     
     var body: some View {
@@ -133,7 +135,22 @@ struct Avatar: View {
                 loadFailed = false
             }
         }
-        .id("\(user.mid)_\(user.avatar ?? "noavatar")") // Force recreation only when avatar changes, not baseUrl
+        .onReceive(user.$avatar) { newAvatar in
+            // Track avatar field changes manually - ignore all other User properties like baseUrl
+            guard newAvatar != avatarId else { return }
+            
+            print("👤 [AVATAR.onReceive] Avatar changed from \(avatarId ?? "nil") to \(newAvatar ?? "nil")")
+            avatarId = newAvatar
+            
+            // Reset state and reload
+            cachedImage = nil
+            loadFailed = false
+            isLoading = false
+            
+            if let avatarUrl = user.avatarUrl {
+                loadAvatar(from: avatarUrl)
+            }
+        }
     }
     
     private func loadAvatar(from urlString: String) {
