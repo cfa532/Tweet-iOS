@@ -457,6 +457,13 @@ struct TweetDetailView: View {
         }
         .onAppear {
             
+            // CRITICAL: Stop all videos from previous screen (feed, other tweets)
+            // Principle: Only keep videos on current view/screen active
+            // Note: DetailVideoManager will handle activating THIS tweet's video
+            VideoPlaybackCoordinator.shared.stopAllVideos()
+            
+            print("🧹 [TweetDetailView] View appeared - stopped all videos from previous screen")
+            
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")

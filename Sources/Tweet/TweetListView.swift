@@ -319,6 +319,12 @@ struct TweetListView<RowView: View>: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            // CRITICAL: Stop all videos from previous screen
+            // Principle: Only keep videos on current view/screen active
+            VideoPlaybackCoordinator.shared.stopAllVideos()
+            
+            print("🧹 [TweetListView] View appeared - stopped all videos from previous screen")
+            
             // Set up fullscreen video search function for auto-advance
             setupVideoSearchFunction()
             

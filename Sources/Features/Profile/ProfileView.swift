@@ -184,6 +184,12 @@ struct ProfileView: View {
     }
     
     private func handleViewAppear() {
+        // CRITICAL: Stop all videos from previous screen (e.g., MainFeed, other profiles)
+        // Principle: Only keep videos on current view/screen active
+        VideoPlaybackCoordinator.shared.stopAllVideos()
+        
+        print("🧹 [ProfileView] View appeared - stopped all videos from previous screen")
+        
         // Ensure navigation is visible when view appears
         isNavigationVisible = true
         NotificationCenter.default.post(
