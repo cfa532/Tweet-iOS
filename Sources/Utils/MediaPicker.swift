@@ -600,104 +600,85 @@ struct VideoThumbnailView: View {
         }
         
         Task {
-            do {
-                // Check if file exists and is accessible
-                guard FileManager.default.fileExists(atPath: videoURL.path) else {
-                    print("DEBUG: [VideoThumbnailView] Video file does not exist at path: \(videoURL.path)")
-                    await MainActor.run {
-                        self.isLoading = false
-                        self.hasError = true
-                    }
-                    return
+            // Check if file exists and is accessible
+            guard FileManager.default.fileExists(atPath: videoURL.path) else {
+                print("DEBUG: [VideoThumbnailView] Video file does not exist at path: \(videoURL.path)")
+                await MainActor.run {
+                    self.isLoading = false
+                    self.hasError = true
                 }
-                
-                let asset = AVURLAsset(url: videoURL)
-                print("DEBUG: [VideoThumbnailView] Created AVURLAsset for: \(videoURL.lastPathComponent)")
-                
-                // Check if asset is playable
-                let isPlayable = try await asset.load(.isPlayable)
-                guard isPlayable else {
-                    print("DEBUG: [VideoThumbnailView] Video asset is not playable: \(videoURL.lastPathComponent)")
-                    await MainActor.run {
-                        self.isLoading = false
-                        self.hasError = true
+                return
+            }
+            
+            let asset = AVURLAsset(url: videoURL)
+            print("DEBUG: [VideoThumbnailView] Created AVURLAsset for: \(videoURL.lastPathComponent)")
+            
+            // NOTE: Removed isPlayable check - trust the app and data
+            
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.maximumSize = CGSize(width: 120, height: 120)
+            // Allow some tolerance to find nearby keyframes instead of requiring exact time
+            // This prevents falling back to 1.0s when earlier positions don't have exact frames
+            imageGenerator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+            imageGenerator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+            
+            print("DEBUG: [VideoThumbnailView] Attempting to generate thumbnail at CMTime.zero")
+            
+            // Try different time positions if zero fails
+            let timePositions: [CMTime] = [
+                CMTime.zero,
+                CMTime(seconds: 0.1, preferredTimescale: 600),
+                CMTime(seconds: 0.5, preferredTimescale: 600),
+                CMTime(seconds: 1.0, preferredTimescale: 600)
+            ]
+            
+            var thumbnailGenerated = false
+            
+            for timePosition in timePositions {
+                do {
+                    let cgImage = try await imageGenerator.image(at: timePosition).image
+                    let uiImage = UIImage(cgImage: cgImage)
+                    
+                    // Validate image dimensions before using
+                    let imageSize = uiImage.size
+                    guard imageSize.width.isFinite, imageSize.height.isFinite,
+                          imageSize.width > 0, imageSize.height > 0,
+                          imageSize.width < 10000, imageSize.height < 10000 else {
+                        print("DEBUG: [VideoThumbnailView] Invalid thumbnail dimensions: \(imageSize), trying next time position")
+                        continue // Try next time position instead of failing
                     }
-                    return
-                }
-                
-                let imageGenerator = AVAssetImageGenerator(asset: asset)
-                imageGenerator.appliesPreferredTrackTransform = true
-                imageGenerator.maximumSize = CGSize(width: 120, height: 120)
-                // Allow some tolerance to find nearby keyframes instead of requiring exact time
-                // This prevents falling back to 1.0s when earlier positions don't have exact frames
-                imageGenerator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
-                imageGenerator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
-                
-                print("DEBUG: [VideoThumbnailView] Attempting to generate thumbnail at CMTime.zero")
-                
-                // Try different time positions if zero fails
-                let timePositions: [CMTime] = [
-                    CMTime.zero,
-                    CMTime(seconds: 0.1, preferredTimescale: 600),
-                    CMTime(seconds: 0.5, preferredTimescale: 600),
-                    CMTime(seconds: 1.0, preferredTimescale: 600)
-                ]
-                
-                var thumbnailGenerated = false
-                
-                for timePosition in timePositions {
-                    do {
-                        let cgImage = try await imageGenerator.image(at: timePosition).image
-                        let uiImage = UIImage(cgImage: cgImage)
-
-                        // Validate image dimensions before using
-                        let imageSize = uiImage.size
-                        guard imageSize.width.isFinite, imageSize.height.isFinite,
-                              imageSize.width > 0, imageSize.height > 0,
-                              imageSize.width < 10000, imageSize.height < 10000 else {
-                            print("DEBUG: [VideoThumbnailView] Invalid thumbnail dimensions: \(imageSize), trying next time position")
-                            continue // Try next time position instead of failing
-                        }
-
-                        print("DEBUG: [VideoThumbnailView] Successfully generated thumbnail at time: \(timePosition.seconds) with size: \(imageSize)")
+                    
+                    print("DEBUG: [VideoThumbnailView] Successfully generated thumbnail at time: \(timePosition.seconds) with size: \(imageSize)")
+                    
+                    await MainActor.run {
+                        self.thumbnail = uiImage
+                        self.isLoading = false
+                        self.hasError = false
                         
-                        await MainActor.run {
-                            self.thumbnail = uiImage
-                            self.isLoading = false
-                            self.hasError = false
-                            
-                            // Cache the generated thumbnail (thread-safe)
-                            Self.setCachedThumbnail(uiImage, forKey: videoPath)
-                            print("DEBUG: [VideoThumbnailView] Thumbnail cached for: \(videoURL.lastPathComponent)")
-                        }
-                        thumbnailGenerated = true
-                        break
-                    } catch {
-                        print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at time \(timePosition.seconds): \(error)")
-                        continue
+                        // Cache the generated thumbnail (thread-safe)
+                        Self.setCachedThumbnail(uiImage, forKey: videoPath)
+                        print("DEBUG: [VideoThumbnailView] Thumbnail cached for: \(videoURL.lastPathComponent)")
                     }
+                    thumbnailGenerated = true
+                    break
+                } catch {
+                    print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at time \(timePosition.seconds): \(error)")
+                    continue
                 }
-                
-                if !thumbnailGenerated {
-                    print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at any time position, using placeholder")
-                    await MainActor.run {
-                        self.thumbnail = generatePlaceholderVideoThumbnail()
-                        self.isLoading = false
-                        self.hasError = false // Don't show error state since we have a placeholder
-
-                        // Cache the placeholder (thread-safe)
-                        if let placeholderThumbnail = self.thumbnail {
-                            Self.setCachedThumbnail(placeholderThumbnail, forKey: videoPath)
-                        }
-                    }
-                }
-                
-            } catch {
-                print("DEBUG: [VideoThumbnailView] Error generating video thumbnail: \(error)")
+            }
+            
+            if !thumbnailGenerated {
+                print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at any time position, using placeholder")
                 await MainActor.run {
                     self.thumbnail = generatePlaceholderVideoThumbnail()
                     self.isLoading = false
-                    self.hasError = false // Use placeholder instead of error state
+                    self.hasError = false // Don't show error state since we have a placeholder
+                    
+                    // Cache the placeholder (thread-safe)
+                    if let placeholderThumbnail = self.thumbnail {
+                        Self.setCachedThumbnail(placeholderThumbnail, forKey: videoPath)
+                    }
                 }
             }
         }

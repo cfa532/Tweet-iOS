@@ -765,7 +765,7 @@ class SharedAssetCache: ObservableObject {
         } else {
             // For progressive videos, use LocalHTTPServer to proxy and fix Content-Type WITH RETRY
             do {
-                let player = try await createProgressivePlayerWithRetry(for: url, mediaID: mediaID)
+                let player = try await createProgressivePlayerWithRetry(for: url, mediaID: mediaID, tweetId: tweetId)
                 // Notify success
                 await MainActor.run {
                     VideoLoadingManager.shared.videoLoadCompleted()
@@ -789,7 +789,7 @@ class SharedAssetCache: ObservableObject {
     
     /// Create progressive video player with ONE retry after refreshing author's baseUrl
     /// If it fails twice, it fails - no additional fallback attempts
-    private func createProgressivePlayerWithRetry(for url: URL, mediaID: String) async throws -> AVPlayer {
+    private func createProgressivePlayerWithRetry(for url: URL, mediaID: String, tweetId: String?) async throws -> AVPlayer {
         let currentRetry = await MainActor.run { videoRetryCount[mediaID] ?? 0 }
         
         do {
@@ -806,7 +806,7 @@ class SharedAssetCache: ObservableObject {
                 print("🔄 [PROGRESSIVE VIDEO RETRY] Attempt #1 for: \(mediaID) - refreshing author baseUrl...")
                 
                 // CRITICAL: Refresh author's baseUrl before retry
-                let refreshed = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: nil)
+                let refreshed = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: tweetId)
                 
                 if refreshed {
                     print("✅ [PROGRESSIVE VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
@@ -858,12 +858,10 @@ class SharedAssetCache: ObservableObject {
         
         // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
         let asset = AVURLAsset(url: localURL)
-        
-        // Load asset properties to validate it's playable
-        guard let _ = try? await asset.load(.isPlayable) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, 
-                         userInfo: [NSLocalizedDescriptionKey: "Progressive video asset not playable"])
-        }
+
+        // NOTE: Removed strict isPlayable validation since LocalHTTPServer proxy URLs
+        // may not immediately report as playable, but the video should still work.
+        // Let the player creation proceed and fail naturally if truly unplayable.
         
         let playerItem = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: playerItem)

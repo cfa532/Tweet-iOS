@@ -2925,6 +2925,7 @@ struct SimpleVideoPlayer: View {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
                         for: url,
+                        tweetId: parentTweetId,
                         mediaType: mediaType
                     )
                     self.player = newPlayer
@@ -3543,7 +3544,7 @@ struct SimpleVideoPlayer: View {
         Task.detached(priority: .userInitiated) {
             do {
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaType: mediaType)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: parentTweetId, mediaType: mediaType)
 
                 // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
                 // This prevents any brief moment where the player might start with wrong audio state

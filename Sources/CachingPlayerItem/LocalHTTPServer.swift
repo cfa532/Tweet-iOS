@@ -485,29 +485,46 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     public func start() {
-        queue.async { [weak self] in
-            Task {
-                guard let self = self else { return }
+        // If already running, return immediately
+        if isRunning {
+            return
+        }
 
+        // Use a dispatch group to wait for server startup
+        let group = DispatchGroup()
+        group.enter()
+
+        queue.async { [weak self] in
+            guard let self = self else {
+                group.leave()
+                return
+            }
+
+            Task {
                 // If currently stopping, wait for it to finish
                 if self.isStopping {
-                    // Wait on the same queue - stop() will finish and set isStopping=false
                     var waitCount = 0
                     while self.isStopping && waitCount < 10 {
                         try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
                         waitCount += 1
                     }
-                    if self.isStopping {
-                    }
                 }
 
                 // Don't start if already running or starting
                 if self.isRunning || self.isStarting {
+                    group.leave()
                     return
                 }
 
                 await self.startServer()
+                group.leave()
             }
+        }
+
+        // Wait for server to start (with timeout)
+        let result = group.wait(timeout: .now() + 2.0) // 2 second timeout
+        if result == .timedOut {
+            print("⚠️ [LocalHTTPServer] start() timed out waiting for server to start")
         }
     }
     
@@ -560,11 +577,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         queue.sync {
             mediaRealURLs[mediaID] = realURL
         }
-        
+
         // Return localhost URL: http://localhost:8080/ipfs/mediaID (clean format without redundancy)
         // AVPlayer will request this, and we'll serve from cache or fetch from realURL
         let localhostURL = URL(string: "\(Constants.LOCAL_HOST):\(port)\(realURL.path)")!
-        // Removed repetitive registration log
         return localhostURL
     }
     
@@ -645,35 +661,53 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // CRITICAL: Update port BEFORE starting listener so URLs use correct port
                 self.port = tryPort
 
+                // Create a sendable wrapper for the timeout task
+                final class TimeoutTaskBox: @unchecked Sendable {
+                    private let lock = NSLock()
+                    private var task: Task<Void, Never>?
+
+                    func set(_ task: Task<Void, Never>) {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        self.task = task
+                    }
+
+                    func cancel() {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        task?.cancel()
+                        task = nil
+                    }
+                }
+
+                let timeoutTaskBox = TimeoutTaskBox()
+
                 listener.stateUpdateHandler = { [weak self] state in
                     guard let self = self else {
+                        timeoutTaskBox.cancel()
                         resumeOnce(false)
                         return
                     }
+
                     switch state {
-                    case .setup:
-                        break // Silent
                     case .ready:
+                        timeoutTaskBox.cancel()
                         self.isRunning = true
                         // Save successful port to preferences
                         self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
                         // Store the listener
                         self.listener = listener
                         resumeOnce(true)
-                    case .failed(let error):
+                    case .failed, .cancelled:
+                        timeoutTaskBox.cancel()
                         self.isRunning = false
-
-                        // Only log if it's not a simple "port in use" error
-                        let errorDesc = error.localizedDescription.lowercased()
-                        if !errorDesc.contains("address already in use") && !errorDesc.contains("address in use") && !errorDesc.contains("eaddrinuse") {
-                        }
-
                         listener.cancel()
                         resumeOnce(false)
-                    case .waiting(_), .cancelled:
-                        listener.cancel()
-                        resumeOnce(false)
+                    case .waiting, .setup:
+                        break
                     @unknown default:
+                        timeoutTaskBox.cancel()
+                        self.isRunning = false
                         listener.cancel()
                         resumeOnce(false)
                     }
@@ -687,7 +721,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 listener.start(queue: listenerQueue)
 
                 // Set timeout using Task
-                Task {
+                let timeoutTask = Task {
                     do {
                         try await Task.sleep(nanoseconds: 200_000_000) // 200ms timeout
                         // If we get here, timeout occurred - cancel listener
@@ -697,6 +731,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         // Task was cancelled, ignore
                     }
                 }
+                timeoutTaskBox.set(timeoutTask)
 
             } catch {
                 resumeOnce(false)
