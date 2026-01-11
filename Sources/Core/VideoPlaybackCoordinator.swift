@@ -51,6 +51,30 @@ struct VideoPlaybackInfo: Equatable {
 /// 4. When primary finishes, move to next visible video
 /// 5. Keep videos playing during scroll
 /// 6. After scroll stops (2s delay), re-identify primary video
+///
+/// LONG BACKGROUND RECOVERY INTEGRATION
+/// ====================================
+///
+/// This coordinator integrates with AppDelegate's infrastructure restart system:
+///
+/// **Problem:** After long background (>5min), LocalHTTPServer restarts asynchronously
+/// - Videos are cleared via SharedAssetCache.clearVideoPlayersForBackgroundRecovery()
+/// - .reloadVisibleVideosOnly notification is posted
+/// - But coordinator's internal state (phase, primaryVideoId) becomes stale
+/// - Coordinator thinks videos are playing but players are gone → videos won't load
+///
+/// **Solution:** Two-layer state synchronization
+/// 1. **Infrastructure Readiness Notification** (VideoInfrastructureReadinessChanged):
+///    - Posted when AppDelegate.isVideoInfrastructureReady changes
+///    - Coordinator immediately stops all videos and clears state when isReady=false
+///    - Prevents stale load attempts during restart
+///
+/// 2. **Recovery Notification Guard** (.reloadVisibleVideosOnly):
+///    - Coordinator waits for infrastructure to be ready before processing recovery
+///    - Uses AppDelegate.isVideoInfrastructureReady flag as gate
+///    - Retries every 500ms if infrastructure not ready yet
+///
+/// This ensures coordinator state stays synchronized with actual video infrastructure state.
 @MainActor
 class VideoPlaybackCoordinator: ObservableObject {
     static let shared = VideoPlaybackCoordinator()
@@ -123,6 +147,16 @@ class VideoPlaybackCoordinator: ObservableObject {
             name: UIApplication.didEnterBackgroundNotification,
             object: nil
         )
+        
+        // CRITICAL: Listen for infrastructure readiness changes
+        // When infrastructure is set to NOT ready (during restart), we need to stop all videos
+        // to prevent them from trying to load with invalid servers
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleVideoInfrastructureChanged),
+            name: NSNotification.Name("VideoInfrastructureReadinessChanged"),
+            object: nil
+        )
     }
     
     /// Handle app entering background - set flag to preserve state on foreground
@@ -131,6 +165,28 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This flag will be cleared if user explicitly scrolls
         if phase != .idle {
             shouldPreserveStateOnForeground = true
+        }
+    }
+    
+    /// Handle video infrastructure readiness changes
+    /// When infrastructure is restarting (isReady = false), stop all videos to prevent load attempts
+    @objc private func handleVideoInfrastructureChanged(_ notification: Notification) {
+        guard let isReady = notification.userInfo?["isReady"] as? Bool else { return }
+        
+        if !isReady {
+            print("🔴 [VideoPlaybackCoordinator] Infrastructure not ready - stopping all videos")
+            
+            // Stop all videos immediately
+            stopAllVideos()
+            
+            // Clear state to force fresh start when infrastructure becomes ready
+            phase = .idle
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+            shouldPreserveStateOnForeground = false
+            previousVisibleVideoIds.removeAll()
+        } else {
+            print("✅ [VideoPlaybackCoordinator] Infrastructure ready - coordinator state reset")
         }
     }
     
@@ -619,6 +675,21 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Handle foreground recovery - intelligently decide whether to preserve or reset state
     /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
     @objc private func handleForegroundRecovery(_ notification: Notification) {
+        
+        // CRITICAL: Wait for video infrastructure to be ready before attempting recovery
+        // During long background recovery, infrastructure is restarted asynchronously
+        // Attempting to load videos before server is ready causes failures
+        guard AppDelegate.isVideoInfrastructureReady else {
+            print("⚠️ [VideoPlaybackCoordinator] Infrastructure not ready yet - deferring recovery")
+            
+            // Schedule retry after a short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.handleForegroundRecovery(notification)
+            }
+            return
+        }
+        
+        print("✅ [VideoPlaybackCoordinator] Infrastructure ready - processing foreground recovery")
         
         // CRITICAL: Use flag instead of comparing IDs
         // Tweet list might refresh (new IDs) even though user is at same position

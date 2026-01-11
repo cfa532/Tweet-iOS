@@ -10,7 +10,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// Public flag for video views to decide whether to attempt recovery/play.
     /// During long background recovery we restart LocalHTTPServer + clear players asynchronously; attempting
     /// to recover/play while this is in-flight causes "zombie" players (nil currentItem / NaN time).
-    static var isVideoInfrastructureReady = true
+    static var isVideoInfrastructureReady = true {
+        didSet {
+            // CRITICAL: Notify VideoPlaybackCoordinator when infrastructure readiness changes
+            // This ensures coordinator stops all videos during restart (prevents stale load attempts)
+            NotificationCenter.default.post(
+                name: NSNotification.Name("VideoInfrastructureReadinessChanged"),
+                object: nil,
+                userInfo: ["isReady": isVideoInfrastructureReady]
+            )
+        }
+    }
     
     // Loading overlay window for server restart
     private var loadingWindow: UIWindow?
