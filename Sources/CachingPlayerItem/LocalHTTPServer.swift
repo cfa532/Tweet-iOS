@@ -165,6 +165,23 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     }
 }
 
+// MARK: - Active Downloads Actor (Swift 6 Concurrency-Safe)
+private actor ActiveDownloadsActor {
+    private var activeDownloads: [String: Task<Void, Never>] = [:]
+    
+    func getTask(for key: String) -> Task<Void, Never>? {
+        return activeDownloads[key]
+    }
+    
+    func setTask(_ task: Task<Void, Never>, for key: String) {
+        activeDownloads[key] = task
+    }
+    
+    func removeTask(for key: String) {
+        activeDownloads.removeValue(forKey: key)
+    }
+}
+
 public class LocalHTTPServer: @unchecked Sendable {
     public static let shared = LocalHTTPServer()
     
@@ -184,8 +201,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     // DEDUPLICATION: Track active downloads to prevent duplicates
-    private var activeDownloads: [String: DispatchSemaphore] = [:]
-    private let activeDownloadsLock = NSLock()
+    private let activeDownloadsActor = ActiveDownloadsActor()
     
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
@@ -338,7 +354,11 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         guard let state = listenerState else {
             print("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
-            queue.async { [weak self] in self?.restart() }
+            queue.async { [weak self] in
+                Task {
+                    await self?.restart()
+                }
+            }
             return
         }
         
@@ -354,21 +374,25 @@ public class LocalHTTPServer: @unchecked Sendable {
         default:
             print("[LocalHTTPServer] ⚠️ Listener state \(state) – restarting for safety")
         }
-        
-        queue.async { [weak self] in self?.restart() }
+
+        queue.async { [weak self] in
+            Task {
+                await self?.restart()
+            }
+        }
     }
     
-    private func restart() {
-        
+    private func restart() async {
+
         // Stop current instance
         stop()
-        
+
         // Small delay to ensure clean shutdown
-        Thread.sleep(forTimeInterval: 0.1)
-        
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
         // Start fresh
-        startServer()
-        
+        await startServer()
+
         if isRunning {
         } else {
             print("[LocalHTTPServer] ✗ Server restart failed")
@@ -394,14 +418,18 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // DON'T block with semaphore - just start async
         queue.async { [weak self] in
-            guard let self = self else { return }
-            
-            if !self.isRunning {
-                self.startServer()
+            Task {
+                guard let self = self else { return }
+
+                if !self.isRunning {
+                    await self.startServer()
+                }
             }
         }
         
         // Give it a moment to start (don't block with semaphore!)
+        // NOTE: This is still using Thread.sleep because this is a deprecated sync method
+        // Users should migrate to startAndWaitAsync() instead
         Thread.sleep(forTimeInterval: 0.1)
         
         if isRunning {
@@ -425,25 +453,27 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Use async/await instead of semaphores (doesn't block thread!)
         await withCheckedContinuation { continuation in
             queue.async { [weak self] in
-                guard let self = self else {
+                Task {
+                    guard let self = self else {
+                        continuation.resume()
+                        return
+                    }
+
+                    // Wait for any stop operation
+                    var stopWaitCount = 0
+                    while self.isStopping && stopWaitCount < 20 { // Max 1 second
+                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                        stopWaitCount += 1
+                    }
+
+                    if self.isRunning {
+                        continuation.resume()
+                        return
+                    }
+
+                    await self.startServer()
                     continuation.resume()
-                    return
                 }
-                
-                // Wait for any stop operation
-                var stopWaitCount = 0
-                while self.isStopping && stopWaitCount < 20 { // Max 1 second
-                    Thread.sleep(forTimeInterval: 0.05)
-                    stopWaitCount += 1
-                }
-                
-                if self.isRunning {
-                    continuation.resume()
-                    return
-                }
-                
-                self.startServer()
-                continuation.resume()
             }
         }
         
@@ -456,26 +486,28 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     public func start() {
         queue.async { [weak self] in
-            guard let self = self else { return }
-            
-            // If currently stopping, wait for it to finish
-            if self.isStopping {
-                // Wait on the same queue - stop() will finish and set isStopping=false
-                var waitCount = 0
-                while self.isStopping && waitCount < 10 {
-                    Thread.sleep(forTimeInterval: 0.1)
-                    waitCount += 1
-                }
+            Task {
+                guard let self = self else { return }
+
+                // If currently stopping, wait for it to finish
                 if self.isStopping {
+                    // Wait on the same queue - stop() will finish and set isStopping=false
+                    var waitCount = 0
+                    while self.isStopping && waitCount < 10 {
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                        waitCount += 1
+                    }
+                    if self.isStopping {
+                    }
                 }
+
+                // Don't start if already running or starting
+                if self.isRunning || self.isStarting {
+                    return
+                }
+
+                await self.startServer()
             }
-            
-            // Don't start if already running or starting
-            if self.isRunning || self.isStarting {
-                return
-            }
-            
-            self.startServer()
         }
     }
     
@@ -492,9 +524,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                 
                 // OPTIMIZATION: Reduced wait time for faster recovery
                 // Port release is usually fast - 0.1s is typically enough
-                Thread.sleep(forTimeInterval: 0.1)
-                
-                self.isStopping = false
+                Task {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    self.isStopping = false
+                }
             }
         }
     }
@@ -539,23 +572,23 @@ public class LocalHTTPServer: @unchecked Sendable {
         return URL(string: "http://localhost:\(port)/media/\(mediaID)/")
     }
     
-    private func startServer() {
+    private func startServer() async {
         // Don't start if already listening
         if listener?.state == .ready {
             isRunning = true
             return
         }
-        
+
         // Extra check: if listener exists but not ready, cancel it first
         if listener != nil {
             listener?.cancel()
             listener = nil
             isRunning = false
         }
-        
+
         isStarting = true
         defer { isStarting = false }
-        
+
         // Load saved port from preferences as starting point
         let savedPort: UInt16
         if let helper = preferenceHelper {
@@ -563,104 +596,111 @@ public class LocalHTTPServer: @unchecked Sendable {
         } else {
             savedPort = 8080
         }
-        
+
         // FAST PATH: Try saved port first (most common case - should succeed immediately)
-        if tryBindToPort(savedPort) {
+        if await tryBindToPort(savedPort) {
             return
         }
-        
-        
+
+
         // SLOW PATH: Saved port in use, search for available port
         let maxAttempts = 20
-        
+
         for attempt in 0..<maxAttempts {
             // Sequential search starting from saved port
             let tryPort = savedPort + UInt16(attempt) + 1
-            
+
             // Skip invalid ports
             guard tryPort <= 65535 else {
                 break
             }
-            
-            if tryBindToPort(tryPort) {
+
+            if await tryBindToPort(tryPort) {
                 return
             }
         }
-        
+
     }
     
-    /// Try to bind to a specific port - returns true if successful
-    private func tryBindToPort(_ tryPort: UInt16) -> Bool {
-        let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
-        
-        do {
-            let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
-            
-            // Use a semaphore to wait for binding result
-            let semaphore = DispatchSemaphore(value: 0)
-            var bindingSucceeded = false
-            
-            // CRITICAL: Use a separate queue for this listener to avoid deadlock
-            let listenerQueue = DispatchQueue(label: "LocalHTTPServer.listener.\(tryPort)", qos: .userInitiated)
-            
-            // CRITICAL: Update port BEFORE starting listener so URLs use correct port
-            self.port = tryPort
-            
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self = self else { return }
-                switch state {
-                case .setup:
-                    break // Silent
-                case .ready:
-                    self.isRunning = true
-                    bindingSucceeded = true
-                    semaphore.signal()
-                    // Save successful port to preferences
-                    self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
-                case .failed(let error):
-                    self.isRunning = false
-                    bindingSucceeded = false
-                    semaphore.signal()
-                    
-                    // Only log if it's not a simple "port in use" error
-                    let errorDesc = error.localizedDescription.lowercased()
-                    if !errorDesc.contains("address already in use") && !errorDesc.contains("address in use") && !errorDesc.contains("eaddrinuse") {
+    /// Try to bind to a specific port - returns true if successful (async version)
+    private func tryBindToPort(_ tryPort: UInt16) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = true
+
+            // Use a flag to ensure continuation is only resumed once
+            var hasResumed = false
+            let resumeOnce: (Bool) -> Void = { result in
+                guard !hasResumed else { return }
+                hasResumed = true
+                continuation.resume(returning: result)
+            }
+
+            do {
+                let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
+
+                // CRITICAL: Use a separate queue for this listener to avoid deadlock
+                let listenerQueue = DispatchQueue(label: "LocalHTTPServer.listener.\(tryPort)", qos: .userInitiated)
+
+                // CRITICAL: Update port BEFORE starting listener so URLs use correct port
+                self.port = tryPort
+
+                listener.stateUpdateHandler = { [weak self] state in
+                    guard let self = self else {
+                        resumeOnce(false)
+                        return
                     }
-                case .waiting(_), .cancelled:
-                    break // Silent
-                @unknown default:
-                    break
+                    switch state {
+                    case .setup:
+                        break // Silent
+                    case .ready:
+                        self.isRunning = true
+                        // Save successful port to preferences
+                        self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
+                        // Store the listener
+                        self.listener = listener
+                        resumeOnce(true)
+                    case .failed(let error):
+                        self.isRunning = false
+
+                        // Only log if it's not a simple "port in use" error
+                        let errorDesc = error.localizedDescription.lowercased()
+                        if !errorDesc.contains("address already in use") && !errorDesc.contains("address in use") && !errorDesc.contains("eaddrinuse") {
+                        }
+
+                        listener.cancel()
+                        resumeOnce(false)
+                    case .waiting(_), .cancelled:
+                        listener.cancel()
+                        resumeOnce(false)
+                    @unknown default:
+                        listener.cancel()
+                        resumeOnce(false)
+                    }
                 }
+
+                listener.newConnectionHandler = { [weak self] connection in
+                    self?.handleConnection(connection)
+                }
+
+                // Start on separate queue to avoid deadlock
+                listener.start(queue: listenerQueue)
+
+                // Set timeout using Task
+                Task {
+                    do {
+                        try await Task.sleep(nanoseconds: 200_000_000) // 200ms timeout
+                        // If we get here, timeout occurred - cancel listener
+                        listener.cancel()
+                        resumeOnce(false)
+                    } catch {
+                        // Task was cancelled, ignore
+                    }
+                }
+
+            } catch {
+                resumeOnce(false)
             }
-            
-            listener.newConnectionHandler = { [weak self] connection in
-                self?.handleConnection(connection)
-            }
-            
-            // Start on separate queue to avoid deadlock
-            listener.start(queue: listenerQueue)
-            
-            // Wait up to 200ms for binding to succeed or fail (faster than before)
-            let result = semaphore.wait(timeout: .now() + .milliseconds(200))
-            
-            if result == .timedOut {
-                listener.cancel()
-                return false
-            }
-            
-            if bindingSucceeded {
-                // Store the listener
-                self.listener = listener
-                return true
-            } else {
-                // Binding failed
-                listener.cancel()
-                return false
-            }
-            
-        } catch {
-            return false
         }
     }
     
@@ -669,42 +709,58 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: queue)
-        receiveNextRequest(connection: connection)
+        Task {
+            await receiveNextRequest(connection: connection)
+        }
     }
     
-    private func receiveNextRequest(connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                // Only log non-connection-reset errors
-                if (error as NSError).code != 54 {  // 54 = Connection reset by peer
-                    print("ERROR: [LocalHTTPServer] Receive error: \(error)")
+    private func receiveNextRequest(connection: NWConnection) async {
+        await withCheckedContinuation { continuation in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+                guard let self = self else {
+                    continuation.resume()
+                    return
                 }
-            }
-            
-            if let data = data, !data.isEmpty {
-                let request = String(data: data, encoding: .utf8) ?? ""
-                
-                // Handle the request
-                self.handleRequest(request, connection: connection) {
-                    // After handling, continue listening for more requests
-                    if !isComplete && error == nil {
-                        self.receiveNextRequest(connection: connection)
-                    } else {
-                        connection.cancel()
+
+                if let error = error {
+                    // Only log non-connection-reset errors
+                    if (error as NSError).code != 54 {  // 54 = Connection reset by peer
+                        print("ERROR: [LocalHTTPServer] Receive error: \(error)")
                     }
                 }
-            } else if isComplete || error != nil {
-                connection.cancel()
-            } else {
-                // No data yet, keep waiting
-                self.receiveNextRequest(connection: connection)
+
+                if let data = data, !data.isEmpty {
+                    let request = String(data: data, encoding: .utf8) ?? ""
+
+                    // Handle the request
+                    Task {
+                        await self.handleRequest(request, connection: connection) {
+                            // After handling, continue listening for more requests
+                            if !isComplete && error == nil {
+                                Task {
+                                    await self.receiveNextRequest(connection: connection)
+                                }
+                            } else {
+                                connection.cancel()
+                            }
+                        }
+                        continuation.resume()
+                    }
+                } else if isComplete || error != nil {
+                    connection.cancel()
+                    continuation.resume()
+                } else {
+                    // No data yet, keep waiting
+                    Task {
+                        await self.receiveNextRequest(connection: connection)
+                        continuation.resume()
+                    }
+                }
             }
         }
     }
     
-    private func handleRequest(_ request: String, connection: NWConnection, completion: @escaping () -> Void) {
+    private func handleRequest(_ request: String, connection: NWConnection, completion: @escaping () -> Void) async {
         let lines = request.components(separatedBy: .newlines)
         guard let firstLine = lines.first else {
             completion()
@@ -721,14 +777,14 @@ public class LocalHTTPServer: @unchecked Sendable {
         let path = components[1]
         
         if method == "GET" || method == "HEAD" {
-            handleGetRequest(path: path, method: method, requestLines: lines, connection: connection, completion: completion)
+            await handleGetRequest(path: path, method: method, requestLines: lines, connection: connection, completion: completion)
         } else {
             sendResponse(connection: connection, statusCode: 405, headers: [:], body: nil)
             completion()
         }
     }
     
-    private func handleGetRequest(path: String, method: String, requestLines: [String], connection: NWConnection, completion: @escaping () -> Void) {
+    private func handleGetRequest(path: String, method: String, requestLines: [String], connection: NWConnection, completion: @escaping () -> Void) async {
         // Health check endpoint
         if path == "/health" {
             let headers = [
@@ -870,7 +926,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else if relativePath.hasSuffix(".ts") {
-            handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+            await handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else {
             // Progressive video - proxy with Content-Type fix
@@ -911,7 +967,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
     }
     
-    private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
+    private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         
         // Check cache first
@@ -925,8 +981,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
-        var shouldWait = false
-        
+
         // Extract quality level for logging (dynamic - no hardcoding!)
         let pathComponents = cachePath.components(separatedBy: "/")
         // Look for any component that ends with 'p' (e.g., "480p", "720p", "1080p", "4k", etc.)
@@ -934,72 +989,60 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Matches patterns like "480p", "720p", "1080p", etc.
             component.hasSuffix("p") && component.dropLast().allSatisfy({ $0.isNumber })
         }) ?? "unknown"
+
+        // Use actor for thread-safe access
+        let existingTask = await activeDownloadsActor.getTask(for: downloadKey)
         
-        activeDownloadsLock.lock()
-        if activeDownloads[downloadKey] != nil {
-            // Another request is already downloading this segment
-            shouldWait = true
-            activeDownloadsLock.unlock()
-        } else {
-            // This is the first request for this segment - create semaphore
-            let newSemaphore = DispatchSemaphore(value: 0)
-            activeDownloads[downloadKey] = newSemaphore
-            activeDownloadsLock.unlock()
+        if existingTask == nil {
+            // This is the first request for this segment - create a task placeholder
+            await activeDownloadsActor.setTask(Task {}, for: downloadKey)
         }
-        
-        if shouldWait {
-            // CRITICAL: For very slow networks, don't wait at all - AVPlayer connections timeout
-            // Instead, immediately check if file exists and serve, or start independent download
-            
-            // Check if file already exists in cache (from previous play or completed download)
+
+        // Wait for existing task if there is one
+        if let existingTask = existingTask {
+            // Another request is already downloading this segment
+            // Wait for it to complete, then serve the cached file
+            await existingTask.value
+
+            // Now check if the file exists and serve it
             if FileManager.default.fileExists(atPath: cachePath) {
                 autoreleasepool {
                     serveFile(path: cachePath, connection: connection, method: method)
                 }
             } else {
-                let memoryManager = MemoryCapManager.shared
-                if memoryManager.isAboveDuplicateBlockThreshold {
-                    let _ = memoryManager.memoryUsagePercentage * 100
-                    let _ = memoryManager.duplicateBlockThresholdPercentage * 100
-                    
-                    let body = "Memory usage high. Retry segment later.".data(using: .utf8)
-                    self.sendResponse(
-                        connection: connection,
-                        statusCode: 503,
-                        headers: ["Retry-After": "1"],
-                        body: body
-                    )
-                } else {
-                    // File not ready yet - on slow networks (20+ second downloads), waiting would timeout the connection
-                    // Better to start an independent download for this connection
-                    fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
-                }
+                // File still doesn't exist - something went wrong with the download
+                // Start our own download as fallback
+                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
             }
             return
         }
-        
-        // This request is the downloader - fetch from server and wait for cache write
-        // Use a completion handler that signals the semaphore AFTER download completes
+
+        // This request is the downloader - fetch from server and cache
         let downloadStartTime = Date()
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
-            // This completion is called AFTER the file is written and served
+
+        // Create the actual download task
+        let downloadTask = Task {
+            // Wait for fetchAndServe to complete
+            await withCheckedContinuation { continuation in
+                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
+                    continuation.resume()
+                }
+            }
+
             let _ = Date().timeIntervalSince(downloadStartTime)
-            
+
             if FileManager.default.fileExists(atPath: cachePath) {
                 let _ = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
             } else {
                 print("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
             }
-            
-            // Signal all waiting requests that download is complete AND cached
-            self.activeDownloadsLock.lock()
-            if let semaphore = self.activeDownloads.removeValue(forKey: downloadKey) {
-                self.activeDownloadsLock.unlock()
-                semaphore.signal()  // Wake up all waiting requests
-            } else {
-                self.activeDownloadsLock.unlock()
-            }
+
+            // Remove the completed task from active downloads
+            await self.activeDownloadsActor.removeTask(for: downloadKey)
         }
+
+        // Store the actual download task
+        await activeDownloadsActor.setTask(downloadTask, for: downloadKey)
     }
     
     private func handleProgressiveVideoRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String, requestHeaders: [String]) {

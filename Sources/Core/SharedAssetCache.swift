@@ -922,7 +922,7 @@ class SharedAssetCache: ObservableObject {
                     print("❌ [HLS VIDEO] Failed after 1 retry with baseUrl refresh: \(mediaID)")
                     // Reset retry count for next time
                     await MainActor.run {
-                        videoRetryCount.removeValue(forKey: mediaID)
+                        _ = videoRetryCount.removeValue(forKey: mediaID)
                     }
                     throw error
                 }
@@ -931,7 +931,7 @@ class SharedAssetCache: ObservableObject {
                 print("❌ [HLS VIDEO] Failed - already attempted retry: \(mediaID)")
                 // Reset retry count for next time
                 await MainActor.run {
-                    videoRetryCount.removeValue(forKey: mediaID)
+                    _ = videoRetryCount.removeValue(forKey: mediaID)
                 }
                 throw originalError
             }
