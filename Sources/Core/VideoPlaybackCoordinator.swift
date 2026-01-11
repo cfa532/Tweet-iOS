@@ -63,16 +63,22 @@ struct VideoPlaybackInfo: Equatable {
 /// - But coordinator's internal state (phase, primaryVideoId) becomes stale
 /// - Coordinator thinks videos are playing but players are gone → videos won't load
 ///
-/// **Solution:** Two-layer state synchronization
+/// **Solution:** Automatic restart on infrastructure readiness
 /// 1. **Infrastructure Readiness Notification** (VideoInfrastructureReadinessChanged):
-///    - Posted when AppDelegate.isVideoInfrastructureReady changes
-///    - Coordinator immediately stops all videos and clears state when isReady=false
+///    - When isReady=false: Stops all videos, clears playback state (keeps visible video tracking)
+///    - When isReady=true: Automatically restarts videos if any are visible (starts survey)
 ///    - Prevents stale load attempts during restart
 ///
 /// 2. **Recovery Notification Guard** (.reloadVisibleVideosOnly):
-///    - Coordinator waits for infrastructure to be ready before processing recovery
-///    - Uses AppDelegate.isVideoInfrastructureReady flag as gate
+///    - Waits for infrastructure to be ready (checks AppDelegate.isVideoInfrastructureReady)
+///    - Skips if videos are already playing (prevents duplicate survey from infrastructure notification)
 ///    - Retries every 500ms if infrastructure not ready yet
+///
+/// **Flow Example (Long Background):**
+/// 1. isReady=false → coordinator stops videos, clears state
+/// 2. Server restarts asynchronously
+/// 3. isReady=true → coordinator automatically starts survey for visible videos
+/// 4. .reloadVisibleVideosOnly arrives → skipped (already playing)
 ///
 /// This ensures coordinator state stays synchronized with actual video infrastructure state.
 @MainActor
@@ -170,6 +176,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Handle video infrastructure readiness changes
     /// When infrastructure is restarting (isReady = false), stop all videos to prevent load attempts
+    /// When infrastructure becomes ready (isReady = true), restart videos if any are visible
     @objc private func handleVideoInfrastructureChanged(_ notification: Notification) {
         guard let isReady = notification.userInfo?["isReady"] as? Bool else { return }
         
@@ -179,14 +186,31 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Stop all videos immediately
             stopAllVideos()
             
-            // Clear state to force fresh start when infrastructure becomes ready
+            // Clear playback state (but keep visible video tracking!)
             phase = .idle
             currentlyPlayingVideoIds.removeAll()
             primaryVideoId = nil
             shouldPreserveStateOnForeground = false
-            previousVisibleVideoIds.removeAll()
+            // DON'T clear previousVisibleVideoIds - we need this to restart videos when ready
         } else {
-            print("✅ [VideoPlaybackCoordinator] Infrastructure ready - coordinator state reset")
+            print("✅ [VideoPlaybackCoordinator] Infrastructure ready - checking for visible videos to restart")
+            
+            // If we have visible videos, start survey phase automatically
+            if !visibleVideos.isEmpty {
+                print("🎬 [VideoPlaybackCoordinator] Found \(visibleVideos.count) visible videos - starting survey")
+                
+                // Small delay to ensure infrastructure is fully ready
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    guard let self = self else { return }
+                    
+                    // Double-check we're still idle and have visible videos
+                    if self.phase == .idle && !self.visibleVideos.isEmpty {
+                        self.startSurveyPhase()
+                    }
+                }
+            } else {
+                print("ℹ️ [VideoPlaybackCoordinator] No visible videos to restart")
+            }
         }
     }
     
@@ -690,6 +714,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         print("✅ [VideoPlaybackCoordinator] Infrastructure ready - processing foreground recovery")
+        
+        // OPTIMIZATION: If we're already surveying or playing, skip recovery
+        // This prevents duplicate survey starts when infrastructure readiness notification
+        // already triggered video restart
+        if phase == .surveying || phase == .primaryPlaying {
+            print("ℹ️ [VideoPlaybackCoordinator] Already playing videos (phase: \(phase)) - skipping recovery")
+            return
+        }
         
         // CRITICAL: Use flag instead of comparing IDs
         // Tweet list might refresh (new IDs) even though user is at same position
