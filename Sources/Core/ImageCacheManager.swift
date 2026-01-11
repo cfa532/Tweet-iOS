@@ -450,17 +450,16 @@ class ImageCacheManager: @unchecked Sendable {
             // Create compressed version (under 300KB) on background thread
             let compressedImage = self.compressImageToSize(targetImage, maxSize: self.maxCompressedImageSize)
             let compressedFileURL = self.getCompressedCacheFileURL(for: key)
-
+            
             // Write compressed data to disk
             do {
                 try compressedImage.write(to: compressedFileURL)
             } catch {
                 print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
             }
-
+            
             // Add to memory cache
             self.cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
-            print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
             
             // Notify Avatar views that this image is now cached
             await MainActor.run {

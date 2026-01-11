@@ -6,7 +6,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     private let mediaID: String?
     private let saveFilePath: String
     private weak var owner: CachingPlayerItem?
-
+    
     public init(url: URL, mediaID: String?, saveFilePath: String, owner: CachingPlayerItem) {
         self.url = url
         self.mediaID = mediaID
@@ -14,7 +14,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         self.owner = owner
         super.init()
     }
-
+    
     public func resourceLoader(_ resourceLoader: AVAssetResourceLoader, shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest) -> Bool {
         guard let requestURL = loadingRequest.request.url else {
             print("DEBUG: [CachingPlayerItem] resourceLoader: No request URL")
@@ -48,7 +48,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             return false
         }
     }
-
+    
     private func convertCustomSchemeToOriginalURL(_ customSchemeURL: URL) -> URL? {
         guard customSchemeURL.scheme == "cachingPlayerItemScheme" else {
             return customSchemeURL
@@ -75,11 +75,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         // If this is the initial request (the resolved HLS URL that was passed to CachingPlayerItem), 
         // download and cache the master playlist, then serve it directly
         if requestPath == baseUrlPath {
-            print("DEBUG: [CachingPlayerItem] handleHLSRequest: Initial HLS request - downloading and serving directly")
-            
-            // The URL is already resolved (it's the resolved HLS URL passed to CachingPlayerItem)
-            print("DEBUG: [CachingPlayerItem] handleHLSRequest: Using resolved HLS URL: \(url.absoluteString)")
-            
             // Download and cache the master playlist using dynamic cache path if provided
             let finalCachePath = cachePath ?? saveFilePath
             startHLSPlaylistDownload(loadingRequest, playlistURL: url, cachePath: finalCachePath)
@@ -115,30 +110,28 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         let cachePath = getCachePath(for: actualPlaylistURL)
         
         if FileManager.default.fileExists(atPath: cachePath) {
-            print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Serving cached playlist from \(cachePath)")
-            
             do {
                 _ = try Data(contentsOf: URL(fileURLWithPath: cachePath))
                 
-            // Redirect to LocalHTTPServer to serve the cached playlist
-            guard let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
-                print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Failed to get local URL")
-                let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
-                loadingRequest.finishLoading(with: error)
-                return false
-            }
-            
-            // Construct the full URL with the filename
-            let filename = actualPlaylistURL.lastPathComponent
-            let fullURL = localURL.appendingPathComponent(filename)
-            
-            let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
-                "Location": fullURL.absoluteString
-            ])
-            loadingRequest.response = response
-            loadingRequest.finishLoading()
-            
-            print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirected to LocalHTTPServer for cached playlist: \(localURL.absoluteString)")
+                // Redirect to LocalHTTPServer to serve the cached playlist
+                guard let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
+                    print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Failed to get local URL")
+                    let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get local URL"])
+                    loadingRequest.finishLoading(with: error)
+                    return false
+                }
+                
+                // Construct the full URL with the filename
+                let filename = actualPlaylistURL.lastPathComponent
+                let fullURL = localURL.appendingPathComponent(filename)
+                
+                let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
+                    "Location": fullURL.absoluteString
+                ])
+                loadingRequest.response = response
+                loadingRequest.finishLoading()
+                
+                print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Redirected to LocalHTTPServer for cached playlist: \(localURL.absoluteString)")
                 return true
             } catch {
                 print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Failed to read cached playlist: \(error.localizedDescription)")
@@ -163,8 +156,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 return
             }
             
-            print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Successfully downloaded playlist, size: \(data.count) bytes")
-            
             // Modify the playlist to use custom scheme URLs for segments and sub-playlists
             let modifiedPlaylistData = self.modifyPlaylistForCustomScheme(data, baseURL: actualPlaylistURL)
             
@@ -186,9 +177,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Using baseURL for segment downloads: \(baseURL.absoluteString)")
                 self.downloadHLSSegments(segments, baseURL: baseURL)
             }
-            
-            // Serve playlist directly (no redirect!)
-            print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving playlist DIRECTLY (no redirect!)")
             
             // Provide ContentInformationRequest for metadata
             if let contentRequest = loadingRequest.contentInformationRequest {
@@ -215,9 +203,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             print("DEBUG: [CachingPlayerItem] handleSegmentRequest: No request URL")
             return false
         }
-        
-        print("DEBUG: [CachingPlayerItem] handleSegmentRequest: requestURL = \(requestURL.absoluteString)")
-        print("DEBUG: [CachingPlayerItem] handleSegmentRequest: resolvedURL = \(url.absoluteString)")
         
         // Check if we have a cached segment
         let cachePath = getCachePath(for: url)
@@ -296,8 +281,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 return
             }
             
-            print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Successfully downloaded segment, size: \(data.count) bytes")
-            
             // Cache the segment
             do {
                 try data.write(to: URL(fileURLWithPath: cachePath))
@@ -324,8 +307,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             ])
             loadingRequest.response = response
             loadingRequest.finishLoading()
-            
-            print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for downloaded segment: \(localURL.absoluteString)")
         }
         
         task.resume()
@@ -337,9 +318,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             print("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: No request URL")
             return false
         }
-        
-        print("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: requestURL = \(requestURL.absoluteString)")
-        print("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: resolvedURL = \(url.absoluteString)")
         
         // Check if we have a cached video file
         let cachePath = saveFilePath.isEmpty ? getCachePath(for: url) : saveFilePath
@@ -396,9 +374,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             }
         }
         
-        // If not cached, download and cache the video
-        print("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Downloading video from \(url.absoluteString)")
-        
         // Create a custom URLSession with longer timeout for video files
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30.0  // 30 seconds per request
@@ -420,8 +395,6 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
-            print("DEBUG: [CachingPlayerItem] handleProgressiveVideoRequest: Successfully downloaded video, size: \(data.count) bytes")
             
             // Cache the video file
             do {
@@ -492,49 +465,47 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     }
     
     private func startHLSPlaylistDownload(_ loadingRequest: AVAssetResourceLoadingRequest, playlistURL: URL, cachePath: String) {
-        print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Starting download from \(playlistURL.absoluteString)")
-        
-            // Check if playlist is already cached
-            if FileManager.default.fileExists(atPath: cachePath) {
-                print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Playlist already cached at \(cachePath), validating cache")
-
-                do {
-                    let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
-                    let playlistString = String(data: cachedData, encoding: .utf8) ?? ""
-                    
-                    // Validate that the cached playlist contains segment references
-                    // Check for both standard segment naming (segment000.ts) and custom naming (playlist_000.ts)
-                    let hasValidSegments = playlistString.contains(".ts") && playlistString.split(separator: "\n").contains { line in
-                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        return trimmed.hasSuffix(".ts") && !trimmed.hasPrefix("#")
-                    }
-                    
-                    if hasValidSegments {
-                        print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving cached playlist, size: \(cachedData.count) bytes")
-
-                        // Serve the cached playlist directly
-                        let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
-                            "Content-Type": "application/vnd.apple.mpegurl",
-                            "Content-Length": "\(cachedData.count)"
-                        ])
-                        loadingRequest.response = response
-                        loadingRequest.dataRequest?.respond(with: cachedData)
-                        loadingRequest.finishLoading()
-
-                        // Notify owner about serving from cache
-                        DispatchQueue.main.async {
-                            self.owner?.delegate?.playerItem?(self.owner!, didFinishDownloadingFileAt: cachePath)
-                        }
-                        return
-                    } else {
-                        print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Cached playlist is invalid (no segments), will re-download")
-                        // Remove invalid cached playlist
-                        try? FileManager.default.removeItem(atPath: cachePath)
-                    }
-                } catch {
-                    print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Failed to read cached playlist: \(error.localizedDescription), will re-download")
+        // Check if playlist is already cached
+        if FileManager.default.fileExists(atPath: cachePath) {
+            print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Playlist already cached at \(cachePath), validating cache")
+            
+            do {
+                let cachedData = try Data(contentsOf: URL(fileURLWithPath: cachePath))
+                let playlistString = String(data: cachedData, encoding: .utf8) ?? ""
+                
+                // Validate that the cached playlist contains segment references
+                // Check for both standard segment naming (segment000.ts) and custom naming (playlist_000.ts)
+                let hasValidSegments = playlistString.contains(".ts") && playlistString.split(separator: "\n").contains { line in
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.hasSuffix(".ts") && !trimmed.hasPrefix("#")
                 }
+                
+                if hasValidSegments {
+                    print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving cached playlist, size: \(cachedData.count) bytes")
+                    
+                    // Serve the cached playlist directly
+                    let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
+                        "Content-Type": "application/vnd.apple.mpegurl",
+                        "Content-Length": "\(cachedData.count)"
+                    ])
+                    loadingRequest.response = response
+                    loadingRequest.dataRequest?.respond(with: cachedData)
+                    loadingRequest.finishLoading()
+                    
+                    // Notify owner about serving from cache
+                    DispatchQueue.main.async {
+                        self.owner?.delegate?.playerItem?(self.owner!, didFinishDownloadingFileAt: cachePath)
+                    }
+                    return
+                } else {
+                    print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Cached playlist is invalid (no segments), will re-download")
+                    // Remove invalid cached playlist
+                    try? FileManager.default.removeItem(atPath: cachePath)
+                }
+            } catch {
+                print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Failed to read cached playlist: \(error.localizedDescription), will re-download")
             }
+        }
         
         // Create a custom URLSession with longer timeout to prevent cancellations
         let config = URLSessionConfiguration.default
@@ -587,7 +558,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             ])
             loadingRequest.response = response
             loadingRequest.dataRequest?.respond(with: modifiedPlaylistData)
-                loadingRequest.finishLoading()
+            loadingRequest.finishLoading()
             
             // Notify owner about download completion
             DispatchQueue.main.async {
@@ -663,14 +634,14 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         let task = session.dataTask(with: url) { data, response, error in
             if let error = error {
                 print("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Download error: \(error.localizedDescription)")
-                    return
-                }
-                
+                return
+            }
+            
             guard let data = data else {
                 print("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: No data received")
-                    return
-                }
-                
+                return
+            }
+            
             print("DEBUG: [CachingPlayerItem] downloadSegmentInBackground: Successfully downloaded segment, size: \(data.count) bytes")
             
             // Save to local path
