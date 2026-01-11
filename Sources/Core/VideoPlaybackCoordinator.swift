@@ -552,7 +552,26 @@ class VideoPlaybackCoordinator: ObservableObject {
         )
     }
     
-    /// Identify the primary video (most visible/centered in viewport)
+    /// Identify the primary video with priority to fully visible videos in higher positions
+    ///
+    /// **Algorithm Priority:**
+    /// 1. **Fully Visible Videos (100% visibility)** - Highest priority
+    ///    - Among fully visible videos, prefer those in higher screen positions (top of feed)
+    ///    - Position score: Distance from top of visible rect (lower = better)
+    ///
+    /// 2. **Highly Visible Videos (≥80% visibility)** - Medium priority
+    ///    - Consider both visibility ratio and position
+    ///    - Balanced scoring: visibilityWeight=70%, positionWeight=30%
+    ///
+    /// 3. **Partially Visible Videos (<80% visibility)** - Lowest priority
+    ///    - Fallback to nearest-to-center algorithm
+    ///
+    /// **Example Scenarios:**
+    /// - Video A: 100% visible at top → Score: 100 (WINNER)
+    /// - Video B: 100% visible at center → Score: 500
+    /// - Video C: 80% visible at top → Score: 200
+    /// - Video D: 50% visible at center → Uses fallback (nearest-to-center)
+    ///
     private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
         guard let tableView = tableView else {
             // Fallback: return first visible video
@@ -566,34 +585,78 @@ class VideoPlaybackCoordinator: ObservableObject {
             height: tableView.bounds.height
         )
         
+        let viewportTopY = visibleRect.minY
         let centerY = visibleRect.midY
         
-        // Find video closest to center of viewport
-        var bestVideo: VideoPlaybackInfo?
-        var bestDistance: CGFloat = .infinity
+        // Separate videos into categories based on visibility
+        var fullyVisibleVideos: [(video: VideoPlaybackInfo, positionScore: CGFloat)] = []
+        var highlyVisibleVideos: [(video: VideoPlaybackInfo, combinedScore: CGFloat)] = []
+        var partiallyVisibleVideos: [(video: VideoPlaybackInfo, centerScore: CGFloat)] = []
         
         for video in visibleVideos {
             // Find the cell containing this video
             guard let cell = findCell(for: video.tweetId, in: tableView) else { continue }
             
             let cellFrame = tableView.convert(cell.frame, to: tableView)
-            let cellCenterY = cellFrame.midY
-            let distance = abs(cellCenterY - centerY)
             
-            // Also consider what percentage of the cell is visible
+            // Calculate visibility ratio (what percentage of cell is visible)
             let intersection = cellFrame.intersection(visibleRect)
             let visibilityRatio = intersection.height / cellFrame.height
             
-            // Prefer videos that are more centered and more visible
-            let score = distance / max(visibilityRatio, 0.1) // Lower is better
+            // Calculate position score (distance from top of viewport - lower is better)
+            let distanceFromTop = abs(cellFrame.minY - viewportTopY)
             
-            if score < bestDistance {
-                bestDistance = score
-                bestVideo = video
+            // Calculate center distance (for fallback)
+            let cellCenterY = cellFrame.midY
+            let distanceFromCenter = abs(cellCenterY - centerY)
+            
+            // Categorize video based on visibility
+            if visibilityRatio >= 0.99 {  // Fully visible (≥99% to account for floating point)
+                // For fully visible videos, prioritize by position (top of screen = best)
+                fullyVisibleVideos.append((video, distanceFromTop))
+            } else if visibilityRatio >= 0.80 {  // Highly visible (≥80%)
+                // For highly visible videos, combine visibility and position
+                // Weight: 70% visibility, 30% position
+                let visibilityScore = (1.0 - visibilityRatio) * 1000  // Invert (lower is better)
+                let positionScore = distanceFromTop * 0.3
+                let combinedScore = visibilityScore + positionScore
+                highlyVisibleVideos.append((video, combinedScore))
+            } else {  // Partially visible (<80%)
+                // For partially visible videos, use center-based scoring (original algorithm)
+                let centerScore = distanceFromCenter / max(visibilityRatio, 0.1)
+                partiallyVisibleVideos.append((video, centerScore))
             }
         }
         
-        return bestVideo ?? visibleVideos.first
+        // Priority 1: Fully visible videos (sorted by position - topmost wins)
+        if !fullyVisibleVideos.isEmpty {
+            let bestFullyVisible = fullyVisibleVideos.min(by: { $0.positionScore < $1.positionScore })
+            if let best = bestFullyVisible {
+                print("✅ [PrimaryVideo] Selected FULLY VISIBLE video at top: \(best.video.videoMid) (position score: \(Int(best.positionScore)))")
+                return best.video
+            }
+        }
+        
+        // Priority 2: Highly visible videos (sorted by combined score)
+        if !highlyVisibleVideos.isEmpty {
+            let bestHighlyVisible = highlyVisibleVideos.min(by: { $0.combinedScore < $1.combinedScore })
+            if let best = bestHighlyVisible {
+                print("ℹ️ [PrimaryVideo] Selected HIGHLY VISIBLE video: \(best.video.videoMid) (combined score: \(Int(best.combinedScore)))")
+                return best.video
+            }
+        }
+        
+        // Priority 3: Partially visible videos (sorted by center distance + visibility)
+        if !partiallyVisibleVideos.isEmpty {
+            let bestPartiallyVisible = partiallyVisibleVideos.min(by: { $0.centerScore < $1.centerScore })
+            if let best = bestPartiallyVisible {
+                print("⚠️ [PrimaryVideo] Selected PARTIALLY VISIBLE video (fallback): \(best.video.videoMid) (center score: \(Int(best.centerScore)))")
+                return best.video
+            }
+        }
+        
+        // Ultimate fallback: first visible video
+        return visibleVideos.first
     }
     
     /// Find table view cell for a given tweet ID
