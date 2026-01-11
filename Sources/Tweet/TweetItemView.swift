@@ -265,12 +265,12 @@ struct TweetItemView: View, Equatable {
                             tweet: originalTweet,
                             isVisible: isVisible,
                             sourceTweetId: tweet.mid,
-                            onTweetBodyTap: {
+                            onTweetBodyTap: onTap != nil ? {
                                 // Navigate to original tweet detail when body is tapped
                                 if let callback = onTap {
                                     callback(originalTweet)
                                 }
-                            }
+                            } : nil
                         )
                         // STABILITY: Layout priority for tweet body prevents shifting
                         .layoutPriority(1)
@@ -311,12 +311,12 @@ struct TweetItemView: View, Equatable {
                             tweet: tweet,
                             enableTap: false,
                             isVisible: isVisible,
-                            onTweetBodyTap: {
+                            onTweetBodyTap: onTap != nil ? {
                                 // Navigate to tweet detail when body is tapped
                                 if let callback = onTap {
                                     callback(tweet)
                                 }
-                            }
+                            } : nil
                         )
                         // STABILITY: Layout priority for tweet body prevents shifting
                         .layoutPriority(1)
@@ -380,12 +380,12 @@ struct TweetItemView: View, Equatable {
                             tweet: tweet,
                             enableTap: false,
                             isVisible: isVisible,
-                            onTweetBodyTap: {
+                            onTweetBodyTap: onTap != nil ? {
                                 // Navigate to tweet detail when body is tapped
                                 if let callback = onTap {
                                     callback(tweet)
                                 }
-                            }
+                            } : nil
                         )
                         // STABILITY: Layout priority for tweet body prevents shifting
                         .layoutPriority(1)
@@ -456,12 +456,12 @@ struct TweetItemView: View, Equatable {
                         tweet: tweet,
                         enableTap: false,
                         isVisible: isVisible,
-                        onTweetBodyTap: {
+                        onTweetBodyTap: onTap != nil ? {
                             // Navigate to tweet detail when body is tapped
                             if let callback = onTap {
                                 callback(tweet)
                             }
-                        }
+                        } : nil
                     )
                     // STABILITY: Layout priority for tweet body prevents shifting
                     .layoutPriority(1)
@@ -577,12 +577,12 @@ struct EmbeddedTweetView: View, Equatable {
                     enableTap: false,
                     isVisible: isVisible,
                     isEmbedded: isEmbedded,
-                    onTweetBodyTap: {
+                    onTweetBodyTap: onTap != nil ? {
                         // Navigate to embedded tweet detail when body is tapped
                         if let callback = onTap {
                             callback(tweet)
                         }
-                    }
+                    } : nil
                 )
                 // STABILITY: Layout priority for embedded tweet body
                 .layoutPriority(1)

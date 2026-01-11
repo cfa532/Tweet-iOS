@@ -100,92 +100,25 @@ struct TweetItemBodyView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(content)
-                        .font(.body)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(7)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .task(id: content) {
-                            // Cancel previous task if content changed
-                            truncationTask?.cancel()
-                            
-                            // Calculate truncation off main thread
-                            truncationTask = Task.detached(priority: .userInitiated) {
-                                let truncated = await checkTextTruncation(text: content, maxLines: 7)
-                                
-                                // Check if task was cancelled
-                                guard !Task.isCancelled else { return }
-                                
-                                // Update UI on main thread
-                                await MainActor.run {
-                                    isTruncated = truncated
-                                }
-                            }
+        // Only add background tap layer if there's a tap callback provided
+        // If onTweetBodyTap is nil, parent handles navigation (via NavigationLink)
+        Group {
+            if onTweetBodyTap != nil {
+                // Use ZStack with background tap layer when callback is provided
+                ZStack(alignment: .topLeading) {
+                    // Background tap layer - catches taps on whitespace/non-interactive areas
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onTweetBodyTap?()
                         }
                     
-                    if isTruncated {
-                        Text(LocalizedStringKey("More..."))
-                            .font(.body)
-                            .foregroundColor(.blue)
-                    }
+                    // Actual content on top
+                    bodyContent
                 }
-                .padding(.bottom, 2)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    // Single tap gesture for entire text content area (including "More...")
-                    onTweetBodyTap?()
-                }
-            }
-            // Separate media and documents
-            if let attachments = tweet.attachments, !attachments.isEmpty {
-                // Filter attachments into media (visual) and documents
-                let mediaAttachments = attachments.filter { isMediaType($0.type) }
-                let documentAttachments = attachments.filter { isDocumentType($0.type) }
-                
-                VStack(alignment: .leading, spacing: 0) {
-                    // MediaGrid for images, videos, and audio (visual content)
-                    if !mediaAttachments.isEmpty {
-                        MediaGridView(
-                            parentTweet: tweet,
-                            attachments: mediaAttachments,
-                            isEmbedded: isEmbedded,
-                            sourceTweetId: sourceTweetId  // Pass the viewing context tweet ID
-                        )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .clipped()
-                            .cornerRadius(8)
-                            .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
-                            .padding(.top, 4)
-                            // STABILITY: Layout priority ensures media grid maintains consistent sizing
-                            .layoutPriority(1)
-                            // STABILITY: Fixed vertical size prevents content from shifting media position
-                            .fixedSize(horizontal: false, vertical: true)
-                        
-                        if let caption = singleVideoCaption(for: mediaAttachments) {
-                            Text(caption)
-                                .font(.system(size: 14, weight: .regular))
-                                .foregroundColor(.primary.opacity(0.6))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, 2)
-                        }
-                    }
-                    
-                    // Document attachments vertically (below media) - limit to 2 in list
-                    if !documentAttachments.isEmpty {
-                        DocumentAttachmentsView(
-                            parentTweet: tweet,
-                            documents: documentAttachments,
-                            maxDocuments: 2 // Show at most 2 documents in tweet list
-                        )
-                        .padding(.top, mediaAttachments.isEmpty ? 4 : 8)
-                    }
-                }
+            } else {
+                // No callback - parent uses NavigationLink, don't intercept taps
+                bodyContent
             }
         }
         .sheet(isPresented: $showLoginSheet) {
@@ -194,6 +127,109 @@ struct TweetItemBodyView: View {
         .onDisappear {
             // Cancel truncation task when view disappears
             truncationTask?.cancel()
+        }
+    }
+    
+    private var bodyContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+                if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(content)
+                            .font(.body)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(7)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .task(id: content) {
+                                // Cancel previous task if content changed
+                                truncationTask?.cancel()
+                                
+                                // Calculate truncation off main thread
+                                truncationTask = Task.detached(priority: .userInitiated) {
+                                    let truncated = await checkTextTruncation(text: content, maxLines: 7)
+                                    
+                                    // Check if task was cancelled
+                                    guard !Task.isCancelled else { return }
+                                    
+                                    // Update UI on main thread
+                                    await MainActor.run {
+                                        isTruncated = truncated
+                                    }
+                                }
+                            }
+                        
+                        if isTruncated {
+                            Text(LocalizedStringKey("More..."))
+                                .font(.body)
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    .padding(.bottom, 2)
+                    // Only add tap gesture when callback is provided
+                    .if(onTweetBodyTap != nil) { view in
+                        view
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onTweetBodyTap?()
+                            }
+                    }
+                }
+                
+                // Separate media and documents
+                if let attachments = tweet.attachments, !attachments.isEmpty {
+                    // Filter attachments into media (visual) and documents
+                    let mediaAttachments = attachments.filter { isMediaType($0.type) }
+                    let documentAttachments = attachments.filter { isDocumentType($0.type) }
+                    
+                    VStack(alignment: .leading, spacing: 0) {
+                        // MediaGrid for images, videos, and audio (visual content)
+                        if !mediaAttachments.isEmpty {
+                            MediaGridView(
+                                parentTweet: tweet,
+                                attachments: mediaAttachments,
+                                isEmbedded: isEmbedded,
+                                sourceTweetId: sourceTweetId  // Pass the viewing context tweet ID
+                            )
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .clipped()
+                                .cornerRadius(8)
+                                .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
+                                .padding(.top, 4)
+                                // STABILITY: Layout priority ensures media grid maintains consistent sizing
+                                .layoutPriority(1)
+                                // STABILITY: Fixed vertical size prevents content from shifting media position
+                                .fixedSize(horizontal: false, vertical: true)
+                            
+                            if let caption = singleVideoCaption(for: mediaAttachments) {
+                                Text(caption)
+                                    .font(.system(size: 14, weight: .regular))
+                                    .foregroundColor(.primary.opacity(0.6))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.top, 2)
+                                    // Only add tap gesture when callback is provided
+                                    .if(onTweetBodyTap != nil) { view in
+                                        view
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                onTweetBodyTap?()
+                                            }
+                                    }
+                            }
+                        }
+                        
+                        // Document attachments vertically (below media) - limit to 2 in list
+                        if !documentAttachments.isEmpty {
+                            DocumentAttachmentsView(
+                                parentTweet: tweet,
+                                documents: documentAttachments,
+                                maxDocuments: 2 // Show at most 2 documents in tweet list
+                            )
+                            .padding(.top, mediaAttachments.isEmpty ? 4 : 8)
+                        }
+                    }
+                }
         }
     }
     
