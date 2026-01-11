@@ -1589,34 +1589,6 @@ class SharedAssetCache: ObservableObject {
         preloadTasks.removeValue(forKey: mediaID)
     }
     
-    /// Preload multiple videos with priority management
-    func preloadVideos(_ urls: [URL], priority: PreloadPriority = .normal) {
-        for (index, url) in urls.enumerated() {
-            let delay = priority.delay(for: index)
-            
-        // NOTE: Disabled Task creation during heavy concurrent operations to prevent thread exhaustion
-        // Task {
-        //     // Preload immediately if delay is 0, otherwise use async timing
-        //     if delay > 0 {
-        //         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-        //     }
-        //
-        //     guard !Task.isCancelled else { return }
-        //
-        //     switch priority {
-        //     case .high:
-        //         await MainActor.run {
-        //             preloadVideo(for: _)
-        //         }
-        //     case .normal, .low:
-        //         await MainActor.run {
-        //             preloadAsset(for: _)
-        //         }
-        //     }
-        // }
-        }
-    }
-    
     // MARK: - Cache Management
     
     private func manageCacheSize() {

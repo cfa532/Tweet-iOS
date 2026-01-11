@@ -725,8 +725,10 @@ class GlobalImageLoadManager: ObservableObject {
         // Force garbage collection
         updateStatistics()
         
-        // Aggressively trim cached images - 70% on memory warning
-        ImageCacheManager.shared.releasePartialCache(percentage: 70)
+        // Moderately trim cached images - 30% on memory warning (not 70%!)
+        // This matches video player cache strategy (also 30%)
+        // Balance: Free memory quickly but preserve recently viewed images
+        ImageCacheManager.shared.releasePartialCache(percentage: 30)
         
         print("✅ [GlobalImageLoadManager] Cleanup complete")
     }

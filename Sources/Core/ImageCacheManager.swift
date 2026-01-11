@@ -315,14 +315,19 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     /// Release a percentage of image cache to free memory
+    /// NOTE: Memory cache is cleared entirely (NSCache limitation), but disk cache
+    /// respects the percentage parameter for gradual cleanup
     func releasePartialCache(percentage: Int) {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
         print("DEBUG: [ImageCacheManager] Releasing \(percentageToRemove)% of image cache")
         
-        // Clear memory cache completely (NSCache doesn't support partial clearing)
+        // MEMORY CACHE: Clear completely (NSCache limitation - no partial clearing)
+        // This is unavoidable with NSCache architecture
         cache.removeAllObjects()
+        print("DEBUG: [ImageCacheManager] Cleared all memory cache (NSCache limitation)")
         
-        // Remove percentage of disk cache files (oldest first)
+        // DISK CACHE: Remove percentage of files (oldest first)
+        // Skip permanent images (bookmarks/favorites/private tweets)
         do {
             let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
             
@@ -333,14 +338,23 @@ class ImageCacheManager: @unchecked Sendable {
                 return date1 < date2
             }
             
-            let countToRemove = max(1, (sortedFiles.count * percentageToRemove) / 100)
-            let filesToRemove = Array(sortedFiles.prefix(countToRemove))
+            // Filter out permanent images (bookmarks/favorites/private tweets)
+            let removableFiles = sortedFiles.filter { fileURL in
+                let filename = fileURL.deletingPathExtension().lastPathComponent
+                let imageID = filename.components(separatedBy: "-").first ?? filename
+                let isPrivate = isPrivateTweet(imageID: imageID)
+                let isPermanent = isPermanentImageID(imageID)
+                return !isPrivate && !isPermanent
+            }
+            
+            let countToRemove = max(1, (removableFiles.count * percentageToRemove) / 100)
+            let filesToRemove = Array(removableFiles.prefix(countToRemove))
             
             for fileURL in filesToRemove {
                 try? fileManager.removeItem(at: fileURL)
             }
             
-            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from cache")
+            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count)/\(removableFiles.count) removable image files from disk cache")
         } catch {
             print("Error releasing partial image cache: \(error)")
         }
