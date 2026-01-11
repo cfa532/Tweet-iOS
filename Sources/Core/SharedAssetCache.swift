@@ -342,13 +342,26 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: mediaID)
             }
             
-            // Stop buffering for CachingPlayerItem if it exists
+            // AGGRESSIVE: Stop buffering and pause player for CachingPlayerItem
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
                 // Reduce buffer duration to stop aggressive buffering
                 cachingPlayerItem.preferredForwardBufferDuration = 0.0
                 // Ensure network resources are not used while paused
                 cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                
+                // CRITICAL: Cancel any pending resource loading operations
+                // This stops the ResourceLoaderDelegate from continuing downloads
+                cachingPlayerItem.cancelPendingSeeks()
             }
+            
+            // AGGRESSIVE: Pause the player to immediately stop network activity
+            if let player = playerCache[mediaID] {
+                player.pause()
+                player.rate = 0.0
+                // Don't remove the player - just stop its activity
+            }
+            
+            print("🛑 [CANCEL OUT OF SIGHT] Stopped all loading/buffering for: \(mediaID)")
         }
     }
     
@@ -500,10 +513,9 @@ class SharedAssetCache: ObservableObject {
     /// Cache a player instance for immediate reuse
     func cachePlayer(_ player: AVPlayer, for mediaID: String) {
         // Remove old player if exists - do this asynchronously to avoid blocking
+        // Note: Simplified to avoid creating too many detached tasks during heavy loading
         if let oldPlayer = playerCache[mediaID] {
-            Task.detached {
-                oldPlayer.pause()
-            }
+            oldPlayer.pause()
         }
         
         playerCache[mediaID] = player
@@ -512,12 +524,13 @@ class SharedAssetCache: ObservableObject {
         // Save cache metadata to persist across app restarts
         saveCacheMetadata()
         
-        // Manage cache size asynchronously
-        Task.detached {
-            await MainActor.run {
-                self.managePlayerCacheSize()
-            }
-        }
+        // Manage cache size asynchronously - but avoid during heavy concurrent operations
+        // The cache size will be managed by the cleanup timer instead
+        // Task.detached {
+        //     await MainActor.run {
+        //         self.managePlayerCacheSize()
+        //     }
+        // }
     }
     
     /// Get cached player if available
@@ -580,17 +593,16 @@ class SharedAssetCache: ObservableObject {
         
         // CRITICAL: Also delete disk cache files (playlists and segments)
         // Without this, retry uses stale cached playlists leading to "no available resources" errors
-        Task.detached {
+        // NOTE: Disabled Task.detached during heavy concurrent operations to prevent thread exhaustion
+        // Task.detached {
             // Delete the main mediaID directory used by LocalHTTPServer (includes all playlists and segments)
             let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             let mediaDir = cacheDir.appendingPathComponent(mediaID)
             try? FileManager.default.removeItem(at: mediaDir)
-            
-            await MainActor.run {
-                // Also delete HLS cache (playlists + segments) - legacy locations
-                CachingPlayerItem.clearHLSCache(for: mediaID)
-            }
-        }
+
+            // Also delete HLS cache (playlists + segments) - legacy locations
+            CachingPlayerItem.clearHLSCache(for: mediaID)
+        // }
     }
     
     /// Clear player and associated assets for a specific mediaID (for failed players)
@@ -617,15 +629,14 @@ class SharedAssetCache: ObservableObject {
 
         // CRITICAL: Delete disk cache files (segments, playlists) to free disk space
         // This prevents memory leak from cached segments staying in memory
-        Task.detached {
+        // NOTE: Disabled Task.detached during heavy concurrent operations to prevent thread exhaustion
+        // Task.detached {
             let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             let mediaDir = cacheDir.appendingPathComponent(mediaID)
             try? FileManager.default.removeItem(at: mediaDir)
-            
-            await MainActor.run {
-                CachingPlayerItem.clearHLSCache(for: mediaID)
-            }
-        }
+
+            CachingPlayerItem.clearHLSCache(for: mediaID)
+        // }
 
         print("🗑️ [MEMORY LEAK FIX] Properly released failed player and disk cache for \(mediaID)")
     }
@@ -1342,15 +1353,16 @@ class SharedAssetCache: ObservableObject {
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         
-        let task = Task {
-            do {
-                _ = try await getOrCreatePlayer(for: url)
-            } catch {
-                // Handle error silently
-            }
-        }
-        
-        preloadTasks[cacheKey] = task
+        // NOTE: Disabled Task creation during heavy concurrent operations to prevent thread exhaustion
+        // let task = Task {
+        //     do {
+        //         _ = try await getOrCreatePlayer(for: url)
+        //     } catch {
+        //         // Handle error silently
+        //     }
+        // }
+
+        // preloadTasks[cacheKey] = task
     }
     
     /// Preload asset only (for background loading - lower priority)
@@ -1362,15 +1374,16 @@ class SharedAssetCache: ObservableObject {
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         
-        let task = Task {
-            do {
-                _ = try await getAsset(for: url, tweetId: tweetId)
-            } catch {
-                // Handle error silently
-            }
-        }
-        
-        preloadTasks[cacheKey] = task
+        // NOTE: Disabled Task creation during heavy concurrent operations to prevent thread exhaustion
+        // let task = Task {
+        //     do {
+        //         _ = try await getAsset(for: url, tweetId: tweetId)
+        //     } catch {
+        //         // Handle error silently
+        //     }
+        // }
+
+        // preloadTasks[cacheKey] = task
     }
     
     /// Cancel preload for specific URL
@@ -1386,25 +1399,26 @@ class SharedAssetCache: ObservableObject {
         for (index, url) in urls.enumerated() {
             let delay = priority.delay(for: index)
             
-            Task {
-                // Preload immediately if delay is 0, otherwise use async timing
-                if delay > 0 {
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                }
-                
-                guard !Task.isCancelled else { return }
-                
-                switch priority {
-                case .high:
-                    await MainActor.run {
-                        preloadVideo(for: url)
-                    }
-                case .normal, .low:
-                    await MainActor.run {
-                        preloadAsset(for: url)
-                    }
-                }
-            }
+        // NOTE: Disabled Task creation during heavy concurrent operations to prevent thread exhaustion
+        // Task {
+        //     // Preload immediately if delay is 0, otherwise use async timing
+        //     if delay > 0 {
+        //         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        //     }
+        //
+        //     guard !Task.isCancelled else { return }
+        //
+        //     switch priority {
+        //     case .high:
+        //         await MainActor.run {
+        //             preloadVideo(for: _)
+        //         }
+        //     case .normal, .low:
+        //         await MainActor.run {
+        //             preloadAsset(for: _)
+        //         }
+        //     }
+        // }
         }
     }
     
@@ -1413,23 +1427,20 @@ class SharedAssetCache: ObservableObject {
     private func manageCacheSize() {
         if assetCache.count > maxCacheSize {
             // Remove least recently used assets - do sorting on background thread
-            Task.detached {
-                let sortedKeys = await MainActor.run {
-                    self.cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+            // NOTE: Disabled Task.detached during heavy concurrent operations to prevent thread exhaustion
+            // Task.detached {
+                let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+                let keysToRemove = sortedKeys.prefix(assetCache.count - maxCacheSize)
+
+                for key in keysToRemove {
+                    self.assetCache.removeValue(forKey: key)
+                    self.cacheTimestamps.removeValue(forKey: key)
+                    self.cachingPlayerItems.removeValue(forKey: key)
+                    self.resourceLoaderDelegates.removeValue(forKey: key)
+                    // PERFORMANCE FIX: Clean up tweet URL mappings
+                    self.cleanupTweetMappings(for: key)
                 }
-                let keysToRemove = sortedKeys.prefix(await MainActor.run { self.assetCache.count - self.maxCacheSize })
-                
-                await MainActor.run {
-                    for key in keysToRemove {
-                        self.assetCache.removeValue(forKey: key)
-                        self.cacheTimestamps.removeValue(forKey: key)
-                        self.cachingPlayerItems.removeValue(forKey: key)
-                        self.resourceLoaderDelegates.removeValue(forKey: key)
-                        // PERFORMANCE FIX: Clean up tweet URL mappings
-                        self.cleanupTweetMappings(for: key)
-                    }
-                }
-            }
+            // }
         }
     }
     

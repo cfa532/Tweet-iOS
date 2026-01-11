@@ -17,7 +17,7 @@ enum Constants {
     // Cache Configuration  
     static let MAX_ASSET_CACHE_SIZE = 40 // Maximum number of cached assets (lightweight - just metadata)
     static let MAX_PLAYER_CACHE_SIZE = 30 // Research-backed: Safe on modern devices (iPhone SE ~1.5GB limit, iPhone 14 Pro ~2.5GB limit)
-    static let MAX_CONCURRENT_PLAYER_CREATIONS = 4 // Research-backed: iPhone supports 4 connections/host by default, matches iOS network best practices
+    static let MAX_CONCURRENT_PLAYER_CREATIONS = 2 // Reduced to 2 to prevent thread exhaustion and logging deadlocks
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 600 // 10 minutes (reduced from 30 minutes)
     
     // File Upload Limits

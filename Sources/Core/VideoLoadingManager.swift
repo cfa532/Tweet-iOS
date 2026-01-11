@@ -30,7 +30,7 @@ class VideoLoadingManager: ObservableObject {
     
     // MARK: - Performance Management
     private var activeLoadingCount: Int = 0
-    private let maxConcurrentLoads: Int = 4 // Reduced from 8 to 4 for better stability during network issues
+    private let maxConcurrentLoads: Int = 2 // Reduced to 2 to prevent thread exhaustion and logging deadlocks
     private var loadingQueue: [String] = [] // Queue for pending video loads
     private var isProcessingQueue = false
     
