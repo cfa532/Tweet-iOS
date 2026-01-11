@@ -660,6 +660,25 @@ struct MediaGridView: View, Equatable {
             // Update visibility when grid disappears
             // Global VideoPlaybackCoordinator handles video state
             isVisible = false
+            
+            // AGGRESSIVE: Immediately cancel any ongoing video/image loading
+            // This prevents resource waste during fast scrolling
+            for attachment in attachments {
+                // Cancel image loading
+                if attachment.type == .image {
+                    GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
+                }
+                
+                // Cancel video loading via SharedAssetCache
+                if attachment.type == .video || attachment.type == .hls_video {
+                    if let url = attachment.getUrl(parentTweet.author?.baseUrl ?? HproseInstance.baseUrl),
+                       let mediaID = SharedAssetCache.shared.extractMediaID(from: url) {
+                        Task { @MainActor in
+                            SharedAssetCache.shared.cancelLoading(for: mediaID)
+                        }
+                    }
+                }
+            }
         }
         .onChange(of: isVisible) { _, newVisibility in
             // Visibility changes handled by global coordinator

@@ -342,6 +342,13 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: mediaID)
             }
             
+            // CRITICAL: Cancel any scheduled retry tasks to prevent wasted retries
+            if let retryTask = scheduledVideoRetries[mediaID] {
+                retryTask.cancel()
+                scheduledVideoRetries.removeValue(forKey: mediaID)
+            }
+            // Don't reset retry count - preserve it for when video becomes visible again
+            
             // AGGRESSIVE: Stop buffering and pause player for CachingPlayerItem
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
                 // Reduce buffer duration to stop aggressive buffering
@@ -1772,6 +1779,13 @@ class SharedAssetCache: ObservableObject {
         
         // Cancel all ongoing loading tasks to prevent new players from being created
         cancelAllLoadingTasks()
+        
+        // CRITICAL: Cancel all retry tasks to prevent retries after navigation
+        for (_, task) in scheduledVideoRetries {
+            task.cancel()
+        }
+        scheduledVideoRetries.removeAll()
+        // Keep retry counts in case user navigates back
         
         // Pause and release ALL video players
         for (key, player) in playerCache {

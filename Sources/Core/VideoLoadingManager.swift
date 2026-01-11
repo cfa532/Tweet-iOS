@@ -91,11 +91,31 @@ class VideoLoadingManager: ObservableObject {
         // Update visible tweet IDs
         updateVisibleTweetIds()
         
-        // Queue tweets for background cancellation instead of immediate cancellation
-        queueTweetsForCancellation()
+        // IMMEDIATE cancellation for fast scrolling - don't wait for background timer
+        cancelOutOfSightTweetsImmediately()
         
         // Manage video loading with performance considerations
         manageVideoLoadingWithPerformance()
+    }
+    
+    /// Immediately cancel videos that are out of sight (for fast scrolling)
+    private func cancelOutOfSightTweetsImmediately() {
+        // Process cancellations synchronously for tweets far from current position
+        for (index, tweetId) in allTweetIds.enumerated() {
+            // Cancel if tweet is more than 2 positions away from current (buffer = 1)
+            let distance = abs(index - currentVisibleTweetIndex)
+            if distance > 2 {
+                // Post notification immediately (SharedAssetCache handles cancellation)
+                NotificationCenter.default.post(
+                    name: .cancelVideoLoading,
+                    object: nil,
+                    userInfo: ["tweetId": tweetId]
+                )
+                
+                // Also cancel directly in SharedAssetCache
+                SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(tweetId)
+            }
+        }
     }
     
     /// Check if a tweet should load videos/audio (with performance throttling and cache awareness)
