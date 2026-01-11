@@ -102,44 +102,41 @@ struct TweetItemBodyView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(content)
-                    .font(.body)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(7)
-                    .if(enableTap) { $0.contentShape(Rectangle()) }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 2)
-                    .onTapGesture {
-                        // Tap to open tweet detail
-                        onTweetBodyTap?()
-                    }
-                    .task(id: content) {
-                        // Cancel previous task if content changed
-                        truncationTask?.cancel()
-                        
-                        // Calculate truncation off main thread
-                        truncationTask = Task.detached(priority: .userInitiated) {
-                            let truncated = await checkTextTruncation(text: content, maxLines: 7)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(content)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(7)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .task(id: content) {
+                            // Cancel previous task if content changed
+                            truncationTask?.cancel()
                             
-                            // Check if task was cancelled
-                            guard !Task.isCancelled else { return }
-                            
-                            // Update UI on main thread
-                            await MainActor.run {
-                                isTruncated = truncated
+                            // Calculate truncation off main thread
+                            truncationTask = Task.detached(priority: .userInitiated) {
+                                let truncated = await checkTextTruncation(text: content, maxLines: 7)
+                                
+                                // Check if task was cancelled
+                                guard !Task.isCancelled else { return }
+                                
+                                // Update UI on main thread
+                                await MainActor.run {
+                                    isTruncated = truncated
+                                }
                             }
                         }
-                    }
-                
-                if isTruncated {
-                    Button(action: { 
-                        // Navigate to detail view
-                        onTweetBodyTap?()
-                    }) {
+                    
+                    if isTruncated {
                         Text(LocalizedStringKey("More..."))
                             .font(.body)
                             .foregroundColor(.blue)
                     }
+                }
+                .padding(.bottom, 2)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    // Single tap gesture for entire text content area (including "More...")
+                    onTweetBodyTap?()
                 }
             }
             // Separate media and documents
