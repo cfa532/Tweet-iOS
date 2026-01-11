@@ -787,7 +787,8 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    /// Create progressive video player with 1 retry on failure
+    /// Create progressive video player with ONE retry after refreshing author's baseUrl
+    /// If it fails twice, it fails - no additional fallback attempts
     private func createProgressivePlayerWithRetry(for url: URL, mediaID: String) async throws -> AVPlayer {
         let currentRetry = await MainActor.run { videoRetryCount[mediaID] ?? 0 }
         
@@ -795,27 +796,48 @@ class SharedAssetCache: ObservableObject {
             // Try to create player
             let player = try await createProgressivePlayer(for: url, mediaID: mediaID)
             return player
-        } catch {
-            // Check if we can retry (max 1 retry)
-            if currentRetry < 1 {
+        } catch let originalError {
+            // Only retry ONCE with baseUrl refresh
+            if currentRetry == 0 {
                 await MainActor.run {
-                    videoRetryCount[mediaID] = currentRetry + 1
+                    videoRetryCount[mediaID] = 1
                 }
-                print("🔄 [PROGRESSIVE VIDEO RETRY] Attempt #\(currentRetry + 1) for: \(mediaID)")
                 
-                // Wait 2 seconds before retry
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                print("🔄 [PROGRESSIVE VIDEO RETRY] Attempt #1 for: \(mediaID) - refreshing author baseUrl...")
                 
-                // Check if cancelled during sleep
+                // CRITICAL: Refresh author's baseUrl before retry
+                let refreshed = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: nil)
+                
+                if refreshed {
+                    print("✅ [PROGRESSIVE VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
+                } else {
+                    print("⚠️ [PROGRESSIVE VIDEO RETRY] Could not refresh author baseUrl, retrying anyway")
+                }
+                
+                // Check if cancelled
                 if Task.isCancelled {
                     throw CancellationError()
                 }
                 
-                // Retry once
-                return try await createProgressivePlayer(for: url, mediaID: mediaID)
+                // Retry ONCE with (potentially) refreshed baseUrl
+                do {
+                    return try await createProgressivePlayer(for: url, mediaID: mediaID)
+                } catch {
+                    print("❌ [PROGRESSIVE VIDEO] Failed after 1 retry with baseUrl refresh: \(mediaID)")
+                    // Reset retry count for next time
+                    _ = await MainActor.run {
+                        videoRetryCount.removeValue(forKey: mediaID)
+                    }
+                    throw error
+                }
             } else {
-                print("❌ [PROGRESSIVE VIDEO] Failed after 1 retry: \(mediaID)")
-                throw error
+                // Already retried once, give up
+                print("❌ [PROGRESSIVE VIDEO] Failed - already attempted retry: \(mediaID)")
+                // Reset retry count for next time
+                _ = await MainActor.run {
+                    videoRetryCount.removeValue(forKey: mediaID)
+                }
+                throw originalError
             }
         }
     }
@@ -861,38 +883,133 @@ class SharedAssetCache: ObservableObject {
         return player
     }
     
-    /// Create HLS video player with 1 retry on failure (tries master.m3u8 then playlist.m3u8, retries sequence once)
+    /// Create HLS video player with ONE retry after refreshing author's baseUrl
+    /// If it fails twice, it fails - no additional fallback attempts
     private func createCachingPlayerWithRetry(for url: URL, mediaID: String, tweetId: String?) async throws -> AVPlayer {
         let currentRetry = await MainActor.run { videoRetryCount[mediaID] ?? 0 }
         
         do {
-            // Try to create player (already tries master.m3u8 then playlist.m3u8)
+            // Try to create player (tries master.m3u8 then playlist.m3u8)
             let player = try await createCachingPlayer(for: url, tweetId: tweetId)
             return player
-        } catch {
-            // Check if we can retry (max 1 retry)
-            if currentRetry < 1 {
+        } catch let originalError {
+            // Only retry ONCE with baseUrl refresh
+            if currentRetry == 0 {
                 await MainActor.run {
-                    videoRetryCount[mediaID] = currentRetry + 1
+                    videoRetryCount[mediaID] = 1
                 }
-                print("🔄 [HLS VIDEO RETRY] Attempt #\(currentRetry + 1) for: \(mediaID)")
-                print("🔄 [HLS VIDEO RETRY] Will try master.m3u8 then playlist.m3u8 again")
                 
-                // Wait 2 seconds before retry
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                print("🔄 [HLS VIDEO RETRY] Attempt #1 for: \(mediaID) - refreshing author baseUrl...")
                 
-                // Check if cancelled during sleep
+                // CRITICAL: Refresh author's baseUrl before retry
+                let refreshed = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: tweetId)
+                
+                if refreshed {
+                    print("✅ [HLS VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
+                } else {
+                    print("⚠️ [HLS VIDEO RETRY] Could not refresh author baseUrl, retrying anyway")
+                }
+                
+                // Check if cancelled
                 if Task.isCancelled {
                     throw CancellationError()
                 }
                 
-                // Retry once (will try master.m3u8 -> playlist.m3u8 again)
-                return try await createCachingPlayer(for: url, tweetId: tweetId)
+                // Retry ONCE with (potentially) refreshed baseUrl
+                do {
+                    return try await createCachingPlayer(for: url, tweetId: tweetId)
+                } catch {
+                    print("❌ [HLS VIDEO] Failed after 1 retry with baseUrl refresh: \(mediaID)")
+                    // Reset retry count for next time
+                    await MainActor.run {
+                        videoRetryCount.removeValue(forKey: mediaID)
+                    }
+                    throw error
+                }
             } else {
-                print("❌ [HLS VIDEO] Failed after 1 retry (tried master.m3u8 and playlist.m3u8 twice): \(mediaID)")
-                throw error
+                // Already retried once, give up
+                print("❌ [HLS VIDEO] Failed - already attempted retry: \(mediaID)")
+                // Reset retry count for next time
+                await MainActor.run {
+                    videoRetryCount.removeValue(forKey: mediaID)
+                }
+                throw originalError
             }
         }
+    }
+    
+    /// Attempt to refresh the author's baseUrl for a video
+    /// Returns true if baseUrl was successfully refreshed
+    private func refreshAuthorBaseUrlForVideo(mediaID: String, originalUrl: URL, tweetId: String?) async -> Bool {
+        // Try to find the author ID from the tweet or attachment
+        guard let authorId = await findAuthorIdForVideo(mediaID: mediaID, tweetId: tweetId) else {
+            print("⚠️ [BASEURL REFRESH] Cannot find author ID for video: \(mediaID)")
+            return false
+        }
+        
+        print("🔍 [BASEURL REFRESH] Found author ID: \(authorId) for video: \(mediaID)")
+        
+        // Fetch fresh user data to get updated baseUrl
+        do {
+            // Force baseUrl refresh by passing empty baseUrl
+            let refreshedUser = try await HproseInstance.shared.fetchUser(authorId, baseUrl: "")
+            
+            if let newBaseUrl = refreshedUser?.baseUrl {
+                print("✅ [BASEURL REFRESH] Successfully refreshed baseUrl for author \(authorId): \(newBaseUrl.absoluteString)")
+                
+                // Update any cached Tweet instances with the new author info
+                await MainActor.run {
+                    if let cachedTweet = Tweet.getInstance(for: tweetId ?? "") {
+                        cachedTweet.author = refreshedUser
+                        print("✅ [BASEURL REFRESH] Updated cached tweet with refreshed author")
+                    }
+                }
+                
+                return true
+            } else {
+                print("⚠️ [BASEURL REFRESH] Fetched user but no baseUrl available for author: \(authorId)")
+                return false
+            }
+        } catch {
+            print("❌ [BASEURL REFRESH] Failed to fetch user \(authorId): \(error.localizedDescription)")
+            return false
+        }
+    }
+    
+    /// Find the author ID for a video by searching tweets and attachments
+    private func findAuthorIdForVideo(mediaID: String, tweetId: String?) async -> String? {
+        // Strategy 1: Try to get from tweet if we have tweetId (most reliable)
+        if let tweetId = tweetId, !tweetId.isEmpty {
+            // Check singleton cache first (fast)
+            if let tweet = Tweet.getInstance(for: tweetId) {
+                let authorId = !tweet.authorId.isEmpty ? tweet.authorId : tweet.author?.mid
+                if let authorId = authorId, !authorId.isEmpty {
+                    print("✅ [AUTHOR SEARCH] Found author from tweetId singleton: \(authorId)")
+                    return authorId
+                }
+            }
+            
+            // Check Core Data cache (synchronous but reliable)
+            if let tweet = TweetCacheManager.shared.fetchTweetSync(mid: tweetId) {
+                let authorId = !tweet.authorId.isEmpty ? tweet.authorId : tweet.author?.mid
+                if let authorId = authorId, !authorId.isEmpty {
+                    print("✅ [AUTHOR SEARCH] Found author from Core Data: \(authorId)")
+                    return authorId
+                }
+            }
+        }
+        
+        // Strategy 2: Check if this video belongs to current user (common case for own videos)
+        // This is a reasonable assumption - many video playback failures are on user's own content
+        // because server reboots affect the current user's videos most visibly
+        let currentUserMid = HproseInstance.shared.appUser.mid
+        if !currentUserMid.isEmpty {
+            print("⚠️ [AUTHOR SEARCH] Could not find specific author for video \(mediaID), trying current user: \(currentUserMid)")
+            return currentUserMid
+        }
+        
+        print("❌ [AUTHOR SEARCH] Could not find author for video: \(mediaID)")
+        return nil
     }
     
     /// Create CachingPlayerItem for HLS videos only

@@ -204,6 +204,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                             }
                         }
                     } else {
+                        print("  ⚠️ Original tweet not found for retweet: \(tweet.mid)")
                     }
                 }
             } else {
@@ -314,6 +315,8 @@ class VideoPlaybackCoordinator: ObservableObject {
                     guard let self = self else { return }
                     if self.phase == .idle && !self.visibleVideos.isEmpty {
                         self.startSurveyPhase()
+                    } else {
+                        print("⚠️ [VideoPlaybackCoordinator] Skipping survey - phase: \(self.phase), videos: \(self.visibleVideos.count)")
                     }
                 }
             }
@@ -380,6 +383,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func startSurveyPhase() {
         // Guard against starting survey if not in idle phase
         guard phase == .idle else {
+            print("⚠️ [VideoPlaybackCoordinator] startSurveyPhase called but not in idle phase (current: \(phase))")
             return
         }
         
@@ -421,6 +425,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func endSurveyPhase() {
         // Guard against ending survey if not in surveying phase
         guard phase == .surveying else {
+            print("⚠️ [VideoPlaybackCoordinator] endSurveyPhase called but not in surveying phase (current: \(phase))")
             return
         }
         
@@ -430,6 +435,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         // Identify primary video (most visible/centered)
         guard let primary = identifyPrimaryVideo() else {
+            print("⚠️ [VideoPlaybackCoordinator] No primary video identified, stopping all videos")
             stopAllVideos()
             return
         }
@@ -439,10 +445,11 @@ class VideoPlaybackCoordinator: ObservableObject {
             pauseVideo(video)
         }
 
-        // Update state to primary phase
+        // Update state to primary phase BEFORE sending play command
+        // This prevents race conditions where the phase check fails
+        phase = .primaryPlaying
         primaryVideoId = primary.identifier
         currentlyPlayingVideoIds = [primary.identifier]
-        phase = .primaryPlaying
 
         // CRITICAL: Always send play command for primary video, even if we think it's "already playing"
         // This ensures playback starts even if player creation failed during survey phase (e.g., network errors)
@@ -452,6 +459,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // - If ACTUALLY playing, it returns immediately without seeking/restarting
         // - If NOT playing (failed creation), it starts playback
         // - This gives us reliability (handles failures) without jitter (idempotent)
+        print("📤 [VideoPlaybackCoordinator] Sending play command for primary video: \(primary.videoMid)")
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
             object: nil,

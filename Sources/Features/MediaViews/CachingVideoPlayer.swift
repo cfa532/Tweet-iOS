@@ -111,7 +111,7 @@ struct CachingVideoPlayer: View {
                     }
                 }
             } else if isLoading {
-                // Show black background with white spinner while loading for first time
+                // Show black background with white spinner while loading for first time (no text)
                 Color.black
                     .overlay(
                         ProgressView()
@@ -119,15 +119,12 @@ struct CachingVideoPlayer: View {
                             .scaleEffect(1.2)
                     )
             } else if loadFailed {
+                // Show broken icon only, no text
                 Color.black
                     .overlay(
-                        VStack {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.title)
-                                .foregroundColor(.white)
-                            Text("Failed to load video")
-                                .foregroundColor(.white)
-                        }
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundColor(.white)
                     )
             } else {
                 Color.black
