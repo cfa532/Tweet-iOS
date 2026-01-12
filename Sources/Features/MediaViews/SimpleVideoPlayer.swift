@@ -440,10 +440,18 @@ struct SimpleVideoPlayer: View {
     
     /// Apply mute state to player based on current mode
     private func applyMuteState(to player: AVPlayer) {
-        if mode == .mediaCell || mode == .embeddedDetail {
+        if mode == .mediaCell {
+            // MediaCell: Always respect global mute state
             player.isMuted = MuteState.shared.isMuted
+        } else if mode == .embeddedDetail {
+            // EmbeddedDetail: Unmute if inside detail view, otherwise respect global mute
+            if NavigationStateManager.shared.isDetailViewActive {
+                player.isMuted = false  // Unmute in detail view
+            } else {
+                player.isMuted = MuteState.shared.isMuted  // Respect global mute in feed
+            }
         } else {
-            // Fullscreen/Detail: Always unmute
+            // Fullscreen/TweetDetail: Always unmute
             player.isMuted = false
         }
     }
@@ -1252,11 +1260,21 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleMuteChange(newMuteState: Bool) {
-        // For full screen modes, always keep unmuted regardless of the isMuted parameter
-        if mode == .mediaBrowser {
-            player?.isMuted = false
-        } else {
+        // For MediaCell mode, apply the mute state parameter
+        if mode == .mediaCell {
             player?.isMuted = newMuteState
+        }
+        // For embeddedDetail mode, only apply if NOT in detail view
+        else if mode == .embeddedDetail {
+            if NavigationStateManager.shared.isDetailViewActive {
+                player?.isMuted = false  // Always unmuted in detail view
+            } else {
+                player?.isMuted = newMuteState  // Apply parameter in feed
+            }
+        }
+        // For fullscreen and tweetDetail modes, always keep unmuted
+        else if mode == .mediaBrowser || mode == .tweetDetail {
+            player?.isMuted = false
         }
     }
     
@@ -1265,8 +1283,16 @@ struct SimpleVideoPlayer: View {
         if mode == .mediaCell {
             player?.isMuted = globalMuteState
         }
-        // For full screen modes, ignore global mute state and always keep unmuted
-        else if mode == .mediaBrowser {
+        // For embeddedDetail mode, only sync if NOT in detail view
+        else if mode == .embeddedDetail {
+            if NavigationStateManager.shared.isDetailViewActive {
+                player?.isMuted = false  // Keep unmuted in detail view
+            } else {
+                player?.isMuted = globalMuteState  // Sync with global in feed
+            }
+        }
+        // For full screen and tweetDetail modes, ignore global mute state and always keep unmuted
+        else if mode == .mediaBrowser || mode == .tweetDetail {
             player?.isMuted = false
         }
     }
@@ -3522,8 +3548,8 @@ struct SimpleVideoPlayer: View {
                 let asset = cachedPlayerItem.asset
                 let playerItem = AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
-                // Respect global mute state for embedded previews
-                newPlayer.isMuted = MuteState.shared.isMuted
+                // Apply correct mute state based on context (unmuted in detail view, muted in feed)
+                applyMuteState(to: newPlayer)
                 self.configurePlayer(newPlayer)
                 return
             }
@@ -3538,8 +3564,8 @@ struct SimpleVideoPlayer: View {
                     )
                     let newPlayer = AVPlayer(playerItem: playerItem)
                     await MainActor.run {
-                        // Respect global mute state for embedded previews
-                        newPlayer.isMuted = MuteState.shared.isMuted
+                        // Apply correct mute state based on context (unmuted in detail view, muted in feed)
+                        self.applyMuteState(to: newPlayer)
                         self.configurePlayer(newPlayer)
                     }
                 } catch {
