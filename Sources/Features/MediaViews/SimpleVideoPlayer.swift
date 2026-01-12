@@ -1691,6 +1691,13 @@ struct SimpleVideoPlayer: View {
         // Allow both mediaCell and embeddedDetail modes to respond to stop commands
         guard mode == .mediaCell || mode == .embeddedDetail else { return }
         
+        // CRITICAL: If we're in embeddedDetail mode and visible inside a TweetDetailView,
+        // ignore stop commands from the coordinator (detail view videos should keep playing)
+        if mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive && isVisible {
+            print("⏸️ [COORDINATOR] Ignoring stop for visible embeddedDetail video in detail view: \(mid)")
+            return
+        }
+        
         // If notification has a specific videoMid, only stop if it matches this video
         if let videoMid = notification?.userInfo?["videoMid"] as? String {
             guard videoMid == mid else { return }
@@ -1729,6 +1736,13 @@ struct SimpleVideoPlayer: View {
         guard mode == .mediaCell || mode == .embeddedDetail else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
+        
+        // CRITICAL: If we're in embeddedDetail mode and visible inside a TweetDetailView,
+        // ignore pause commands from the coordinator (detail view videos should keep playing)
+        if mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive && isVisible {
+            print("⏸️ [COORDINATOR] Ignoring pause for visible embeddedDetail video in detail view: \(mid)")
+            return
+        }
 
         coordinatorWantsToPlay = false
         if let player = player {
