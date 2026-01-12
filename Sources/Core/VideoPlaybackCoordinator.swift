@@ -18,6 +18,7 @@ extension Notification.Name {
     static let shouldPauseVideo = Notification.Name("shouldPauseVideo")
     static let videoTimerUpdate = Notification.Name("videoTimerUpdate")
     static let requestVideoTimerUpdate = Notification.Name("requestVideoTimerUpdate")
+    static let muteStateRefreshed = Notification.Name("muteStateRefreshed")
 }
 
 /// Video state during orchestration

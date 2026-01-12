@@ -280,6 +280,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             // Refresh mute state before reloading videos to ensure proper audio state
                             MuteState.shared.refreshFromPreferences()
 
+                            // Notify all videos to refresh their mute state
+                            NotificationCenter.default.post(name: .muteStateRefreshed, object: nil)
+
                             // Post notification for visible videos to reload
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
@@ -296,6 +299,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
                         // Refresh mute state before reloading videos to ensure proper audio state
                         MuteState.shared.refreshFromPreferences()
+
+                        // Notify all videos to refresh their mute state
+                        NotificationCenter.default.post(name: .muteStateRefreshed, object: nil)
 
                         print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
                         // Post notification for visible videos to check health (they skip if seeking)
@@ -336,6 +342,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                                 // Refresh mute state before reloading videos to ensure proper audio state
                                 MuteState.shared.refreshFromPreferences()
 
+                                // Notify all videos to refresh their mute state
+                                NotificationCenter.default.post(name: .muteStateRefreshed, object: nil)
+
                                 // Post notification for visible videos to reload
                                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                                 print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
@@ -352,7 +361,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Refresh mute state from preferences when app becomes active
         // This ensures videos respect the current mute setting even if it was changed while app was in background
         MuteState.shared.refreshFromPreferences()
-        
+
+        // Notify all videos to refresh their mute state
+        NotificationCenter.default.post(name: .muteStateRefreshed, object: nil)
+
         // Post notification to restore video state (handled by SimpleVideoPlayer)
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
     }
@@ -452,6 +464,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         // Refresh mute state before reloading videos to ensure proper audio state
                         MuteState.shared.refreshFromPreferences()
 
+                        // Notify all videos to refresh their mute state
+                        NotificationCenter.default.post(name: .muteStateRefreshed, object: nil)
+
                         // Post notification for visible videos to reload
                         // Coordinator will intelligently decide whether to preserve or reset state
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
@@ -495,6 +510,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                             // Refresh mute state before reloading videos to ensure proper audio state
                             MuteState.shared.refreshFromPreferences()
 
+                            // Notify all videos to refresh their mute state
+                            NotificationCenter.default.post(name: .muteStateRefreshed, object: nil)
+
                             // Post notification for visible videos to reload with new port
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
@@ -510,6 +528,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
                             // Refresh mute state before reloading videos to ensure proper audio state
                             MuteState.shared.refreshFromPreferences()
+
+                            // Notify all videos to refresh their mute state
+                            NotificationCenter.default.post(name: .muteStateRefreshed, object: nil)
 
                             print("✅ [AppDelegate] Short background recovery complete - players preserved")
 
