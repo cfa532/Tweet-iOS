@@ -34,6 +34,7 @@ struct TweetListView<RowView: View>: View {
     let leadingPadding: CGFloat  // Leading padding for cells
     let trailingPadding: CGFloat  // Trailing padding for cells
     let pinnedTweets: [Tweet]  // Pinned tweets for video coordination
+    let isReadyToLoad: Bool  // Prevents loading until profile data is ready
     private let pageSize: UInt = 10  // Manual load-more only
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -208,6 +209,7 @@ struct TweetListView<RowView: View>: View {
         pinnedTweets: [Tweet] = [],  // Pinned tweets for video coordination
         header: (() -> AnyView)? = nil,
         onRefreshExtra: (() async -> Void)? = nil,  // Extra refresh callback
+        isReadyToLoad: Bool = true,  // Default true for views that don't need coordination
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
@@ -220,6 +222,7 @@ struct TweetListView<RowView: View>: View {
         self.pinnedTweets = pinnedTweets
         self.header = header
         self.onRefreshExtra = onRefreshExtra
+        self.isReadyToLoad = isReadyToLoad
         // Default: listen for newTweetCreated and insert at top
         self.notifications = notifications ?? [
             TweetListNotification(
@@ -318,9 +321,9 @@ struct TweetListView<RowView: View>: View {
                     }
             }
             }  // Close ZStack
-            .task {
-                // Only load if tweets are empty and we haven't completed initial load
-                if tweets.isEmpty && !initialLoadComplete {
+            .task(id: isReadyToLoad) {
+                // Only load if ready and tweets are empty and we haven't completed initial load
+                if isReadyToLoad && tweets.isEmpty && !initialLoadComplete {
                     await performInitialLoad()
                 } else if !tweets.isEmpty {
                     // If we already have tweets, mark as loaded

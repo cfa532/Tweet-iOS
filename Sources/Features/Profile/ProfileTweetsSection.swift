@@ -128,6 +128,7 @@ struct ProfileTweetsSection<Header: View>: View {
     let onAvatarTapInProfile: ((User) -> Void)?
     let onPinnedTweetsRefresh: () async -> Void
     let onScroll: (CGFloat, CGFloat) -> Void  // (offset, delta)
+    let isProfileDataLoaded: Bool // prevents concurrent loading with profile data
     @StateObject private var viewModel: ProfileTweetsViewModel
     let header: () -> Header
     
@@ -141,6 +142,7 @@ struct ProfileTweetsSection<Header: View>: View {
         onAvatarTapInProfile: ((User) -> Void)? = nil,
         onPinnedTweetsRefresh: @escaping () async -> Void,
         onScroll: @escaping (CGFloat, CGFloat) -> Void,  // (offset, delta)
+        isProfileDataLoaded: Bool,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.pinnedTweets = pinnedTweets
@@ -152,6 +154,7 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onAvatarTapInProfile = onAvatarTapInProfile
         self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
         self.onScroll = onScroll
+        self.isProfileDataLoaded = isProfileDataLoaded
         self.header = header
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
             hproseInstance: hproseInstance,
@@ -171,7 +174,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     // tweets from multiple authors (e.g., from main feed)
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid, isProfileView: true)
-                    
+
                     return cachedTweets
                 } else {
                     return try await viewModel.fetchTweets(page: page, pageSize: size)
@@ -223,6 +226,7 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             },
             onRefreshExtra: onPinnedTweetsRefresh,
+            isReadyToLoad: isProfileDataLoaded,
             rowView: { tweet in
                 TweetItemView(
                     tweet: tweet,

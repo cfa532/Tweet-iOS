@@ -36,6 +36,8 @@ struct ProfileView: View {
     @State private var isUploadingAvatar = false
     /// Indicates if profile data is currently being submitted
     @State private var isSubmittingProfile = false
+    /// Indicates if profile data has been loaded (prevents concurrent loading with tweets)
+    @State private var isProfileDataLoaded = false
     /// Toast message states
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -231,29 +233,30 @@ struct ProfileView: View {
     
     private var mainContentView: some View {
         ZStack {
-            VStack(spacing: 0) {
-                ProfileTweetsSection(
-                    pinnedTweets: pinnedTweets,
-                    pinnedTweetIds: pinnedTweetIds,
-                    user: user,
-                    hproseInstance: hproseInstance,
-                    onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
-                    onTweetTap: { tweet in
-                        // This should never be called since we'll use NavigationLink directly
-                        print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
-                    },
-                    onAvatarTapInProfile: { tappedUser in
-                        // Check if the tapped avatar is the same as the profile user
-                        if tappedUser.mid == user.mid {
-                            // Same user - scroll to top
-                            scrollToTop()
-                        }
-                        // Different user navigation is handled by NavigationLink in TweetItemView
-                    },
-                    onPinnedTweetsRefresh: refreshPinnedTweets,
-                    onScroll: { offset, delta in
-                        handleScroll(offset: offset, delta: delta)
-                    },
+                VStack(spacing: 0) {
+                    ProfileTweetsSection(
+                        pinnedTweets: pinnedTweets,
+                        pinnedTweetIds: pinnedTweetIds,
+                        user: user,
+                        hproseInstance: hproseInstance,
+                        onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
+                        onTweetTap: { tweet in
+                            // This should never be called since we'll use NavigationLink directly
+                            print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
+                        },
+                        onAvatarTapInProfile: { tappedUser in
+                            // Check if the tapped avatar is the same as the profile user
+                            if tappedUser.mid == user.mid {
+                                // Same user - scroll to top
+                                scrollToTop()
+                            }
+                            // Different user navigation is handled by NavigationLink in TweetItemView
+                        },
+                        onPinnedTweetsRefresh: refreshPinnedTweets,
+                        onScroll: { offset, delta in
+                            handleScroll(offset: offset, delta: delta)
+                        },
+                        isProfileDataLoaded: isProfileDataLoaded,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
@@ -648,6 +651,7 @@ struct ProfileView: View {
             Task { @MainActor in
                 isLoading = false
                 didLoad = true
+                isProfileDataLoaded = true
             }
         }
         
