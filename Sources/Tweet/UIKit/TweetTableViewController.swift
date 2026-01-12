@@ -83,6 +83,11 @@ class TweetTableViewController: UITableViewController {
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
+        
+        // Set up scroll callback for video coordinator
+        videoCoordinator.scrollToTweetCallback = { [weak self] tweetId in
+            return self?.scrollToTweet(tweetId) ?? false
+        }
     }
     
     deinit {
@@ -110,6 +115,30 @@ class TweetTableViewController: UITableViewController {
         // Scroll to the top of the table view with animation
         let topInset = tableView.adjustedContentInset.top
         tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: true)
+    }
+    
+    /// Scroll to a specific tweet by ID
+    /// Returns true if successful, false if tweet not found
+    func scrollToTweet(_ tweetId: String) -> Bool {
+        // Find the tweet in our data sources
+        let allTweets = pinnedTweets + tweets
+        
+        guard let tweetIndex = allTweets.firstIndex(where: { $0.mid == tweetId }) else {
+            print("⚠️ [TweetTableViewController] Cannot scroll to tweet \(tweetId) - not found in data")
+            return false
+        }
+        
+        let indexPath = IndexPath(row: tweetIndex, section: 0)
+        
+        // Check if this row exists in the table
+        guard tweetIndex < tableView.numberOfRows(inSection: 0) else {
+            print("⚠️ [TweetTableViewController] Cannot scroll to tweet \(tweetId) - row \(tweetIndex) out of bounds")
+            return false
+        }
+        
+        print("📜 [TweetTableViewController] Scrolling to tweet \(tweetId) at row \(tweetIndex)")
+        tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
+        return true
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -770,27 +799,33 @@ class TweetTableViewController: UITableViewController {
     private func updateVisibleTweetsForVideoPlayback() {
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
 
-        // OPTIMIZATION: Use simpler visibility calculation to reduce CPU usage
-        // Instead of complex intersection calculations, use index-based approximation
-        let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
-
-        // Convert visible index paths to tweet IDs more efficiently
-        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
-            let totalRows = pinnedTweets.count + tweets.count
-            guard indexPath.row < totalRows else { return nil }
-
-            // Determine which tweet this row represents
-            if indexPath.row < pinnedTweets.count {
-                return pinnedTweets[indexPath.row].mid
-            } else {
-                let regularIndex = indexPath.row - pinnedTweets.count
-                guard regularIndex < tweets.count else { return nil }
-                return tweets[regularIndex].mid
+        // OPTIMIZATION: Filter to only truly visible tweets (at least 10% visible)
+        // This prevents barely-visible tweets from being considered "visible" by coordinator
+        let visibleRect = CGRect(
+            x: 0,
+            y: tableView.contentOffset.y,
+            width: tableView.bounds.width,
+            height: tableView.bounds.height
+        )
+        
+        var visibleTweetIds = Set<String>()
+        
+        // Check each visible cell and calculate visibility ratio
+        for cell in tableView.visibleCells {
+            guard let tweetCell = cell as? TweetTableViewCell,
+                  let tweetId = tweetCell.tweetId else { continue }
+            
+            let cellFrame = tableView.convert(cell.frame, to: tableView)
+            let intersection = cellFrame.intersection(visibleRect)
+            
+            // Only include if at least 10% visible (prevents "barely in view" cells)
+            let visibleRatio = intersection.height / cellFrame.height
+            if visibleRatio >= 0.10 {
+                visibleTweetIds.insert(tweetId)
             }
-        })
+        }
 
         // Update coordinator with visible tweets
-        // The coordinator can handle its own visibility filtering if needed
         videoCoordinator.updateVisibleTweets(visibleTweetIds)
     }
     

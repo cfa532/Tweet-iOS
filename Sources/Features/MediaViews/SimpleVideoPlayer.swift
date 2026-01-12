@@ -815,13 +815,24 @@ struct SimpleVideoPlayer: View {
     // Reactive autoPlay state
     // For fullscreen and detail modes, use static autoPlay parameter
     // CRITICAL: For MediaCell mode, NEVER auto-play - VideoPlaybackCoordinator controls all playback via notifications
+    // CRITICAL: For embeddedDetail, check if we're in a feed context (should be coordinated) or detail context (can auto-play)
     private var currentAutoPlay: Bool {
-        if mode == .mediaBrowser || mode == .tweetDetail || mode == .embeddedDetail {
+        if mode == .mediaBrowser || mode == .tweetDetail {
             return autoPlay
         }
         // MediaCell mode: coordinator controls playback via notifications
         if mode == .mediaCell {
             return false
+        }
+        // embeddedDetail mode: depends on parent context
+        // If parent is TweetDetailView (detail view active), allow auto-play
+        // If parent is TweetListView (feed), coordinator controls it
+        if mode == .embeddedDetail {
+            // Check if we're in a detail view context
+            // If detail view is active, this is a quoted tweet inside the detail view - can auto-play
+            // Otherwise, it's in the feed - coordinator controls it
+            let isInDetailView = NavigationStateManager.shared.isDetailViewActive || DetailVideoManager.shared.isDetailViewActive()
+            return isInDetailView ? autoPlay : false
         }
         // For other modes, use autoPlay parameter
         return autoPlay

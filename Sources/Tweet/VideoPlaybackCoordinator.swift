@@ -11,8 +11,8 @@
 //  - Repeat
 //
 //  TWO PLAYBACK SYSTEMS:
-//  1. COORDINATED (This coordinator): Regular tweets, retweets
-//  2. INDEPENDENT (MediaCell): Embedded/quoted tweets
+//  1. COORDINATED (This coordinator): Regular tweets, retweets, embedded videos in quoted tweets
+//  2. INDEPENDENT (MediaCell): Reserved for future use (e.g., picture-in-picture)
 //
 import Foundation
 import SwiftUI
@@ -49,7 +49,7 @@ struct VideoPlaybackInfo: Equatable {
     }
     
     var shouldCoordinate: Bool {
-        context == .regular || context == .retweet
+        context == .regular || context == .retweet || context == .embedded
     }
     
     static func == (lhs: VideoPlaybackInfo, rhs: VideoPlaybackInfo) -> Bool {
@@ -80,6 +80,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Table view for calculations
     private weak var tableView: UITableView?
+    
+    /// Scroll to tweet callback (set by TweetTableViewController)
+    var scrollToTweetCallback: ((String) -> Bool)?
     
     /// Debounce timer
     private var debounceTimer: Timer?
@@ -149,6 +152,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         self.allVideos = videos.filter { $0.shouldCoordinate }
         
         print("🎬 [VideoCoordinator] Built list: \(allVideos.count) coordinated videos")
+        for (index, video) in allVideos.enumerated() {
+            print("🎬 [VideoCoordinator]   [\(index)] \(video.videoMid) - context: \(video.context)")
+        }
         
         // Share with fullscreen manager
         FullScreenVideoManager.shared.updateVideoList(videos: allVideos, tweets: tweets)
@@ -161,15 +167,26 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         if hasOriginal && !hasContent {
             // Pure retweet - get original videos
+            print("🔍 [VideoCoordinator] Processing pure retweet: \(tweet.mid)")
             if let originalId = tweet.originalTweetId,
                let original = Tweet.getInstance(for: originalId) ?? TweetCacheManager.shared.fetchTweetSync(mid: originalId),
                let attachments = original.attachments {
+                print("🔍 [VideoCoordinator]   Found \(attachments.count) attachments in original tweet")
                 addVideos(attachments, tweetId: tweet.mid, context: .retweet, to: &videos, seen: &seen)
             }
         } else if hasOriginal && hasContent {
-            // Quoted tweet - ONLY main body videos (skip embedded)
+            // Quoted tweet - add BOTH main body AND embedded videos
+            print("🔍 [VideoCoordinator] Processing quoted tweet: \(tweet.mid)")
             if let attachments = tweet.attachments {
+                print("🔍 [VideoCoordinator]   Found \(attachments.count) main body attachments")
                 addVideos(attachments, tweetId: tweet.mid, context: .regular, to: &videos, seen: &seen)
+            }
+            // Also add embedded quoted video
+            if let originalId = tweet.originalTweetId,
+               let original = Tweet.getInstance(for: originalId) ?? TweetCacheManager.shared.fetchTweetSync(mid: originalId),
+               let attachments = original.attachments {
+                print("🔍 [VideoCoordinator]   Found \(attachments.count) embedded attachments in quoted original")
+                addVideos(attachments, tweetId: tweet.mid, context: .embedded, to: &videos, seen: &seen)
             }
         } else {
             // Regular tweet - all videos
@@ -193,6 +210,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                 if !seen.contains(info.identifier) {
                     videos.append(info)
                     seen.insert(info.identifier)
+                    print("🔍 [VideoCoordinator]     ✅ Added video: \(attachment.mid) (context: \(context))")
+                } else {
+                    print("🔍 [VideoCoordinator]     ⏭️ Skipped duplicate: \(attachment.mid) (context: \(context))")
                 }
             }
         }
@@ -222,7 +242,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     // MARK: - Private Logic
     
-    /// Check visibility and play topmost fully visible video
+    /// Check visibility and play topmost sufficiently visible video
     private func checkAndPlayTopmost() {
         guard !visibleVideos.isEmpty else {
             stopAllVideos()
@@ -230,6 +250,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         guard let topVideo = findTopmostFullyVisibleVideo() else {
+            // No video meets visibility threshold - stop playing
+            if currentlyPlayingVideoId != nil {
+                print("⏹️ [VideoCoordinator] No video meets visibility threshold - stopping")
+                stopAllVideos()
+            }
             return
         }
         
@@ -238,10 +263,52 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         
+        // CRITICAL: If we're currently playing ANY video and it's still sufficiently visible,
+        // don't switch videos. Let playNextVideo() handle sequencing.
+        if let currentId = currentlyPlayingVideoId {
+            // Check if current video still meets visibility threshold
+            if isVideoSufficientlyVisible(videoId: currentId) {
+                print("⏭️ [VideoCoordinator] Video \(currentId) still playing and sufficiently visible - not switching")
+                return
+            } else {
+                print("⏹️ [VideoCoordinator] Current video \(currentId) no longer sufficiently visible")
+            }
+        }
+        
         playVideo(topVideo)
     }
     
-    /// Find topmost FULLY visible video
+    /// Check if a specific video meets the visibility threshold (at least 60% visible)
+    private func isVideoSufficientlyVisible(videoId: String) -> Bool {
+        guard let tableView = tableView else { return false }
+        
+        // Find the video in our list
+        guard let video = visibleVideos.first(where: { $0.identifier == videoId }) else {
+            return false
+        }
+        
+        // Find the cell
+        guard let cell = findCell(for: video.tweetId) else {
+            return false
+        }
+        
+        let visibleRect = CGRect(
+            x: 0,
+            y: tableView.contentOffset.y,
+            width: tableView.bounds.width,
+            height: tableView.bounds.height
+        )
+        
+        let cellFrame = tableView.convert(cell.frame, to: tableView)
+        let intersection = cellFrame.intersection(visibleRect)
+        let visibleRatio = intersection.height / cellFrame.height
+        
+        // Must be at least 60% visible
+        return visibleRatio >= 0.60
+    }
+    
+    /// Find topmost sufficiently visible video
+    /// A video is considered "visible enough" if at least 60% of its cell is visible
     private func findTopmostFullyVisibleVideo() -> VideoPlaybackInfo? {
         guard let tableView = tableView else {
             return visibleVideos.first
@@ -254,40 +321,56 @@ class VideoPlaybackCoordinator: ObservableObject {
             height: tableView.bounds.height
         )
         
+        // CRITICAL: Use visibility threshold to prevent premature video switching
+        // Video must be at least 60% visible to be considered "ready to play"
+        let visibilityThreshold: CGFloat = 0.60
+        
         var topmostVideo: VideoPlaybackInfo?
         var topmostY: CGFloat = .infinity
+        var topmostRatio: CGFloat = 0
+        
+        var debugInfo: [(String, CGFloat, CGFloat)] = []
         
         for video in visibleVideos {
             guard let cell = findCell(for: video.tweetId) else { continue }
             let cellFrame = tableView.convert(cell.frame, to: tableView)
             
-            // Check if FULLY visible
-            let isFullyVisible = visibleRect.contains(cellFrame)
+            // Calculate visible ratio
+            let intersection = cellFrame.intersection(visibleRect)
+            let visibleRatio = intersection.height / cellFrame.height
             
-            if isFullyVisible && cellFrame.minY < topmostY {
+            debugInfo.append((video.videoMid.prefix(12) + "...", visibleRatio, cellFrame.minY))
+            
+            // Video must meet visibility threshold
+            guard visibleRatio >= visibilityThreshold else { continue }
+            
+            // Among videos meeting threshold, pick topmost
+            // If two videos have similar Y positions (within 50pt), prefer the more visible one
+            if cellFrame.minY < topmostY - 50 {
+                // This video is clearly higher on screen
                 topmostY = cellFrame.minY
+                topmostRatio = visibleRatio
+                topmostVideo = video
+            } else if abs(cellFrame.minY - topmostY) <= 50 && visibleRatio > topmostRatio {
+                // Similar position but more visible
+                topmostY = cellFrame.minY
+                topmostRatio = visibleRatio
                 topmostVideo = video
             }
         }
         
-        // No fully visible? Pick most visible
-        if topmostVideo == nil {
-            var bestVideo: VideoPlaybackInfo?
-            var bestRatio: CGFloat = 0
-            
-            for video in visibleVideos {
-                guard let cell = findCell(for: video.tweetId) else { continue }
-                let cellFrame = tableView.convert(cell.frame, to: tableView)
-                let intersection = cellFrame.intersection(visibleRect)
-                let ratio = intersection.height / cellFrame.height
-                
-                if ratio > bestRatio {
-                    bestRatio = ratio
-                    bestVideo = video
-                }
+        // Debug log (only when finding a new video or no video found)
+        if topmostVideo?.identifier != currentlyPlayingVideoId || topmostVideo == nil {
+            print("👁️ [VISIBILITY] Checking \(visibleVideos.count) videos:")
+            for (mid, ratio, y) in debugInfo.prefix(5) {
+                let status = ratio >= visibilityThreshold ? "✅" : "❌"
+                print("👁️   \(status) \(mid) - \(Int(ratio * 100))% visible, Y:\(Int(y))")
             }
-            
-            topmostVideo = bestVideo
+            if let top = topmostVideo {
+                print("👁️ [VISIBILITY] Selected: \(top.videoMid.prefix(12))... (\(Int(topmostRatio * 100))% visible)")
+            } else {
+                print("👁️ [VISIBILITY] No video meets \(Int(visibilityThreshold * 100))% threshold")
+            }
         }
         
         return topmostVideo
@@ -308,13 +391,18 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Play a video (stops all others)
     private func playVideo(_ video: VideoPlaybackInfo) {
-        // Stop all others
-        for other in visibleVideos where other != video {
-            NotificationCenter.default.post(
-                name: .shouldStopVideo,
-                object: nil,
-                userInfo: ["videoMid": other.videoMid]
-            )
+        // Stop all others first
+        let othersToStop = visibleVideos.filter { $0 != video }
+        if !othersToStop.isEmpty {
+            print("⏹️ [VideoCoordinator] Stopping \(othersToStop.count) other videos")
+            for other in othersToStop {
+                print("⏹️ [VideoCoordinator] Stop command sent to: \(other.videoMid)")
+                NotificationCenter.default.post(
+                    name: .shouldStopVideo,
+                    object: nil,
+                    userInfo: ["videoMid": other.videoMid]
+                )
+            }
         }
         
         // Play this one
@@ -331,32 +419,109 @@ class VideoPlaybackCoordinator: ObservableObject {
             ]
         )
         
-        print("▶️ [VideoCoordinator] Playing: \(video.videoMid)")
+        print("▶️ [VideoCoordinator] Playing: \(video.videoMid) (context: \(video.context))")
     }
     
     /// Play next video in list
     private func playNextVideo() {
-        guard let currentId = currentlyPlayingVideoId,
-              let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentId }) else {
+        guard let currentId = currentlyPlayingVideoId else {
+            print("⚠️ [VideoCoordinator] playNextVideo() called but no current video - checking topmost")
             checkAndPlayTopmost()
             return
         }
         
-        let nextIndex = currentIndex + 1
+        // CRITICAL: Use allVideos index, not visibleVideos
+        // visibleVideos can change between calls and cause sequencing issues
+        guard let currentIndexInAll = allVideos.firstIndex(where: { $0.identifier == currentId }) else {
+            print("⚠️ [VideoCoordinator] Current video not found in allVideos - checking topmost")
+            checkAndPlayTopmost()
+            return
+        }
         
-        guard nextIndex < visibleVideos.count else {
+        print("⏭️ [VideoCoordinator] playNextVideo() - current video at index \(currentIndexInAll)/\(allVideos.count)")
+        
+        let nextIndexInAll = currentIndexInAll + 1
+        
+        // Check if there's a next video in the list
+        guard nextIndexInAll < allVideos.count else {
+            print("🏁 [VideoCoordinator] Reached end of all videos - stopping")
             stopAllVideos()
             return
         }
         
-        playVideo(visibleVideos[nextIndex])
+        let nextVideo = allVideos[nextIndexInAll]
+        
+        // CRITICAL: Capture visible videos at this exact moment to avoid race conditions
+        let currentVisibleVideos = visibleVideos
+        
+        print("⏭️ [VideoCoordinator] Next video: \(nextVideo.videoMid) (index \(nextIndexInAll))")
+        print("⏭️ [VideoCoordinator] Currently visible: \(currentVisibleVideos.count) videos")
+        
+        // First, check if next video is already visible
+        if currentVisibleVideos.contains(where: { $0.identifier == nextVideo.identifier }) {
+            print("⏭️ [VideoCoordinator] Playing next video - already visible")
+            playVideo(nextVideo)
+            return
+        }
+        
+        // Next video not visible - try to scroll to it
+        print("📜 [VideoCoordinator] Next video not visible, attempting to scroll")
+        print("📜 [VideoCoordinator] Next video: \(nextVideo.videoMid) in tweet: \(nextVideo.tweetId)")
+        
+        // Try to scroll to the tweet containing the next video
+        if scrollToTweet(nextVideo.tweetId) {
+            // Successfully scrolled, wait a bit for the scroll to complete and cells to update
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self = self else { return }
+                
+                // Check if the video is now visible
+                if self.visibleVideos.contains(where: { $0.identifier == nextVideo.identifier }) {
+                    print("✅ [VideoCoordinator] Next video is now visible after scroll, playing it")
+                    self.playVideo(nextVideo)
+                } else {
+                    print("⚠️ [VideoCoordinator] Next video still not visible after scroll - stopping")
+                    self.stopAllVideos()
+                }
+            }
+        } else {
+            print("⚠️ [VideoCoordinator] Failed to scroll to next video's tweet - stopping")
+            stopAllVideos()
+        }
+    }
+    
+    /// Scroll to a specific tweet by ID
+    /// Returns true if scroll was attempted, false if tweet not found
+    private func scrollToTweet(_ tweetId: String) -> Bool {
+        guard let tableView = tableView else {
+            print("⚠️ [VideoCoordinator] Cannot scroll - no tableView reference")
+            return false
+        }
+        
+        // Use the callback if available
+        if let callback = scrollToTweetCallback {
+            return callback(tweetId)
+        }
+        
+        // Fallback: Check if tweet is already visible
+        for cell in tableView.visibleCells {
+            if let tweetCell = cell as? TweetTableViewCell,
+               tweetCell.tweetId == tweetId,
+               let indexPath = tableView.indexPath(for: cell) {
+                print("📜 [VideoCoordinator] Tweet already visible, scrolling to center it")
+                tableView.scrollToRow(at: indexPath, at: .middle, animated: true)
+                return true
+            }
+        }
+        
+        print("⚠️ [VideoCoordinator] Tweet not in visible cells and no scroll callback available")
+        return false
     }
     
     /// Handle video finished
     @objc private func handleVideoFinished(_ notification: Notification) {
         guard let videoMid = notification.userInfo?["videoMid"] as? String,
               let mode = notification.userInfo?["mode"] as? String,
-              mode == "mediaCell" else {
+              mode == "mediaCell" || mode == "embeddedDetail" else {
             return
         }
         

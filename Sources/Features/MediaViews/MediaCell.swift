@@ -239,24 +239,16 @@ struct MediaCell: View, Equatable {
             }
             
             // Update autoplay state when visibility changes for video attachments
-            // For embedded videos, delay autoplay to prevent premature playback
-            if isVideoAttachment && newValue && isEmbedded {
-                // Delay autoplay for embedded videos to ensure they're actually visible
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
-                    if self.isVisible && self.shouldLoadVideo {
-                        self.shouldAutoPlay = true
-                    }
-                }
-            }
+            // All videos (regular and embedded) are now controlled by VideoPlaybackCoordinator
+            // The coordinator will send .shouldPlayVideo notifications when appropriate
+            // NO AUTO-PLAY - wait for coordinator notification
         }
         
         .onChange(of: shouldLoadVideo) { _, newValue in
-            // Update autoplay state when shouldLoadVideo changes for embedded videos only
-            // Regular videos wait for coordinator notifications
-            if isVideoAttachment && isVisible && newValue && isEmbedded {
-                shouldAutoPlay = true
-            }
+            // Update autoplay state when shouldLoadVideo changes
+            // All videos (regular and embedded) are now controlled by VideoPlaybackCoordinator
+            // The coordinator will send .shouldPlayVideo notifications when appropriate
+            // NO AUTO-PLAY - wait for coordinator notification
         }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
