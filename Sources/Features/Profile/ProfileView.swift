@@ -27,7 +27,6 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
-    @State private var isLoadingProfile = false // Prevent multiple simultaneous loads
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -100,14 +99,10 @@ struct ProfileView: View {
             }
             .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
             .task(id: user.mid) {
-                // Only fetch if this is the first load for this user and not already loading
-                if !didLoad && !isLoadingProfile {
-                    isLoadingProfile = true
-                    print("🔄 [ProfileView] Starting profile data load for user: \(user.mid)")
-                    await refreshProfileData()
+                // Only fetch if this is the first load for this user
+                if !didLoad {
+                await refreshProfileData()
                     didLoad = true
-                    isLoadingProfile = false
-                    print("✅ [ProfileView] Profile data load completed for user: \(user.mid)")
                 }
             }
             .onChange(of: user.mid) { _, _ in
@@ -645,12 +640,6 @@ struct ProfileView: View {
     }
     
     private func refreshProfileData() async {
-        // Prevent multiple simultaneous calls
-        guard !isLoading else {
-            print("⚠️ [ProfileView] Profile data refresh already in progress, skipping")
-            return
-        }
-
         await MainActor.run {
             isLoading = true
         }
