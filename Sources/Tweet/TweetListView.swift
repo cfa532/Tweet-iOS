@@ -321,14 +321,22 @@ struct TweetListView<RowView: View>: View {
                     }
             }
             }  // Close ZStack
-            .task(id: isReadyToLoad) {
-                // Only load if ready and tweets are empty and we haven't completed initial load
-                if isReadyToLoad && tweets.isEmpty && !initialLoadComplete {
+            .task {
+                // Always try to load cached data first for instant UX
+                if tweets.isEmpty && !initialLoadComplete {
                     await performInitialLoad()
                 } else if !tweets.isEmpty {
                     // If we already have tweets, mark as loaded
                     initialLoadComplete = true
                     isLoading = false
+                }
+            }
+            .task(id: isReadyToLoad) {
+                // When profile data becomes ready, ensure server loading can proceed
+                // This allows cached data to load immediately but server requests wait for profile data
+                if isReadyToLoad && !tweets.isEmpty && !initialLoadComplete {
+                    // Only trigger server loading if we have cached tweets and haven't completed loading yet
+                    await performServerLoading()
                 }
             }
         }  // Close GeometryReader
@@ -610,20 +618,28 @@ struct TweetListView<RowView: View>: View {
                 initialLoadComplete = true
             }
         }
-        
+
+        // Server loading is handled separately by performServerLoading() when profile data is ready
+    }
+
+    /// Perform server loading after profile data is ready
+    private func performServerLoading() async {
+        let page: UInt = 0
+        let pageSize = self.pageSize
+
         // CRITICAL: Let UI render cached tweets BEFORE fetching from server
         // If we await server fetch in same function, SwiftUI batches updates and only renders once
         // By launching server fetch in separate Task, cached tweets render immediately
         Task {
             // Step 2: Load from server to get the most up-to-date data (in background)
             await loadFromServer(page: page, pageSize: pageSize) { _ in }
-            
+
             // Step 3: Auto-load additional pages if there are more tweets on server
             // This ensures all new tweets are loaded when app opens, not just first page
             await autoLoadRemainingNewTweets()
         }
     }
-    
+
     /// Automatically load remaining new tweets after initial load
     /// Continues loading pages until no more tweets or reasonable limit reached
     private func autoLoadRemainingNewTweets() async {

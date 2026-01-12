@@ -1819,7 +1819,7 @@ class SharedAssetCache: ObservableObject {
             
             // Update all cached players with the new mute state
             Task { @MainActor in
-                for (mediaID, player) in self.playerCache {
+                for (_, player) in self.playerCache {
                     player.isMuted = isMuted
                 }
                 print("🔇 [MUTE STATE UPDATE] Updated \(self.playerCache.count) cached players - isMuted: \(isMuted)")
