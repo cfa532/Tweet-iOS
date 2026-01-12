@@ -73,8 +73,9 @@ struct MediaCell: View, Equatable {
             let isVideo = attachment.type == .video || attachment.type == .hls_video
             if isVideo {
                 if isEmbedded {
-                    // Embedded/quoted tweet preview: simple autoplay when visible
-                    self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible)
+                    // Embedded/quoted tweet preview: delay autoplay to prevent premature playback
+                    // Videos in retweets/quoted tweets should not start playing until user can actually see them
+                    self._shouldAutoPlay = State(initialValue: false)
                 } else {
                     // Regular videos: coordinator sends notifications to control playback
                     // Initial state is false, coordinator will send play command when appropriate
@@ -238,9 +239,15 @@ struct MediaCell: View, Equatable {
             }
             
             // Update autoplay state when visibility changes for video attachments
-            // Only for embedded videos - regular videos wait for coordinator
+            // For embedded videos, delay autoplay to prevent premature playback
             if isVideoAttachment && newValue && isEmbedded {
-                shouldAutoPlay = shouldLoadVideo
+                // Delay autoplay for embedded videos to ensure they're actually visible
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
+                    if self.isVisible && self.shouldLoadVideo {
+                        self.shouldAutoPlay = true
+                    }
+                }
             }
         }
         
