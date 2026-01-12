@@ -67,6 +67,16 @@
 		466934952F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */; };
 		466934972F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */; };
 		466934992F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934982F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md */; };
+		4669349F2F14DE9E00D3AF1F /* VIDEO_COORDINATOR_FIXES.md in Resources */ = {isa = PBXBuildFile; fileRef = 4669349E2F14DE9E00D3AF1F /* VIDEO_COORDINATOR_FIXES.md */; };
+		466934A12F14DEF300D3AF1F /* VIDEO_COORDINATOR_ARCHITECTURE.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934A02F14DEF300D3AF1F /* VIDEO_COORDINATOR_ARCHITECTURE.md */; };
+		466934A32F14DF3200D3AF1F /* VIDEO_COORDINATOR_DEBUG_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934A22F14DF3200D3AF1F /* VIDEO_COORDINATOR_DEBUG_GUIDE.md */; };
+		466934A52F14DF6900D3AF1F /* VIDEO_COORDINATOR_FIX_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934A42F14DF6900D3AF1F /* VIDEO_COORDINATOR_FIX_SUMMARY.md */; };
+		466934A72F14DFA900D3AF1F /* VIDEO_COORDINATOR_DOCS_README.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934A62F14DFA900D3AF1F /* VIDEO_COORDINATOR_DOCS_README.md */; };
+		466934A92F14DFF400D3AF1F /* VIDEO_COORDINATOR_VISUAL_SUMMARY.txt in Resources */ = {isa = PBXBuildFile; fileRef = 466934A82F14DFF400D3AF1F /* VIDEO_COORDINATOR_VISUAL_SUMMARY.txt */; };
+		466934AB2F14E03200D3AF1F /* VIDEO_COORDINATOR_MIGRATION_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934AA2F14E03200D3AF1F /* VIDEO_COORDINATOR_MIGRATION_GUIDE.md */; };
+		466934AD2F150ABA00D3AF1F /* VideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 466934AC2F150ABA00D3AF1F /* VideoPlaybackCoordinator.swift */; };
+		466934AF2F150AE400D3AF1F /* VIDEO_COORDINATOR_SIMPLE_APPROACH.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934AE2F150AE400D3AF1F /* VIDEO_COORDINATOR_SIMPLE_APPROACH.md */; };
+		466934B12F150B1900D3AF1F /* VIDEO_COORDINATOR_SIMPLE_DIAGRAM.txt in Resources */ = {isa = PBXBuildFile; fileRef = 466934B02F150B1900D3AF1F /* VIDEO_COORDINATOR_SIMPLE_DIAGRAM.txt */; };
 		466E00942E7023460068D968 /* MemoryWarningManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 466E00932E7023460068D968 /* MemoryWarningManager.swift */; };
 		46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46704DE12DD8CEF7001D69B9 /* MediaType.swift */; };
 		4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */; };
@@ -152,7 +162,6 @@
 		9432536CBF9DB1A3ADCD2067 /* DocumentAttachmentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77454EFF645F6F03E20DC055 /* DocumentAttachmentsView.swift */; };
 		A0F8F09D30F34289B896499E /* UploadProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */; };
 		B3FB362ED05AE5169A33DE6D /* DocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */; };
-		C22045EF1B134C4698599733 /* VideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */; };
 		CA8FCEEC89259B8FD761147C /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */; };
 		E3D452B1D03C4C09827F92B7 /* UploadProgressManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */; };
 /* End PBXBuildFile section */
@@ -221,6 +230,16 @@
 		466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MUTE_AND_SCROLL_FIX.md; sourceTree = "<group>"; };
 		466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SCROLL_FREEZE_FIX.md; sourceTree = "<group>"; };
 		466934982F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PERFORMANCE_OPTIMIZATION_SUMMARY.md; sourceTree = "<group>"; };
+		4669349E2F14DE9E00D3AF1F /* VIDEO_COORDINATOR_FIXES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_COORDINATOR_FIXES.md; sourceTree = "<group>"; };
+		466934A02F14DEF300D3AF1F /* VIDEO_COORDINATOR_ARCHITECTURE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_COORDINATOR_ARCHITECTURE.md; sourceTree = "<group>"; };
+		466934A22F14DF3200D3AF1F /* VIDEO_COORDINATOR_DEBUG_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_COORDINATOR_DEBUG_GUIDE.md; sourceTree = "<group>"; };
+		466934A42F14DF6900D3AF1F /* VIDEO_COORDINATOR_FIX_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_COORDINATOR_FIX_SUMMARY.md; sourceTree = "<group>"; };
+		466934A62F14DFA900D3AF1F /* VIDEO_COORDINATOR_DOCS_README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_COORDINATOR_DOCS_README.md; sourceTree = "<group>"; };
+		466934A82F14DFF400D3AF1F /* VIDEO_COORDINATOR_VISUAL_SUMMARY.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = VIDEO_COORDINATOR_VISUAL_SUMMARY.txt; sourceTree = "<group>"; };
+		466934AA2F14E03200D3AF1F /* VIDEO_COORDINATOR_MIGRATION_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_COORDINATOR_MIGRATION_GUIDE.md; sourceTree = "<group>"; };
+		466934AC2F150ABA00D3AF1F /* VideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
+		466934AE2F150AE400D3AF1F /* VIDEO_COORDINATOR_SIMPLE_APPROACH.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_COORDINATOR_SIMPLE_APPROACH.md; sourceTree = "<group>"; };
+		466934B02F150B1900D3AF1F /* VIDEO_COORDINATOR_SIMPLE_DIAGRAM.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = VIDEO_COORDINATOR_SIMPLE_DIAGRAM.txt; sourceTree = "<group>"; };
 		466E00932E7023460068D968 /* MemoryWarningManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryWarningManager.swift; sourceTree = "<group>"; };
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
 		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
@@ -307,7 +326,6 @@
 		8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadManagerDebugView.swift; sourceTree = "<group>"; };
 		98729E031BD14CADF7E78810 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
 		9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PendingUploadDialog.swift; sourceTree = "<group>"; };
-		A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
 		AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UploadProgressManager.swift; sourceTree = "<group>"; };
 		DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
 		E2C260FE784A43EF9772A398 /* TweetTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetTableView.swift; sourceTree = "<group>"; };
@@ -396,7 +414,6 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
-				A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */,
 				46A73E3B2F04C76D001310E5 /* NodePool.swift */,
 				AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */,
 				466E00932E7023460068D968 /* MemoryWarningManager.swift */,
@@ -633,6 +650,16 @@
 				46E5B33E2DDAB74400AEF31F /* TweetActionButtonsView.swift */,
 				46E5B3522DDD6A7A00AEF31F /* TweetDetailView.swift */,
 				466934702F134B2800D3AF1F /* RESOURCE_CANCELLATION_IMPROVEMENTS.md */,
+				4669349E2F14DE9E00D3AF1F /* VIDEO_COORDINATOR_FIXES.md */,
+				466934A02F14DEF300D3AF1F /* VIDEO_COORDINATOR_ARCHITECTURE.md */,
+				466934A22F14DF3200D3AF1F /* VIDEO_COORDINATOR_DEBUG_GUIDE.md */,
+				466934A42F14DF6900D3AF1F /* VIDEO_COORDINATOR_FIX_SUMMARY.md */,
+				466934A62F14DFA900D3AF1F /* VIDEO_COORDINATOR_DOCS_README.md */,
+				466934A82F14DFF400D3AF1F /* VIDEO_COORDINATOR_VISUAL_SUMMARY.txt */,
+				466934AA2F14E03200D3AF1F /* VIDEO_COORDINATOR_MIGRATION_GUIDE.md */,
+				466934AC2F150ABA00D3AF1F /* VideoPlaybackCoordinator.swift */,
+				466934AE2F150AE400D3AF1F /* VIDEO_COORDINATOR_SIMPLE_APPROACH.md */,
+				466934B02F150B1900D3AF1F /* VIDEO_COORDINATOR_SIMPLE_DIAGRAM.txt */,
 			);
 			path = Tweet;
 			sourceTree = "<group>";
@@ -750,18 +777,27 @@
 			files = (
 				4669348D2F13F78900D3AF1F /* VIDEO_NAVIGATION_CLEANUP_FIX.md in Resources */,
 				466934812F139E1200D3AF1F /* MEMORY_LEAK_QUICK_REFERENCE.md in Resources */,
+				466934A72F14DFA900D3AF1F /* VIDEO_COORDINATOR_DOCS_README.md in Resources */,
+				466934AB2F14E03200D3AF1F /* VIDEO_COORDINATOR_MIGRATION_GUIDE.md in Resources */,
 				466934872F13A23D00D3AF1F /* MEMORY_OPTIMIZATION_PHASE2.md in Resources */,
 				460680F62E1660C700D9D15A /* Localizable.strings in Resources */,
+				466934AF2F150AE400D3AF1F /* VIDEO_COORDINATOR_SIMPLE_APPROACH.md in Resources */,
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
 				46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */,
+				466934A12F14DEF300D3AF1F /* VIDEO_COORDINATOR_ARCHITECTURE.md in Resources */,
 				466934952F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md in Resources */,
+				466934A32F14DF3200D3AF1F /* VIDEO_COORDINATOR_DEBUG_GUIDE.md in Resources */,
 				46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				4669348B2F13DE6900D3AF1F /* IMAGE_CACHE_MEMORY_MANAGEMENT.md in Resources */,
 				466934832F139E7500D3AF1F /* CHANGELOG_MEMORY_LEAK_FIX.md in Resources */,
 				466934712F134B2800D3AF1F /* RESOURCE_CANCELLATION_IMPROVEMENTS.md in Resources */,
 				466934892F13DC3100D3AF1F /* MEMORY_MANAGEMENT_FINAL.md in Resources */,
+				466934B12F150B1900D3AF1F /* VIDEO_COORDINATOR_SIMPLE_DIAGRAM.txt in Resources */,
 				46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */,
+				4669349F2F14DE9E00D3AF1F /* VIDEO_COORDINATOR_FIXES.md in Resources */,
 				4669348F2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md in Resources */,
+				466934A92F14DFF400D3AF1F /* VIDEO_COORDINATOR_VISUAL_SUMMARY.txt in Resources */,
+				466934A52F14DF6900D3AF1F /* VIDEO_COORDINATOR_FIX_SUMMARY.md in Resources */,
 				466934992F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md in Resources */,
 				4669347F2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md in Resources */,
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
@@ -844,7 +880,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C22045EF1B134C4698599733 /* VideoPlaybackCoordinator.swift in Sources */,
 				52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */,
 				8BFE5A55ECEA49F3A6FC6D3F /* TweetTableViewController.swift in Sources */,
 				1A510F6D811F4CE89FC9FE05 /* TweetTableView.swift in Sources */,
@@ -934,6 +969,7 @@
 				460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */,
 				46E5B3632DE1703200AEF31F /* Registration.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */,
+				466934AD2F150ABA00D3AF1F /* VideoPlaybackCoordinator.swift in Sources */,
 				464EA3602EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift in Sources */,
 				46E5B3572DDF74B500AEF31F /* CommentComposeView.swift in Sources */,
 				46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */,

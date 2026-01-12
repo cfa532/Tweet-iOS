@@ -1,0 +1,322 @@
+# VideoPlaybackCoordinator - Simple Flow Diagram
+
+```
+╔════════════════════════════════════════════════════════════════╗
+║           SIMPLE VIDEO PLAYBACK COORDINATOR                     ║
+║                                                                 ║
+║  Play topmost fully visible video. Stop others. Advance next.  ║
+╚════════════════════════════════════════════════════════════════╝
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    USER SCROLLS FEED                             │
+└─────────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │ updateVisibleTweets()   │
+              │ (called by scroll)      │
+              └─────────────────────────┘
+                            │
+                            │ Start 0.3s debounce timer
+                            ▼
+              ┌─────────────────────────┐
+              │   Wait 0.3 seconds      │
+              │   (scroll settles)      │
+              └─────────────────────────┘
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │ checkAndPlayTopmost()   │
+              └─────────────────────────┘
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+           NO   │  Any videos visible?  │  YES
+                │                       │
+                └───────────┬───────────┘
+                            │
+                       YES  │
+                            ▼
+              ┌─────────────────────────┐
+              │ findTopmostFully        │
+              │ VisibleVideo()          │
+              └─────────────────────────┘
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+                │   Search viewport:    │
+                │                       │
+                │   1. Find cells with  │
+                │      100% visibility  │
+                │                       │
+                │   2. Pick topmost     │
+                │      (lowest Y)       │
+                │                       │
+                │   3. If none 100%,    │
+                │      pick highest %   │
+                └───────────┬───────────┘
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │  Found topmost video    │
+              └─────────────────────────┘
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+            NO  │ Already playing this? │ YES → Return
+                │                       │
+                └───────────┬───────────┘
+                            │
+                       NO   │
+                            ▼
+              ┌─────────────────────────┐
+              │    playVideo()          │
+              └─────────────────────────┘
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+                │  1. Stop all other    │
+                │     visible videos    │
+                │                       │
+                │  2. Send .shouldPlay  │
+                │     notification      │
+                │                       │
+                │  3. Set currentlyPlaying│
+                └───────────┬───────────┘
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │   VIDEO IS PLAYING      │
+              └─────────────────────────┘
+                            │
+                            │ User watches...
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │  Video reaches end      │
+              └─────────────────────────┘
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │ .videoDidFinishPlaying  │
+              │ notification sent       │
+              └─────────────────────────┘
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │ handleVideoFinished()   │
+              └─────────────────────────┘
+                            │
+                ┌───────────┴───────────┐
+                │                       │
+                │ 1. Verify it's our    │
+                │    current video      │
+                │                       │
+                │ 2. Find next in list  │
+                │                       │
+                │ 3. Play next video    │
+                │    (or stop if none)  │
+                └───────────┬───────────┘
+                            │
+                            ▼
+              ┌─────────────────────────┐
+              │  NEXT VIDEO PLAYING     │
+              │  (cycle continues)      │
+              └─────────────────────────┘
+
+
+╔════════════════════════════════════════════════════════════════╗
+║                      VIEWPORT EXAMPLE                           ║
+╚════════════════════════════════════════════════════════════════╝
+
+    Screen Top
+    ═══════════════════════════════════════
+    │                                      │
+    │  ┌────────────────────────────┐     │  ← Tweet 1
+    │  │ [Video 1] (30% visible)    │     │     30% visible - SKIP
+    ┌──┴────────────────────────────┴─────┤
+    │  Viewport Start                      │
+    │                                      │
+    │  ┌────────────────────────────┐     │  ← Tweet 2
+    │  │ [Video 2] (100% visible)   │     │     100% visible - PLAY! ✅
+    │  └────────────────────────────┘     │
+    │                                      │
+    │  ┌────────────────────────────┐     │  ← Tweet 3
+    │  │ [Video 3] (100% visible)   │     │     100% visible - Queue next
+    │  └────────────────────────────┘     │
+    │                                      │
+    │  ┌────────────────────────────┐     │  ← Tweet 4
+    │  │ Text tweet (no video)      │     │     No video - Skip
+    │  └────────────────────────────┘     │
+    │                                      │
+    └──┬────────────────────────────┬─────┘
+    │  Viewport End                        │
+    │                                      │
+    │  ┌────────────────────────────┐     │  ← Tweet 5
+    │  │ [Video 4] (60% visible)    │     │     60% visible - SKIP
+    ═══════════════════════════════════════
+    Screen Bottom
+
+
+╔════════════════════════════════════════════════════════════════╗
+║                    STATE TRANSITIONS                            ║
+╚════════════════════════════════════════════════════════════════╝
+
+    ┌─────────────────┐
+    │  No Video       │  currentlyPlayingVideoId = nil
+    │  Playing        │
+    └────────┬────────┘
+             │
+             │ User scrolls, videos become visible
+             │
+             ▼
+    ┌─────────────────┐
+    │  Video 2        │  currentlyPlayingVideoId = "tweet2_video2"
+    │  Playing        │
+    └────────┬────────┘
+             │
+             │ Video 2 finishes
+             │
+             ▼
+    ┌─────────────────┐
+    │  Video 3        │  currentlyPlayingVideoId = "tweet3_video3"
+    │  Playing        │
+    └────────┬────────┘
+             │
+             │ User scrolls, Video 3 off-screen
+             │
+             ▼
+    ┌─────────────────┐
+    │  Video 5        │  currentlyPlayingVideoId = "tweet5_video5"
+    │  Playing        │
+    └────────┬────────┘
+             │
+             │ No more visible videos
+             │
+             ▼
+    ┌─────────────────┐
+    │  No Video       │  currentlyPlayingVideoId = nil
+    │  Playing        │
+    └─────────────────┘
+
+
+╔════════════════════════════════════════════════════════════════╗
+║                  TWEET TYPE HANDLING                            ║
+╚════════════════════════════════════════════════════════════════╝
+
+    ┌─────────────────────────────────────┐
+    │  Regular Tweet                      │
+    │  "Check out this video!"            │
+    │  [Video A] ◄── COORDINATED ✅       │
+    └─────────────────────────────────────┘
+
+    ┌─────────────────────────────────────┐
+    │  Pure Retweet                       │
+    │  (forwarded content)                │
+    │  [Video B] ◄── COORDINATED ✅       │
+    └─────────────────────────────────────┘
+
+    ┌─────────────────────────────────────┐
+    │  Quoted Tweet                       │
+    │  "Great content:"                   │
+    │  [Video C] ◄── COORDINATED ✅       │
+    │                                     │
+    │  ┌───────────────────────────────┐ │
+    │  │ Embedded Quote               │ │
+    │  │ "Original"                   │ │
+    │  │ [Video D] ◄── INDEPENDENT 🚫 │ │
+    │  └───────────────────────────────┘ │
+    └─────────────────────────────────────┘
+
+
+╔════════════════════════════════════════════════════════════════╗
+║                    NOTIFICATION FLOW                            ║
+╚════════════════════════════════════════════════════════════════╝
+
+VideoPlaybackCoordinator
+    │
+    │ Finds topmost video
+    │
+    ▼
+┌───────────────────────────┐
+│ Stop other videos:        │
+│                           │
+│ .shouldStopVideo          │
+│   videoMid: "video_2"     │
+│                           │
+│ .shouldStopVideo          │
+│   videoMid: "video_3"     │
+└───────────────────────────┘
+    │
+    │ Then play selected video
+    ▼
+┌───────────────────────────┐
+│ .shouldPlayVideo          │
+│   videoMid: "video_1"     │
+│   tweetId: "tweet_1"      │
+│   videoIndex: 0           │
+│   isMuted: false          │
+└─────────┬─────────────────┘
+          │
+          │ Broadcast to all MediaCells
+          ▼
+┌───────────────────────────┐
+│ MediaCell                 │
+│ (for video_1)             │
+│                           │
+│ Receives notification     │
+│ → Starts playing          │
+└───────────────────────────┘
+
+┌───────────────────────────┐
+│ MediaCell                 │
+│ (for video_2)             │
+│                           │
+│ Receives stop notification│
+│ → Stops playing           │
+└───────────────────────────┘
+
+
+╔════════════════════════════════════════════════════════════════╗
+║                         SUMMARY                                 ║
+╚════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────┐
+│  OLD APPROACH (Complex)                                         │
+│                                                                 │
+│  1. Survey Phase (2s)                                          │
+│     ├─ Play ALL visible videos                                 │
+│     ├─ Wait 2 seconds                                          │
+│     └─ Choose "primary"                                        │
+│                                                                 │
+│  2. Primary Phase                                              │
+│     ├─ Pause non-primary videos                               │
+│     └─ Play primary to completion                             │
+│                                                                 │
+│  3. Sequential Phase                                           │
+│     └─ Advance to next video                                  │
+│                                                                 │
+│  State: 3 phases, 3 timers, complex logic                      │
+│  Code: ~900 lines                                              │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  NEW APPROACH (Simple)                                          │
+│                                                                 │
+│  1. Find topmost fully visible video                           │
+│  2. Play it (stop all others)                                  │
+│  3. When it finishes, play next                                │
+│                                                                 │
+│  State: 1 variable, 1 timer, linear logic                      │
+│  Code: ~350 lines                                              │
+└─────────────────────────────────────────────────────────────────┘
+
+BENEFITS:
+✅ Instant playback (no 2s delay)
+✅ Predictable behavior
+✅ 60% less code
+✅ Easy to maintain
+✅ Battery efficient (one video at a time)
+✅ Scroll friendly (0.3s debounce)
+```
