@@ -199,6 +199,44 @@ struct HomeView: View {
     }
 }
 
+// MARK: - Timeout Utility
+
+/// Execute an async operation with a timeout
+/// - Parameters:
+///   - seconds: Timeout duration in seconds
+///   - operation: The async operation to execute
+/// - Returns: The result of the operation
+/// - Throws: The error from the operation or TimeoutError if it times out
+private func withTimeout<T>(
+    seconds: TimeInterval,
+    operation: @escaping () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        // Add the operation task
+        group.addTask {
+            try await operation()
+        }
+
+        // Add the timeout task
+        group.addTask {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw TimeoutError()
+        }
+
+        // Wait for the first task to complete
+        let result = try await group.next()!
+        group.cancelAll() // Cancel the remaining task
+        return result
+    }
+}
+
+/// Error thrown when an operation times out
+private struct TimeoutError: Error {
+    var localizedDescription: String {
+        "Operation timed out"
+    }
+}
+
 // MARK: - Navigation Destination Views
 // These wrapper views handle navigation destinations at the root level to avoid conflicts
 // when multiple ProfileViews are nested in the navigation stack
@@ -216,16 +254,27 @@ struct UserListDestinationView: View {
                 if page == 0 {
                     let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
                     let targetUser = User.getInstance(mid: destination.userId)
-                    let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-                    // Update user properties on main thread
-                    await MainActor.run {
-                        if destination.listType == .FOLLOWER {
-                            targetUser.fansList = ids
-                        } else {
-                            targetUser.followingList = ids
+
+                    do {
+                        // Add timeout to prevent infinite loading
+                        let ids = try await withTimeout(seconds: 10) {
+                            try await hproseInstance.getListByType(user: targetUser, entry: entry)
                         }
+                        // Update user properties on main thread
+                        await MainActor.run {
+                            if destination.listType == .FOLLOWER {
+                                targetUser.fansList = ids
+                            } else {
+                                targetUser.followingList = ids
+                            }
+                        }
+                        return ids
+                    } catch {
+                        print("⚠️ [UserListDestinationView] Failed to fetch \(entry.rawValue) for user \(targetUser.mid): \(error)")
+                        // Return empty list to avoid infinite loading state
+                        // The UserListView will show an empty state instead of loading forever
+                        return []
                     }
-                    return ids
                 } else {
                     let targetUser = User.getInstance(mid: destination.userId)
                     return if destination.listType == .FOLLOWER {
@@ -299,8 +348,19 @@ struct TweetListDestinationView: View {
                     return cachedTweets
                 } else {
                     let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
-                    let fetchedTweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: tweetType, pageNumber: page, pageSize: size)
-                    return fetchedTweets
+
+                    do {
+                        // Add timeout to prevent infinite loading
+                        let fetchedTweets = try await withTimeout(seconds: 10) {
+                            try await hproseInstance.getUserTweetsByType(user: targetUser, type: tweetType, pageNumber: page, pageSize: size)
+                        }
+                        return fetchedTweets
+                    } catch {
+                        print("⚠️ [TweetListDestinationView] Failed to fetch \(tweetType.rawValue) for user \(targetUser.mid): \(error)")
+                        // Return empty array to avoid infinite loading state
+                        // The TweetListView will show an empty state instead of loading forever
+                        return []
+                    }
                 }
             },
             rowView: { tweet in
