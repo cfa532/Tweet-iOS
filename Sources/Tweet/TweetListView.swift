@@ -319,11 +319,14 @@ struct TweetListView<RowView: View>: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // CRITICAL: Stop all videos from previous screen
-            // Principle: Only keep videos on current view/screen active
-            VideoPlaybackCoordinator.shared.stopAllVideos()
+            // DON'T stop all videos here for MainFeed/TweetList!
+            // The coordinator already tracks visible videos and will restart them naturally.
+            // Calling stopAllVideos() would reset coordinator state and force player recreation.
+            //
+            // For views like ProfileView, stopAllVideos() makes sense because they're
+            // new contexts. But TweetListView is the "home base" that coordinator manages.
             
-            print("🧹 [TweetListView] View appeared - stopped all videos from previous screen")
+            print("🧹 [TweetListView] View appeared - letting coordinator handle video state")
             
             // Set up fullscreen video search function for auto-advance
             setupVideoSearchFunction()
@@ -341,13 +344,13 @@ struct TweetListView<RowView: View>: View {
         }
         .onDisappear {
             // CRITICAL: Stop all video playback when navigating away
-            // This prevents videos from playing in the background when switching between screens
             VideoPlaybackCoordinator.shared.stopAllVideos()
             
-            // CRITICAL: Clean up video resources to free memory
-            SharedAssetCache.shared.cleanupForNavigation()
+            // DON'T clean up players here - they may be needed when navigating back
+            // Memory management is handled by cache limits and periodic cleanup
+            // Only aggressive cleanup happens on profile view transitions
             
-            print("🧹 [TweetListView] View disappeared - stopped all videos and cleaned up resources")
+            print("🧹 [TweetListView] View disappeared - stopped all videos (players kept for potential return)")
             
             // Clean up foreground observer
             if let observer = foregroundObserver {

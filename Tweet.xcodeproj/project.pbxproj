@@ -62,6 +62,10 @@
 		4669348B2F13DE6900D3AF1F /* IMAGE_CACHE_MEMORY_MANAGEMENT.md in Resources */ = {isa = PBXBuildFile; fileRef = 4669348A2F13DE6900D3AF1F /* IMAGE_CACHE_MEMORY_MANAGEMENT.md */; };
 		4669348D2F13F78900D3AF1F /* VIDEO_NAVIGATION_CLEANUP_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 4669348C2F13F78900D3AF1F /* VIDEO_NAVIGATION_CLEANUP_FIX.md */; };
 		4669348F2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4669348E2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md */; };
+		466934912F14017700D3AF1F /* VIDEO_CLEANUP_STRATEGY_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934902F14017700D3AF1F /* VIDEO_CLEANUP_STRATEGY_FIX.md */; };
+		466934932F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934922F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md */; };
+		466934952F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */; };
+		466934972F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */; };
 		466E00942E7023460068D968 /* MemoryWarningManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 466E00932E7023460068D968 /* MemoryWarningManager.swift */; };
 		46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46704DE12DD8CEF7001D69B9 /* MediaType.swift */; };
 		4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */; };
@@ -211,6 +215,10 @@
 		4669348A2F13DE6900D3AF1F /* IMAGE_CACHE_MEMORY_MANAGEMENT.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = IMAGE_CACHE_MEMORY_MANAGEMENT.md; sourceTree = "<group>"; };
 		4669348C2F13F78900D3AF1F /* VIDEO_NAVIGATION_CLEANUP_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_NAVIGATION_CLEANUP_FIX.md; sourceTree = "<group>"; };
 		4669348E2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_CLEANUP_PRINCIPLE.md; sourceTree = "<group>"; };
+		466934902F14017700D3AF1F /* VIDEO_CLEANUP_STRATEGY_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_CLEANUP_STRATEGY_FIX.md; sourceTree = "<group>"; };
+		466934922F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_NAV_FINAL_FIX.md; sourceTree = "<group>"; };
+		466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MUTE_AND_SCROLL_FIX.md; sourceTree = "<group>"; };
+		466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SCROLL_FREEZE_FIX.md; sourceTree = "<group>"; };
 		466E00932E7023460068D968 /* MemoryWarningManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryWarningManager.swift; sourceTree = "<group>"; };
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
 		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
@@ -414,6 +422,10 @@
 				466934862F13A23D00D3AF1F /* MEMORY_OPTIMIZATION_PHASE2.md */,
 				4669348C2F13F78900D3AF1F /* VIDEO_NAVIGATION_CLEANUP_FIX.md */,
 				4669348E2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md */,
+				466934902F14017700D3AF1F /* VIDEO_CLEANUP_STRATEGY_FIX.md */,
+				466934922F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md */,
+				466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */,
+				466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -739,6 +751,7 @@
 				460680F62E1660C700D9D15A /* Localizable.strings in Resources */,
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
 				46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */,
+				466934952F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md in Resources */,
 				46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				4669348B2F13DE6900D3AF1F /* IMAGE_CACHE_MEMORY_MANAGEMENT.md in Resources */,
 				466934832F139E7500D3AF1F /* CHANGELOG_MEMORY_LEAK_FIX.md in Resources */,
@@ -748,7 +761,10 @@
 				4669348F2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md in Resources */,
 				4669347F2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md in Resources */,
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
+				466934972F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md in Resources */,
+				466934912F14017700D3AF1F /* VIDEO_CLEANUP_STRATEGY_FIX.md in Resources */,
 				466934852F13A07900D3AF1F /* MEMORY_LEAK_FIX_DELEGATE.md in Resources */,
+				466934932F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -184,11 +184,15 @@ struct ProfileView: View {
     }
     
     private func handleViewAppear() {
-        // CRITICAL: Stop all videos from previous screen (e.g., MainFeed, other profiles)
-        // Principle: Only keep videos on current view/screen active
-        VideoPlaybackCoordinator.shared.stopAllVideos()
+        // DON'T stop all videos here!
+        // The coordinator manages video lifecycle naturally.
+        // Calling stopAllVideos() here breaks coordinator state and prevents
+        // videos from playing when returning to MainFeed.
+        //
+        // The coordinator already tracks visible videos and will handle
+        // the transition automatically.
         
-        print("🧹 [ProfileView] View appeared - stopped all videos from previous screen")
+        print("🧹 [ProfileView] View appeared - letting coordinator handle video transition")
         
         // Ensure navigation is visible when view appears
         isNavigationVisible = true
@@ -201,15 +205,15 @@ struct ProfileView: View {
     }
     
     private func handleViewDisappear() {
-        // CRITICAL: Stop all video playback when navigating away from profile
-        // This prevents videos from playing in the background when switching profiles
+        // Stop all video playback when navigating away from profile
         VideoPlaybackCoordinator.shared.stopAllVideos()
         
-        // CRITICAL: Clean up video resources to free memory
-        // This aggressively removes all cached players/assets when leaving the profile
-        SharedAssetCache.shared.cleanupForNavigation()
+        // DON'T call cleanupForNavigation() here!
+        // Reason: We can't distinguish between "Profile's players" and "MainFeed's players"
+        // If we clean up ALL players, we break MainFeed when navigating back
+        // Let periodic cleanup (every 15s) and cache limits (30 players) handle memory
         
-        print("🧹 [ProfileView] View disappeared - stopped all videos and cleaned up resources")
+        print("🧹 [ProfileView] View disappeared - stopped videos (cleanup handled by periodic timer)")
         
         // Reset navigation visibility when view disappears
         withAnimation(.easeInOut(duration: 0.3)) {

@@ -41,6 +41,13 @@
 //  - Cancels ALL downloads and releases cache under pressure
 //  - See: handleMemoryWarning(), handleSystemMemoryWarning()
 //
+//  MUTE STATE SYNCHRONIZATION
+//  ==========================
+//  - All cached players are kept in sync with MuteState.shared
+//  - Mute state is applied when creating new players
+//  - Cached players are updated when mute state changes (via observer)
+//  - Players are synced when retrieved from cache (getCachedPlayer)
+//
 //  For complete documentation, see: MEMORY_LEAK_FIX_DELEGATE.md
 //
 
@@ -105,6 +112,9 @@ class SharedAssetCache: ObservableObject {
         
         // Initialize memory cap manager
         _ = MemoryCapManager.shared
+        
+        // CRITICAL: Observe mute state changes to update all cached players
+        setupMuteStateObserver()
     }
     
     // MARK: - Cache Storage
@@ -648,6 +658,10 @@ class SharedAssetCache: ObservableObject {
                 }
             }
             
+            // CRITICAL: Sync mute state before returning cached player
+            // This ensures the player respects the current global mute setting
+            player.isMuted = MuteState.shared.isMuted
+            
             cacheTimestamps[mediaID] = Date() // Update access time
             return player
         }
@@ -860,34 +874,36 @@ class SharedAssetCache: ObservableObject {
         }
         
         // NEW: Throttle concurrent player creation to prevent memory spikes
-        return try await withCheckedThrowingContinuation { continuation in
-            Task { @MainActor in
-                if self.activeCreations < self.maxConcurrentCreations {
-                    // Can create immediately
-                    self.activeCreations += 1
-                    print("🎬 [THROTTLE] Creating player immediately (\(self.activeCreations)/\(self.maxConcurrentCreations) active)")
-                    
-                    Task {
-                        do {
-                            let player = try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
-                            await MainActor.run {
-                                self.activeCreations -= 1
-                                self.processNextPendingCreation()
-                            }
-                            continuation.resume(returning: player)
-                        } catch {
-                            await MainActor.run {
-                                self.activeCreations -= 1
-                                self.processNextPendingCreation()
-                            }
-                            continuation.resume(throwing: error)
-                        }
+        // CRITICAL: Capture state synchronously to avoid MainActor scheduling delays
+        let canCreateNow = self.activeCreations < self.maxConcurrentCreations
+        
+        if canCreateNow {
+            self.activeCreations += 1
+            print("🎬 [THROTTLE] Creating player immediately (\(self.activeCreations)/\(self.maxConcurrentCreations) active)")
+            
+            // Create player off MainActor to avoid blocking scroll
+            return try await Task.detached {
+                do {
+                    let player = try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
+                    await MainActor.run {
+                        self.activeCreations -= 1
+                        self.processNextPendingCreation()
                     }
-                } else {
-                    // Queue for later
-                    print("⏳ [THROTTLE] Queuing player creation (active: \(self.activeCreations), pending: \(self.pendingCreations.count + 1))")
-                    self.pendingCreations.append((url, tweetId, mediaType, continuation))
+                    return player
+                } catch {
+                    await MainActor.run {
+                        self.activeCreations -= 1
+                        self.processNextPendingCreation()
+                    }
+                    throw error
                 }
+            }.value
+        } else {
+            // Queue for later and wait
+            print("⏳ [THROTTLE] Queuing player creation (active: \(self.activeCreations), pending: \(self.pendingCreations.count + 1))")
+            
+            return try await withCheckedThrowingContinuation { continuation in
+                self.pendingCreations.append((url, tweetId, mediaType, continuation))
             }
         }
     }
@@ -902,7 +918,8 @@ class SharedAssetCache: ObservableObject {
         
         print("▶️ [THROTTLE] Processing queued player (\(activeCreations)/\(maxConcurrentCreations) active, \(pendingCreations.count) pending)")
         
-        Task {
+        // Create player off MainActor to avoid blocking scroll
+        Task.detached {
             do {
                 let player = try await self.createPlayerNow(for: next.url, tweetId: next.tweetId, mediaType: next.mediaType)
                 await MainActor.run {
@@ -1072,8 +1089,9 @@ class SharedAssetCache: ObservableObject {
         let playerItem = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: playerItem)
         
-        // CRITICAL: Mute player at creation - will be unmuted by mode if needed
-        player.isMuted = true
+        // CRITICAL: Apply current mute state from MuteState.shared
+        // This ensures players respect the global mute setting when created
+        player.isMuted = await MainActor.run { MuteState.shared.isMuted }
         
         // Optimize buffering for progressive video playback
         player.automaticallyWaitsToMinimizeStalling = false
@@ -1267,8 +1285,9 @@ class SharedAssetCache: ObservableObject {
         // Create player with CachingPlayerItem
         let player = AVPlayer(playerItem: cachingPlayerItem)
         
-        // CRITICAL: Mute player at creation - will be unmuted by mode if needed
-        player.isMuted = true
+        // CRITICAL: Apply current mute state from MuteState.shared
+        // This ensures players respect the global mute setting when created
+        player.isMuted = await MainActor.run { MuteState.shared.isMuted }
 
         
         // Optimize buffering for HLS playback
@@ -1765,6 +1784,29 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Memory Warning Handling
     
+    private func setupMuteStateObserver() {
+        // Observe UserDefaults changes for speakerMuted key
+        // This is more reliable than observing MuteState.shared directly
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            
+            // Get the current mute state
+            let isMuted = MuteState.shared.isMuted
+            
+            // Update all cached players with the new mute state
+            Task { @MainActor in
+                for (mediaID, player) in self.playerCache {
+                    player.isMuted = isMuted
+                }
+                print("🔇 [MUTE STATE UPDATE] Updated \(self.playerCache.count) cached players - isMuted: \(isMuted)")
+            }
+        }
+    }
+    
     private func setupMemoryWarningNotifications() {
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
@@ -1915,7 +1957,7 @@ class SharedAssetCache: ObservableObject {
         // But we need to verify players are still healthy (no action needed, just validation)
     }
     
-    /// Clear video players for background recovery after long background periods
+    /// Clean up video players for background recovery after long background periods
     /// This is called when app returns from extended background (>5 minutes)
     func clearVideoPlayersForBackgroundRecovery() {
         // Clear all cached players - they may have invalid video layers
@@ -1942,10 +1984,17 @@ class SharedAssetCache: ObservableObject {
         // Keep resourceLoaderDelegates - they're needed for HLS playback
         // Keep cacheTimestamps - they track cache expiration
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)
+        
+        print("🧹 [BACKGROUND RECOVERY] Cleared all video players for background recovery")
     }
     
     /// Aggressively cleanup video players when navigating away from video-heavy screens
     /// This prevents memory accumulation when navigating between bookmarks/favorites/profile
+    /// 
+    /// NOTE: Use sparingly! Only call when:
+    /// 1. Navigating away from profiles (users rarely return immediately)
+    /// 2. Switching between major sections (bookmarks → favorites)
+    /// 3. NOT when navigating to/from MainFeed (users frequently return)
     @MainActor func cleanupForNavigation() {
         print("🧹 [NAVIGATION CLEANUP] Starting aggressive cleanup - playerCache: \(playerCache.count), assetCache: \(assetCache.count)")
         
