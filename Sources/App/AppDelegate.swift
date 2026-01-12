@@ -352,7 +352,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Refresh mute state from preferences when app becomes active
         // This ensures videos respect the current mute setting even if it was changed while app was in background
         MuteState.shared.refreshFromPreferences()
-        
+
+        // Force all videos to sync their mute state with global setting
+        NotificationCenter.default.post(name: Notification.Name("forceMuteStateSync"), object: nil)
+
         // Post notification to restore video state (handled by SimpleVideoPlayer)
         NotificationCenter.default.post(name: .appDidBecomeActive, object: nil)
     }

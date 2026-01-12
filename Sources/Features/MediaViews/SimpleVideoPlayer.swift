@@ -903,6 +903,7 @@ struct SimpleVideoPlayer: View {
         AnyViewModifier { content in
             content
                 .onReceive(MuteState.shared.$isMuted) { globalMuteState in handleGlobalMuteChange(globalMuteState: globalMuteState) }
+                .onReceive(NotificationCenter.default.publisher(for: Notification.Name("forceMuteStateSync"))) { _ in handleForceMuteStateSync() }
                 .onReceive(NotificationCenter.default.publisher(for: .overlayCoverageChanged)) { notification in
                     guard mode == .mediaCell else { return }
                     if let isCovered = notification.userInfo?["isCovered"] as? Bool {
@@ -1255,6 +1256,17 @@ struct SimpleVideoPlayer: View {
         }
         // For full screen modes, ignore global mute state and always keep unmuted
         else if mode == .mediaBrowser {
+            player?.isMuted = false
+        }
+    }
+
+    private func handleForceMuteStateSync() {
+        // Force sync mute state regardless of mode - ensures all videos match global setting
+        let currentMuteState = MuteState.shared.isMuted
+        if mode == .mediaCell || mode == .embeddedDetail {
+            player?.isMuted = currentMuteState
+            print("🔇 [FORCE SYNC] Video \(mid) mute state forced to: \(currentMuteState)")
+        } else if mode == .mediaBrowser {
             player?.isMuted = false
         }
     }
