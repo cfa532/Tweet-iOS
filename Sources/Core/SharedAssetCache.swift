@@ -127,6 +127,7 @@ class SharedAssetCache: ObservableObject {
     private var loadingTasks: [String: Task<AVAsset, Error>] = [:] // mediaID -> loading task
     private var preloadTasks: [String: Task<Void, Never>] = [:] // mediaID -> preload task
     private var tweetUrlMapping: [String: Set<String>] = [:] // tweetId -> Set of mediaIDs
+    private var resolvedHLSURLCache: [String: (url: URL, timestamp: Date)] = [:] // URL string -> resolved URL with timestamp
     
     // MARK: - Download Debouncing (prevents downloads during fast scrolling)
     /// Pending downloads waiting for debounce period to elapse
@@ -1415,6 +1416,7 @@ class SharedAssetCache: ObservableObject {
     /// Resolve HLS URL with specific fallback strategy
     /// Sequential approach: tries master.m3u8 first, then playlist.m3u8 only if master fails
     /// Does NOT try them simultaneously
+    /// OPTIMIZATION: Caches resolved URLs to avoid repeated network checks (1-hour expiration)
     private func resolveHLSURL(_ url: URL) async -> URL {
         let urlString = url.absoluteString
         
@@ -1428,6 +1430,13 @@ class SharedAssetCache: ObservableObject {
             return url
         }
         
+        // Check cache first (1-hour expiration)
+        if let cached = resolvedHLSURLCache[urlString],
+           Date().timeIntervalSince(cached.timestamp) < 3600 { // 1 hour
+            print("✅ [HLS RESOLVE] Using cached resolution for \(urlString)")
+            return cached.url
+        }
+        
         // HLS fallback strategy: master.m3u8 -> playlist.m3u8 (sequential, not simultaneous)
         let masterURL = url.appendingPathComponent("master.m3u8")
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
@@ -1435,15 +1444,22 @@ class SharedAssetCache: ObservableObject {
         
         // Step 1: Try master.m3u8 first (wait for completion before proceeding)
         if await urlExists(masterURL, timeout: 8.0) {
+            // Cache the successful resolution
+            resolvedHLSURLCache[urlString] = (url: masterURL, timestamp: Date())
+            print("✅ [HLS RESOLVE] Cached master.m3u8 resolution for \(urlString)")
             return masterURL
         }
         
         // Step 2: Only if master.m3u8 failed, try playlist.m3u8 (sequential, not simultaneous)
         if await urlExists(playlistURL, timeout: 8.0) {
+            // Cache the successful resolution
+            resolvedHLSURLCache[urlString] = (url: playlistURL, timestamp: Date())
+            print("✅ [HLS RESOLVE] Cached playlist.m3u8 resolution for \(urlString)")
             return playlistURL
         }
         
-        // If both fail, return original URL and let it fail
+        // If both fail, return original URL and let it fail (don't cache failures)
+        print("⚠️ [HLS RESOLVE] Both master.m3u8 and playlist.m3u8 failed for \(urlString)")
         return url
     }
     
@@ -1483,6 +1499,10 @@ class SharedAssetCache: ObservableObject {
         // Clear preload tasks
         preloadTasks.values.forEach { $0.cancel() }
         preloadTasks.removeAll()
+        
+        // Clear HLS resolution cache
+        resolvedHLSURLCache.removeAll()
+        print("✅ [CACHE CLEAR] Cleared HLS resolution cache")
         
         // Clear retry tasks
         for task in scheduledVideoRetries.values {

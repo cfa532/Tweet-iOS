@@ -621,8 +621,9 @@ struct TweetDetailView: View {
             if let _ = tweet.originalTweetId, let _ = tweet.originalAuthorId {
                 if let orig = originalTweet {
                     VStack {
-                        // Use embedded rendering: prevents quoted tweet videos from loading/autoplaying
-                        // (avoids conflicts with feed/shared MediaCell players).
+                        // Use embedded rendering: embedded videos in detail view context will now load
+                        // The fix in SimpleVideoPlayer checks NavigationStateManager.isDetailViewActive
+                        // to allow video loading when the quoted tweet is shown in a detail view
                         EmbeddedTweetView(
                             tweet: orig,
                             isPinned: false,

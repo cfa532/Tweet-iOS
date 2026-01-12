@@ -88,6 +88,8 @@
 		46866CCE2F15208A00302798 /* VIDEO_SEQUENCE_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 46866CCD2F15208A00302798 /* VIDEO_SEQUENCE_FIX.md */; };
 		46866CD02F152D7D00302798 /* VIDEO_VISIBILITY_THRESHOLD_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 46866CCF2F152D7D00302798 /* VIDEO_VISIBILITY_THRESHOLD_FIX.md */; };
 		46866CD22F152D9600302798 /* VIDEO_FIX_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 46866CD12F152D9600302798 /* VIDEO_FIX_SUMMARY.md */; };
+		46866CD42F153C8800302798 /* QUOTED_TWEET_VIDEO_HANG_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 46866CD32F153C8800302798 /* QUOTED_TWEET_VIDEO_HANG_FIX.md */; };
+		46866CD62F153DBF00302798 /* QUOTED_TWEET_VIDEO_BLACK_SCREEN_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 46866CD52F153DBF00302798 /* QUOTED_TWEET_VIDEO_BLACK_SCREEN_FIX.md */; };
 		468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20D2E39AF3900D49038 /* ChatRepository.swift */; };
 		468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20F2E39AF5900D49038 /* ChatMessage.swift */; };
 		468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2172E39B06900D49038 /* BadgeView.swift */; };
@@ -255,6 +257,8 @@
 		46866CCD2F15208A00302798 /* VIDEO_SEQUENCE_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_SEQUENCE_FIX.md; sourceTree = "<group>"; };
 		46866CCF2F152D7D00302798 /* VIDEO_VISIBILITY_THRESHOLD_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_VISIBILITY_THRESHOLD_FIX.md; sourceTree = "<group>"; };
 		46866CD12F152D9600302798 /* VIDEO_FIX_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_FIX_SUMMARY.md; sourceTree = "<group>"; };
+		46866CD32F153C8800302798 /* QUOTED_TWEET_VIDEO_HANG_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUOTED_TWEET_VIDEO_HANG_FIX.md; sourceTree = "<group>"; };
+		46866CD52F153DBF00302798 /* QUOTED_TWEET_VIDEO_BLACK_SCREEN_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUOTED_TWEET_VIDEO_BLACK_SCREEN_FIX.md; sourceTree = "<group>"; };
 		468CF20D2E39AF3900D49038 /* ChatRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRepository.swift; sourceTree = "<group>"; };
 		468CF20F2E39AF5900D49038 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		468CF2172E39B06900D49038 /* BadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeView.swift; sourceTree = "<group>"; };
@@ -638,6 +642,8 @@
 				46866CCD2F15208A00302798 /* VIDEO_SEQUENCE_FIX.md */,
 				46866CCF2F152D7D00302798 /* VIDEO_VISIBILITY_THRESHOLD_FIX.md */,
 				46866CD12F152D9600302798 /* VIDEO_FIX_SUMMARY.md */,
+				46866CD32F153C8800302798 /* QUOTED_TWEET_VIDEO_HANG_FIX.md */,
+				46866CD52F153DBF00302798 /* QUOTED_TWEET_VIDEO_BLACK_SCREEN_FIX.md */,
 			);
 			path = MediaViews;
 			sourceTree = "<group>";
@@ -804,6 +810,8 @@
 				46866CD02F152D7D00302798 /* VIDEO_VISIBILITY_THRESHOLD_FIX.md in Resources */,
 				466934892F13DC3100D3AF1F /* MEMORY_MANAGEMENT_FINAL.md in Resources */,
 				466934B12F150B1900D3AF1F /* VIDEO_COORDINATOR_SIMPLE_DIAGRAM.txt in Resources */,
+				46866CD42F153C8800302798 /* QUOTED_TWEET_VIDEO_HANG_FIX.md in Resources */,
+				46866CD62F153DBF00302798 /* QUOTED_TWEET_VIDEO_BLACK_SCREEN_FIX.md in Resources */,
 				46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				4669349F2F14DE9E00D3AF1F /* VIDEO_COORDINATOR_FIXES.md in Resources */,
 				4669348F2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md in Resources */,

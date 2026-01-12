@@ -1043,6 +1043,7 @@ struct SimpleVideoPlayer: View {
         
         // For fullscreen and detail modes, always try to set up player regardless of shouldLoadVideo
         if mode == .mediaBrowser || mode == .tweetDetail {
+            print("🎬 [SimpleVideoPlayer.onAppear] Detail/Fullscreen mode (\(mode.rawValue)) for \(mid), player=\(player != nil)")
             if player == nil {
                 // Reset loading state if stuck
                 if loadingState.isLoading {
@@ -3421,10 +3422,12 @@ struct SimpleVideoPlayer: View {
         
         // SPECIAL CASE: For TweetDetail mode, use singleton DetailVideoManager
         if mode == .tweetDetail {
+            print("🎥 [SimpleVideoPlayer.setupPlayer] tweetDetail mode for \(mid)")
             
             // Check if singleton already has this exact video playing
             if let existingPlayer = DetailVideoManager.shared.currentPlayer,
                DetailVideoManager.shared.currentVideoMid == mid {
+                print("✅ [SimpleVideoPlayer.setupPlayer] Reusing existing singleton player for \(mid)")
                 self.player = existingPlayer
                 self.loadingState = .loaded
                 // For tweetDetail mode, always unmute and ensure restore happens before any playback.
@@ -3432,6 +3435,8 @@ struct SimpleVideoPlayer: View {
                 self.configurePlayer(existingPlayer)
                 return
             }
+            
+            print("🔄 [SimpleVideoPlayer.setupPlayer] Creating new singleton player for \(mid)")
             
             // Different video or no singleton - create an INDEPENDENT player and store in singleton.
             // IMPORTANT: Do NOT reuse SharedAssetCache's cached AVPlayer here, otherwise MediaCell's
@@ -4170,7 +4175,9 @@ struct SimpleVideoPlayer: View {
         // Simple approach: Tell AVPlayer what to do and let IT handle the rest
         // For MediaCell mode, observe when player is ready and react accordingly
         if mode == .mediaCell || mode == .embeddedDetail {
-            let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
+            // CRITICAL: For embeddedDetail in a detail view, bypass shouldLoadVideo check (treat like tweetDetail)
+            let isEmbeddedInDetail = mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive
+            let shouldAutoPlay = self.currentAutoPlay && self.isVisible && (isEmbeddedInDetail || self.shouldLoadVideo)
             
             // Observe player status to know when it's ready
             playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { item, change in
@@ -4695,12 +4702,17 @@ struct SimpleVideoPlayer: View {
         
         // Check if all conditions are met for autoplay
         // For fullscreen and tweetDetail modes, bypass shouldLoadVideo check.
-        // For embeddedDetail (quoted video), treat like MediaCell and respect shouldLoadVideo.
-        let shouldCheckLoading = (mode == .mediaCell || mode == .embeddedDetail) ? shouldLoadVideo : true
+        // For embeddedDetail (quoted video), check context:
+        // - In feed: treat like MediaCell and respect shouldLoadVideo
+        // - In detail view: treat like tweetDetail and bypass shouldLoadVideo check
+        let isEmbeddedInDetail = mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive
+        let shouldCheckLoading = (mode == .mediaCell || (mode == .embeddedDetail && !isEmbeddedInDetail)) ? shouldLoadVideo : true
         
         // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals or detail views)
         // Use synchronous visibility check (presentedViewController) to avoid timer lag.
-        let isActuallyVisibleOrFullscreen = (mode == .mediaCell || mode == .embeddedDetail) ? !isCoveredByOverlay : true
+        // For embeddedDetail in a detail view, treat like tweetDetail (don't check overlay coverage as strictly)
+        let isEmbeddedInDetailView = mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive
+        let isActuallyVisibleOrFullscreen = (mode == .mediaCell || (mode == .embeddedDetail && !isEmbeddedInDetailView)) ? !isCoveredByOverlay : true
         let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
         
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {
