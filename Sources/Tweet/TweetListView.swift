@@ -57,25 +57,43 @@ struct TweetListView<RowView: View>: View {
     @State private var needsMoreContent: Bool = true
     @State private var startupTime: Date = Date()
     @State private var foregroundObserver: NSObjectProtocol?
+    @State private var videoUpdateTask: Task<Void, Never>? // Track update task for debouncing
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
     
     // MARK: - Helper Methods
     
-    /// Update VideoLoadingManager with current tweet list
-    /// Centralized method to avoid code duplication
+    /// Update VideoLoadingManager with current tweet list (DEBOUNCED)
+    /// Centralized method to avoid code duplication and prevent task pile-up
     private func updateVideoLoadingManager(delay: TimeInterval = 0) {
-        Task.detached(priority: .background) {
+        // Cancel any pending update task to prevent pile-up
+        videoUpdateTask?.cancel()
+        
+        // Create new update task
+        videoUpdateTask = Task.detached(priority: .background) {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
+            
+            // Check if cancelled during delay
+            guard !Task.isCancelled else { return }
+            
             let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+            
+            // Check again after MainActor.run
+            guard !Task.isCancelled else { return }
+            
             await self.videoLoadingManager.updateTweetList(tweetIds)
 
             // Also cleanup old tweet instances to prevent memory growth
             let activeTweetIds = Set(tweetIds)
             Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+            
+            // Clear task reference on completion
+            await MainActor.run {
+                self.videoUpdateTask = nil
+            }
         }
     }
     
@@ -86,12 +104,12 @@ struct TweetListView<RowView: View>: View {
     /// currentVideoIndex: The current video index in the tweet's attachments
     func findNextVideoInList(sourceTweetId: String, currentVideoIndex: Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
         
-        // Combined tweet list: pinned tweets first, then regular tweets
-        // Consolidate MainActor calls into one to avoid multiple context switches
-        let (allTweets, pinnedCount, regularCount) = await MainActor.run { [pinnedTweets, tweets] in
-            let combined = pinnedTweets + tweets
-            return (combined, pinnedTweets.count, tweets.count)
-        }
+        // ✅ PERFORMANCE FIX: Capture tweet arrays synchronously (no MainActor wait)
+        // This eliminates the async bottleneck that was blocking UI during video navigation
+        let allTweets = pinnedTweets + tweets
+        let pinnedCount = pinnedTweets.count
+        let regularCount = tweets.count
+        
         print("🔍 [FIND NEXT VIDEO] Searching for next video after sourceTweetId: \(sourceTweetId), videoIndex: \(currentVideoIndex)")
         print("🔍 [FIND NEXT VIDEO] Total tweets to search: \(allTweets.count) (pinned: \(pinnedCount), regular: \(regularCount))")
         

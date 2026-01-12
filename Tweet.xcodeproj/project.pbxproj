@@ -66,6 +66,7 @@
 		466934932F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934922F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md */; };
 		466934952F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */; };
 		466934972F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */; };
+		466934992F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 466934982F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md */; };
 		466E00942E7023460068D968 /* MemoryWarningManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 466E00932E7023460068D968 /* MemoryWarningManager.swift */; };
 		46704DE22DD8CF07001D69B9 /* MediaType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46704DE12DD8CEF7001D69B9 /* MediaType.swift */; };
 		4674940D2DF08B7E0082FAC6 /* FollowingsTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4674940C2DF08B780082FAC6 /* FollowingsTweetViewModel.swift */; };
@@ -219,6 +220,7 @@
 		466934922F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = VIDEO_NAV_FINAL_FIX.md; sourceTree = "<group>"; };
 		466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MUTE_AND_SCROLL_FIX.md; sourceTree = "<group>"; };
 		466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SCROLL_FREEZE_FIX.md; sourceTree = "<group>"; };
+		466934982F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PERFORMANCE_OPTIMIZATION_SUMMARY.md; sourceTree = "<group>"; };
 		466E00932E7023460068D968 /* MemoryWarningManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryWarningManager.swift; sourceTree = "<group>"; };
 		46704DDD2DD72E58001D69B9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Tweet/Info.plist; sourceTree = "<group>"; };
 		46704DE12DD8CEF7001D69B9 /* MediaType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaType.swift; sourceTree = "<group>"; };
@@ -426,6 +428,7 @@
 				466934922F14835D00D3AF1F /* VIDEO_NAV_FINAL_FIX.md */,
 				466934942F1485CD00D3AF1F /* MUTE_AND_SCROLL_FIX.md */,
 				466934962F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md */,
+				466934982F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -759,6 +762,7 @@
 				466934892F13DC3100D3AF1F /* MEMORY_MANAGEMENT_FINAL.md in Resources */,
 				46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				4669348F2F13FBC500D3AF1F /* VIDEO_CLEANUP_PRINCIPLE.md in Resources */,
+				466934992F148B3400D3AF1F /* PERFORMANCE_OPTIMIZATION_SUMMARY.md in Resources */,
 				4669347F2F139D7A00D3AF1F /* MEMORY_LEAK_PREVENTION.md in Resources */,
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
 				466934972F1486BD00D3AF1F /* SCROLL_FREEZE_FIX.md in Resources */,
