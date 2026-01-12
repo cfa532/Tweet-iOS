@@ -222,9 +222,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     func updateVisibleTweets(_ tweetIds: Set<String>) {
         self.visibleTweetIds = tweetIds
         
-        // Debounce (0.3s)
+        // Debounce (0.1s)
         debounceTimer?.invalidate()
-        let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 self?.checkAndPlayTopmost()
             }
@@ -457,36 +457,16 @@ class VideoPlaybackCoordinator: ObservableObject {
         print("⏭️ [VideoCoordinator] Next video: \(nextVideo.videoMid) (index \(nextIndexInAll))")
         print("⏭️ [VideoCoordinator] Currently visible: \(currentVisibleVideos.count) videos")
         
-        // First, check if next video is already visible
+        // Only play next video if it's already visible
         if currentVisibleVideos.contains(where: { $0.identifier == nextVideo.identifier }) {
             print("⏭️ [VideoCoordinator] Playing next video - already visible")
             playVideo(nextVideo)
             return
         }
-        
-        // Next video not visible - try to scroll to it
-        print("📜 [VideoCoordinator] Next video not visible, attempting to scroll")
-        print("📜 [VideoCoordinator] Next video: \(nextVideo.videoMid) in tweet: \(nextVideo.tweetId)")
-        
-        // Try to scroll to the tweet containing the next video
-        if scrollToTweet(nextVideo.tweetId) {
-            // Successfully scrolled, wait a bit for the scroll to complete and cells to update
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self = self else { return }
-                
-                // Check if the video is now visible
-                if self.visibleVideos.contains(where: { $0.identifier == nextVideo.identifier }) {
-                    print("✅ [VideoCoordinator] Next video is now visible after scroll, playing it")
-                    self.playVideo(nextVideo)
-                } else {
-                    print("⚠️ [VideoCoordinator] Next video still not visible after scroll - stopping")
-                    self.stopAllVideos()
-                }
-            }
-        } else {
-            print("⚠️ [VideoCoordinator] Failed to scroll to next video's tweet - stopping")
-            stopAllVideos()
-        }
+
+        // Next video not visible - stop all videos (don't force scroll)
+        print("⏹️ [VideoCoordinator] Next video not visible - stopping playback")
+        stopAllVideos()
     }
     
     /// Scroll to a specific tweet by ID
