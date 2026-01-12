@@ -46,39 +46,39 @@ struct TweetItemBodyView: View {
     private func checkTextTruncation(text: String, maxLines: Int) async -> Bool {
         // Create cache key from text hash and max lines
         let cacheKey = "\(text.hashValue)-\(maxLines)" as NSString
-        
-        // Check cache first (thread-safe)
-        Self.truncationCacheLock.lock()
-        if let cached = Self.truncationCache.object(forKey: cacheKey) {
-            Self.truncationCacheLock.unlock()
-            return cached.boolValue
+
+        // Check cache first (async-safe scoped locking)
+        let cachedResult = await Self.truncationCacheLock.withLock {
+            Self.truncationCache.object(forKey: cacheKey)?.boolValue
         }
-        Self.truncationCacheLock.unlock()
-        
+        if let cached = cachedResult {
+            return cached
+        }
+
         // PERFORMANCE: Use fast character-based estimation instead of expensive boundingRect()
         // This is 100x faster and accurate enough for "Show More" button
-        
-        let screenWidth = UIScreen.main.bounds.width - 32 // Match frame padding
-        let font = UIFont.preferredFont(forTextStyle: .body)
-        
+
+        let screenWidth = await MainActor.run { UIScreen.main.bounds.width - 32 } // Match frame padding
+        let font = await MainActor.run { UIFont.preferredFont(forTextStyle: .body) }
+
         // Estimate characters per line based on average character width
         // For .body font, average character width is ~8.5pt
         let avgCharWidth: CGFloat = 8.5
         let charsPerLine = Int(screenWidth / avgCharWidth)
-        
+
         // Count newlines in text
         let newlineCount = text.components(separatedBy: .newlines).count - 1
-        
+
         // Estimate if text will wrap based on character count
         let estimatedLines = (text.count / charsPerLine) + newlineCount + 1
-        
+
         let isTruncated = estimatedLines > maxLines
-        
-        // Cache the result (thread-safe)
-        Self.truncationCacheLock.lock()
-        Self.truncationCache.setObject(NSNumber(value: isTruncated), forKey: cacheKey)
-        Self.truncationCacheLock.unlock()
-        
+
+        // Cache the result (async-safe scoped locking)
+        await Self.truncationCacheLock.withLock {
+            Self.truncationCache.setObject(NSNumber(value: isTruncated), forKey: cacheKey)
+        }
+
         return isTruncated
     }
 
