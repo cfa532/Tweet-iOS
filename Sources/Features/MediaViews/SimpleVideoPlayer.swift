@@ -1676,7 +1676,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorStopCommand(notification: Notification? = nil) {
         // Stop command from VideoPlaybackCoordinator
-        guard mode == .mediaCell else { return }
+        // Allow both mediaCell and embeddedDetail modes to respond to stop commands
+        guard mode == .mediaCell || mode == .embeddedDetail else { return }
         
         // If notification has a specific videoMid, only stop if it matches this video
         if let videoMid = notification?.userInfo?["videoMid"] as? String {
@@ -1712,7 +1713,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorPauseCommand(notification: Notification) {
         // Pause command from VideoPlaybackCoordinator - check if it's for this video
-        guard mode == .mediaCell else { return }
+        // Allow both mediaCell and embeddedDetail modes to respond to pause commands
+        guard mode == .mediaCell || mode == .embeddedDetail else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
 
@@ -1743,7 +1745,9 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorPlayCommand(notification: Notification) {
         // Play command from VideoPlaybackCoordinator - check if it's for this video
-        guard mode == .mediaCell else { return }
+        // Allow both mediaCell and embeddedDetail modes to respond to play commands
+        // This enables quoted videos to play when they become primary
+        guard mode == .mediaCell || mode == .embeddedDetail else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
         
