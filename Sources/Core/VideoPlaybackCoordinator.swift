@@ -89,7 +89,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Currently playing videos (can be multiple during survey phase)
     @Published private(set) var currentlyPlayingVideoIds: Set<String> = []
-    
+
+    /// Videos that have received play commands (to prevent duplicates)
+    private var videosSentPlayCommands: Set<String> = []
+
     /// Primary video that's playing to completion
     @Published private(set) var primaryVideoId: String?
 
@@ -333,6 +336,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         // Stop all videos if none are visible
         if currentVisibleVideoIds.isEmpty {
+            videosSentPlayCommands.removeAll()
             previousVisibleVideoIds.removeAll()
             stopAllVideos()
             return
@@ -379,6 +383,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Reset to idle phase
             phase = .idle
             currentlyPlayingVideoIds.removeAll()
+            videosSentPlayCommands.removeAll()
             primaryVideoId = nil
             
             // Cancel existing timers
@@ -443,9 +448,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         // Clear state
         currentlyPlayingVideoIds.removeAll()
+        videosSentPlayCommands.removeAll()
         primaryVideoId = nil
         phase = .idle
-        
+
         // Notify all videos to stop
         NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
     }
@@ -486,8 +492,15 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Play a video during survey phase (2s duration)
     private func playVideoForSurvey(_ video: VideoPlaybackInfo) {
         let videoId = video.identifier
+
+        // Prevent duplicate play commands
+        guard !videosSentPlayCommands.contains(videoId) else {
+            return
+        }
+
         currentlyPlayingVideoIds.insert(videoId)
-        
+        videosSentPlayCommands.insert(videoId)
+
         // Notify video to start playing
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
@@ -537,9 +550,20 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Why this is safe (NO JITTER):
         // - SimpleVideoPlayer checks `player.rate > 0` before playing
         // - If ACTUALLY playing, it returns immediately without seeking/restarting
+        // Prevent duplicate play commands
+        let primaryId = primary.identifier
+        guard !videosSentPlayCommands.contains(primaryId) else {
+            return
+        }
+
         // - If NOT playing (failed creation), it starts playback
         // - This gives us reliability (handles failures) without jitter (idempotent)
         print("📤 [VideoPlaybackCoordinator] Sending play command for primary video: \(primary.videoMid)")
+
+        currentlyPlayingVideoIds.insert(primaryId)
+        videosSentPlayCommands.insert(primaryId)
+        primaryVideoId = primaryId
+
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
             object: nil,
@@ -659,8 +683,16 @@ class VideoPlaybackCoordinator: ObservableObject {
         )
 
         // Set new primary and start playing
-        primaryVideoId = nextVideo.identifier
-        currentlyPlayingVideoIds = [nextVideo.identifier]
+        let nextVideoId = nextVideo.identifier
+
+        // Prevent duplicate play commands
+        guard !videosSentPlayCommands.contains(nextVideoId) else {
+            return
+        }
+
+        primaryVideoId = nextVideoId
+        currentlyPlayingVideoIds = [nextVideoId]
+        videosSentPlayCommands.insert(nextVideoId)
 
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
@@ -677,6 +709,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Handle video finished notification
     @objc private func handleVideoFinished(_ notification: Notification) {
         guard let videoMid = notification.userInfo?["videoMid"] as? String else {
+            return
+        }
+
+        // Only respond to videos that are managed by the coordinator (mediaCell mode)
+        // Embedded videos (in retweets/quoted tweets) should not trigger sequential playback
+        guard let modeString = notification.userInfo?["mode"] as? String,
+              modeString == "mediaCell" else {
             return
         }
 
@@ -765,9 +804,17 @@ class VideoPlaybackCoordinator: ObservableObject {
                         }
                         
                         let firstVideo = visibleVideos[0]
-                        primaryVideoId = firstVideo.identifier
-                        currentlyPlayingVideoIds = [firstVideo.identifier]
-                        
+                        let firstVideoId = firstVideo.identifier
+
+                        // Prevent duplicate play commands
+                        guard !videosSentPlayCommands.contains(firstVideoId) else {
+                            return
+                        }
+
+                        primaryVideoId = firstVideoId
+                        currentlyPlayingVideoIds = [firstVideoId]
+                        videosSentPlayCommands.insert(firstVideoId)
+
                         NotificationCenter.default.post(
                             name: .shouldPlayVideo,
                             object: nil,
@@ -780,8 +827,16 @@ class VideoPlaybackCoordinator: ObservableObject {
                         )
                     } else {
                         // Primary is first or only video - resume it
-                        primaryVideoId = primary.identifier
-                        currentlyPlayingVideoIds = [primary.identifier]
+                        let primaryId = primary.identifier
+
+                        // Prevent duplicate play commands
+                        guard !videosSentPlayCommands.contains(primaryId) else {
+                            return
+                        }
+
+                        primaryVideoId = primaryId
+                        currentlyPlayingVideoIds = [primaryId]
+                        videosSentPlayCommands.insert(primaryId)
 
                         NotificationCenter.default.post(
                             name: .shouldPlayVideo,
@@ -818,6 +873,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             // Clear playing state
             currentlyPlayingVideoIds.removeAll()
+            videosSentPlayCommands.removeAll()
             primaryVideoId = nil
             phase = .idle
             

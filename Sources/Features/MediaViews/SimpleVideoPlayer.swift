@@ -14,7 +14,7 @@ import CoreVideo
 import QuartzCore
 
 // MARK: - Video Player Mode
-enum Mode {
+enum Mode: String {
     case mediaCell // Normal cell in feed/grid
     case mediaBrowser // In MediaBrowserView (fullscreen browser)
     case tweetDetail // In TweetDetailView (single tweet view)
@@ -4558,10 +4558,15 @@ struct SimpleVideoPlayer: View {
         }
         
         // Notify the coordinator that video finished (for sequential playback)
+        // Only coordinator-managed videos (mediaCell mode) should trigger sequential playback
         NotificationCenter.default.post(
             name: .videoDidFinishPlaying,
             object: nil,
-            userInfo: ["videoMid": mid, "tweetId": parentTweetId ?? ""]
+            userInfo: [
+                "videoMid": mid,
+                "tweetId": parentTweetId ?? "",
+                "mode": mode.rawValue
+            ]
         )
         
         // CRITICAL: Check disableAutoRestart before calling callback
