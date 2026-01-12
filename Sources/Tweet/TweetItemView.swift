@@ -160,10 +160,10 @@ struct TweetItemView: View, Equatable {
         .task(id: tweet.originalTweetId, priority: .userInitiated) {
             // Load original tweet if this is a retweet/quoted tweet
             // Use .userInitiated priority for faster loading of visible content
-            guard let originalTweetId = tweet.originalTweetId, let originalAuthorId = tweet.authorId else {
-                  let originalAuthorId = tweet.originalAuthorId else {
+            guard let originalTweetId = tweet.originalTweetId else {
                 return
             }
+            let originalAuthorId = tweet.authorId
             
             // First, try to restore from cache immediately to prevent layout shifts
             if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
@@ -171,8 +171,9 @@ struct TweetItemView: View, Equatable {
                     originalTweet = cachedTweet
                     hasLoadedOriginalTweet = true
 
-                    // Register retweet relationship if retweet is already visible
-                    if isVisible && !hasRegisteredRetweetRelationship {
+                    // Register retweet relationship immediately when original tweet loads
+                    // This will be registered even if not visible, but VideoLoadingManager checks visibility
+                    if !hasRegisteredRetweetRelationship {
                         VideoLoadingManager.shared.registerRetweetRelationship(
                             retweetId: tweet.mid,
                             originalTweetId: cachedTweet.mid
@@ -191,8 +192,9 @@ struct TweetItemView: View, Equatable {
                     originalTweet = t
                     hasLoadedOriginalTweet = true
 
-                    // Register retweet relationship if retweet is already visible
-                    if isVisible && !hasRegisteredRetweetRelationship {
+                    // Register retweet relationship immediately when original tweet loads
+                    // This will be registered even if not visible, but VideoLoadingManager checks visibility
+                    if !hasRegisteredRetweetRelationship {
                         VideoLoadingManager.shared.registerRetweetRelationship(
                             retweetId: tweet.mid,
                             originalTweetId: t.mid
@@ -537,16 +539,6 @@ struct EmbeddedTweetView: View, Equatable {
 
             // Mark tweet as accessed for cache management
             TweetCacheManager.shared.markTweetAccessed(tweet.mid)
-
-            // Register retweet relationship only when retweet becomes visible and original tweet is loaded
-            // This prevents premature video loading for retweets that aren't actually visible yet
-            if let originalTweet = originalTweet, tweet.originalTweetId != nil && !hasRegisteredRetweetRelationship {
-                VideoLoadingManager.shared.registerRetweetRelationship(
-                    retweetId: tweet.mid,
-                    originalTweetId: originalTweet.mid
-                )
-                hasRegisteredRetweetRelationship = true
-            }
         }
         .onDisappear {
             isVisible = false
