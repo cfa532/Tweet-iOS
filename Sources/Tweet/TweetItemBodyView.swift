@@ -26,6 +26,11 @@ struct TweetItemBodyView: View {
     @State private var truncationTask: Task<Void, Never>? = nil
     @EnvironmentObject private var hproseInstance: HproseInstance
     
+    // PERFORMANCE: Static cache for truncation checks to avoid repeated expensive text layout
+    // Key: hash of (text content + maxLines), Value: is truncated
+    private static var truncationCache = NSCache<NSString, NSNumber>()
+    private static let truncationCacheLock = NSLock()
+    
     // Cache screen dimensions to avoid repeated UIScreen.main calls
     private static let cachedGridWidth: CGFloat = {
         let screenWidth = UIScreen.main.bounds.width
@@ -36,7 +41,19 @@ struct TweetItemBodyView: View {
     
     /// Calculate if text will be truncated at given line limit without rendering
     /// This runs off the main thread to avoid blocking UI
+    /// PERFORMANCE: Results are cached to avoid repeated expensive text layout calculations
     private func checkTextTruncation(text: String, maxLines: Int) async -> Bool {
+        // Create cache key from text hash and max lines
+        let cacheKey = "\(text.hashValue)-\(maxLines)" as NSString
+        
+        // Check cache first (thread-safe)
+        Self.truncationCacheLock.lock()
+        if let cached = Self.truncationCache.object(forKey: cacheKey) {
+            Self.truncationCacheLock.unlock()
+            return cached.boolValue
+        }
+        Self.truncationCacheLock.unlock()
+        
         // Use the same width as the text view (screen width - padding)
         let availableWidth = UIScreen.main.bounds.width - 32 // Match frame padding
         
@@ -60,7 +77,14 @@ struct TweetItemBodyView: View {
         let maxHeight = lineHeight * CGFloat(maxLines)
         
         // If the full text height exceeds the max height, it's truncated
-        return boundingRect.height > maxHeight
+        let isTruncated = boundingRect.height > maxHeight
+        
+        // Cache the result (thread-safe)
+        Self.truncationCacheLock.lock()
+        Self.truncationCache.setObject(NSNumber(value: isTruncated), forKey: cacheKey)
+        Self.truncationCacheLock.unlock()
+        
+        return isTruncated
     }
 
     /// Caption text for a single-video media grid: prefers tweet title, falls back to video file name (without extension)
@@ -139,9 +163,10 @@ struct TweetItemBodyView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .lineLimit(7)
                             .fixedSize(horizontal: false, vertical: true)
-                            .task(id: content) {
-                                // Cancel previous task if content changed
-                                truncationTask?.cancel()
+                            .task {
+                                // PERFORMANCE: Only calculate once when view is created
+                                // Tweet content is constant, no need to recalculate on appearance
+                                // Cache still helps when tweets are destroyed and recreated
                                 
                                 // Calculate truncation off main thread
                                 truncationTask = Task.detached(priority: .userInitiated) {
