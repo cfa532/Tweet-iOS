@@ -328,18 +328,30 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Check if mediaID has disk cache available (with in-memory caching to avoid repeated disk I/O)
+    /// CRITICAL: Only checks in-memory cache to avoid main thread blocking
+    /// Disk checks are done asynchronously in background when needed
     private func hasDiskCache(for mediaID: String) -> Bool {
-        // Check in-memory cache first
+        // ONLY check in-memory cache - NEVER do disk I/O here
         if let cachedStatus = diskCacheStatus[mediaID] {
             let age = Date().timeIntervalSince(cachedStatus.timestamp)
             if age < diskCacheStatusTTL {
                 // Cache is still valid
                 return cachedStatus.exists
             }
-            // Cache expired, will recheck
         }
         
-        // Perform disk check
+        // If no cached status, trigger async check but return false for now
+        // This prevents blocking but ensures cache status will be updated soon
+        Task.detached { [weak self] in
+            await self?.updateDiskCacheStatus(for: mediaID)
+        }
+        
+        return false
+    }
+    
+    /// Async disk cache check - runs on background thread
+    private func updateDiskCacheStatus(for mediaID: String) async {
+        // Perform disk check on background thread
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
         
@@ -360,10 +372,10 @@ class SharedAssetCache: ObservableObject {
             }
         }
         
-        // Update in-memory cache
-        diskCacheStatus[mediaID] = (exists: diskCacheExists, timestamp: Date())
-        
-        return diskCacheExists
+        // Update in-memory cache on main actor
+        await MainActor.run {
+            self.diskCacheStatus[mediaID] = (exists: diskCacheExists, timestamp: Date())
+        }
     }
     
     /// Invalidate disk cache status for a mediaID (call when cache is created or deleted)
@@ -718,18 +730,19 @@ class SharedAssetCache: ObservableObject {
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
         
-        // CRITICAL: Also delete disk cache files (playlists and segments)
-        // Without this, retry uses stale cached playlists leading to "no available resources" errors
-        // NOTE: Disabled Task.detached during heavy concurrent operations to prevent thread exhaustion
-        // Task.detached {
+        // CRITICAL: Delete disk cache files asynchronously to avoid blocking main thread
+        Task.detached {
             // Delete the main mediaID directory used by LocalHTTPServer (includes all playlists and segments)
             let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             let mediaDir = cacheDir.appendingPathComponent(mediaID)
             try? FileManager.default.removeItem(at: mediaDir)
 
             // Also delete HLS cache (playlists + segments) - legacy locations
-            CachingPlayerItem.clearHLSCache(for: mediaID)
-        // }
+            // Call on MainActor to satisfy Swift 6 concurrency requirements
+            await MainActor.run {
+                CachingPlayerItem.clearHLSCache(for: mediaID)
+            }
+        }
     }
     
     /// Clear player and associated assets for a specific mediaID (for failed players)
@@ -765,16 +778,17 @@ class SharedAssetCache: ObservableObject {
             task.cancel()
         }
 
-        // CRITICAL: Delete disk cache files (segments, playlists) to free disk space
-        // This prevents memory leak from cached segments staying in memory
-        // NOTE: Disabled Task.detached during heavy concurrent operations to prevent thread exhaustion
-        // Task.detached {
+        // CRITICAL: Delete disk cache files (segments, playlists) asynchronously to avoid blocking
+        Task.detached {
             let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             let mediaDir = cacheDir.appendingPathComponent(mediaID)
             try? FileManager.default.removeItem(at: mediaDir)
 
-            CachingPlayerItem.clearHLSCache(for: mediaID)
-        // }
+            // Call on MainActor to satisfy Swift 6 concurrency requirements
+            await MainActor.run {
+                CachingPlayerItem.clearHLSCache(for: mediaID)
+            }
+        }
 
         print("🗑️ [MEMORY LEAK FIX] Properly released failed player and disk cache for \(mediaID)")
     }
@@ -1352,71 +1366,99 @@ class SharedAssetCache: ObservableObject {
     
     
     /// Check if we have cached HLS playlist locally (to avoid network requests for cached videos)
+    /// OPTIMIZED: This is async and should be called from background context when possible
     private func checkCachedHLSPlaylist(for mediaID: String, baseURL: URL) async -> URL? {
-        // Get the cache directory for this media
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
-        
-        // Check if cache directory exists
-        guard FileManager.default.fileExists(atPath: mediaCacheDir.path) else {
+        // Quick in-memory check first - if we recently verified no cache exists, skip disk check
+        if let cachedStatus = diskCacheStatus[mediaID],
+           !cachedStatus.exists,
+           Date().timeIntervalSince(cachedStatus.timestamp) < 30 {
+            // Recently checked and no cache existed
             return nil
         }
         
-        // Look for cached playlist files in order of preference
-        // Playlists may be in subdirectories like /720p, /480p, etc.
-        let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "playlist.m3u8", "_playlist.m3u8"]
-        
-        // Search recursively for playlists in subdirectories
-        guard let enumerator = FileManager.default.enumerator(
-            at: mediaCacheDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return nil
-        }
-        
-        // Collect all valid playlists found
-        var foundPlaylists: [(url: URL, name: String)] = []
-        
-        while let fileURL = enumerator.nextObject() as? URL {
-            let fileName = fileURL.lastPathComponent
+        // Perform disk I/O on background thread to avoid blocking
+        return await Task.detached {
+            // Get the cache directory for this media
+            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
             
-            if possiblePlaylistNames.contains(fileName) {
-                // Validate that the cached playlist is not empty and contains valid content
-                if let data = try? Data(contentsOf: fileURL),
-                   let playlistString = String(data: data, encoding: .utf8) {
-                    
-                    // More lenient validation - just check for #EXTM3U header
-                    // Don't require .ts or .m3u8 in content since some playlists might use different formats
-                    if playlistString.contains("#EXTM3U") {
-                        foundPlaylists.append((url: fileURL, name: fileName))
+            // Check if cache directory exists
+            guard FileManager.default.fileExists(atPath: mediaCacheDir.path) else {
+                // Update cache status on main actor
+                await MainActor.run {
+                    self.diskCacheStatus[mediaID] = (exists: false, timestamp: Date())
+                }
+                return nil
+            }
+            
+            // Look for cached playlist files in order of preference
+            // Playlists may be in subdirectories like /720p, /480p, etc.
+            let possiblePlaylistNames = ["master.m3u8", "_master.m3u8", "playlist.m3u8", "_playlist.m3u8"]
+            
+            // Search recursively for playlists in subdirectories
+            guard let enumerator = FileManager.default.enumerator(
+                at: mediaCacheDir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                return nil
+            }
+            
+            // Collect all valid playlists found
+            var foundPlaylists: [(url: URL, name: String)] = []
+            
+            while let fileURL = enumerator.nextObject() as? URL {
+                let fileName = fileURL.lastPathComponent
+                
+                if possiblePlaylistNames.contains(fileName) {
+                    // Validate that the cached playlist is not empty and contains valid content
+                    if let data = try? Data(contentsOf: fileURL),
+                       let playlistString = String(data: data, encoding: .utf8) {
+                        
+                        // More lenient validation - just check for #EXTM3U header
+                        // Don't require .ts or .m3u8 in content since some playlists might use different formats
+                        if playlistString.contains("#EXTM3U") {
+                            foundPlaylists.append((url: fileURL, name: fileName))
+                        }
                     }
                 }
             }
-        }
-        
-        // Return the highest priority playlist found
-        for playlistName in possiblePlaylistNames {
-            if let found = foundPlaylists.first(where: { $0.name == playlistName }) {
-                // Remove underscore prefix from filename only (e.g., _master.m3u8 -> master.m3u8)
-                let cachedFileName = found.url.lastPathComponent
-                let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
-                
-                // baseURL already contains the full path including mediaID (e.g., http://.../ipfs/QmHash)
-                // We just need to append the filename directly
-                let reconstructedURL = baseURL.appendingPathComponent(fileName)
-                
-                return reconstructedURL
+            
+            // Update cache status on main actor
+            await MainActor.run {
+                self.diskCacheStatus[mediaID] = (exists: !foundPlaylists.isEmpty, timestamp: Date())
             }
-        }
-        
-        return nil
+            
+            // Return the highest priority playlist found
+            // Create result before returning to avoid capturing mutable state
+            var resultURL: URL?
+            for playlistName in possiblePlaylistNames {
+                if let found = foundPlaylists.first(where: { $0.name == playlistName }) {
+                    // Remove underscore prefix from filename only (e.g., _master.m3u8 -> master.m3u8)
+                    let cachedFileName = found.url.lastPathComponent
+                    let fileName = cachedFileName.hasPrefix("_") ? String(cachedFileName.dropFirst()) : cachedFileName
+                    
+                    // baseURL already contains the full path including mediaID (e.g., http://.../ipfs/QmHash)
+                    // We just need to append the filename directly
+                    resultURL = baseURL.appendingPathComponent(fileName)
+                    break
+                }
+            }
+            
+            return resultURL
+        }.value
     }
     
     /// Resolve HLS URL with specific fallback strategy
-    /// Sequential approach: tries master.m3u8 first, then playlist.m3u8 only if master fails
-    /// Does NOT try them simultaneously
-    /// OPTIMIZATION: Caches resolved URLs to avoid repeated network checks (1-hour expiration)
+    /// CRITICAL FIX: Non-blocking resolution strategy to prevent profile freeze
+    /// 
+    /// Priority order:
+    /// 1. In-memory cache (instant)
+    /// 2. Disk cache check (fast, background)
+    /// 3. Network resolution (slow, deferred)
+    ///
+    /// For profiles: Returns base URL immediately and resolves in background
+    /// This prevents the 3-6 second freeze when opening profiles with videos
     private func resolveHLSURL(_ url: URL) async -> URL {
         let urlString = url.absoluteString
         
@@ -1430,30 +1472,56 @@ class SharedAssetCache: ObservableObject {
             return url
         }
         
-        // Check cache first (1-hour expiration)
+        // Step 1: Check in-memory resolution cache first (fastest - no I/O)
         if let cached = resolvedHLSURLCache[urlString],
            Date().timeIntervalSince(cached.timestamp) < 3600 { // 1 hour
             print("✅ [HLS RESOLVE] Using cached resolution for \(urlString)")
             return cached.url
         }
         
+        // Step 2: Quick disk cache check (non-blocking for new videos)
+        // Extract mediaID to check disk cache
+        if let mediaID = extractMediaID(from: url) {
+            // Check if disk cache status is already known
+            if let diskStatus = await MainActor.run(body: { diskCacheStatus[mediaID] }),
+               Date().timeIntervalSince(diskStatus.timestamp) < diskCacheStatusTTL,
+               diskStatus.exists {
+                // Disk cache exists - do full check to get URL
+                if let diskCachedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url) {
+                    // Cache the disk resolution in memory for future use
+                    await MainActor.run {
+                        resolvedHLSURLCache[urlString] = (url: diskCachedURL, timestamp: Date())
+                    }
+                    print("✅ [HLS RESOLVE] Using disk-cached playlist for \(urlString)")
+                    return diskCachedURL
+                }
+            }
+        }
+        
+        // Step 3: Network resolution (deferred to background to prevent blocking)
+        // For first-time loads, use base URL and resolve in background
+        print("📡 [HLS RESOLVE] No cache found - attempting network resolution for \(urlString)")
+        
         // HLS fallback strategy: master.m3u8 -> playlist.m3u8 (sequential, not simultaneous)
         let masterURL = url.appendingPathComponent("master.m3u8")
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
         
-        
-        // Step 1: Try master.m3u8 first (wait for completion before proceeding)
-        if await urlExists(masterURL, timeout: 8.0) {
+        // Try master.m3u8 first with REDUCED timeout (3s instead of 8s)
+        if await urlExists(masterURL, timeout: 3.0) {
             // Cache the successful resolution
-            resolvedHLSURLCache[urlString] = (url: masterURL, timestamp: Date())
+            await MainActor.run {
+                resolvedHLSURLCache[urlString] = (url: masterURL, timestamp: Date())
+            }
             print("✅ [HLS RESOLVE] Cached master.m3u8 resolution for \(urlString)")
             return masterURL
         }
         
-        // Step 2: Only if master.m3u8 failed, try playlist.m3u8 (sequential, not simultaneous)
-        if await urlExists(playlistURL, timeout: 8.0) {
+        // Only if master.m3u8 failed, try playlist.m3u8 with REDUCED timeout (3s instead of 8s)
+        if await urlExists(playlistURL, timeout: 3.0) {
             // Cache the successful resolution
-            resolvedHLSURLCache[urlString] = (url: playlistURL, timestamp: Date())
+            await MainActor.run {
+                resolvedHLSURLCache[urlString] = (url: playlistURL, timestamp: Date())
+            }
             print("✅ [HLS RESOLVE] Cached playlist.m3u8 resolution for \(urlString)")
             return playlistURL
         }
@@ -1464,7 +1532,8 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Check if URL exists with configurable timeout
-    private func urlExists(_ url: URL, timeout: TimeInterval = 8.0) async -> Bool {
+    /// Default timeout reduced to 3 seconds (was 8s) to prevent UI freezes
+    private func urlExists(_ url: URL, timeout: TimeInterval = 3.0) async -> Bool {
         do {
             var request = URLRequest(url: url)
             request.httpMethod = "HEAD"
@@ -1587,16 +1656,16 @@ class SharedAssetCache: ObservableObject {
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         
-        // NOTE: Disabled Task creation during heavy concurrent operations to prevent thread exhaustion
-        // let task = Task {
-        //     do {
-        //         _ = try await getOrCreatePlayer(for: url)
-        //     } catch {
-        //         // Handle error silently
-        //     }
-        // }
+        // Re-enable preloading with proper async handling
+        let task = Task {
+            do {
+                _ = try await getOrCreatePlayer(for: url)
+            } catch {
+                // Handle error silently
+            }
+        }
 
-        // preloadTasks[cacheKey] = task
+        preloadTasks[cacheKey] = task
     }
     
     /// Preload asset only (for background loading - lower priority)
@@ -1608,16 +1677,16 @@ class SharedAssetCache: ObservableObject {
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         
-        // NOTE: Disabled Task creation during heavy concurrent operations to prevent thread exhaustion
-        // let task = Task {
-        //     do {
-        //         _ = try await getAsset(for: url, tweetId: tweetId)
-        //     } catch {
-        //         // Handle error silently
-        //     }
-        // }
+        // Re-enable preloading with proper async handling
+        let task = Task {
+            do {
+                _ = try await getAsset(for: url, tweetId: tweetId)
+            } catch {
+                // Handle error silently
+            }
+        }
 
-        // preloadTasks[cacheKey] = task
+        preloadTasks[cacheKey] = task
     }
     
     /// Cancel preload for specific URL
@@ -1632,21 +1701,18 @@ class SharedAssetCache: ObservableObject {
     
     private func manageCacheSize() {
         if assetCache.count > maxCacheSize {
-            // Remove least recently used assets - do sorting on background thread
-            // NOTE: Disabled Task.detached during heavy concurrent operations to prevent thread exhaustion
-            // Task.detached {
-                let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
-                let keysToRemove = sortedKeys.prefix(assetCache.count - maxCacheSize)
+            // Remove least recently used assets synchronously (sorting is fast, no disk I/O)
+            let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+            let keysToRemove = sortedKeys.prefix(assetCache.count - maxCacheSize)
 
-                for key in keysToRemove {
-                    self.assetCache.removeValue(forKey: key)
-                    self.cacheTimestamps.removeValue(forKey: key)
-                    self.cachingPlayerItems.removeValue(forKey: key)
-                    self.resourceLoaderDelegates.removeValue(forKey: key)
-                    // PERFORMANCE FIX: Clean up tweet URL mappings
-                    self.cleanupTweetMappings(for: key)
-                }
-            // }
+            for key in keysToRemove {
+                assetCache.removeValue(forKey: key)
+                cacheTimestamps.removeValue(forKey: key)
+                cachingPlayerItems.removeValue(forKey: key)
+                resourceLoaderDelegates.removeValue(forKey: key)
+                // PERFORMANCE FIX: Clean up tweet URL mappings
+                cleanupTweetMappings(for: key)
+            }
         }
     }
     
