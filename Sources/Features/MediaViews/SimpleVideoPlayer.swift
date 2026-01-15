@@ -3429,9 +3429,13 @@ struct SimpleVideoPlayer: View {
             // onDisappear() will pause the same player instance and TweetDetail will "play briefly then stop".
             
             // CRITICAL: Check for cached player and reuse its asset to avoid network timeout
+            // Preserve playback position to prevent black screen during transition
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
                let cachedPlayerItem = cachedPlayer.currentItem {
                 let asset = cachedPlayerItem.asset
+                let currentTime = cachedPlayer.currentTime()
+                let wasPlaying = cachedPlayer.rate > 0
+                
                 let playerItem = AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 newPlayer.isMuted = false
@@ -3446,8 +3450,45 @@ struct SimpleVideoPlayer: View {
                 DetailVideoManager.shared.currentVideoMid = mid
                 
                 self.player = newPlayer
-                self.loadingState = .loaded
-                self.configurePlayer(newPlayer)
+                
+                // Wait for playerItem to be ready before marking as loaded to prevent black screen
+                if playerItem.status == .readyToPlay {
+                    self.loadingState = .loaded
+                    self.configurePlayer(newPlayer)
+                    // Seek to preserved position immediately
+                    newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                        if finished && wasPlaying {
+                            newPlayer.play()
+                        }
+                    }
+                } else {
+                    // PlayerItem not ready yet - wait for it and then seek
+                    self.loadingState = .loading
+                    self.configurePlayer(newPlayer)
+                    
+                    // Observe playerItem status to know when it's ready
+                    // Use a Task to wait for ready status with timeout
+                    Task { @MainActor in
+                        var attempts = 0
+                        while playerItem.status != .readyToPlay && attempts < 100 {
+                            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+                            attempts += 1
+                        }
+                        
+                        if playerItem.status == .readyToPlay {
+                            self.loadingState = .loaded
+                            // Seek to preserved position once ready
+                            newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                                if finished && wasPlaying {
+                                    newPlayer.play()
+                                }
+                            }
+                        } else {
+                            // Timeout - mark as loaded anyway to prevent infinite loading
+                            self.loadingState = .loaded
+                        }
+                    }
+                }
                 return
             }
             

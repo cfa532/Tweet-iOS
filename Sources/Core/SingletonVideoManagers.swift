@@ -1439,19 +1439,32 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     
     /// Activate manager when detail view appears
     func activateForDetail() {
-        guard !isActive else { return }
+        // CRITICAL: Always call beginDetailViewSession() to increment count
+        // even if manager is already active (multiple detail views can be active during transitions)
+        beginDetailViewSession()
+        
+        // Only register lifecycle observers once
+        guard !isActive else {
+            print("📱 [DetailVideoManager] Already active - incremented session count to \(activeDetailViewCount)")
+            return
+        }
         isActive = true
         registerLifecycleObservers()
-        beginDetailViewSession()
         print("📱 [DetailVideoManager] Activated - lifecycle observers registered")
     }
     
     /// Deactivate manager when all detail views disappear
     func deactivate() {
-        guard isActive else { return }
+        // CRITICAL: Always call endDetailViewSession() to decrement count
+        // Only teardown lifecycle observers when count reaches 0
+        endDetailViewSession()
+        
+        guard isActive && activeDetailViewCount == 0 else {
+            print("📱 [DetailVideoManager] Session ended - count now \(activeDetailViewCount)")
+            return
+        }
         isActive = false
         teardownAppLifecycleNotifications()
-        endDetailViewSession()
         print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed")
     }
     
