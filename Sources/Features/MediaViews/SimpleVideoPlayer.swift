@@ -1672,7 +1672,8 @@ struct SimpleVideoPlayer: View {
                 // Capture the last visible frame right before pausing (covers interruptions / audio session changes).
                 captureLastFrameIfPossible(reason: "stopAllVideos")
                 player.pause()
-                player.isMuted = true
+                // Keep mute state consistent with global setting instead of forcing muted
+                player.isMuted = MuteState.shared.isMuted
             }
         }
         // TweetDetail and MediaBrowser: DO NOTHING
