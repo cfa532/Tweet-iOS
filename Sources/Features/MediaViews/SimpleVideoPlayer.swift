@@ -424,6 +424,8 @@ struct SimpleVideoPlayer: View {
     // Timer display state (MediaCell only) - exposed for parent overlay
     @State var showTimeRemaining: Bool = false
     @State private var timeRemainingDisplayTask: Task<Void, Never>?
+    // Track setup tasks to cancel them when view disappears
+    @State private var setupPlayerTask: Task<Void, Never>?
     var timeRemainingText: String {
         guard let duration = player?.currentItem?.duration.seconds,
               duration.isFinite,
@@ -1098,6 +1100,10 @@ struct SimpleVideoPlayer: View {
         // Cancel recovery timeout task (cleanup)
         recoveryTimeoutTask?.cancel()
         recoveryTimeoutTask = nil
+        
+        // CRITICAL FIX: Cancel any pending setup tasks to prevent memory leaks
+        setupPlayerTask?.cancel()
+        setupPlayerTask = nil
         
         // Handle idle timer for fullscreen modes
         if mode == .mediaBrowser {
@@ -3447,17 +3453,28 @@ struct SimpleVideoPlayer: View {
             
             // No cached player - load fresh
             // Use .userInitiated for detail view (not in scrolling feed, user is focused on this video)
-            Task.detached(priority: .userInitiated) {
+            setupPlayerTask?.cancel()
+            setupPlayerTask = Task.detached(priority: .userInitiated) {
                 do {
+                    // Check cancellation before proceeding
+                    try Task.checkCancellation()
+                    
                     let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
                         for: uniquePlayerURL,
                         mediaID: mid,
                         mediaType: mediaType
                     )
+                    
+                    // Check cancellation again after async operation
+                    try Task.checkCancellation()
+                    
                     let newPlayer = AVPlayer(playerItem: playerItem)
                     newPlayer.isMuted = false
                     
                     await MainActor.run {
+                        // Check if task was cancelled while we were waiting
+                        guard !Task.isCancelled else { return }
+                        
                         // Stop old singleton player if exists
                         DetailVideoManager.shared.currentPlayer?.pause()
                         
@@ -3468,11 +3485,15 @@ struct SimpleVideoPlayer: View {
                         self.player = newPlayer
                         self.loadingState = .loaded
                         self.configurePlayer(newPlayer)
+                        self.setupPlayerTask = nil
                     }
                 } catch {
+                    // Only handle error if not cancelled
+                    guard !Task.isCancelled else { return }
                     print("ERROR: Failed to create player: \(error.localizedDescription)")
                     await MainActor.run {
                         self.handleError(strategy: .loadFailure)
+                        self.setupPlayerTask = nil
                     }
                 }
             }
@@ -3495,23 +3516,38 @@ struct SimpleVideoPlayer: View {
             }
             
             // No cached player - load fresh
-            Task.detached(priority: .userInitiated) {
+            setupPlayerTask?.cancel()
+            setupPlayerTask = Task.detached(priority: .userInitiated) {
                 do {
+                    // Check cancellation before proceeding
+                    try Task.checkCancellation()
+                    
                     let playerItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
                         for: uniquePlayerURL,
                         mediaID: mid,
                         mediaType: mediaType
                     )
+                    
+                    // Check cancellation again after async operation
+                    try Task.checkCancellation()
+                    
                     let newPlayer = AVPlayer(playerItem: playerItem)
                     await MainActor.run {
+                        // Check if task was cancelled while we were waiting
+                        guard !Task.isCancelled else { return }
+                        
                         // Respect global mute state for embedded previews
                         newPlayer.isMuted = MuteState.shared.isMuted
                         self.configurePlayer(newPlayer)
+                        self.setupPlayerTask = nil
                     }
                 } catch {
+                    // Only handle error if not cancelled
+                    guard !Task.isCancelled else { return }
                     print("ERROR: Failed to create player: \(error.localizedDescription)")
                     await MainActor.run {
                         self.handleError(strategy: .loadFailure)
+                        self.setupPlayerTask = nil
                     }
                 }
             }
@@ -3541,10 +3577,17 @@ struct SimpleVideoPlayer: View {
         
         // SECOND: Always try async loading - SharedAssetCache handles cache vs network internally
         // This avoids synchronous file system operations on the main thread during scrolling
-        Task.detached(priority: .userInitiated) {
+        setupPlayerTask?.cancel()
+        setupPlayerTask = Task.detached(priority: .userInitiated) {
             do {
+                // Check cancellation before proceeding
+                try Task.checkCancellation()
+                
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: parentTweetId, mediaType: mediaType)
+
+                // Check cancellation again after async operation
+                try Task.checkCancellation()
 
                 // Apply mute state IMMEDIATELY after player creation, before returning to MainActor
                 // This prevents any brief moment where the player might start with wrong audio state
@@ -3556,6 +3599,9 @@ struct SimpleVideoPlayer: View {
                 }
 
                 await MainActor.run {
+                    // Check if task was cancelled while we were waiting
+                    guard !Task.isCancelled else { return }
+                    
                     // Double-check and reapply mute state for safety
                     if self.mode == .mediaCell {
                         newPlayer.isMuted = MuteState.shared.isMuted
@@ -3563,10 +3609,14 @@ struct SimpleVideoPlayer: View {
                         newPlayer.isMuted = false
                     }
                     self.configurePlayer(newPlayer)
+                    self.setupPlayerTask = nil
                 }
             } catch {
+                // Only handle error if not cancelled
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.handleError(strategy: .loadFailure)
+                    self.setupPlayerTask = nil
                 }
             }
         }
@@ -4047,20 +4097,25 @@ struct SimpleVideoPlayer: View {
         // (configurePlayer() can run while currentItem is temporarily nil for some HLS paths.)
         ensureVideoOutputAttachedIfNeeded(for: player)
         
+        // CRITICAL FIX: Always remove existing observers FIRST to prevent accumulation
+        // Even if we think they're already set up, remove them to handle cases where:
+        // - The view was recreated and old observers still exist
+        // - Multiple instances might share the same playerItem
+        // - Observer cleanup didn't happen properly
+        removePlayerObservers()
+        
         // CRITICAL: Check if observer is already attached to this exact playerItem
         // Use object identity (===) to ensure we're checking the same instance
+        // After removing observers above, this check should typically be false, but keep it for safety
         let alreadySetup = (self.playerItem === playerItem && videoCompletionObserver != nil)
         
         if alreadySetup {
-            // Observers already attached - skipping
+            // This shouldn't happen after removePlayerObservers(), but defensive check
+            print("⚠️ [OBSERVER SETUP] Observers still exist after removal - this shouldn't happen")
             return
         }
         
         // Setting up observers
-        
-        // CRITICAL: Remove existing observers FIRST to prevent duplicates
-        // This must happen before storing the new playerItem reference
-        removePlayerObservers()
         
         // Store reference for cleanup (AFTER removing old observers)
         self.playerItem = playerItem

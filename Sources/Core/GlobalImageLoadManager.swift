@@ -432,9 +432,14 @@ class GlobalImageLoadManager: ObservableObject {
     private func startLoadingOptimized(_ request: ImageLoadRequest, maxSize: CGSize) {
         let task = Task {
             do {
+                // Check cancellation early
+                try Task.checkCancellation()
+                
                 // Check if image is already cached
                 if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                     await MainActor.run {
+                        // Check cancellation again before completing
+                        guard !Task.isCancelled else { return }
                         request.completion(cachedImage)
                         self.completedRequests.insert(request.id)
                         self.activeLoads.removeValue(forKey: request.id)
@@ -444,10 +449,21 @@ class GlobalImageLoadManager: ObservableObject {
                     return
                 }
                 
+                // Check cancellation before network request
+                try Task.checkCancellation()
+                
                 // Load from network with size optimization
-                let optimizedImage = await loadImageFromNetworkOptimized(request, maxSize: maxSize)
+                let optimizedImage = try await loadImageFromNetworkOptimized(request, maxSize: maxSize)
                 
                 await MainActor.run {
+                    // Check cancellation before completing - don't call completion if cancelled
+                    guard !Task.isCancelled else {
+                        // Clean up if cancelled
+                        self.activeLoads.removeValue(forKey: request.id)
+                        self.updateStatistics()
+                        return
+                    }
+                    
                     request.completion(optimizedImage)
                     if optimizedImage != nil {
                         self.completedRequests.insert(request.id)
@@ -459,6 +475,30 @@ class GlobalImageLoadManager: ObservableObject {
                     self.updateStatistics()
                     self.processNextPendingRequest()
                 }
+            } catch {
+                // Handle cancellation silently - don't treat it as a failure
+                if error is CancellationError {
+                    await MainActor.run {
+                        // Clean up cancelled task
+                        self.activeLoads.removeValue(forKey: request.id)
+                        self.updateStatistics()
+                    }
+                    return
+                }
+                
+                // Handle actual errors
+                await MainActor.run {
+                    // Only handle failure if not cancelled
+                    guard !Task.isCancelled else {
+                        self.activeLoads.removeValue(forKey: request.id)
+                        self.updateStatistics()
+                        return
+                    }
+                    self.handleLoadFailure(request)
+                    self.activeLoads.removeValue(forKey: request.id)
+                    self.updateStatistics()
+                    self.processNextPendingRequest()
+                }
             }
         }
         
@@ -466,14 +506,20 @@ class GlobalImageLoadManager: ObservableObject {
         updateStatistics()
     }
     
-    private func loadImageFromNetworkOptimized(_ request: ImageLoadRequest, maxSize: CGSize) async -> UIImage? {
+    private func loadImageFromNetworkOptimized(_ request: ImageLoadRequest, maxSize: CGSize) async throws -> UIImage? {
         do {
+            // Check cancellation before network request
+            try Task.checkCancellation()
+            
             // Create URLRequest with timeout
             var urlRequest = URLRequest(url: request.url)
             urlRequest.timeoutInterval = 8.0 // 8 second timeout (reduced from 10s for faster failure detection)
             urlRequest.cachePolicy = .returnCacheDataElseLoad
             
             let (data, response) = try await URLSession.shared.data(for: urlRequest)
+            
+            // Check cancellation after network request
+            try Task.checkCancellation()
             
             // Check if we got a valid response
             guard let httpResponse = response as? HTTPURLResponse,
@@ -482,16 +528,26 @@ class GlobalImageLoadManager: ObservableObject {
                 return nil
             }
             
-            // Update progress
+            // Update progress (only if not cancelled)
             await MainActor.run {
+                guard !Task.isCancelled else { return }
                 request.onProgress(1.0)
             }
+            
+            // Check cancellation before image processing
+            try Task.checkCancellation()
             
             // Create UIImage from data
             guard let originalImage = UIImage(data: data) else { return nil }
             
+            // Check cancellation before resizing
+            try Task.checkCancellation()
+            
             // Resize image to fit within maxSize while maintaining aspect ratio
             let resizedImage = resizeImage(originalImage, toFit: maxSize)
+            
+            // Check cancellation before caching
+            try Task.checkCancellation()
             
             if let resizedData = resizedImage.jpegData(compressionQuality: 0.8) {
                 if let cachedImage = ImageCacheManager.shared.cacheImageData(resizedData, for: request.attachment) {
@@ -501,6 +557,10 @@ class GlobalImageLoadManager: ObservableObject {
             
             return resizedImage
         } catch {
+            // Re-throw cancellation errors so they can be handled upstream
+            if error is CancellationError {
+                throw error
+            }
             return nil
         }
     }
