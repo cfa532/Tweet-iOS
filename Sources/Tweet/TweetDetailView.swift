@@ -255,11 +255,10 @@ struct DetailMediaCell: View {
             baseUrl: baseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
-            // Completion is already @MainActor, but use Task to ensure SwiftUI view updates properly
-            Task { @MainActor in
-                self.image = loadedImage
-                self.loading = false
-            }
+            // Completion is already @MainActor, update state immediately without additional Task wrapper
+            // The extra Task wrapper was causing a delay in UI updates, making spinners stick
+            self.image = loadedImage
+            self.loading = false
         }
     }
 }

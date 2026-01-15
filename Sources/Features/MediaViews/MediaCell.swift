@@ -422,12 +422,10 @@ struct MediaCell: View, Equatable {
             attachment: attachment,
             baseUrl: effectiveBaseUrl
         ) { loadedImage in
-            // Completion is already @MainActor, so state updates will happen on main thread
-            // Use Task to ensure SwiftUI view updates properly
-            Task { @MainActor in
-                self.image = loadedImage
-                self.isLoading = false
-            }
+            // Completion is already @MainActor, update state immediately without additional Task wrapper
+            // The extra Task wrapper was causing a delay in UI updates, making spinners stick
+            self.image = loadedImage
+            self.isLoading = false
         }
     }
     

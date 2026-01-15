@@ -443,7 +443,11 @@ class ImageCacheManager: @unchecked Sendable {
             return nil
         }
         
-        // CRITICAL: Move compression to background to avoid blocking main thread
+        // CRITICAL FIX: Cache to memory IMMEDIATELY so subsequent cache checks can find it
+        // This prevents race condition where cells miss the cache and start loading again
+        cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
+        
+        // Then compress and write to disk in background
         Task.detached(priority: .utility) { [weak self] in
             guard let self = self else { return }
             
@@ -454,13 +458,10 @@ class ImageCacheManager: @unchecked Sendable {
             // Write compressed data to disk
             do {
                 try compressedImage.write(to: compressedFileURL)
+                print("DEBUG: [ImageCacheManager] Successfully cached compressed image to disk for \(key)")
             } catch {
                 print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
             }
-
-            // Add to memory cache
-            self.cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
-            print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
             
             // Notify Avatar views that this image is now cached
             await MainActor.run {

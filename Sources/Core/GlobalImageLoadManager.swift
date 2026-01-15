@@ -93,30 +93,52 @@ class GlobalImageLoadManager: ObservableObject {
         let mediaID = MimeiId(request.attachment.mid)
         if BlackList.shared.isBlacklisted(mediaID) {
             print("🚫 [IMAGE BLACKLIST] Skipping blacklisted image: \(mediaID)")
-            // Call completion with nil to update UI
-            Task { @MainActor in
-                request.completion(nil)
-            }
+            // Call completion with nil to update UI - already on MainActor since class is @MainActor
+            request.completion(nil)
             return
         }
         
         // Check if already completed successfully
         if completedRequests.contains(request.id) {
-            return
+            // CRITICAL FIX: Always call completion handler to update UI state
+            // If cache has image, use it; otherwise return nil to reset loading state
+            let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment)
+            request.completion(cachedImage)
+            
+            // If image was evicted from cache, remove from completed so it can be reloaded
+            if cachedImage == nil {
+                completedRequests.remove(request.id)
+                // Don't return - let it load again
+            } else {
+                return
+            }
         }
         
         // Check if this request previously returned non-image content (don't retry)
         if nonImageResponses.contains(request.id) {
+            // Call completion with nil to update UI state
+            request.completion(nil)
             return
         }
         
         // Check if this request has permanently failed (exhausted all retries)
         if permanentlyFailedRequests.contains(request.id) {
+            // Call completion with nil to update UI state
+            request.completion(nil)
             return
         }
         
         // Check if already loading
         if activeLoads[request.id] != nil {
+            // Already loading - check cache in case it just completed and was cached
+            // This handles race condition where image completes between checks
+            let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment)
+            if cachedImage != nil {
+                // Found in cache, return it immediately
+                request.completion(cachedImage)
+            }
+            // If not in cache, the existing request will call its completion when done
+            // Don't call completion(nil) here as that would reset loading state prematurely
             return
         }
         
