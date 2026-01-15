@@ -3,7 +3,7 @@
 //  Tweet
 //
 //  Coordinates video playback across the app
-//  New behavior: 2s autoplay survey -> primary video selection -> sequential playback
+//  Behavior: Play topmost video on screen, switch to next when current video is 30% out of view
 //
 import Foundation
 import SwiftUI
@@ -43,14 +43,13 @@ struct VideoPlaybackInfo: Equatable {
     }
 }
 
-/// Coordinates video playback with intelligent primary video selection
-/// New behavior:
-/// 1. Load and autoplay all visible videos for 2s (survey phase)
-/// 2. Identify primary video (most visible/centered)
-/// 3. Keep primary video playing to completion
-/// 4. When primary finishes, move to next visible video
-/// 5. Keep videos playing during scroll
-/// 6. After scroll stops (2s delay), re-identify primary video
+/// Coordinates video playback with topmost video selection
+/// Behavior:
+/// 1. Play topmost video on screen immediately (no survey phase)
+/// 2. Monitor scroll position during playback
+/// 3. When current video is 30% out of view, switch to next video
+/// 4. When video finishes, move to next visible video
+/// 5. Debounce timer: 0.2s
 @MainActor
 class VideoPlaybackCoordinator: ObservableObject {
     static let shared = VideoPlaybackCoordinator()
@@ -77,7 +76,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Timer for detecting scroll stop (2s delay)
     private var scrollStopTimer: Timer?
     
-    /// Timer for debouncing video playback (0.1s delay)
+    /// Timer for debouncing video playback (0.2s delay)
     private var playbackDebounceTimer: Timer?
     
     /// Visible tweet IDs (updated by scroll tracking)
@@ -274,74 +273,71 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This handles both "new videos" and "coming back to idle with videos present"
         if videoVisibilityChanged && !currentVisibleVideoIds.isEmpty {
             // CRITICAL FIX: Don't reset if we're in primaryPlaying phase and the primary video is still visible
-            // This prevents restarting the video during small scrolls
+            // This prevents restarting the video during small scrolls, but we still check for 30% threshold
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
                currentVisibleVideoIds.contains(where: { primaryId.contains($0) }) {
+                // Primary video still visible - just update tracking and check 30% threshold
                 previousVisibleVideoIds = currentVisibleVideoIds
-                return
-            }
-            
-            // CRITICAL FIX: Don't reset if we're in surveying phase and just adding more videos
-            // This prevents duplicate survey commands when new video cells appear during the survey
-            if phase == .surveying {
-                // Only add new videos to the survey, don't restart it
-                let newVideos = visibleVideos.filter { video in
-                    !currentlyPlayingVideoIds.contains(video.identifier)
-                }
-                for video in newVideos {
-                    playVideoForSurvey(video)
-                }
-                previousVisibleVideoIds = currentVisibleVideoIds
-                return
-            }
-            
-            // Reset to idle phase
-            phase = .idle
-            currentlyPlayingVideoIds.removeAll()
-            primaryVideoId = nil
-            
-            // Cancel existing timers
-            surveyTimer?.invalidate()
-            surveyTimer = nil
-            playbackDebounceTimer?.invalidate()
-            playbackDebounceTimer = nil
-            
-            // Start debounce timer for new visible videos
-            // Use .common mode so timer fires even during active scrolling
-            let timer = Timer(timeInterval: 0.1, repeats: false) { [weak self] _ in
-                // Use DispatchQueue to ensure MainActor isolation
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    if self.phase == .idle && !self.visibleVideos.isEmpty {
-                        self.startSurveyPhase()
-                    } else {
-                        print("⚠️ [VideoPlaybackCoordinator] Skipping survey - phase: \(self.phase), videos: \(self.visibleVideos.count)")
+                // Continue to checkAndSwitchVideoIfNeeded() below
+            } else {
+                // Primary video no longer visible or not in primaryPlaying phase - reset
+                phase = .idle
+                currentlyPlayingVideoIds.removeAll()
+                primaryVideoId = nil
+                
+                // Cancel existing timers
+                surveyTimer?.invalidate()
+                surveyTimer = nil
+                playbackDebounceTimer?.invalidate()
+                playbackDebounceTimer = nil
+                
+                // Start debounce timer for new visible videos
+                // Use .common mode so timer fires even during active scrolling
+                let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
+                    // Use DispatchQueue to ensure MainActor isolation
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        if self.phase == .idle && !self.visibleVideos.isEmpty {
+                            self.startPrimaryVideoPlayback()
+                        } else {
+                            print("⚠️ [VideoPlaybackCoordinator] Skipping playback - phase: \(self.phase), videos: \(self.visibleVideos.count)")
+                        }
                     }
                 }
+                RunLoop.main.add(timer, forMode: .common)
+                playbackDebounceTimer = timer
+                
+                // Update previous state
+                previousVisibleVideoIds = currentVisibleVideoIds
             }
-            RunLoop.main.add(timer, forMode: .common)
-            playbackDebounceTimer = timer
         } else if !videoVisibilityChanged && phase == .idle && !currentVisibleVideoIds.isEmpty && playbackDebounceTimer == nil {
             // Handle case where videos are already visible but we're in idle (e.g., initial load)
-            let timer = Timer(timeInterval: 0.1, repeats: false) { [weak self] _ in
+            let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     if self.phase == .idle && !self.visibleVideos.isEmpty {
-                        self.startSurveyPhase()
+                        self.startPrimaryVideoPlayback()
                     }
                 }
             }
             RunLoop.main.add(timer, forMode: .common)
             playbackDebounceTimer = timer
+            
+            // Update previous state
+            previousVisibleVideoIds = currentVisibleVideoIds
+        } else {
+            // Update previous state for all other cases
+            previousVisibleVideoIds = currentVisibleVideoIds
         }
-        
-        // Update previous state
-        previousVisibleVideoIds = currentVisibleVideoIds
         
         // CRITICAL: Clear preserve flag when user explicitly scrolls
         // This ensures foreground recovery knows user changed context
         shouldPreserveStateOnForeground = false
+        
+        // Check if current primary video is 30% out of view and switch to next
+        // This check runs on every scroll update to monitor video position
+        checkAndSwitchVideoIfNeeded()
         
         // Cancel scroll stop timer - we don't need re-evaluation anymore
         // Videos start via debounce during scroll, no need for post-scroll restart
@@ -379,87 +375,33 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Videos continue playing through scroll and beyond
     }
     
-    /// Start survey phase - play all visible videos for 2s each
-    private func startSurveyPhase() {
-        // Guard against starting survey if not in idle phase
+    /// Start primary video playback - play topmost video immediately
+    private func startPrimaryVideoPlayback() {
+        // Guard against starting if not in idle phase
         guard phase == .idle else {
-            print("⚠️ [VideoPlaybackCoordinator] startSurveyPhase called but not in idle phase (current: \(phase))")
+            print("⚠️ [VideoPlaybackCoordinator] startPrimaryVideoPlayback called but not in idle phase (current: \(phase))")
             return
         }
         
-        phase = .surveying
-        currentlyPlayingVideoIds.removeAll()
-        
-        // Start playing all visible videos
-        for video in visibleVideos {
-            playVideoForSurvey(video)
-        }
-        
-        // After 2s, identify primary video and transition
-        surveyTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.endSurveyPhase()
-            }
-        }
-    }
-    
-    /// Play a video during survey phase (2s duration)
-    private func playVideoForSurvey(_ video: VideoPlaybackInfo) {
-        let videoId = video.identifier
-        currentlyPlayingVideoIds.insert(videoId)
-        
-        // Notify video to start playing
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: [
-                "tweetId": video.tweetId,
-                "videoMid": video.videoMid,
-                "videoIndex": video.index,
-                "isSurvey": true
-            ]
-        )
-    }
-    
-    /// End survey phase and identify primary video
-    private func endSurveyPhase() {
-        // Guard against ending survey if not in surveying phase
-        guard phase == .surveying else {
-            print("⚠️ [VideoPlaybackCoordinator] endSurveyPhase called but not in surveying phase (current: \(phase))")
-            return
-        }
-        
-        // Invalidate survey timer to prevent duplicate calls
-        surveyTimer?.invalidate()
-        surveyTimer = nil
-        
-        // Identify primary video (most visible/centered)
+        // Identify topmost video
         guard let primary = identifyPrimaryVideo() else {
             print("⚠️ [VideoPlaybackCoordinator] No primary video identified, stopping all videos")
             stopAllVideos()
             return
         }
 
-        // Pause all non-primary videos
+        // Pause all other videos
         for video in visibleVideos where video != primary {
             pauseVideo(video)
         }
 
         // Update state to primary phase BEFORE sending play command
-        // This prevents race conditions where the phase check fails
         phase = .primaryPlaying
         primaryVideoId = primary.identifier
         currentlyPlayingVideoIds = [primary.identifier]
 
-        // CRITICAL: Always send play command for primary video, even if we think it's "already playing"
-        // This ensures playback starts even if player creation failed during survey phase (e.g., network errors)
-        // 
-        // Why this is safe (NO JITTER):
-        // - SimpleVideoPlayer checks `player.rate > 0` before playing
-        // - If ACTUALLY playing, it returns immediately without seeking/restarting
-        // - If NOT playing (failed creation), it starts playback
-        // - This gives us reliability (handles failures) without jitter (idempotent)
-        print("📤 [VideoPlaybackCoordinator] Sending play command for primary video: \(primary.videoMid)")
+        // Send play command for topmost video
+        print("📤 [VideoPlaybackCoordinator] Sending play command for topmost video: \(primary.videoMid)")
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
             object: nil,
@@ -472,10 +414,27 @@ class VideoPlaybackCoordinator: ObservableObject {
         )
     }
     
-    /// Identify the primary video (most visible/centered in viewport)
+    /// Start survey phase - play all visible videos for 2s each (kept for backward compatibility)
+    private func startSurveyPhase() {
+        // Redirect to new immediate playback
+        startPrimaryVideoPlayback()
+    }
+    
+    /// Play a video during survey phase (2s duration) - kept for backward compatibility
+    private func playVideoForSurvey(_ video: VideoPlaybackInfo) {
+        // No-op - survey phase is no longer used
+    }
+    
+    /// End survey phase and identify primary video - kept for backward compatibility
+    private func endSurveyPhase() {
+        // No-op - survey phase is no longer used
+    }
+    
+    /// Identify the primary video (topmost video on screen - lowest Y coordinate)
     private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
-        guard let tableView = tableView else {
-            // Fallback: return first visible video
+        guard let tableView = tableView,
+              tableView.window != nil else {
+            // Fallback: return first visible video if table view not in hierarchy
             return visibleVideos.first
         }
         
@@ -486,38 +445,97 @@ class VideoPlaybackCoordinator: ObservableObject {
             height: tableView.bounds.height
         )
         
-        let centerY = visibleRect.midY
-        
-        // Find video closest to center of viewport
-        var bestVideo: VideoPlaybackInfo?
-        var bestDistance: CGFloat = .infinity
+        // Find topmost video (lowest Y coordinate)
+        var topmostVideo: VideoPlaybackInfo?
+        var topmostY: CGFloat = .infinity
         
         for video in visibleVideos {
             // Find the cell containing this video
             guard let cell = findCell(for: video.tweetId, in: tableView) else { continue }
             
             let cellFrame = tableView.convert(cell.frame, to: tableView)
-            let cellCenterY = cellFrame.midY
-            let distance = abs(cellCenterY - centerY)
+            let cellTopY = cellFrame.minY
             
-            // Also consider what percentage of the cell is visible
+            // Check if cell is at least partially visible
             let intersection = cellFrame.intersection(visibleRect)
-            let visibilityRatio = intersection.height / cellFrame.height
-            
-            // Prefer videos that are more centered and more visible
-            let score = distance / max(visibilityRatio, 0.1) // Lower is better
-            
-            if score < bestDistance {
-                bestDistance = score
-                bestVideo = video
+            if intersection.height > 0 && cellTopY < topmostY {
+                topmostY = cellTopY
+                topmostVideo = video
             }
         }
         
-        return bestVideo ?? visibleVideos.first
+        return topmostVideo ?? visibleVideos.first
+    }
+    
+    /// Check if current primary video is 30% out of view and switch to next video if needed
+    private func checkAndSwitchVideoIfNeeded() {
+        // Only check during primary playing phase
+        guard phase == .primaryPlaying,
+              let primaryId = primaryVideoId,
+              let tableView = tableView,
+              tableView.window != nil else {
+            // Skip check if table view not in view hierarchy
+            return
+        }
+        
+        // Find current primary video
+        guard let currentPrimary = visibleVideos.first(where: { $0.identifier == primaryId }),
+              let cell = findCell(for: currentPrimary.tweetId, in: tableView) else {
+            return
+        }
+        
+        let visibleRect = CGRect(
+            x: 0,
+            y: tableView.contentOffset.y,
+            width: tableView.bounds.width,
+            height: tableView.bounds.height
+        )
+        
+        let cellFrame = tableView.convert(cell.frame, to: tableView)
+        let intersection = cellFrame.intersection(visibleRect)
+        
+        // Calculate visibility ratio (0.0 = completely out of view, 1.0 = fully visible)
+        let visibilityRatio = intersection.height / cellFrame.height
+        
+        // If video is 30% or less visible (70% out of view), switch to next video
+        if visibilityRatio <= 0.3 {
+            // Find next video in visible videos list
+            guard let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == primaryId }),
+                  currentIndex + 1 < visibleVideos.count else {
+                return
+            }
+            
+            let nextVideo = visibleVideos[currentIndex + 1]
+            
+            // Pause current video
+            pauseVideo(currentPrimary)
+            
+            // Switch to next video
+            primaryVideoId = nextVideo.identifier
+            currentlyPlayingVideoIds = [nextVideo.identifier]
+            
+            NotificationCenter.default.post(
+                name: .shouldPlayVideo,
+                object: nil,
+                userInfo: [
+                    "tweetId": nextVideo.tweetId,
+                    "videoMid": nextVideo.videoMid,
+                    "videoIndex": nextVideo.index,
+                    "isPrimary": true
+                ]
+            )
+            
+            print("🔄 [VideoPlaybackCoordinator] Switched from \(currentPrimary.videoMid) to \(nextVideo.videoMid) (visibility: \(visibilityRatio * 100)%%)")
+        }
     }
     
     /// Find table view cell for a given tweet ID
     private func findCell(for tweetId: String, in tableView: UITableView) -> UITableViewCell? {
+        // Ensure table view is in view hierarchy before accessing visibleCells
+        guard tableView.window != nil else {
+            return nil
+        }
+        
         for cell in tableView.visibleCells {
             // This assumes TweetTableViewCell has a way to identify its tweet
             // We'll need to add this functionality
@@ -600,19 +618,11 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
-        // If in survey phase, a video finishing means it's short or was near end
-        // Immediately end survey and make it (or next one) primary
-        if phase == .surveying {
-            endSurveyPhase()
-            return
-        }
-
-        // If in primary playing phase, advance to next video
+        // If in primary playing phase, advance to next video when current finishes
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId,
            primaryId.contains(videoMid) {
             playNextVisibleVideo()
-        } else {
         }
     }
     
@@ -692,19 +702,13 @@ class VideoPlaybackCoordinator: ObservableObject {
                         )
                     }
                 } else {
-                    // Primary video no longer in list (scrolled out), restart survey
+                    // Primary video no longer in list (scrolled out), restart playback
                     phase = .idle
                     primaryVideoId = nil
                     currentlyPlayingVideoIds.removeAll()
                     if !visibleVideos.isEmpty {
-                        startSurveyPhase()
+                        startPrimaryVideoPlayback()
                     }
-                }
-            } else if phase == .surveying {
-                // Continue survey phase
-                // Re-send play commands to ensure survey continues
-                for video in visibleVideos {
-                    playVideoForSurvey(video)
                 }
             }
         } else {
@@ -726,7 +730,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             scrollStopTimer?.invalidate()
             scrollStopTimer = nil
             
-            // If there are visible videos, restart survey
+            // If there are visible videos, restart playback
             if !visibleVideos.isEmpty {
                 
                 // Small delay to ensure video infrastructure is ready
@@ -734,13 +738,12 @@ class VideoPlaybackCoordinator: ObservableObject {
                     DispatchQueue.main.async {
                         guard let self = self else { return }
                         if self.phase == .idle && !self.visibleVideos.isEmpty {
-                            self.startSurveyPhase()
+                            self.startPrimaryVideoPlayback()
                         }
                     }
                 }
                 RunLoop.main.add(timer, forMode: .common)
                 playbackDebounceTimer = timer
-            } else {
             }
         }
     }
