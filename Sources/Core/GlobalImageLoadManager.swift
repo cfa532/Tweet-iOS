@@ -299,7 +299,10 @@ class GlobalImageLoadManager: ObservableObject {
             // Longer delays with exponential backoff: 5s, 10s
             let delay = Double(newRetryCount) * 5.0
             
-            // ✅ MEMORY FIX: Only capture request ID, not the entire request object
+            // ✅ CRITICAL MEMORY LEAK FIX: Only capture minimal data, NOT completion handlers
+            // Completion handlers may capture views, creating retain cycles via DispatchWorkItem
+            // Instead of capturing the completion handler, we mark request as "needs retry"
+            // and let the cell request it again when it reappears
             let requestId = request.id
             
             // Create a weak reference to avoid retain cycles
@@ -309,10 +312,12 @@ class GlobalImageLoadManager: ObservableObject {
                 self.scheduledRetries.removeValue(forKey: requestId)
                 
                 // ✅ MEMORY FIX: Check if request was cancelled before retry
-                // If cancelLoad() was called, don't retry
+                // If cancelLoad() was called, don't retry (cell disappeared)
                 if !self.activeLoads.keys.contains(requestId) && 
                    !self.pendingRequests.contains(where: { $0.id == requestId }) {
                     print("🧹 [GlobalImageLoadManager] Skipping retry - request was cancelled: \(requestId)")
+                    // Remove from completed so cell can retry when it reappears
+                    self.completedRequests.remove(requestId)
                     return
                 }
                 
@@ -324,10 +329,11 @@ class GlobalImageLoadManager: ObservableObject {
                     return
                 }
                 
-                // ⚠️ NOTE: We still need to pass the request to loadImage
-                // This is unavoidable with current architecture
-                // TODO: Refactor to use ID-based lookup instead
-                self.loadImage(request: request)
+                // ✅ CRITICAL MEMORY LEAK FIX: Don't capture request or completion handler
+                // Instead, just remove from completedRequests so cell can retry when visible
+                // This prevents memory leak from holding completion handlers in DispatchWorkItem
+                self.completedRequests.remove(requestId)
+                print("🔄 [GlobalImageLoadManager] Retry time reached for \(requestId) - removed from completed, cell will reload when visible")
             }
             
             scheduledRetries[request.id] = workItem

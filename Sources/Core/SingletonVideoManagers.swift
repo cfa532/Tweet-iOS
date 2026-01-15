@@ -1827,11 +1827,9 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 
                 // Just pause - no automatic rewind
                 // Will rewind when user tries to play
-                Task { @MainActor [weak self] in
-                    guard let self = self else { return }
-                    print("DEBUG: [DETAIL VIDEO MANAGER] Video finished for \(currentMid ?? "unknown") - paused, ready to replay")
-                    self.isPlaying = false
-                }
+                // ✅ PERFORMANCE FIX: Already on @MainActor, no need for nested Task
+                print("DEBUG: [DETAIL VIDEO MANAGER] Video finished for \(currentMid ?? "unknown") - paused, ready to replay")
+                self.isPlaying = false
             }
         }
         
