@@ -223,7 +223,8 @@ struct MediaCell: View, Equatable {
             cancelPreloadTask()
             
             // Cancel any pending image loads to prevent memory leaks
-            GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(effectiveBaseUrl.absoluteString)")
+            // ✅ FIX: Use only mid as request ID (matching loadImageNormalPriority above)
+            GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
             
             // Clean up foreground observer
             if let observer = foregroundObserver {
@@ -416,8 +417,10 @@ struct MediaCell: View, Equatable {
         isLoading = true
         
         // Use normal priority for grid images (they're visible but not as critical as detail view)
+        // ✅ FIX: Use only mid as request ID - cache key is based on mid, so request ID should match
+        // This ensures cached images are reused even when baseUrl changes
         GlobalImageLoadManager.shared.loadImageNormalPriority(
-            id: "\(attachment.mid)_\(effectiveBaseUrl.absoluteString)",
+            id: attachment.mid,
             url: url,
             attachment: attachment,
             baseUrl: effectiveBaseUrl

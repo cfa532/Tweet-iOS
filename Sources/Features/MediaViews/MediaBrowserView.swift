@@ -504,7 +504,9 @@ struct MediaBrowserView: View {
     }
     
     private func loadImageIfNeeded(for attachment: MimeiFileType, at index: Int) {
-        let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+        // ✅ FIX: Remove baseUrl from request ID - cache key is based on mid, so request ID should match
+        // Keep index prefix to distinguish between different browser views of the same image
+        let loadId = "browser_\(index)_\(attachment.mid)"
         
         // First, try to get compressed image immediately
         if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
@@ -546,8 +548,9 @@ struct MediaBrowserView: View {
     
     private static func cleanupImageStates(attachments: [MimeiFileType], imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
         // Cancel all pending image loads
+        // ✅ FIX: Use same request ID format as loadImageIfNeeded (without baseUrl)
         for (index, attachment) in attachments.enumerated() {
-            let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+            let loadId = "browser_\(index)_\(attachment.mid)"
             GlobalImageLoadManager.shared.cancelLoad(id: loadId)
         }
         
@@ -564,9 +567,10 @@ struct MediaBrowserView: View {
         for (index, _) in imageStates.wrappedValue {
             if !keepRange.contains(index) {
                 // Cancel load for non-visible images
+                // ✅ FIX: Use same request ID format as loadImageIfNeeded (without baseUrl)
                 if index < attachments.count {
                     let attachment = attachments[index]
-                    let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+                    let loadId = "browser_\(index)_\(attachment.mid)"
                     GlobalImageLoadManager.shared.cancelLoad(id: loadId)
                 }
                 

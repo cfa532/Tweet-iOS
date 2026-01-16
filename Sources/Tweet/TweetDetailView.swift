@@ -233,7 +233,9 @@ struct DetailMediaCell: View {
         guard let baseUrl = baseUrl,
               let url = attachment.getUrl(baseUrl) else { return }
         
-        let loadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
+        // ✅ FIX: Use only mid as request ID - cache key is based on mid, so request ID should match
+        // This ensures cached images are reused even when baseUrl changes
+        let loadId = attachment.mid
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
         
         // First, try to get cached image immediately (disk check is OK in async context)
@@ -498,10 +500,11 @@ struct TweetDetailView: View {
             if let attachments = displayTweet.attachments,
                let baseUrl = displayTweet.author?.baseUrl {
                 for attachment in attachments {
-                    let mainLoadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
-                    
+                    // ✅ FIX: Use only mid as request ID (matching loadImageHighPriority above)
+                    let mainLoadId = attachment.mid
+
                     print("DEBUG: [TweetDetailView] Cancelling load: \(mainLoadId)")
-                    
+
                     GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
                 }
             }

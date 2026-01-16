@@ -153,8 +153,10 @@ struct Avatar: View {
         )
         
         // Check cache first (disk check is OK in async context like onAppear/loadAvatar)
+        // ✅ FIX: Reset failed state when cache is found (prevents showing default avatar when cached image exists)
         if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
             cachedImage = cached
+            loadFailed = false  // Reset failed state since we have a cached image
             return
         }
         
