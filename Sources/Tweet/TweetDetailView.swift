@@ -242,6 +242,22 @@ struct DetailMediaCell: View {
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             print("DEBUG: [TweetDetailView] Found cached image for \(loadId)")
             self.image = cachedImage
+            
+            // ✅ Load original image in background and replace compressed cache
+            // This ensures detail view uses the highest quality image
+            Task {
+                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                    from: url,
+                    for: attachment,
+                    baseUrl: baseUrl,
+                    replaceCompressedCache: true
+                ) {
+                    // Update image with original
+                    await MainActor.run {
+                        self.image = originalImage
+                    }
+                }
+            }
             return
         }
         
@@ -261,6 +277,24 @@ struct DetailMediaCell: View {
             // The extra Task wrapper was causing a delay in UI updates, making spinners stick
             self.image = loadedImage
             self.loading = false
+            
+            // ✅ Load original image in background and replace compressed cache
+            // This ensures detail view uses the highest quality image
+            if let loadedImage = loadedImage {
+                Task {
+                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                        from: url,
+                        for: attachment,
+                        baseUrl: baseUrl,
+                        replaceCompressedCache: true
+                    ) {
+                        // Update image with original
+                        await MainActor.run {
+                            self.image = originalImage
+                        }
+                    }
+                }
+            }
         }
     }
 }

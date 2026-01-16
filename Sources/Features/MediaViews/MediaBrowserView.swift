@@ -511,6 +511,23 @@ struct MediaBrowserView: View {
         // First, try to get compressed image immediately
         if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             imageStates[index] = .loaded(compressedImage)
+            
+            // ✅ Load original image in background and replace compressed cache
+            // This ensures fullscreen views use the highest quality image
+            guard let url = attachment.getUrl(baseUrl) else { return }
+            Task {
+                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                    from: url,
+                    for: attachment,
+                    baseUrl: baseUrl,
+                    replaceCompressedCache: true
+                ) {
+                    // Update image state with original image
+                    await MainActor.run {
+                        self.imageStates[index] = .loaded(originalImage)
+                    }
+                }
+            }
             return
         }
         
@@ -532,6 +549,22 @@ struct MediaBrowserView: View {
         ) { compressedImage in
             if let compressedImage = compressedImage {
                 self.imageStates[index] = .loaded(compressedImage)
+                
+                // ✅ Load original image in background and replace compressed cache
+                // This ensures fullscreen and detail views use the highest quality image
+                Task {
+                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                        from: url,
+                        for: attachment,
+                        baseUrl: baseUrl,
+                        replaceCompressedCache: true
+                    ) {
+                        // Update image state with original image
+                        await MainActor.run {
+                            self.imageStates[index] = .loaded(originalImage)
+                        }
+                    }
+                }
             } else {
                 self.imageStates[index] = .error
             }

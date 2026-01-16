@@ -609,7 +609,14 @@ class ImageCacheManager: @unchecked Sendable {
         return result
     }
     
-    func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
+    /// Load original image and optionally replace compressed cache with it
+    /// - Parameters:
+    ///   - url: URL to load the original image from
+    ///   - attachment: The attachment to load the image for
+    ///   - baseUrl: Base URL for the attachment
+    ///   - replaceCompressedCache: If true, replace the compressed cache entry with the original image
+    /// - Returns: The loaded original image, or nil if loading failed
+    func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL, replaceCompressedCache: Bool = false) async -> UIImage? {
         guard let key = getCacheKey(for: attachment) else {
             print("DEBUG: [ImageCacheManager] Cannot load original image - no cache key available")
             return nil
@@ -628,7 +635,12 @@ class ImageCacheManager: @unchecked Sendable {
                 return nil
             }
             print("DEBUG: [ImageCacheManager] Reusing existing request for original image \(cacheKey)")
-            return await existingTask.value
+            let result = await existingTask.value
+            // Replace compressed cache if requested
+            if replaceCompressedCache, let originalImage = result {
+                replaceCompressedCacheWithOriginal(image: originalImage, for: key)
+            }
+            return result
         }
         
         // Create new request task
@@ -656,6 +668,12 @@ class ImageCacheManager: @unchecked Sendable {
                     print("Error loading original image from disk (nil) at \(tempURL)")
                 }
                 try? FileManager.default.removeItem(at: tempURL)
+                
+                // Replace compressed cache if requested
+                if replaceCompressedCache, let originalImage = image {
+                    replaceCompressedCacheWithOriginal(image: originalImage, for: key)
+                }
+                
                 return image
             } catch {
                 print("Error loading original image from \(url): \(error.localizedDescription)")
@@ -677,6 +695,26 @@ class ImageCacheManager: @unchecked Sendable {
         }
         
         return result
+    }
+    
+    /// Replace compressed cache entry with original image
+    /// - Parameters:
+    ///   - image: The original image to cache
+    ///   - key: The cache key (without _compressed or _original suffix)
+    private func replaceCompressedCacheWithOriginal(image: UIImage, for key: String) {
+        let compressedKey = "\(key)_compressed"
+        // Replace in memory cache
+        cacheImageInMemory(image, forKey: compressedKey)
+        
+        // Replace on disk (save original as compressed cache file)
+        let compressedFileURL = getCompressedCacheFileURL(for: key)
+        Task.detached(priority: .utility) {
+            // Save original image to compressed cache location
+            if let jpegData = image.jpegData(compressionQuality: 1.0) {
+                try? jpegData.write(to: compressedFileURL)
+                print("✅ [ImageCacheManager] Replaced compressed cache with original image for \(key)")
+            }
+        }
     }
     
     // MARK: - Avatar Loading with Throttling
