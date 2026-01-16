@@ -197,14 +197,32 @@ struct TweetItemView: View, Equatable {
                     hasRegisteredRetweetRelationship = true
                 }
                 
+                // ✅ FIX: Always update originalTweet state to trigger view refresh
+                // Even if it's the same singleton instance, explicitly setting the state
+                // ensures SwiftUI detects the update and refreshes the view
                 await MainActor.run {
-                    originalTweet = t
+                    // Force view update by clearing and then setting (ensures SwiftUI detects change)
+                    let previousTweet = originalTweet
+                    originalTweet = nil  // Clear first to force view update
+                    originalTweet = t    // Then set to new value
                     hasLoadedOriginalTweet = true
+                    
+                    // If it's the same instance, trigger objectWillChange to notify observers
+                    if previousTweet === t {
+                        t.objectWillChange.send()
+                    }
                 }
-            } else if originalTweet == nil {
-                // Could not fetch original tweet and no cache, remove this tweet from the list
+            } else {
+                // Server fetch failed - check if we have cache
                 await MainActor.run {
-                    onRemove?(tweet.mid)
+                    if originalTweet == nil {
+                        // No cache either - remove this tweet from the list
+                        hasLoadedOriginalTweet = true  // Mark as loaded to prevent infinite placeholder
+                        onRemove?(tweet.mid)
+                    } else {
+                        // We have cache, but server fetch failed - mark as loaded to use cached version
+                        hasLoadedOriginalTweet = true
+                    }
                 }
             }
         }
