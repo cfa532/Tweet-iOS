@@ -152,16 +152,23 @@ struct Avatar: View {
             mediaType: .image
         )
         
-        // Check cache first (disk check is OK in async context like onAppear/loadAvatar)
-        // ✅ FIX: Reset failed state when cache is found (prevents showing default avatar when cached image exists)
-        if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
-            cachedImage = cached
-            loadFailed = false  // Reset failed state since we have a cached image
-            return
-        }
+        // ✅ PERFORMANCE FIX: Check disk cache asynchronously to avoid blocking main thread
+        // Set isLoading synchronously to prevent race conditions, but clear it immediately if cache is found
+        isLoading = true  // Set synchronously to prevent multiple Tasks from starting
         
-        isLoading = true
         Task {
+            // Check disk cache first (async, non-blocking)
+            if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
+                await MainActor.run {
+                    // Found in disk cache - set immediately and clear loading state
+                    cachedImage = cached
+                    loadFailed = false
+                    isLoading = false  // Clear loading state immediately
+                }
+                return
+            }
+            
+            // Not in disk cache - keep loading state and fetch from network
             // Use standard image loading with deduplication
             guard let url = URL(string: urlString) else {
                 print("👤 [AVATAR.loadAvatar] ❌ Invalid URL")

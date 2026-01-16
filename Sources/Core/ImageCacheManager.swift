@@ -571,7 +571,7 @@ class ImageCacheManager: @unchecked Sendable {
                 try Task.checkCancellation()
                 
                 var request = URLRequest(url: url)
-                request.timeoutInterval = 10.0 // 10 second timeout
+                request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
                 let (tempURL, response) = try await URLSession.shared.download(for: request)
@@ -640,7 +640,7 @@ class ImageCacheManager: @unchecked Sendable {
                 try Task.checkCancellation()
                 
                 var request = URLRequest(url: url)
-                request.timeoutInterval = 15.0 // 15 second timeout for original images (larger files)
+                request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
                 let (tempURL, response) = try await URLSession.shared.download(for: request)
@@ -735,7 +735,7 @@ class ImageCacheManager: @unchecked Sendable {
                 try Task.checkCancellation()
                 
                 var request = URLRequest(url: url)
-                request.timeoutInterval = 10.0
+                request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
                 let (tempURL, response) = try await URLSession.shared.download(for: request)

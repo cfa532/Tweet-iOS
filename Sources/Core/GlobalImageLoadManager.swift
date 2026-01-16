@@ -396,7 +396,7 @@ class GlobalImageLoadManager: ObservableObject {
         do {
             // Create URLRequest with timeout
             var urlRequest = URLRequest(url: request.url)
-            urlRequest.timeoutInterval = 8.0 // 8 second timeout (reduced from 10s for faster failure detection)
+            urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
             urlRequest.cachePolicy = .returnCacheDataElseLoad
             
             let (data, response) = try await URLSession.shared.data(for: urlRequest)
@@ -541,7 +541,7 @@ class GlobalImageLoadManager: ObservableObject {
             
             // Create URLRequest with timeout
             var urlRequest = URLRequest(url: request.url)
-            urlRequest.timeoutInterval = 8.0 // 8 second timeout (reduced from 10s for faster failure detection)
+            urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
             urlRequest.cachePolicy = .returnCacheDataElseLoad
             
             let (data, response) = try await URLSession.shared.data(for: urlRequest)
