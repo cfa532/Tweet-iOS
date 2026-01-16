@@ -462,6 +462,17 @@ class TweetTableViewController: UITableViewController {
         
         // Show/hide loading spinner with animations
         if isLoadingMore {
+            // ✅ FIX: Don't show spinner if we just showed/have no-more-tweets message
+            // If there are no more tweets and we just showed the message, don't show spinner
+            // This prevents the spinner flash right after the message disappears
+            if isShowingNoMoreTweetsMessage || (!hasMoreTweets && lastNoMoreTweetsShownTime != nil) {
+                let timeSinceMessage = lastNoMoreTweetsShownTime.map { Date().timeIntervalSince($0) } ?? 0
+                if timeSinceMessage < 3.0 {  // Within 3 seconds of showing message (2s display + 1s buffer)
+                    print("⏳ [FOOTER SPINNER] Skipping spinner - no-more-tweets message was recently shown")
+                    return
+                }
+            }
+            
             // Record when spinner was shown
             loadingSpinnerStartTime = Date()
             print("⏳ [FOOTER SPINNER] Showing spinner with animation at \(Date())")
@@ -984,7 +995,21 @@ class TweetTableViewController: UITableViewController {
                     self.tableView.tableFooterView = nil
                     print("📭 [NO MORE TWEETS] Message hidden and removed from table at \(Date())")
                 }
+                // ✅ FIX: Clear flag AFTER removing footer, but add small delay before allowing spinner
+                // This prevents updateLoadingState (called from SwiftUI updates) from immediately showing spinner
                 self.isShowingNoMoreTweetsMessage = false
+                
+                // Small delay to prevent immediate spinner flash after message removal
+                // updateUIViewController might be called right after this, and without the delay,
+                // it could show a spinner if isLoadingMore is still true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    // After brief delay, if state says we should load, allow it
+                    // But if there are no more tweets, don't show spinner
+                    if self.isLoadingMore && self.hasMoreTweets {
+                        // Only update if we should actually be loading
+                        self.updateLoadingState(isLoadingMore: self.isLoadingMore, hasMoreTweets: self.hasMoreTweets)
+                    }
+                }
             }
         }
     }
