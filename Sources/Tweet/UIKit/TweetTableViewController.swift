@@ -946,8 +946,8 @@ class TweetTableViewController: UITableViewController {
         
         print("📭 [NO MORE TWEETS] Showing message with animation at \(Date())")
         
-        // Create footer view with message - match spinner height
-        let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 80))
+        // Create footer view with message - increased height for more spacing from tweet above
+        let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 120))
         footerView.backgroundColor = .clear
         
         let messageLabel = UILabel()
@@ -959,10 +959,11 @@ class TweetTableViewController: UITableViewController {
         
         footerView.addSubview(messageLabel)
         
-        // Position message in lower part of footer, matching spinner position
+        // ✅ FIX: Position message lower in footer to increase distance from tweet above
+        // Increased top padding from 20 to 40 to add more space
         NSLayoutConstraint.activate([
             messageLabel.centerXAnchor.constraint(equalTo: footerView.centerXAnchor),
-            messageLabel.topAnchor.constraint(equalTo: footerView.topAnchor, constant: 20)
+            messageLabel.topAnchor.constraint(equalTo: footerView.topAnchor, constant: 40)
         ])
         
         // Fade in and slide up animation (matching Android)
