@@ -40,7 +40,13 @@ struct ChatListScreen: View {
         VStack {
                 if currentUserSessions.isEmpty {
                     // Show followings list when no chats exist or all messages are empty
-                    FollowingsListForChat(followingUsers: followingUsers, isLoadingFollowings: isLoadingFollowings)
+                    FollowingsListForChat(
+                        followingUsers: followingUsers,
+                        isLoadingFollowings: isLoadingFollowings,
+                        onSelectUser: { user in
+                            navigationPath.append(user.mid)
+                        }
+                    )
                 } else {
                     List {
                         ForEach(currentUserSessions) { session in
@@ -80,7 +86,16 @@ struct ChatListScreen: View {
             }
             .sheet(isPresented: $showStartNewChat) {
                 NavigationStack {
-                    FollowingsListForChat(followingUsers: followingUsers, isLoadingFollowings: isLoadingFollowings)
+                    FollowingsListForChat(
+                        followingUsers: followingUsers,
+                        isLoadingFollowings: isLoadingFollowings,
+                        onSelectUser: { user in
+                            showStartNewChat = false
+                            DispatchQueue.main.async {
+                                navigationPath.append(user.mid)
+                            }
+                        }
+                    )
                         .navigationTitle(LocalizedStringKey("Start Chat"))
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
@@ -275,7 +290,7 @@ struct ChatListScreen: View {
 struct FollowingsListForChat: View {
     let followingUsers: [User]
     let isLoadingFollowings: Bool
-    @Environment(\.dismiss) private var dismiss
+    let onSelectUser: ((User) -> Void)?
     
     var body: some View {
         VStack {
@@ -299,16 +314,9 @@ struct FollowingsListForChat: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(followingUsers) { user in
-                    FollowingRowForChat(user: user)
+                    FollowingRowForChat(user: user, onSelectUser: onSelectUser)
                 }
             }
-        }
-        .navigationDestination(for: String.self) { receiptId in
-            ChatScreen(receiptId: receiptId)
-                .onAppear {
-                    // Dismiss the sheet when navigating to chat
-                    dismiss()
-                }
         }
     }
 }
@@ -316,37 +324,49 @@ struct FollowingsListForChat: View {
 // Separate row view for better performance
 struct FollowingRowForChat: View {
     let user: User
+    let onSelectUser: ((User) -> Void)?
     
     var body: some View {
         // Only show the row if user data is already loaded (has username)
         if let username = user.username {
-            NavigationLink(value: user.mid) {
-                HStack {
-                    Avatar(user: user, size: 40)
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("\(user.name ?? "")@\(username)")
-                                .font(.headline)
-                                .foregroundColor(.primary)
-                            Spacer()
-                        }
-                        
-                        if let profile = user.profile, !profile.isEmpty {
-                            Text(profile)
-                                .font(.body)
-                                .foregroundColor(.secondary)
-                                .lineLimit(2)
-                        }
-                    }
-                    
-                    Image(systemName: "message")
-                        .foregroundColor(.blue)
-                        .font(.system(size: 16, weight: .medium))
+            if let onSelectUser = onSelectUser {
+                Button(action: { onSelectUser(user) }) {
+                    rowContent(username: username)
                 }
-                .padding(.vertical, 4)
+                .buttonStyle(PlainButtonStyle())
+            } else {
+                NavigationLink(value: user.mid) {
+                    rowContent(username: username)
+                }
             }
         }
+    }
+
+    private func rowContent(username: String) -> some View {
+        HStack {
+            Avatar(user: user, size: 40)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("\(user.name ?? "")@\(username)")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Spacer()
+                }
+                
+                if let profile = user.profile, !profile.isEmpty {
+                    Text(profile)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            
+            Image(systemName: "message")
+                .foregroundColor(.blue)
+                .font(.system(size: 16, weight: .medium))
+        }
+        .padding(.vertical, 4)
     }
 }
 
