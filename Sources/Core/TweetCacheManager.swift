@@ -180,7 +180,16 @@ extension TweetCacheManager {
                 
                 // Always load from userId cache (which equals authorId for profile views)
                 request.predicate = NSPredicate(format: "uid == %@", userId)
-                request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+                
+                // For bookmarks and favorites, sort by timeCached (when bookmarked/favorited)
+                // For other types, sort by timestamp (tweet creation time)
+                let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+                if isBookmarkOrFavorite {
+                    request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                } else {
+                    request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+                }
+                
                 // Fetch more tweets if filtering by authorId (to account for filtering)
                 let fetchLimit = shouldFilterByAuthorId ? Int(pageSize * 3) : Int(pageSize)
                 request.fetchLimit = fetchLimit
@@ -369,7 +378,12 @@ extension TweetCacheManager {
 
     /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.
     /// If a tweet with the same mid already exists, it will be updated with new counts and favorites instead of being replaced.
-    func saveTweet(_ tweet: Tweet, userId: String) {
+    /// - Parameters:
+    ///   - tweet: The tweet to save
+    ///   - userId: The cache key (e.g., "bookmark_list_userId" or user's mid)
+    ///   - timeCached: Optional timestamp to use for timeCached. If nil, uses current Date().
+    ///                 For bookmarks/favorites, this should be set to preserve server order.
+    func saveTweet(_ tweet: Tweet, userId: String, timeCached: Date? = nil) {
         // Validate timestamp before caching
         if tweet.timestamp.timeIntervalSince1970 <= 0 {
             print("ERROR: [TweetCacheManager] Attempting to cache tweet with invalid timestamp: \(tweet.timestamp), skipping cache")
@@ -377,14 +391,37 @@ extension TweetCacheManager {
         }
         
         context.performAndWait {
+            // For bookmarks/favorites, look up by both tid AND uid to find the exact cache entry
+            // This ensures we update the correct entry and preserve order
+            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+            
+            if isBookmarkOrFavorite {
+                // Look up by both tid and uid for bookmarks/favorites to find exact cache entry
+                request.predicate = NSPredicate(format: "tid == %@ AND uid == %@", tweet.mid, userId)
+            } else {
+                // For other types, look up by tid only (tweet can be in multiple caches)
+                request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+            }
+            
             let cdTweet: CDTweet
             
             if let existingTweet = try? context.fetch(request).first {
                 cdTweet = existingTweet
             } else {
-                cdTweet = CDTweet(context: context)
+                // If not found with the specific uid (for bookmarks/favorites), check if tweet exists with different uid
+                if isBookmarkOrFavorite {
+                    let fallbackRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    fallbackRequest.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+                    if let existingWithDifferentUid = try? context.fetch(fallbackRequest).first {
+                        // Update existing entry to use the bookmark/favorite cache key
+                        cdTweet = existingWithDifferentUid
+                    } else {
+                        cdTweet = CDTweet(context: context)
+                    }
+                } else {
+                    cdTweet = CDTweet(context: context)
+                }
             }
             
             // Always save the current in-memory tweet state to cache
@@ -399,7 +436,9 @@ extension TweetCacheManager {
             cdTweet.tid = tweet.mid
             cdTweet.uid = userId
             cdTweet.timestamp = tweet.timestamp
-            cdTweet.timeCached = Date()
+            // Use provided timeCached, or current time if not provided
+            // For bookmarks/favorites, timeCached should be set to preserve server order
+            cdTweet.timeCached = timeCached ?? Date()
             
             try? context.save()
         }

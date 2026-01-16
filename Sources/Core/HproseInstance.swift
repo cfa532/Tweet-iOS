@@ -2367,6 +2367,11 @@ final class HproseInstance: ObservableObject {
         
         print("DEBUG: [HproseInstance] getUserTweetsByType - Got response with \(response.count) items")
         
+        // For bookmarks/favorites, preserve server order by using a base timestamp minus index
+        // This ensures tweets are sorted correctly when retrieved from cache
+        let isBookmarkOrFavorite = type == .BOOKMARKS || type == .FAVORITES
+        let baseTime = Date()
+        
         var tweetsWithAuthors: [Tweet?] = []
         for (index, dict) in response.enumerated() {
             if let item = dict {
@@ -2383,8 +2388,23 @@ final class HproseInstance: ObservableObject {
                     // Use format: "bookmark_list_userId" or "favorite_list_userId"
                     // saveTweet will automatically mark media as permanent based on the prefix
                     let cacheKey = "\(type.rawValue)_\(user.mid)"
+                    
+                    // For bookmarks/favorites, preserve server order by using a timestamp that reflects position
+                    // Subtract index milliseconds to ensure earlier items (lower index) have later timestamps
+                    // This way, when sorted descending by timeCached, they appear in the correct order
+                    // Using milliseconds provides better precision for large lists
+                    let timeCached: Date?
+                    if isBookmarkOrFavorite {
+                        // Use baseTime minus index milliseconds to preserve order (most recent bookmark first)
+                        // Index 0 gets baseTime (latest), index 1 gets baseTime - 0.001s, etc.
+                        timeCached = baseTime.addingTimeInterval(-TimeInterval(index) * 0.001)
+                    } else {
+                        // For other types, use current time
+                        timeCached = nil
+                    }
+                    
                     // Reduced logging to prevent console buffer overflow
-                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey)
+                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey, timeCached: timeCached)
                     
                     tweetsWithAuthors.append(tweet)
                     print("DEBUG: [HproseInstance] getUserTweetsByType - Successfully processed tweet \(index): \(tweet.mid)")
@@ -2398,16 +2418,25 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // Sort tweets in descending order by timestamp (most recent first)
-        let sortedTweets = tweetsWithAuthors.sorted { tweet1, tweet2 in
-            guard let t1 = tweet1, let t2 = tweet2 else {
-                // Put non-nil tweets before nil tweets
-                return tweet1 != nil && tweet2 == nil
+        // For bookmarks and favorites, preserve the server's order (already sorted by bookmark/favorite time)
+        // For other types, sort by tweet creation timestamp (most recent first)
+        let sortedTweets: [Tweet?]
+        if type == .BOOKMARKS || type == .FAVORITES {
+            // Preserve server order - don't sort
+            sortedTweets = tweetsWithAuthors
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), preserving server order (bookmarks/favorites)")
+        } else {
+            // Sort tweets in descending order by timestamp (most recent first)
+            sortedTweets = tweetsWithAuthors.sorted { tweet1, tweet2 in
+                guard let t1 = tweet1, let t2 = tweet2 else {
+                    // Put non-nil tweets before nil tweets
+                    return tweet1 != nil && tweet2 == nil
+                }
+                return t1.timestamp > t2.timestamp
             }
-            return t1.timestamp > t2.timestamp
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), sorted by timestamp (descending)")
         }
         
-        print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), sorted by timestamp (descending)")
         return sortedTweets
     }
     
