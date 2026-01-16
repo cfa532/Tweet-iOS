@@ -455,8 +455,10 @@ class TweetTableViewController: UITableViewController {
         self.isLoadingMore = isLoadingMore
         self.hasMoreTweets = hasMoreTweets
         
-        // Only log when state actually changes to avoid spam
+        // ✅ FIX: Only log state changes, and avoid logging Date() or complex objects
+        // Excessive logging can cause Xcode console to stop showing logs (FontServicesDaemonManager error)
         if stateChanged {
+            // Use simple format to avoid overwhelming console
             print("🔄 [LOADING STATE] isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
         }
         
@@ -475,7 +477,8 @@ class TweetTableViewController: UITableViewController {
             
             // Record when spinner was shown
             loadingSpinnerStartTime = Date()
-            print("⏳ [FOOTER SPINNER] Showing spinner with animation at \(Date())")
+            // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
+            print("⏳ [FOOTER SPINNER] Showing spinner with animation")
             
             // Start timeout timer as safety measure (30 second timeout)
             loadingTimeoutTimer?.invalidate()
@@ -536,6 +539,12 @@ class TweetTableViewController: UITableViewController {
                 }
             } else {
                 // No start time recorded, hide immediately
+                // ✅ FIX: Don't clear footer if we're showing the "no more tweets" message
+                // This prevents the message from being removed prematurely
+                if isShowingNoMoreTweetsMessage {
+                    print("✅ [FOOTER SPINNER] Skipping footer clear - no-more-tweets message is showing")
+                    return
+                }
                 if tableView.tableFooterView != nil {
                     print("✅ [FOOTER SPINNER] Hiding spinner (no start time)")
                 }
@@ -548,6 +557,14 @@ class TweetTableViewController: UITableViewController {
         // Cancel timeout timer since loading completed normally
         loadingTimeoutTimer?.invalidate()
         loadingTimeoutTimer = nil
+        
+        // ✅ FIX: Don't hide spinner if we're showing the "no more tweets" message
+        // This prevents the message from being removed when hideSpinner is called
+        if isShowingNoMoreTweetsMessage {
+            print("✅ [FOOTER SPINNER] Skipping hide - no-more-tweets message is showing")
+            loadingSpinnerStartTime = nil
+            return
+        }
         
         guard let footerView = tableView.tableFooterView else {
             print("✅ [FOOTER SPINNER] No footer view to hide")
@@ -944,7 +961,8 @@ class TweetTableViewController: UITableViewController {
         // Cancel any existing timer
         noMoreTweetsMessageTimer?.invalidate()
         
-        print("📭 [NO MORE TWEETS] Showing message with animation at \(Date())")
+        // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
+        print("📭 [NO MORE TWEETS] Showing message with animation")
         
         // Create footer view with message - increased height for more spacing from tweet above
         let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 120))
@@ -985,7 +1003,8 @@ class TweetTableViewController: UITableViewController {
                 return
             }
             
-            print("📭 [NO MORE TWEETS] Timer fired at \(Date()) - hiding message with animation (2s cooldown active)")
+            // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
+            print("📭 [NO MORE TWEETS] Timer fired - hiding message with animation (2s cooldown active)")
             
             // Fade out and slide up animation
             UIView.animate(withDuration: 0.3, animations: {
@@ -994,7 +1013,8 @@ class TweetTableViewController: UITableViewController {
             }) { _ in
                 if self.tableView.tableFooterView === footerView {
                     self.tableView.tableFooterView = nil
-                    print("📭 [NO MORE TWEETS] Message hidden and removed from table at \(Date())")
+                    // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
+                    print("📭 [NO MORE TWEETS] Message hidden and removed from table")
                 }
                 // ✅ FIX: Clear flag AFTER removing footer, but add small delay before allowing spinner
                 // This prevents updateLoadingState (called from SwiftUI updates) from immediately showing spinner
