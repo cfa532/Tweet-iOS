@@ -24,12 +24,17 @@ struct AppHeaderView: View {
             
             Spacer()
             
-            // Middle: App Logo
-            Image("tweet_icon")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 40, height: 40)
-                .clipShape(Circle())
+            // Middle: App Logo (tappable to scroll to top)
+            Button(action: {
+                NotificationCenter.default.post(name: .scrollToTop, object: nil)
+            }) {
+                Image("tweet_icon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 40, height: 40)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(PlainButtonStyle())
             
             Spacer()
             

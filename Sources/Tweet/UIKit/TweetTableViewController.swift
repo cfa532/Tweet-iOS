@@ -9,6 +9,27 @@ import UIKit
 import SwiftUI
 import Combine
 
+/// Persistent storage for scroll positions across view controller deallocation
+@MainActor
+class ScrollPositionManager {
+    static let shared = ScrollPositionManager()
+    private var scrollPositions: [String: CGFloat] = [:]
+    
+    private init() {}
+    
+    func saveScrollPosition(_ position: CGFloat, for identifier: String) {
+        scrollPositions[identifier] = position
+    }
+    
+    func getScrollPosition(for identifier: String) -> CGFloat? {
+        return scrollPositions[identifier]
+    }
+    
+    func clearScrollPosition(for identifier: String) {
+        scrollPositions.removeValue(forKey: identifier)
+    }
+}
+
 class TweetTableViewController: UITableViewController {
     
     // Data
@@ -74,6 +95,13 @@ class TweetTableViewController: UITableViewController {
     private var scrollToTopObserver: NSObjectProtocol?
     // Notification observer for tweet height changes
     
+    // Scroll position preservation
+    private var savedScrollPosition: CGFloat?
+    private var isScrollingToTop: Bool = false
+    
+    // Feed identifier for persistent scroll position storage
+    var feedIdentifier: String = "mainFeed"  // Default to main feed
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -107,9 +135,49 @@ class TweetTableViewController: UITableViewController {
     }
     
     func scrollToTop() {
+        // Clear saved scroll position when scrolling to top (both instance and persistent)
+        savedScrollPosition = nil
+        ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
+        isScrollingToTop = true
+        
         // Scroll to the top of the table view with animation
         let topInset = tableView.adjustedContentInset.top
         tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: true)
+        
+        // Reset flag after animation completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.isScrollingToTop = false
+        }
+    }
+    
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        
+        // Restore scroll position from persistent storage if available
+        // This handles cases where the view controller was deallocated and recreated
+        if !isScrollingToTop {
+            // First check instance variable (for same-session navigation)
+            if let savedPosition = savedScrollPosition {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, !self.isScrollingToTop else { return }
+                    self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
+                    self.lastScrollOffset = savedPosition
+                    self.savedScrollPosition = nil
+                }
+            } else if let persistentPosition = ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) {
+                // Restore from persistent storage (for tab switching)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, !self.isScrollingToTop else { return }
+                    // Wait a bit longer for layout when restoring from persistent storage
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                        guard let self = self, !self.isScrollingToTop else { return }
+                        self.tableView.setContentOffset(CGPoint(x: 0, y: persistentPosition), animated: false)
+                        self.lastScrollOffset = persistentPosition
+                        // Keep position in storage until we scroll away or scroll to top
+                    }
+                }
+            }
+        }
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -126,9 +194,32 @@ class TweetTableViewController: UITableViewController {
         // Only adjust if offset is close to 0 (the bad initial position)
         // and topInset is set (nav bar is present)
         // Ignore if already properly positioned or if user has scrolled
-        if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 {
+        // Also ignore if we just restored a saved position (check both instance and persistent)
+        let hasSavedPosition = savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+        if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 && !hasSavedPosition {
             tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
             lastScrollOffset = -topInset
+        }
+    }
+    
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        
+        // Save current scroll position when view disappears
+        // Only save if we're not at the very top (to avoid saving top position unnecessarily)
+        let topInset = tableView.adjustedContentInset.top
+        let currentOffset = tableView.contentOffset.y
+        let topPosition = -topInset
+        
+        // Save position if we're scrolled down from the top (more than 10 points)
+        if currentOffset > topPosition + 10 {
+            // Save to both instance variable (for same-session) and persistent storage (for tab switching)
+            savedScrollPosition = currentOffset
+            ScrollPositionManager.shared.saveScrollPosition(currentOffset, for: feedIdentifier)
+        } else {
+            // At or near top, clear saved position
+            savedScrollPosition = nil
+            ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
         }
     }
     
@@ -148,7 +239,8 @@ class TweetTableViewController: UITableViewController {
             
             
             // If offset is too negative (header would be under nav bar), correct it
-            if currentOffset < -topInset {
+            // But only if we don't have a saved position to restore
+            if currentOffset < -topInset && savedScrollPosition == nil {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
             }
