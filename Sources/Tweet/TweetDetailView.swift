@@ -280,7 +280,7 @@ struct DetailMediaCell: View {
             
             // ✅ Load original image in background and replace compressed cache
             // This ensures detail view uses the highest quality image
-            if let loadedImage = loadedImage {
+            if loadedImage != nil {
                 Task {
                     if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
                         from: url,
@@ -531,8 +531,7 @@ struct TweetDetailView: View {
             refreshTimer = nil
             
             // Cancel any pending image loads to prevent memory leaks
-            if let attachments = displayTweet.attachments,
-               let baseUrl = displayTweet.author?.baseUrl {
+            if let attachments = displayTweet.attachments {
                 for attachment in attachments {
                     // ✅ FIX: Use only mid as request ID (matching loadImageHighPriority above)
                     let mainLoadId = attachment.mid
