@@ -892,7 +892,6 @@ struct SimpleVideoPlayer: View {
                 // For embedded videos, also react directly to autoPlay parameter changes
                 .onChange(of: autoPlay) { _, newAutoPlay in
                     if mode == .embeddedDetail {
-                        print("🔄 [SimpleVideoPlayer] Embedded video \(mid) autoPlay parameter changed to \(newAutoPlay)")
                         handleAutoPlayChange(shouldAutoPlay: newAutoPlay)
                     }
                 }
@@ -903,7 +902,6 @@ struct SimpleVideoPlayer: View {
                 .onChange(of: loadingState) { oldState, newState in
                     // For embedded videos in detail views, check autoplay when loading completes
                     if oldState.isLoading && !newState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive && currentAutoPlay && isVisible {
-                        print("🔄 [SimpleVideoPlayer] Embedded video \(mid) loading completed - checking autoplay")
                         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                     }
                 }
@@ -1325,7 +1323,6 @@ struct SimpleVideoPlayer: View {
             checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
         } else if mode == .embeddedDetail {
             // For embedded videos, check playback conditions when autoPlay changes
-            print("🔄 [SimpleVideoPlayer] Embedded video \(mid) autoPlay changed to \(shouldAutoPlay) - checking playback conditions")
             if shouldAutoPlay {
                 checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
             } else {
@@ -4736,7 +4733,6 @@ struct SimpleVideoPlayer: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 callback()
             }
-        } else {
         }
         
         isHandlingFinishEvent = false
@@ -4854,11 +4850,6 @@ struct SimpleVideoPlayer: View {
         
         // Allow autoplay if noDetailViewActive is true (normal case) OR if it's embeddedDetail in detail view
         let canAutoplay = noDetailViewActive || (mode == .embeddedDetail && isDetailViewActive)
-        
-        // Log autoplay attempts for embedded videos
-        if mode == .embeddedDetail && autoPlay {
-            print("🎬 [SimpleVideoPlayer] Embedded video \(mid) autoplay check - autoPlay: \(autoPlay), isVisible: \(isVisible), isActuallyVisible: \(isActuallyVisibleOrFullscreen), noDetailViewActive: \(noDetailViewActive), detailViewActive: \(isDetailViewActive), canAutoplay: \(canAutoplay), hasPlayer: \(player != nil), loadingState: \(loadingState), shouldCheckLoading: \(shouldCheckLoading)")
-        }
         
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && canAutoplay && player != nil && !loadingState.isLoading && shouldCheckLoading {
             

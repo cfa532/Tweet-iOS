@@ -693,7 +693,6 @@ class SharedAssetCache: ObservableObject {
                 if self.activeCreations < self.maxConcurrentCreations {
                     // Can create immediately
                     self.activeCreations += 1
-                    print("🎬 [THROTTLE] Creating player immediately (\(self.activeCreations)/\(self.maxConcurrentCreations) active)")
                     
                     Task {
                         do {
@@ -727,8 +726,6 @@ class SharedAssetCache: ObservableObject {
         
         let next = pendingCreations.removeFirst()
         activeCreations += 1
-        
-        print("▶️ [THROTTLE] Processing queued player (\(activeCreations)/\(maxConcurrentCreations) active, \(pendingCreations.count) pending)")
         
         Task {
             do {

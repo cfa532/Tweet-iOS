@@ -122,13 +122,11 @@ struct Avatar: View {
                   cachedImage == nil,
                   !isLoading else { return }
 
-            print("👤 [AVATAR.imageCached] Image cached for current avatar, checking memory cache...")
             // Image is now cached, try loading from memory (should be instant)
             let cacheKey = user.avatar ?? ""
             let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
 
             if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
-                print("👤 [AVATAR.imageCached] ✅ Successfully loaded from memory cache")
                 cachedImage = cached
                 loadFailed = false
             }
@@ -138,7 +136,6 @@ struct Avatar: View {
     
     private func loadAvatar(from urlString: String) {
         guard !isLoading else {
-            print("👤 [AVATAR.loadAvatar] Already loading, returning")
             return 
         }
         

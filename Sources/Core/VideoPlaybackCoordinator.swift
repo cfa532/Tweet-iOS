@@ -79,6 +79,19 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Timer for debouncing video playback (0.2s delay)
     private var playbackDebounceTimer: Timer?
     
+    /// PERF FIX: Debounce timer for visibility checks to reduce expensive calculations
+    private var visibilityCheckDebounceTimer: Timer?
+    private let visibilityCheckDebounceInterval: TimeInterval = 0.15 // 150ms debounce
+    
+    /// PERF FIX: Cache for visibility ratios to avoid redundant calculations
+    private var cachedVisibilityRatios: [String: CGFloat] = [:]
+    private let visibilityRatioThreshold: CGFloat = 0.15 // Only update if ratio changes by 15%
+    
+    /// PERF FIX: Cache for cell lookups to avoid repeated expensive operations
+    private var cellCache: [String: UITableViewCell] = [:]
+    private var lastCacheClearTime: Date = Date()
+    private let cellCacheClearInterval: TimeInterval = 5.0 // Clear cache every 5 seconds
+    
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
     
@@ -331,6 +344,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         self.allVideos = videos
         
+        // PERF FIX: Clear caches when video list is rebuilt to prevent stale data
+        cellCache.removeAll()
+        cachedVisibilityRatios.removeAll()
+        lastCacheClearTime = Date()
+        
         // Share the video list with FullScreenVideoManager to avoid duplicate tracking
         // This consolidates video tracking in one place
         FullScreenVideoManager.shared.updateVideoList(videos: videos, tweets: tweets)
@@ -391,6 +409,17 @@ class VideoPlaybackCoordinator: ObservableObject {
                     object: nil,
                     userInfo: ["videoMid": videoMid]
                 )
+            }
+            
+            // PERF FIX: Clear caches for videos that are no longer visible
+            // This prevents stale cell references and visibility ratios
+            let tweetsToRemove = Set(allVideos.filter { videosToStop.contains($0.videoMid) }.map { $0.tweetId })
+            for tweetId in tweetsToRemove {
+                cellCache.removeValue(forKey: tweetId)
+                // Clear visibility ratios for all videos in this tweet
+                for video in allVideos where video.tweetId == tweetId {
+                    cachedVisibilityRatios.removeValue(forKey: video.identifier)
+                }
             }
         }
         
@@ -460,9 +489,17 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This ensures foreground recovery knows user changed context
         shouldPreserveStateOnForeground = false
         
-        // Check if current primary video is 30% out of view and switch to next
-        // This check runs on every scroll update to monitor video position
-        checkAndSwitchVideoIfNeeded()
+        // PERF FIX: Debounce visibility checks to reduce expensive calculations
+        // Cancel existing timer
+        visibilityCheckDebounceTimer?.invalidate()
+        
+        // Schedule debounced check
+        visibilityCheckDebounceTimer = Timer(timeInterval: visibilityCheckDebounceInterval, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.checkAndSwitchVideoIfNeeded()
+            }
+        }
+        RunLoop.main.add(visibilityCheckDebounceTimer!, forMode: .common)
         
         // Cancel scroll stop timer - we don't need re-evaluation anymore
         // Videos start via debounce during scroll, no need for post-scroll restart
@@ -481,6 +518,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         scrollStopTimer?.invalidate()
         scrollStopTimer = nil
+        
+        // PERF FIX: Cancel visibility check debounce timer
+        visibilityCheckDebounceTimer?.invalidate()
+        visibilityCheckDebounceTimer = nil
+        
+        // PERF FIX: Clear caches
+        cachedVisibilityRatios.removeAll()
+        cellCache.removeAll()
         
         // Clear state
         currentlyPlayingVideoIds.removeAll()
@@ -573,17 +618,36 @@ class VideoPlaybackCoordinator: ObservableObject {
             height: tableView.bounds.height
         )
         
+        // PERF FIX: Clear cell cache periodically
+        let now = Date()
+        if now.timeIntervalSince(lastCacheClearTime) > cellCacheClearInterval {
+            cellCache.removeAll()
+            lastCacheClearTime = now
+        }
+        
         if scrollDirection {
             // Scrolling DOWN: Find topmost video (lowest Y coordinate) that is at least 50% visible
             var topmostVideo: VideoPlaybackInfo?
             var topmostY: CGFloat = .infinity
             
             for video in visibleVideos {
-                // Find the cell containing this video
-                guard let cell = findCell(for: video.tweetId, in: tableView) else { continue }
+                // PERF FIX: Use cached cell if available
+                let cell: UITableViewCell
+                if let cachedCell = cellCache[video.tweetId] {
+                    cell = cachedCell
+                } else {
+                    guard let foundCell = findCell(for: video.tweetId, in: tableView) else { continue }
+                    cellCache[video.tweetId] = foundCell
+                    cell = foundCell
+                }
                 
                 let cellFrame = tableView.convert(cell.frame, to: tableView)
                 let cellTopY = cellFrame.minY
+                
+                // PERF FIX: Early exit if this cell is already below our current topmost
+                if cellTopY >= topmostY {
+                    continue
+                }
                 
                 // Check if cell is at least 50% visible
                 let intersection = cellFrame.intersection(visibleRect)
@@ -601,11 +665,23 @@ class VideoPlaybackCoordinator: ObservableObject {
             var bottommostY: CGFloat = -.infinity
             
             for video in visibleVideos {
-                // Find the cell containing this video
-                guard let cell = findCell(for: video.tweetId, in: tableView) else { continue }
+                // PERF FIX: Use cached cell if available
+                let cell: UITableViewCell
+                if let cachedCell = cellCache[video.tweetId] {
+                    cell = cachedCell
+                } else {
+                    guard let foundCell = findCell(for: video.tweetId, in: tableView) else { continue }
+                    cellCache[video.tweetId] = foundCell
+                    cell = foundCell
+                }
                 
                 let cellFrame = tableView.convert(cell.frame, to: tableView)
                 let cellBottomY = cellFrame.maxY
+                
+                // PERF FIX: Early exit if this cell is already above our current bottommost
+                if cellBottomY <= bottommostY {
+                    continue
+                }
                 
                 // Check if cell is at least 50% visible
                 let intersection = cellFrame.intersection(visibleRect)
@@ -632,9 +708,27 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         // Find current primary video
-        guard let currentPrimary = visibleVideos.first(where: { $0.identifier == primaryId }),
-              let cell = findCell(for: currentPrimary.tweetId, in: tableView) else {
+        guard let currentPrimary = visibleVideos.first(where: { $0.identifier == primaryId }) else {
             return
+        }
+        
+        // PERF FIX: Use cached cell if available, otherwise find and cache it
+        let cell: UITableViewCell
+        if let cachedCell = cellCache[currentPrimary.tweetId] {
+            cell = cachedCell
+        } else {
+            guard let foundCell = findCell(for: currentPrimary.tweetId, in: tableView) else {
+                return
+            }
+            cellCache[currentPrimary.tweetId] = foundCell
+            cell = foundCell
+        }
+        
+        // PERF FIX: Clear cell cache periodically to prevent stale references
+        let now = Date()
+        if now.timeIntervalSince(lastCacheClearTime) > cellCacheClearInterval {
+            cellCache.removeAll()
+            lastCacheClearTime = now
         }
         
         let visibleRect = CGRect(
@@ -648,7 +742,22 @@ class VideoPlaybackCoordinator: ObservableObject {
         let intersection = cellFrame.intersection(visibleRect)
         
         // Calculate visibility ratio (0.0 = completely out of view, 1.0 = fully visible)
-        let visibilityRatio = intersection.height / cellFrame.height
+        let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+        
+        // PERF FIX: Only proceed if visibility ratio changed significantly or crossed threshold
+        let previousRatio = cachedVisibilityRatios[primaryId] ?? 1.0
+        let ratioChange = abs(visibilityRatio - previousRatio)
+        
+        // Update cache
+        cachedVisibilityRatios[primaryId] = visibilityRatio
+        
+        // Only check threshold if ratio changed significantly or crossed the 50% threshold
+        let crossedThreshold = (previousRatio > 0.5 && visibilityRatio <= 0.5) || (previousRatio <= 0.5 && visibilityRatio > 0.5)
+        
+        guard crossedThreshold || ratioChange >= visibilityRatioThreshold else {
+            // No significant change, skip expensive operations
+            return
+        }
         
         // If video is 50% or less visible (50% out of view), switch to appropriate video based on scroll direction
         if visibilityRatio <= 0.5 {
@@ -675,9 +784,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     "isPrimary": true
                 ]
             )
-            
-            let direction = scrollDirection ? "next (scrolling DOWN)" : "previous (scrolling UP)"
-            print("🔄 [VideoPlaybackCoordinator] Switched from \(currentPrimary.videoMid) to \(newPrimary.videoMid) (\(direction), visibility: \(visibilityRatio * 100)%%)")
         }
     }
     
@@ -898,6 +1004,12 @@ class VideoPlaybackCoordinator: ObservableObject {
             playbackDebounceTimer = nil
             scrollStopTimer?.invalidate()
             scrollStopTimer = nil
+            
+            // PERF FIX: Cancel visibility check debounce timer and clear caches
+            visibilityCheckDebounceTimer?.invalidate()
+            visibilityCheckDebounceTimer = nil
+            cachedVisibilityRatios.removeAll()
+            cellCache.removeAll()
             
             // If there are visible videos, restart playback
             if !visibleVideos.isEmpty {
