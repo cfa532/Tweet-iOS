@@ -116,19 +116,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             return frame1.minY < frame2.minY  // Lower Y = higher on screen = earlier in feed
         }
         
-        // Debug: Log sorted order
-        if sorted.count > 1 {
-            print("📹 [VideoPlaybackCoordinator] Visible videos sorted by position (\(sorted.count) total):")
-            for (index, video) in sorted.enumerated() {
-                if let cell = findCell(for: video.tweetId, in: tableView) {
-                    let frame = tableView.convert(cell.frame, to: tableView)
-                    print("  [\(index + 1)] Video \(video.videoMid) from tweet \(video.tweetId) (Y: \(frame.minY))")
-                } else {
-                    print("  [\(index + 1)] Video \(video.videoMid) from tweet \(video.tweetId) (cell not found)")
-                }
-            }
-        }
-        
         return sorted
     }
     
@@ -197,7 +184,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // A tweet is embedded if its ID appears as originalTweetId in another tweet
         // These should NOT have their videos tracked, even if they appear standalone in the feed
         let allTweets = pinnedTweets + tweets
-        print("🔍 [VideoPlaybackCoordinator] Building embedded tweet map from \(allTweets.count) tweets")
         
         // First, collect all quoted tweets (tweets with originalTweetId AND own content)
         // A quoted tweet has originalTweetId AND (has content text OR has attachments)
@@ -213,17 +199,12 @@ class VideoPlaybackCoordinator: ObservableObject {
                 if hasOwnContent {
                     // This is a quoted tweet (has originalTweetId AND own content)
                     quotedTweets.append((id: tweet.mid, originalTweetId: originalTweetId))
-                    print("📋 [VideoPlaybackCoordinator] Found quoted tweet \(tweet.mid) -> embedded tweet \(originalTweetId)")
                 }
             }
         }
         
         // Build set of embedded tweet IDs (IDs that are referenced as originalTweetId in quoted tweets)
         let embeddedTweetIds = Set(quotedTweets.map { $0.originalTweetId })
-        
-        if !embeddedTweetIds.isEmpty {
-            print("🔗 [VideoPlaybackCoordinator] Found \(embeddedTweetIds.count) embedded tweets: \(Array(embeddedTweetIds).sorted())")
-        }
         
         // Process pinned tweets first (they appear at the top)
         for (_, tweet) in pinnedTweets.enumerated() {
@@ -247,7 +228,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     seenVideoIdentifiers.insert(videoInfo.identifier)
                     
                     if embeddedTweetIds.contains(tweet.mid) {
-                        print("  ✅ Added embedded video \(attachment.mid) from embedded tweet \(tweet.mid)")
                     }
                 }
             }
@@ -301,11 +281,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 // REGULAR TWEET or QUOTED TWEET: Process the tweet's own attachments
                 // For quoted tweets, also process embedded tweet's videos (they're now managed by coordinator)
                 if let attachments = tweet.attachments {
-                    // Debug logging for quoted tweets
-                    if isQuotedTweet {
-                        print("📋 [VideoPlaybackCoordinator] Quoted tweet \(tweet.mid) - processing \(attachments.count) outer tweet attachments")
-                    }
-                    
                     for (index, attachment) in attachments.enumerated() {
                         if attachment.type == .video || attachment.type == .hls_video {
                             let videoInfo = VideoPlaybackInfo(
@@ -315,16 +290,11 @@ class VideoPlaybackCoordinator: ObservableObject {
                             )
                             
                             if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                print("⚠️ [VideoPlaybackCoordinator] Skipping duplicate video: \(attachment.mid) from tweet \(tweet.mid) (already seen)")
                                 continue
                             }
                             
                             videos.append(videoInfo)
                             seenVideoIdentifiers.insert(videoInfo.identifier)
-                            
-                            if isQuotedTweet {
-                                print("  ✅ Added video \(attachment.mid) from quoted tweet \(tweet.mid) outer content")
-                            }
                         }
                     }
                 }
@@ -337,8 +307,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     
                     if let embeddedTweet = embeddedTweet,
                        let embeddedAttachments = embeddedTweet.attachments {
-                        print("📋 [VideoPlaybackCoordinator] Quoted tweet \(tweet.mid) - processing \(embeddedAttachments.count) embedded tweet \(originalTweetId) attachments")
-                        
                         for (index, attachment) in embeddedAttachments.enumerated() {
                             if attachment.type == .video || attachment.type == .hls_video {
                                 // Use embedded tweet's ID for tracking (not the quoting tweet's ID)
@@ -349,14 +317,11 @@ class VideoPlaybackCoordinator: ObservableObject {
                                 )
                                 
                                 if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                    print("⚠️ [VideoPlaybackCoordinator] Skipping duplicate video: \(attachment.mid) from embedded tweet \(originalTweetId) (already seen)")
                                     continue
                                 }
                                 
                                 videos.append(videoInfo)
                                 seenVideoIdentifiers.insert(videoInfo.identifier)
-                                
-                                print("  ✅ Added embedded video \(attachment.mid) from embedded tweet \(originalTweetId)")
                             }
                         }
                     }
@@ -365,12 +330,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         self.allVideos = videos
-        
-        // Debug: Log all videos in the list to verify embedded tweets are excluded
-        print("📹 [VideoPlaybackCoordinator] Built video list with \(videos.count) videos")
-        for (index, video) in videos.enumerated() {
-            print("  [\(index + 1)] Video \(video.videoMid) from tweet \(video.tweetId)")
-        }
         
         // Share the video list with FullScreenVideoManager to avoid duplicate tracking
         // This consolidates video tracking in one place
@@ -388,23 +347,12 @@ class VideoPlaybackCoordinator: ObservableObject {
             if previousContentOffset != 0 {
                 // Determine scroll direction: true = scrolling down, false = scrolling up
                 scrollDirection = currentOffset > previousContentOffset
-                if scrollDirection != (currentOffset > previousContentOffset) {
-                    // Only log when direction changes
-                    print("📊 [VideoPlaybackCoordinator] Scroll direction: \(scrollDirection ? "DOWN" : "UP") (offset: \(currentOffset), previous: \(previousContentOffset))")
-                }
             }
             previousContentOffset = currentOffset
         }
         // CRITICAL: Filter to only tweets that have videos in allVideos (similar to Android's playbackTweetId check)
         // This excludes embedded/quoted tweet videos that shouldn't be coordinated
         let tweetsWithVideos = Set(allVideos.map { $0.tweetId })
-        
-        // Debug: Log which tweets have videos vs which are visible
-        let tweetsWithoutVideos = tweetIds.subtracting(tweetsWithVideos)
-        if !tweetsWithoutVideos.isEmpty {
-            print("📊 [VideoPlaybackCoordinator] Tweets visible but without videos in allVideos: \(tweetsWithoutVideos)")
-            print("📊 [VideoPlaybackCoordinator] Tweets with videos in allVideos (\(tweetsWithVideos.count)): \(Array(tweetsWithVideos).sorted().prefix(10))")
-        }
         
         var filteredTweetIds = tweetIds.intersection(tweetsWithVideos)
         
@@ -418,21 +366,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     filteredTweetIds.insert(embeddedTweetId)
                 }
             }
-        }
-        
-        // Include embedded tweets - they should be managed by coordinator
-        // No need to exclude embedded tweets anymore since they're part of the coordination sequence
-        
-        // Debug: Log if any tweets were filtered out (tweets without videos)
-        if tweetIds.count != filteredTweetIds.count {
-            let filteredOut = tweetIds.subtracting(filteredTweetIds)
-            let addedEmbedded = filteredTweetIds.subtracting(tweetIds)
-            print("🔍 [VideoPlaybackCoordinator] Filtered out \(filteredOut.count) tweets:")
-            print("  ❌ Filtered out (no videos): \(filteredOut)")
-            if !addedEmbedded.isEmpty {
-                print("  ✅ Added embedded tweets (\(addedEmbedded.count)): \(Array(addedEmbedded))")
-            }
-            print("  ✅ Allowed tweets with videos (\(filteredTweetIds.count)): \(Array(filteredTweetIds).sorted().prefix(10))")
         }
         
         self.visibleTweetIds = filteredTweetIds
@@ -821,11 +754,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         let nextVideo = visibleVideos[targetIndex]
         let currentVideo = visibleVideos[currentIndex]
         
-        // Debug: Log the video order to verify sorting
-        let direction = scrollDirection ? "next (scrolling DOWN)" : "previous (scrolling UP)"
-        print("🔄 [VideoPlaybackCoordinator] Advancing to \(direction) video:")
-        print("  Current [\(currentIndex)]: \(currentVideo.videoMid) from tweet \(currentVideo.tweetId)")
-        print("  \(direction.capitalized) [\(targetIndex)]: \(nextVideo.videoMid) from tweet \(nextVideo.tweetId)")
 
         // CRITICAL: Clear coordinatorWantsToPlay flag for finished video
         // This prevents it from auto-playing on next foreground recovery
