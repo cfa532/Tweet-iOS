@@ -3,7 +3,7 @@
 //  Tweet
 //
 //  Coordinates video playback across the app
-//  Behavior: Play topmost video on screen, switch to next when current video is 30% out of view
+//  Behavior: Play topmost video on screen, switch to next when current video is 50% out of view (next video must be 50% on screen)
 //
 import Foundation
 import SwiftUI
@@ -47,7 +47,7 @@ struct VideoPlaybackInfo: Equatable {
 /// Behavior:
 /// 1. Play topmost video on screen immediately (no survey phase)
 /// 2. Monitor scroll position during playback
-/// 3. When current video is 30% out of view, switch to next video
+/// 3. When current video is 50% out of view, switch to next video (next video must be 50% on screen)
 /// 4. When video finishes, move to next visible video
 /// 5. Debounce timer: 0.2s
 @MainActor
@@ -641,7 +641,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         )
         
         if scrollDirection {
-            // Scrolling DOWN: Find topmost video (lowest Y coordinate)
+            // Scrolling DOWN: Find topmost video (lowest Y coordinate) that is at least 50% visible
             var topmostVideo: VideoPlaybackInfo?
             var topmostY: CGFloat = .infinity
             
@@ -652,9 +652,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                 let cellFrame = tableView.convert(cell.frame, to: tableView)
                 let cellTopY = cellFrame.minY
                 
-                // Check if cell is at least partially visible
+                // Check if cell is at least 50% visible
                 let intersection = cellFrame.intersection(visibleRect)
-                if intersection.height > 0 && cellTopY < topmostY {
+                let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+                if visibilityRatio >= 0.5 && cellTopY < topmostY {
                     topmostY = cellTopY
                     topmostVideo = video
                 }
@@ -662,7 +663,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             return topmostVideo ?? visibleVideos.first
         } else {
-            // Scrolling UP: Find bottommost video (highest Y coordinate)
+            // Scrolling UP: Find bottommost video (highest Y coordinate) that is at least 50% visible
             var bottommostVideo: VideoPlaybackInfo?
             var bottommostY: CGFloat = -.infinity
             
@@ -673,9 +674,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                 let cellFrame = tableView.convert(cell.frame, to: tableView)
                 let cellBottomY = cellFrame.maxY
                 
-                // Check if cell is at least partially visible
+                // Check if cell is at least 50% visible
                 let intersection = cellFrame.intersection(visibleRect)
-                if intersection.height > 0 && cellBottomY > bottommostY {
+                let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+                if visibilityRatio >= 0.5 && cellBottomY > bottommostY {
                     bottommostY = cellBottomY
                     bottommostVideo = video
                 }
@@ -685,7 +687,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Check if current primary video is 30% out of view and switch to next video if needed
+    /// Check if current primary video is 50% out of view and switch to next video if needed
     private func checkAndSwitchVideoIfNeeded() {
         // Only check during primary playing phase
         guard phase == .primaryPlaying,
@@ -715,8 +717,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Calculate visibility ratio (0.0 = completely out of view, 1.0 = fully visible)
         let visibilityRatio = intersection.height / cellFrame.height
         
-        // If video is 30% or less visible (70% out of view), switch to appropriate video based on scroll direction
-        if visibilityRatio <= 0.3 {
+        // If video is 50% or less visible (50% out of view), switch to appropriate video based on scroll direction
+        if visibilityRatio <= 0.5 {
             // Re-identify primary video based on current scroll direction
             // This handles both scrolling down (switch to next) and scrolling up (switch to previous)
             guard let newPrimary = identifyPrimaryVideo(), newPrimary.identifier != primaryId else {
