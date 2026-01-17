@@ -97,7 +97,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// All videos in the feed (ordered)
     private var allVideos: [VideoPlaybackInfo] = []
-    
+
+    /// Track seen video identifiers (tweetId_videoMid) to prevent duplicates across video list updates
+    private var seenVideoIdentifiers = Set<String>()
+
+    /// Store current tweet list for embedded tweet lookup
+    private var currentTweets: [Tweet] = []
+
     /// Currently visible videos (computed from visibleTweetIds + allVideos)
     /// Visible videos sorted by position (topmost first)
     private var visibleVideos: [VideoPlaybackInfo] {
@@ -188,11 +194,49 @@ class VideoPlaybackCoordinator: ObservableObject {
         self.tableView = tableView
     }
     
+    /// Add embedded tweet videos to the video list when they become available
+    /// Called by TweetItem when embedded tweets are loaded
+    func addEmbeddedTweetVideos(quotingTweetId: String, embeddedTweet: Tweet) {
+        var videosToAdd: [VideoPlaybackInfo] = []
+
+        if let embeddedAttachments = embeddedTweet.attachments {
+            for (index, attachment) in embeddedAttachments.enumerated() {
+                if attachment.type == .video || attachment.type == .hls_video {
+                    let videoInfo = VideoPlaybackInfo(
+                        tweetId: embeddedTweet.mid,  // Use embedded tweet's ID
+                        videoMid: attachment.mid,
+                        index: index
+                    )
+
+                    if seenVideoIdentifiers.contains(videoInfo.identifier) {
+                        continue
+                    }
+
+                    videosToAdd.append(videoInfo)
+                    seenVideoIdentifiers.insert(videoInfo.identifier)
+                }
+            }
+        }
+
+        if !videosToAdd.isEmpty {
+            allVideos.append(contentsOf: videosToAdd)
+            print("VideoPlaybackCoordinator: Added \(videosToAdd.count) embedded tweet videos, total videos now: \(allVideos.count)")
+
+            // Update FullScreenVideoManager with the new video list
+            FullScreenVideoManager.shared.updateVideoList(videos: allVideos, tweets: currentTweets)
+        }
+    }
+
     /// Build video list from tweets (including pinned tweets)
     func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = []) {
         var videos: [VideoPlaybackInfo] = []
-        var seenVideoIdentifiers = Set<String>() // Track seen video identifiers (tweetId_videoMid) to prevent duplicates
-        
+
+        // Clear and reset seen identifiers when rebuilding video list
+        seenVideoIdentifiers.removeAll()
+
+        // Store tweet list for embedded tweet lookup
+        currentTweets = pinnedTweets + tweets
+
         // CRITICAL: Build a map of embedded tweet IDs (tweets that are quoted in other tweets)
         // A tweet is embedded if its ID appears as originalTweetId in another tweet
         // These should NOT have their videos tracked, even if they appear standalone in the feed
@@ -261,15 +305,14 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             if isPureRetweet {
                 // PURE RETWEET: Get attachments from original tweet, use retweet's ID for positioning
-                // Use fetchTweetSync to check both singleton cache AND Core Data cache
+                // Only use cached tweets (non-blocking) - will be added later when fetched by TweetItemView
                 if let originalTweetId = tweet.originalTweetId {
-                    // Try singleton first (fast), then Core Data (still synchronous)
-                    let originalTweet = Tweet.getInstance(for: originalTweetId) 
-                        ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
-                    
+                    // Try singleton cache only (fast, non-blocking)
+                    let originalTweet = Tweet.getInstance(for: originalTweetId)
+
                     if let originalTweet = originalTweet,
                        let originalAttachments = originalTweet.attachments {
-                        
+
                         for (index, attachment) in originalAttachments.enumerated() {
                             if attachment.type == .video || attachment.type == .hls_video {
                                 let videoInfo = VideoPlaybackInfo(
@@ -277,17 +320,17 @@ class VideoPlaybackCoordinator: ObservableObject {
                                     videoMid: attachment.mid,
                                     index: index
                                 )
-                                
+
                                 if seenVideoIdentifiers.contains(videoInfo.identifier) {
                                     continue
                                 }
-                                
+
                                 videos.append(videoInfo)
                                 seenVideoIdentifiers.insert(videoInfo.identifier)
                             }
                         }
                     } else {
-                        print("  ⚠️ Original tweet not found for retweet: \(tweet.mid)")
+                        print("VideoPlaybackCoordinator: Original tweet \(originalTweetId) not cached yet for retweet \(tweet.mid), will be added later when fetched by TweetItemView")
                     }
                 }
             } else {
@@ -314,10 +357,12 @@ class VideoPlaybackCoordinator: ObservableObject {
                 
                 // For quoted tweets, also process embedded tweet's videos (they're now managed by coordinator)
                 if isQuotedTweet, let originalTweetId = tweet.originalTweetId {
-                    // Fetch the embedded tweet
+                    // Try to get embedded tweet from cache only (non-blocking)
+                    // They will be added later when fetched asynchronously by TweetItem
                     let embeddedTweet = Tweet.getInstance(for: originalTweetId)
-                        ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
-                    
+
+                    // Only add embedded tweet videos if they're already cached
+                    // They will be added later when fetched asynchronously by TweetItem
                     if let embeddedTweet = embeddedTweet,
                        let embeddedAttachments = embeddedTweet.attachments {
                         for (index, attachment) in embeddedAttachments.enumerated() {
@@ -328,15 +373,17 @@ class VideoPlaybackCoordinator: ObservableObject {
                                     videoMid: attachment.mid,
                                     index: index
                                 )
-                                
+
                                 if seenVideoIdentifiers.contains(videoInfo.identifier) {
                                     continue
                                 }
-                                
+
                                 videos.append(videoInfo)
                                 seenVideoIdentifiers.insert(videoInfo.identifier)
                             }
                         }
+                    } else {
+                        print("VideoPlaybackCoordinator: Embedded tweet \(originalTweetId) not cached yet, will be added later when fetched by TweetItemView")
                     }
                 }
             }

@@ -170,7 +170,13 @@ struct TweetItemView: View, Equatable {
                 await MainActor.run {
                     originalTweet = cachedTweet
                     hasLoadedOriginalTweet = true
-                    
+
+                    // Notify VideoPlaybackCoordinator about the loaded embedded tweet from cache
+                    VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+                        quotingTweetId: tweet.mid,
+                        embeddedTweet: cachedTweet
+                    )
+
                     // Register retweet relationship ASAP from cache for immediate priority boost
                     if !hasRegisteredRetweetRelationship {
                         VideoLoadingManager.shared.registerRetweetRelationship(
@@ -206,7 +212,13 @@ struct TweetItemView: View, Equatable {
                     originalTweet = nil  // Clear first to force view update
                     originalTweet = t    // Then set to new value
                     hasLoadedOriginalTweet = true
-                    
+
+                    // Notify VideoPlaybackCoordinator about the loaded embedded tweet
+                    VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+                        quotingTweetId: tweet.mid,
+                        embeddedTweet: t
+                    )
+
                     // If it's the same instance, trigger objectWillChange to notify observers
                     if previousTweet === t {
                         t.objectWillChange.send()
