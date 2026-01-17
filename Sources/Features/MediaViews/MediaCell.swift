@@ -46,6 +46,8 @@ struct MediaCell: View, Equatable {
     @State private var effectiveBaseUrl: URL // Reactive baseUrl that updates when author's baseUrl changes
     @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
     @State private var videoReloadTrigger = false // Trigger for video reload
+    @State private var videoFrame: CGRect = .zero // Track video frame for viewport visibility check
+    @State private var isInViewport: Bool = false // Track if video is actually in viewport
     @ObservedObject private var muteState = MuteState.shared
 
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, sourceTweetId: String? = nil) {
@@ -73,10 +75,12 @@ struct MediaCell: View, Equatable {
             let isVideo = attachment.type == .video || attachment.type == .hls_video
             if isVideo {
                 if isEmbedded {
-                    // Embedded/quoted tweet preview: simple autoplay when visible
+                    // Embedded/quoted tweet preview: autoplay when visible (like regular videos)
+                    // Note: isVisible is set via onAppear/onDisappear which may fire early
+                    // but SimpleVideoPlayer checks actual viewport visibility before playing
                     self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible)
                 } else {
-                    // Regular videos: coordinator sends notifications to control playback
+                    // Regular videos and embedded videos: coordinator sends notifications to control playback
                     // Initial state is false, coordinator will send play command when appropriate
                     self._shouldAutoPlay = State(initialValue: false)
                 }
@@ -197,11 +201,8 @@ struct MediaCell: View, Equatable {
             // Update effectiveBaseUrl in case author's baseUrl has been resolved since init
             updateEffectiveBaseUrl()
             
-            // For video attachments, embedded videos autoplay when visible
-            // Regular videos wait for coordinator notifications
-            if isVideoAttachment && isEmbedded {
-                shouldAutoPlay = shouldLoadVideo
-            }
+            // For embedded videos, viewport visibility is checked via GeometryReader in videoPlayerViewContent
+            // No need to enable autoplay here - it will be enabled when the video enters the viewport
             
             // Load image if not already loaded - ONLY for image attachments
             if attachment.type == .image && image == nil {
@@ -238,20 +239,10 @@ struct MediaCell: View, Equatable {
                 updateEffectiveBaseUrl()
             }
             
-            // Update autoplay state when visibility changes for video attachments
-            // Only for embedded videos - regular videos wait for coordinator
-            if isVideoAttachment && newValue && isEmbedded {
-                shouldAutoPlay = shouldLoadVideo
-            }
+            // Embedded videos are now managed by coordinator - no need to manually control autoplay
         }
         
-        .onChange(of: shouldLoadVideo) { _, newValue in
-            // Update autoplay state when shouldLoadVideo changes for embedded videos only
-            // Regular videos wait for coordinator notifications
-            if isVideoAttachment && isVisible && newValue && isEmbedded {
-                shouldAutoPlay = true
-            }
-        }
+        // Embedded videos are now managed by coordinator - no need to manually control autoplay based on shouldLoadVideo
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Update effectiveBaseUrl when app becomes active (author may have been resolved)
@@ -446,38 +437,21 @@ struct MediaCell: View, Equatable {
     // MARK: - Video Player View
     @ViewBuilder
     private func videoPlayerViewContent(url: URL) -> some View {
-        SimpleVideoPlayer(
-                url: url,
-                mid: attachment.mid,
-                parentTweetId: parentTweet.mid,
-                isVisible: isVisible,
-                mediaType: attachment.type,
-                authorId: parentTweet.authorId, // Pass authorId for health check
-                autoPlay: shouldAutoPlay, // Use state variable instead of computed value
-                onVideoFinished: onVideoFinished,
-                cellAspectRatio: CGFloat(aspectRatio),
-                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                showNativeControls: false,
-                isMuted: muteState.isMuted,
-                onVideoTap: isEmbedded ? nil : {
-                    // Save current playback position before opening fullscreen
-                    saveVideoPositionForFullscreen()
-                    isOpeningFullScreen = true
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-                        showFullScreen = true
-                    }
-                },
-                disableAutoRestart: true,
-                shouldLoadVideo: shouldLoadVideo,
-                mode: isEmbedded ? .embeddedDetail : .mediaCell
-            )
-            .id("video_\(attachment.mid)_\(videoReloadTrigger)")
-            .overlay(
-                // Invisible overlay to prevent tap propagation to parent views and add long press
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
+        GeometryReader { geometry in
+            SimpleVideoPlayer(
+                    url: url,
+                    mid: attachment.mid,
+                    parentTweetId: parentTweet.mid,
+                    isVisible: isVisible,
+                    mediaType: attachment.type,
+                    authorId: parentTweet.authorId, // Pass authorId for health check
+                    autoPlay: shouldAutoPlay, // Use state variable instead of computed value
+                    onVideoFinished: onVideoFinished,
+                    cellAspectRatio: CGFloat(aspectRatio),
+                    videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                    showNativeControls: false,
+                    isMuted: muteState.isMuted,
+                    onVideoTap: isEmbedded ? nil : {
                         // Save current playback position before opening fullscreen
                         saveVideoPositionForFullscreen()
                         isOpeningFullScreen = true
@@ -485,26 +459,106 @@ struct MediaCell: View, Equatable {
                             try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
                             showFullScreen = true
                         }
+                    },
+                    disableAutoRestart: true,
+                    shouldLoadVideo: shouldLoadVideo,
+                    mode: isEmbedded ? .embeddedDetail : .mediaCell
+                )
+                .id("video_\(attachment.mid)_\(videoReloadTrigger)")
+                // Embedded videos are now managed by coordinator - no viewport checking needed
+                .overlay(
+                    // Invisible overlay to prevent tap propagation to parent views and add long press
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // Save current playback position before opening fullscreen
+                            saveVideoPositionForFullscreen()
+                            isOpeningFullScreen = true
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                                showFullScreen = true
+                            }
+                        }
+                        .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                            handleVideoReload()
+                        }
+                )
+                .overlay(
+                    // Loading spinner overlay when opening fullscreen
+                    Group {
+                        if isOpeningFullScreen {
+                            ZStack {
+                                Color.black.opacity(0.4)
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .scaleEffect(1.5)
+                            }
+                            .transition(.opacity)
+                            .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
+                        }
                     }
-                    .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                        handleVideoReload()
-                    }
-            )
-        .overlay(
-            // Loading spinner overlay when opening fullscreen
-            Group {
-                if isOpeningFullScreen {
-                    ZStack {
-                        Color.black.opacity(0.4)
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.5)
-                    }
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
-                }
-            }
+                )
+        }
+    }
+    
+    // Preference key to track video frame changes
+    private struct VideoFramePreferenceKey: PreferenceKey {
+        static var defaultValue: CGRect = .zero
+        static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+            value = nextValue()
+        }
+    }
+    
+    /// Check if embedded video is actually visible in the viewport
+    private func checkViewportVisibility(geometry: GeometryProxy? = nil, frame: CGRect? = nil) {
+        guard isEmbedded && isVideoAttachment else { return }
+        
+        let currentFrame: CGRect
+        if let frame = frame {
+            currentFrame = frame
+        } else if let geometry = geometry {
+            currentFrame = geometry.frame(in: .global)
+            videoFrame = currentFrame
+        } else if videoFrame != .zero {
+            currentFrame = videoFrame
+        } else {
+            return // No frame information available
+        }
+        
+        // Get screen bounds
+        let screenBounds = UIScreen.main.bounds
+        
+        // Check if video frame intersects with visible screen area
+        // Account for safe areas (status bar, navigation bar, tab bar)
+        let safeAreaTop: CGFloat = 0 // Will be adjusted if needed
+        let safeAreaBottom: CGFloat = 0 // Will be adjusted if needed
+        
+        let visibleRect = CGRect(
+            x: 0,
+            y: safeAreaTop,
+            width: screenBounds.width,
+            height: screenBounds.height - safeAreaTop - safeAreaBottom
         )
+        
+        let intersection = currentFrame.intersection(visibleRect)
+        let isVisibleInViewport = intersection.height > 0 && currentFrame.height > 0 && intersection.height >= currentFrame.height * 0.3 // At least 30% visible
+        
+        if isVisibleInViewport != isInViewport {
+            isInViewport = isVisibleInViewport
+            
+            if isVisibleInViewport && shouldLoadVideo {
+                print("✅ [MediaCell] Embedded video \(attachment.mid) is now in viewport - enabling autoplay")
+                shouldAutoPlay = true
+            } else if !isVisibleInViewport {
+                print("❌ [MediaCell] Embedded video \(attachment.mid) is no longer in viewport - disabling autoplay")
+                shouldAutoPlay = false
+            }
+        }
+        
+        // Update stored frame
+        if geometry != nil {
+            videoFrame = currentFrame
+        }
     }
     
     private func handleVideoReload() {

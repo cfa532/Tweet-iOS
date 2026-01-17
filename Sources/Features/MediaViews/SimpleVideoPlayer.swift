@@ -481,6 +481,9 @@ struct SimpleVideoPlayer: View {
     @MainActor
     private func playWithResumeIfNeeded(_ player: AVPlayer) {
         if mode != .mediaCell {
+            if mode == .embeddedDetail {
+                print("▶️ [SimpleVideoPlayer] playWithResumeIfNeeded called for embedded video \(mid) from tweet \(parentTweetId ?? "unknown") - starting playback")
+            }
             player.volume = 0
             player.play()
             UIView.animate(withDuration: 0.3) {
@@ -886,6 +889,13 @@ struct SimpleVideoPlayer: View {
                 .onChange(of: mode) { oldMode, newMode in handleModeChange(oldMode: oldMode, newMode: newMode) }
                 .onChange(of: isMuted) { _, newMuteState in handleMuteChange(newMuteState: newMuteState) }
                 .onChange(of: currentAutoPlay) { _, shouldAutoPlay in handleAutoPlayChange(shouldAutoPlay: shouldAutoPlay) }
+                // For embedded videos, also react directly to autoPlay parameter changes
+                .onChange(of: autoPlay) { _, newAutoPlay in
+                    if mode == .embeddedDetail {
+                        print("🔄 [SimpleVideoPlayer] Embedded video \(mid) autoPlay parameter changed to \(newAutoPlay)")
+                        handleAutoPlayChange(shouldAutoPlay: newAutoPlay)
+                    }
+                }
                 .onChange(of: isVisible) { _, visible in handleVisibilityChange(visible: visible) }
                 .onChange(of: isActuallyVisible) { _, actuallyVisible in handleActualVisibilityChange(actuallyVisible: actuallyVisible) }
                 .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
@@ -1306,6 +1316,19 @@ struct SimpleVideoPlayer: View {
             // Only check playback conditions, don't pause
             // Pausing here interferes with shared players used by fullscreen/detail
             checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
+        } else if mode == .embeddedDetail {
+            // For embedded videos, check playback conditions when autoPlay changes
+            print("🔄 [SimpleVideoPlayer] Embedded video \(mid) autoPlay changed to \(shouldAutoPlay) - checking playback conditions")
+            if shouldAutoPlay {
+                checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
+            } else {
+                // Pause when autoPlay becomes false
+                if (player?.rate ?? 0) > 0 {
+                    print("⏸️ [SimpleVideoPlayer] Pausing embedded video \(mid) - autoPlay changed to false")
+                    player?.pause()
+                    playbackState = .paused
+                }
+            }
         } else {
             // Ignore for other modes
         }
@@ -1683,7 +1706,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorStopCommand(notification: Notification? = nil) {
         // Stop command from VideoPlaybackCoordinator
-        guard mode == .mediaCell else { return }
+        // Embedded videos are now also managed by coordinator
+        guard mode == .mediaCell || mode == .embeddedDetail else { return }
         
         // If notification has a specific videoMid, only stop if it matches this video
         if let videoMid = notification?.userInfo?["videoMid"] as? String {
@@ -1719,7 +1743,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorPauseCommand(notification: Notification) {
         // Pause command from VideoPlaybackCoordinator - check if it's for this video
-        guard mode == .mediaCell else { return }
+        // Embedded videos are now also managed by coordinator
+        guard mode == .mediaCell || mode == .embeddedDetail else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
 
@@ -1750,7 +1775,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorPlayCommand(notification: Notification) {
         // Play command from VideoPlaybackCoordinator - check if it's for this video
-        guard mode == .mediaCell else { return }
+        // Embedded videos are now also managed by coordinator
+        guard mode == .mediaCell || mode == .embeddedDetail else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
         
@@ -4780,6 +4806,11 @@ struct SimpleVideoPlayer: View {
         let isActuallyVisibleOrFullscreen = (mode == .mediaCell || mode == .embeddedDetail) ? !isCoveredByOverlay : true
         let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
         
+        // Log autoplay attempts for embedded videos
+        if mode == .embeddedDetail && autoPlay {
+            print("🎬 [SimpleVideoPlayer] Embedded video \(mid) autoplay check - autoPlay: \(autoPlay), isVisible: \(isVisible), isActuallyVisible: \(isActuallyVisibleOrFullscreen), noDetailViewActive: \(noDetailViewActive), hasPlayer: \(player != nil), loadingState: \(loadingState), shouldCheckLoading: \(shouldCheckLoading)")
+        }
+        
         if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {
             
             // For MediaCell, coordinator controls playback via notifications
@@ -4791,6 +4822,9 @@ struct SimpleVideoPlayer: View {
             
             // For other modes, allow restart
             if mode != .mediaCell {
+                if mode == .embeddedDetail {
+                    print("▶️ [SimpleVideoPlayer] Starting autoplay for embedded video \(mid) from tweet \(parentTweetId ?? "unknown")")
+                }
                 // CRITICAL: If video was finished but should play again,
                 // reset it ONLY if the video actually played to completion (no cached position exists)
                 // This allows videos that were paused mid-playback to resume from their saved position
@@ -4846,6 +4880,9 @@ struct SimpleVideoPlayer: View {
                         if self.mode == .mediaBrowser {
                             self.playbackState = .playing
                         } else {
+                            if self.mode == .embeddedDetail {
+                                print("▶️ [SimpleVideoPlayer] Starting playback for embedded video \(self.mid) from tweet \(self.parentTweetId ?? "unknown") (after rewind)")
+                            }
                             self.player?.volume = 0
                             self.player?.play()
                             if let player = self.player {
@@ -4865,6 +4902,9 @@ struct SimpleVideoPlayer: View {
                         if self.mode == .mediaBrowser {
                             self.playbackState = .playing
                         } else {
+                            if self.mode == .embeddedDetail {
+                                print("▶️ [SimpleVideoPlayer] Starting playback for embedded video \(self.mid) from tweet \(self.parentTweetId ?? "unknown") (after seek to zero)")
+                            }
                             self.player?.play()
                             if let player = self.player {
                                 UIView.animate(withDuration: 0.3) {
@@ -4882,6 +4922,9 @@ struct SimpleVideoPlayer: View {
                         // Set playbackState but don't call play() yet
                         playbackState = .playing
                     } else {
+                        if mode == .embeddedDetail {
+                            print("▶️ [SimpleVideoPlayer] Starting playback for embedded video \(mid) from tweet \(parentTweetId ?? "unknown") (direct play path)")
+                        }
                         player?.volume = 0
                         player?.play()
                         if let player = player {
