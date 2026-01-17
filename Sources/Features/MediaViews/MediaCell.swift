@@ -239,7 +239,14 @@ struct MediaCell: View, Equatable {
                 updateEffectiveBaseUrl()
             }
             
-            // Embedded videos are now managed by coordinator - no need to manually control autoplay
+            // For embedded videos in detail views, enable autoplay when visible
+            // In detail views, they autoplay independently (not managed by coordinator)
+            if isEmbedded && isVideoAttachment && newValue {
+                // Check if we're in a detail view context
+                // Note: This check happens in SimpleVideoPlayer, but we enable autoplay here
+                // SimpleVideoPlayer will bypass coordinator check when DetailVideoManager.isDetailViewActive()
+                shouldAutoPlay = true
+            }
         }
         
         // Embedded videos are now managed by coordinator - no need to manually control autoplay based on shouldLoadVideo

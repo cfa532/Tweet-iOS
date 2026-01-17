@@ -900,6 +900,13 @@ struct SimpleVideoPlayer: View {
                 .onChange(of: isActuallyVisible) { _, actuallyVisible in handleActualVisibilityChange(actuallyVisible: actuallyVisible) }
                 .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
                 .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
+                .onChange(of: loadingState) { oldState, newState in
+                    // For embedded videos in detail views, check autoplay when loading completes
+                    if oldState.isLoading && !newState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive && currentAutoPlay && isVisible {
+                        print("🔄 [SimpleVideoPlayer] Embedded video \(mid) loading completed - checking autoplay")
+                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+                    }
+                }
                 .onChange(of: playbackState) { oldState, newState in
                     if newState == .playing && oldState != .playing {
                         startTimeRemainingDisplayCycle()
@@ -1438,6 +1445,7 @@ struct SimpleVideoPlayer: View {
                     // Update loading state to show video is ready
                     // CRITICAL FIX: Check buffered duration to ensure we have enough data before hiding spinner
                     // This prevents hiding spinner too early and fixes stuck loading states after background
+                    let wasLoading = loadingState.isLoading
                     if loadingState.isLoading {
                         let bufferedDuration = bufferedTimeAhead(for: playerItem, player: player)
                         if bufferedDuration >= firstFrameMinimumBuffer {
@@ -1450,8 +1458,20 @@ struct SimpleVideoPlayer: View {
                         }
                     }
                     
+                    // For embedded videos in detail views, check autoplay when loading completes
+                    if wasLoading && !loadingState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
+                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+                        return
+                    }
+                    
                     // Check if should auto-play
                     if currentAutoPlay && player.rate == 0 {
+                        // For embedded videos in detail views, use checkPlaybackConditions
+                        if mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
+                            checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+                            return
+                        }
+                        
                         // CRITICAL: Always ensure muteState is correct before playing
                         // For MediaCell, always respect global muteState
                         if mode == .mediaCell {
@@ -1706,8 +1726,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorStopCommand(notification: Notification? = nil) {
         // Stop command from VideoPlaybackCoordinator
-        // Embedded videos are now also managed by coordinator
-        guard mode == .mediaCell || mode == .embeddedDetail else { return }
+        // Embedded videos in detail views should NOT listen to coordinator (they autoplay independently)
+        guard mode == .mediaCell || (mode == .embeddedDetail && !DetailVideoManager.shared.isDetailViewActive()) else { return }
         
         // If notification has a specific videoMid, only stop if it matches this video
         if let videoMid = notification?.userInfo?["videoMid"] as? String {
@@ -1743,8 +1763,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorPauseCommand(notification: Notification) {
         // Pause command from VideoPlaybackCoordinator - check if it's for this video
-        // Embedded videos are now also managed by coordinator
-        guard mode == .mediaCell || mode == .embeddedDetail else { return }
+        // Embedded videos in detail views should NOT listen to coordinator (they autoplay independently)
+        guard mode == .mediaCell || (mode == .embeddedDetail && !DetailVideoManager.shared.isDetailViewActive()) else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
 
@@ -1775,8 +1795,8 @@ struct SimpleVideoPlayer: View {
     
     private func handleCoordinatorPlayCommand(notification: Notification) {
         // Play command from VideoPlaybackCoordinator - check if it's for this video
-        // Embedded videos are now also managed by coordinator
-        guard mode == .mediaCell || mode == .embeddedDetail else { return }
+        // Embedded videos in detail views should NOT listen to coordinator (they autoplay independently)
+        guard mode == .mediaCell || (mode == .embeddedDetail && !DetailVideoManager.shared.isDetailViewActive()) else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
         
@@ -4318,10 +4338,17 @@ struct SimpleVideoPlayer: View {
                 
                 DispatchQueue.main.async {
                     // CRITICAL: Hide spinner if we have buffered data (buffer observer might have already fired)
+                    let wasLoading = loadingState.isLoading
                     if hasBufferedData && loadingState.isLoading {
                         // Data already buffered, hiding spinner
                         loadingState = .loaded
                         retryAttempts = 0  // Reset retry counter on successful load
+                    }
+                    
+                    // For embedded videos in detail views, check autoplay when loading completes
+                    if wasLoading && !loadingState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
+                        checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
+                        return
                     }
                     
                     if shouldAutoPlay {
@@ -4329,6 +4356,9 @@ struct SimpleVideoPlayer: View {
                         // VideoPlaybackCoordinator controls all playback via notifications
                         if self.mode == .mediaCell {
                             // NOT auto-playing - waiting for coordinator
+                        } else if self.mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
+                            // Embedded video in detail view - use checkPlaybackConditions
+                            self.checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: self.isVisible)
                         } else {
                             // Non-MediaCell modes: use old auto-play logic
                             let actuallyVisible = !self.isCoveredByOverlay
@@ -4798,27 +4828,54 @@ struct SimpleVideoPlayer: View {
         
         // Check if all conditions are met for autoplay
         // For fullscreen and tweetDetail modes, bypass shouldLoadVideo check.
-        // For embeddedDetail (quoted video), treat like MediaCell and respect shouldLoadVideo.
-        let shouldCheckLoading = (mode == .mediaCell || mode == .embeddedDetail) ? shouldLoadVideo : true
+        // For embeddedDetail in detail views, bypass shouldLoadVideo (autoplay independently).
+        // For embeddedDetail in feed, respect shouldLoadVideo (coordinator manages).
+        // Use NavigationStateManager because it's set immediately when detail view appears
+        let isEmbeddedInDetailView = mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive
+        let shouldCheckLoading = (mode == .mediaCell || (mode == .embeddedDetail && !isEmbeddedInDetailView)) ? shouldLoadVideo : true
         
         // CRITICAL: For MediaCell, also check if video is actually visible (not covered by sheets/modals or detail views)
         // Use synchronous visibility check (presentedViewController) to avoid timer lag.
         let isActuallyVisibleOrFullscreen = (mode == .mediaCell || mode == .embeddedDetail) ? !isCoveredByOverlay : true
-        let noDetailViewActive = mode != .mediaCell || !DetailVideoManager.shared.isDetailViewActive()
+        // For MediaCell: prevent autoplay if detail view is active
+        // For embeddedDetail in detail view: allow autoplay (NavigationStateManager.isDetailViewActive should be true)
+        // Use NavigationStateManager instead of DetailVideoManager because it's set immediately when detail view appears
+        let isDetailViewActive = NavigationStateManager.shared.isDetailViewActive
+        let noDetailViewActive: Bool
+        if mode == .mediaCell {
+            noDetailViewActive = !isDetailViewActive
+        } else if mode == .embeddedDetail && isDetailViewActive {
+            // Embedded video in detail view - allow autoplay
+            noDetailViewActive = false
+        } else {
+            // Other modes or embeddedDetail not in detail view
+            noDetailViewActive = true
+        }
+        
+        // Allow autoplay if noDetailViewActive is true (normal case) OR if it's embeddedDetail in detail view
+        let canAutoplay = noDetailViewActive || (mode == .embeddedDetail && isDetailViewActive)
         
         // Log autoplay attempts for embedded videos
         if mode == .embeddedDetail && autoPlay {
-            print("🎬 [SimpleVideoPlayer] Embedded video \(mid) autoplay check - autoPlay: \(autoPlay), isVisible: \(isVisible), isActuallyVisible: \(isActuallyVisibleOrFullscreen), noDetailViewActive: \(noDetailViewActive), hasPlayer: \(player != nil), loadingState: \(loadingState), shouldCheckLoading: \(shouldCheckLoading)")
+            print("🎬 [SimpleVideoPlayer] Embedded video \(mid) autoplay check - autoPlay: \(autoPlay), isVisible: \(isVisible), isActuallyVisible: \(isActuallyVisibleOrFullscreen), noDetailViewActive: \(noDetailViewActive), detailViewActive: \(isDetailViewActive), canAutoplay: \(canAutoplay), hasPlayer: \(player != nil), loadingState: \(loadingState), shouldCheckLoading: \(shouldCheckLoading)")
         }
         
-        if autoPlay && isVisible && isActuallyVisibleOrFullscreen && noDetailViewActive && player != nil && !loadingState.isLoading && shouldCheckLoading {
+        if autoPlay && isVisible && isActuallyVisibleOrFullscreen && canAutoplay && player != nil && !loadingState.isLoading && shouldCheckLoading {
             
-            // For MediaCell, coordinator controls playback via notifications
-            // This prevents videos from auto-restarting - they wait for coordinator commands
-            if mode == .mediaCell {
-                // MediaCell videos don't auto-restart - wait for coordinator notification
-                return
-            }
+        // For MediaCell and embeddedDetail in feed, coordinator controls playback via notifications
+        // Embedded videos in detail views should autoplay independently
+        if mode == .mediaCell {
+            // MediaCell videos don't auto-restart - wait for coordinator notification
+            return
+        }
+        
+        // Embedded videos in detail views should autoplay independently (not wait for coordinator)
+        if mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
+            // In detail view - allow autoplay to proceed
+        } else if mode == .embeddedDetail {
+            // In feed - wait for coordinator notification
+            return
+        }
             
             // For other modes, allow restart
             if mode != .mediaCell {
