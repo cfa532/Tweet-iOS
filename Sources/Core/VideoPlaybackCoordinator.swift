@@ -979,9 +979,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Decision: Preserve if user didn't explicitly scroll away (flag set on background)
     @objc private func handleForegroundRecovery(_ notification: Notification) {
         
-        // CRITICAL: Use flag instead of comparing IDs
-        // Tweet list might refresh (new IDs) even though user is at same position
+        // CRITICAL: Use flag to track if user explicitly scrolled away
+        // Flag is set when app enters background (if playback was active)
         // Flag is cleared only by explicit scroll (updateVisibleTweets)
+        // This distinguishes between background return (preserve) vs user scroll (reset)
         let hasActiveState = phase != .idle
         
         let shouldPreserveState = hasActiveState && shouldPreserveStateOnForeground
