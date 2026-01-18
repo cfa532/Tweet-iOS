@@ -372,6 +372,20 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private var loadGeneration: Int = 0
     private var loadingMid: String?
 
+    // MARK: - Navigation Debounce
+    /// Prevent multiple rapid swipe-ups (or duplicate gesture endings) from racing navigation.
+    /// Without this, a second swipe can execute before `currentVideoMid/currentVideoIndex/currentSourceTweetId`
+    /// are updated for the first navigation, leading to spurious "no next" and fullscreen dismissal.
+    private var nextNavigationAllowedAt: Date = .distantPast
+    private let navigationDebounceInterval: TimeInterval = 0.6
+    
+    private func canNavigateNow() -> Bool {
+        let now = Date()
+        if now < nextNavigationAllowedAt { return false }
+        nextNavigationAllowedAt = now.addingTimeInterval(navigationDebounceInterval)
+        return true
+    }
+
     // MARK: - Prewarm (startup UX)
     // Preload a first AVPlayerItem to reduce first-open latency.
     private var didPrewarmFirstItem: Bool = false
@@ -1109,6 +1123,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Handle video completion and auto-advance to next video
     func handleVideoFinished() {
+        // Guard against re-entrancy (finish event can fire twice during transitions / item swaps)
+        guard canNavigateNow() else { return }
         guard let currentSourceTweetId = currentSourceTweetId else {
             // Don't rewind here - will check position when user tries to play
             isPlaying = false
@@ -1185,6 +1201,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard UIApplication.shared.applicationState == .active else {
             return
         }
+        // Ignore rapid repeated swipe-ups.
+        guard canNavigateNow() else { return }
 
         guard let currentSourceTweetId = currentSourceTweetId else { return }
 

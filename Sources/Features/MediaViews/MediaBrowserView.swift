@@ -32,6 +32,7 @@ struct MediaBrowserView: View {
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
+    @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
     private var attachments: [MimeiFileType] {
         // Filter to only show media types (images, videos, audio) - no documents
         let allAttachments = currentTweet.attachments ?? []
@@ -78,6 +79,7 @@ struct MediaBrowserView: View {
                 isImageZoomed: $isImageZoomed,
                 isTransitioning: $isTransitioning,
                 transitionOffset: $transitionOffset,
+                suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
                 currentSourceTweetId: currentSourceTweetId,
                 dismiss: { dismiss() },
@@ -125,6 +127,11 @@ struct MediaBrowserView: View {
             
             // Animate transition: slide current video up and next video in from bottom
             Task { @MainActor in
+                // Prevent TabView from doing a horizontal paging animation when we change currentIndex programmatically.
+                // We want the vertical slide animation to be the only visible transition.
+                suppressTabPagingAnimation = true
+                defer { suppressTabPagingAnimation = false }
+
                 // Start transition - slide current content up (only 30% of screen for tight transition)
                 let slideDistance = UIScreen.main.bounds.height * 0.3
                 isTransitioning = true
@@ -157,8 +164,11 @@ struct MediaBrowserView: View {
                 
                 // Update UI state
                 self.currentTweet = nextTweet
-                self.currentIndex = videoIndex
-                self.previousIndex = videoIndex
+                // Don't animate this index change; TabView will otherwise page horizontally.
+                withAnimation(.none) {
+                    self.currentIndex = videoIndex
+                    self.previousIndex = videoIndex
+                }
                 self.currentSourceTweetId = nextSourceTweetId
                 self.imageStates = [:]
                 
@@ -196,6 +206,7 @@ struct MediaBrowserView: View {
         @Binding var isImageZoomed: Bool
         @Binding var isTransitioning: Bool
         @Binding var transitionOffset: CGFloat
+        @Binding var suppressTabPagingAnimation: Bool
         let currentTweet: Tweet
         let currentSourceTweetId: String
         let dismiss: () -> Void
@@ -204,72 +215,77 @@ struct MediaBrowserView: View {
         let onShareVisibilityChange: (Bool) -> Void
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
 
-        /// A vertical-only swipe gesture that coexists with TabView's horizontal paging.
-        /// This fixes the case where multi-attachment paging swallows the outer drag gesture,
-        /// disabling "swipe up to next video".
-        private var verticalSwipeGesture: some Gesture {
-            DragGesture()
-                .onChanged { value in
-                    // Disable gestures during transition
-                    guard !isTransitioning else { return }
-
-                    // Only handle gestures if no image is zoomed
-                    guard !isImageZoomed else { return }
-
-                    // Only react to predominantly-vertical drags (let TabView own horizontal paging).
-                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
-
-                    dragOffset = value.translation
-                    isDragging = true
-                    showControls = true
+        /// A directional *vertical* pan recognizer layered over the TabView.
+        ///
+        /// This avoids the "last attachment swipe-up tries to page horizontally then fails" issue by ensuring
+        /// vertical swipes are captured by a recognizer that only begins when the gesture is clearly vertical.
+        private struct VerticalPanCaptureView: UIViewRepresentable {
+            var isEnabled: Bool
+            var verticalDominanceRatio: CGFloat = 1.2 // Increase to require stronger vertical intent
+            var onChanged: (CGSize, CGPoint) -> Void
+            var onEnded: (CGSize, CGPoint, CGPoint) -> Void // translation, start, velocity
+            
+            func makeUIView(context: Context) -> UIView {
+                let view = UIView(frame: .zero)
+                view.backgroundColor = .clear
+                
+                let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+                pan.delegate = context.coordinator
+                pan.cancelsTouchesInView = false
+                view.addGestureRecognizer(pan)
+                context.coordinator.pan = pan
+                return view
+            }
+            
+            func updateUIView(_ uiView: UIView, context: Context) {
+                context.coordinator.isEnabled = isEnabled
+                context.coordinator.verticalDominanceRatio = verticalDominanceRatio
+                context.coordinator.onChanged = onChanged
+                context.coordinator.onEnded = onEnded
+                context.coordinator.pan?.isEnabled = isEnabled
+            }
+            
+            func makeCoordinator() -> Coordinator { Coordinator() }
+            
+            final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+                var pan: UIPanGestureRecognizer?
+                var isEnabled: Bool = true
+                var verticalDominanceRatio: CGFloat = 1.2
+                var onChanged: ((CGSize, CGPoint) -> Void)?
+                var onEnded: ((CGSize, CGPoint, CGPoint) -> Void)?
+                private var startPoint: CGPoint = .zero
+                
+                func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+                    guard isEnabled, let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+                    let v = pan.velocity(in: pan.view)
+                    // Only begin if clearly vertical. Otherwise let TabView/page gesture handle it.
+                    return abs(v.y) > abs(v.x) * verticalDominanceRatio
                 }
-                .onEnded { value in
-                    // Disable gestures during transition
-                    guard !isTransitioning else { return }
-
-                    // Only handle gestures if no image is zoomed
-                    guard !isImageZoomed else {
-                        // Reset drag offset
-                        withAnimation(.spring()) { dragOffset = .zero }
-                        isDragging = false
-                        resetControlsTimer()
-                        return
+                
+                @objc func handlePan(_ pan: UIPanGestureRecognizer) {
+                    guard isEnabled else { return }
+                    let translation = pan.translation(in: pan.view)
+                    let velocity = pan.velocity(in: pan.view)
+                    let current = pan.location(in: pan.view)
+                    
+                    switch pan.state {
+                    case .began:
+                        startPoint = current
+                        onChanged?(CGSize(width: translation.x, height: translation.y), startPoint)
+                    case .changed:
+                        onChanged?(CGSize(width: translation.x, height: translation.y), startPoint)
+                    case .ended, .cancelled, .failed:
+                        onEnded?(CGSize(width: translation.x, height: translation.y), startPoint, CGPoint(x: velocity.x, y: velocity.y))
+                    default:
+                        break
                     }
-
-                    // Only react to predominantly-vertical drags (let TabView own horizontal paging).
-                    guard abs(value.translation.height) > abs(value.translation.width) else {
-                        // Reset drag offset
-                        withAnimation(.spring()) { dragOffset = .zero }
-                        isDragging = false
-                        resetControlsTimer()
-                        return
-                    }
-
-                    let swipeThreshold: CGFloat = 100
-                    let velocityThreshold: CGFloat = 500
-                    // Ignore system home-indicator swipe-ups (close app / go Home).
-                    // Only treat swipe-up as "next video" if the gesture started away from the bottom edge.
-                    let bottomExclusion: CGFloat = 44 + MediaBrowserView.currentBottomSafeAreaInset()
-                    let startedNearBottomEdge = value.startLocation.y > (UIScreen.main.bounds.height - bottomExclusion)
-
-                    // Swipe down - exit fullscreen
-                    if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
-                        dismiss()
-                        return
-                    }
-
-                    // Swipe up - next video (in fullscreen list)
-                    if !startedNearBottomEdge,
-                       (value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold) {
-                        print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
-                        FullScreenVideoManager.shared.navigateToNext()
-                    }
-
-                    // Reset drag offset
-                    withAnimation(.spring()) { dragOffset = .zero }
-                    isDragging = false
-                    resetControlsTimer()
                 }
+                
+                // Don't recognize simultaneously; if we're vertical, we want to win over TabView paging.
+                func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+                    return false
+                }
+            }
         }
         
         var body: some View {
@@ -300,14 +316,53 @@ struct MediaBrowserView: View {
                     .background(Color.black)
                     .tabViewStyle(.page)
                     .indexViewStyle(.page(backgroundDisplayMode: .always))
-                    // Allow vertical swipe up/down to coexist with horizontal paging.
-                    .simultaneousGesture(verticalSwipeGesture)
+                    .transaction { txn in
+                        if suppressTabPagingAnimation {
+                            txn.animation = nil
+                        }
+                    }
                     .onChange(of: currentIndex) { _, newIndex in
                         previousIndex = newIndex
                         
                         // Clean up non-visible images to free memory
                         cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
                     }
+                    .overlay(
+                        VerticalPanCaptureView(
+                            isEnabled: !isTransitioning && !isImageZoomed,
+                            verticalDominanceRatio: 1.2,
+                            onChanged: { translation, _ in
+                                // Interactive drag (for swipe-down dismiss affordance)
+                                dragOffset = translation
+                                isDragging = true
+                                showControls = true
+                            },
+                            onEnded: { translation, startPoint, velocity in
+                                let swipeThreshold: CGFloat = 100
+                                let velocityThreshold: CGFloat = 500
+                                let bottomExclusion: CGFloat = 44 + MediaBrowserView.currentBottomSafeAreaInset()
+                                let startedNearBottomEdge = startPoint.y > (UIScreen.main.bounds.height - bottomExclusion)
+                                
+                                // Swipe down - exit fullscreen
+                                if translation.height > swipeThreshold || velocity.y > velocityThreshold {
+                                    dismiss()
+                                    return
+                                }
+                                
+                                // Swipe up - next video (same tweet if available, else next tweet via coordinator list)
+                                if !startedNearBottomEdge,
+                                   (translation.height < -swipeThreshold || velocity.y < -velocityThreshold) {
+                                    print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
+                                    FullScreenVideoManager.shared.navigateToNext()
+                                }
+                                
+                                withAnimation(.spring()) { dragOffset = .zero }
+                                isDragging = false
+                                resetControlsTimer()
+                            }
+                        )
+                        .contentShape(Rectangle())
+                    )
                     
                     // Close button + tweet actions overlay
                     if showControls {
