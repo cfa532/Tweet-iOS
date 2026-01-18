@@ -697,6 +697,9 @@ struct VideoTimerOverlay: View {
     }
     
     private func startTimer() {
+        // CRITICAL: Clean up any existing timer first to prevent accumulation
+        updateTimer?.invalidate()
+        
         // Request immediate update
         requestUpdate()
 

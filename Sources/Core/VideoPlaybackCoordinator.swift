@@ -742,6 +742,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         visibilityCheckDebounceTimer?.invalidate()
         visibilityCheckDebounceTimer = nil
         
+        // CRITICAL: Cancel overlay uncover timer to prevent CPU cycles accumulation
+        overlayUncoverPlaybackTimer?.invalidate()
+        overlayUncoverPlaybackTimer = nil
+        
         // PERF FIX: Clear caches
         cachedVisibilityRatios.removeAll()
         cellCache.removeAll()

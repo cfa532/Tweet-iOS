@@ -161,48 +161,54 @@ struct TweetListView<RowView: View>: View {
                 .animation(.easeInOut(duration: 0.3), value: showToast)
             }
             
-            // Listen to all notifications
-            ForEach(Array(notifications.enumerated()), id: \.element.name) { idx, notification in
-                EmptyView()
-                    .onReceive(NotificationCenter.default.publisher(for: notification.name)) { notif in
-                        if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
-                            notification.action(tweet)
-                        }
-                        // Special case: tweetId notifications send String instead of Tweet
-                        if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
-                            // Find tweet once for efficiency (avoid multiple O(n) searches)
-                            let tweetIndex = tweets.firstIndex(where: { $0.mid == tweetId })
-                            
-                            if notification.name == .tweetDeleted {
-                                // For tweet deletion, handle directly in TweetListView
-                                if let index = tweetIndex {
-                                    tweets.remove(at: index)
+            // OPTIMIZED: Handle all notifications using individual .onReceive modifiers
+            // This ensures each notification type has its own listener while avoiding ForEach overhead
+            // SwiftUI automatically cancels these Combine subscriptions when the view disappears
+            Group {
+                ForEach(Array(Set(notifications.map { $0.name })), id: \.rawValue) { name in
+                    EmptyView()
+                        .onReceive(NotificationCenter.default.publisher(for: name)) { notif in
+                            // Find matching notification handlers for this notification name
+                            for notification in notifications where notification.name == name {
+                                if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
+                                    notification.action(tweet)
                                 }
-                                TweetCacheManager.shared.deleteTweet(mid: tweetId)
-                            } else if notification.name == .tweetPrivacyChanged {
-                                // For privacy changes, handle removal directly here
-                                if let index = tweetIndex {
-                                    let tweetToRemove = tweets[index]
-                                    tweets.remove(at: index)
-                                    // Call custom handler with the tweet that was removed
-                                    notification.action(tweetToRemove)
-                                }
-                            } else {
-                                // For other notifications, call the custom handler
-                                if let index = tweetIndex {
-                                    notification.action(tweets[index])
+                                // Special case: tweetId notifications send String instead of Tweet
+                                if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
+                                    // Find tweet once for efficiency (avoid multiple O(n) searches)
+                                    let tweetIndex = tweets.firstIndex(where: { $0.mid == tweetId })
+                                    
+                                    if notification.name == .tweetDeleted {
+                                        // For tweet deletion, handle directly in TweetListView
+                                        if let index = tweetIndex {
+                                            tweets.remove(at: index)
+                                        }
+                                        TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                                    } else if notification.name == .tweetPrivacyChanged {
+                                        // For privacy changes, handle removal directly here
+                                        if let index = tweetIndex {
+                                            let tweetToRemove = tweets[index]
+                                            tweets.remove(at: index)
+                                            // Call custom handler with the tweet that was removed
+                                            notification.action(tweetToRemove)
+                                        }
+                                    } else {
+                                        // For other notifications, call the custom handler
+                                        if let index = tweetIndex {
+                                            notification.action(tweets[index])
+                                        }
+                                    }
                                 }
                             }
+                            // Special case: blockUser may send blockedUserId to remove all tweets from that user
+                            // This applies to all notification types, so handle outside the loop
+                            if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
+                                tweets.removeAll { $0.authorId == blockedUserId }
+                            }
                         }
-                        // Special case: tweetPrivacyChanged sends tweetId and privacy info
-                        // This is handled by custom handlers in each view (FollowingsTweetView, ProfileTweetsSection)
-                        // No built-in handling here to avoid conflicts
-                        // Special case: blockUser may send blockedUserId to remove all tweets from that user
-                        if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
-                            tweets.removeAll { $0.authorId == blockedUserId }
-                        }
-                    }
+                }
             }
+            .hidden() // Hide the Group to avoid affecting layout
             }  // Close ZStack
             .task {
                 // Only load if tweets are empty and we haven't completed initial load

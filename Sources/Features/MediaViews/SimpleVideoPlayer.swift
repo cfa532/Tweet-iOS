@@ -399,6 +399,7 @@ struct SimpleVideoPlayer: View {
     @State private var videoStallObserver: NSObjectProtocol?
     @State private var playerItemStatusObserver: NSKeyValueObservation?
     @State private var playerItemBufferObserver: NSKeyValueObservation?
+    @State private var resumeObserver: NSKeyValueObservation? // Temporary observer for stall recovery
     @State private var timeObserver: Any?
     @State private var timeObserverPlayer: AVPlayer?
     @State private var representableId: Int = 0 // Force VideoPlayerRepresentable recreation
@@ -4214,7 +4215,9 @@ struct SimpleVideoPlayer: View {
             guard let item = playerItem, let resumePlayer = player else { return }
             
             // Set up a temporary observer to detect when new data arrives
-            var resumeObserver: NSKeyValueObservation?
+            // CRITICAL: Clean up any existing resume observer first to prevent leaks
+            resumeObserver?.invalidate()
+            
             resumeObserver = item.observe(\.loadedTimeRanges, options: [.new]) { observedItem, _ in
                 
                 let hasData = !observedItem.loadedTimeRanges.isEmpty
@@ -4248,9 +4251,21 @@ struct SimpleVideoPlayer: View {
                     }
                 }
                 
-                // Clean up the temporary observer
-                resumeObserver?.invalidate()
-                resumeObserver = nil
+                // Clean up the temporary observer after successful recovery
+                DispatchQueue.main.async {
+                    self.resumeObserver?.invalidate()
+                    self.resumeObserver = nil
+                }
+            }
+            
+            // CRITICAL: Set timeout to ensure observer is cleaned up even if conditions aren't met
+            // This prevents observer leaks when video never recovers from stall
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
+                if self.resumeObserver != nil {
+                    self.resumeObserver?.invalidate()
+                    self.resumeObserver = nil
+                }
             }
         }
         
@@ -4526,6 +4541,9 @@ struct SimpleVideoPlayer: View {
         playerItemStatusObserver = nil
         playerItemBufferObserver?.invalidate()
         playerItemBufferObserver = nil
+        // CRITICAL: Also clean up temporary resume observer to prevent leaks
+        resumeObserver?.invalidate()
+        resumeObserver = nil
         
         playerItem = nil
     }

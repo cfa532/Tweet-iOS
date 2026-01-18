@@ -115,6 +115,10 @@ struct MediaBrowserView: View {
                 FullScreenVideoManager.shared.deactivate()
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
                 
+                // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
+                controlsTimer?.invalidate()
+                controlsTimer = nil
+                
                 // DON'T post reloadVisibleVideosOnly here
                 // MediaCell videos manage themselves via VideoPlaybackCoordinator
                 // Fullscreen manager is now inactive and won't interfere
