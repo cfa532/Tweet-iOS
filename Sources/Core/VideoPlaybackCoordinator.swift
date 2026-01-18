@@ -87,6 +87,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var cachedVisibilityRatios: [String: CGFloat] = [:]
     private let visibilityRatioThreshold: CGFloat = 0.15 // Only update if ratio changes by 15%
     
+    /// Timestamp when primary video was last switched (to prevent immediate re-switching)
+    private var lastPrimarySwitchTime: Date?
+    
     /// PERF FIX: Cache for cell lookups to avoid repeated expensive operations
     private var cellCache: [String: UITableViewCell] = [:]
     private var lastCacheClearTime: Date = Date()
@@ -473,14 +476,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Start playback when videos become visible OR when in idle phase with videos
         // This handles both "new videos" and "coming back to idle with videos present"
         if videoVisibilityChanged && !currentVisibleVideoIds.isEmpty {
-            // CRITICAL FIX: Don't reset if we're in primaryPlaying phase and the primary video is still visible
-            // This prevents restarting the video during small scrolls, but we still check for 30% threshold
+            // Allow primary video to change during scroll - re-identify primary video if needed
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
                currentVisibleVideoIds.contains(where: { primaryId.contains($0) }) {
-                // Primary video still visible - just update tracking and check 30% threshold
+                // Primary video still visible - check if we should switch to a different primary video
+                // This allows the primary video to change during scroll based on position
+                checkAndSwitchVideoIfNeeded()
                 previousVisibleVideoIds = currentVisibleVideoIds
-                // Continue to checkAndSwitchVideoIfNeeded() below
             } else {
                 // Primary video no longer visible or not in primaryPlaying phase - reset
                 phase = .idle
@@ -616,6 +619,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         phase = .primaryPlaying
         primaryVideoId = primary.identifier
         currentlyPlayingVideoIds = [primary.identifier]
+        
+        // Initialize visibility ratio cache for new primary video to prevent immediate re-switching
+        // Set to 1.0 (fully visible) to prevent glitch where video stops shortly after becoming primary
+        cachedVisibilityRatios[primary.identifier] = 1.0
+        
+        // Record switch time to prevent immediate re-checking
+        lastPrimarySwitchTime = Date()
 
         // Send play command for primary video (topmost when scrolling down, bottommost when scrolling up)
         let direction = scrollDirection ? "topmost (scrolling DOWN)" : "bottommost (scrolling UP)"
@@ -743,7 +753,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Check if current primary video is 50% out of view and switch to next video if needed
+    /// Check if current primary video is less than 50% visible and switch to next video if needed
     private func checkAndSwitchVideoIfNeeded() {
         // Only check during primary playing phase
         guard phase == .primaryPlaying,
@@ -752,6 +762,16 @@ class VideoPlaybackCoordinator: ObservableObject {
               tableView.window != nil else {
             // Skip check if table view not in view hierarchy
             return
+        }
+        
+        // Prevent immediate re-switching after a video becomes primary (prevents glitch when scrolling up)
+        // Wait at least 0.3 seconds after a switch before allowing another switch
+        if let lastSwitchTime = lastPrimarySwitchTime {
+            let timeSinceSwitch = Date().timeIntervalSince(lastSwitchTime)
+            if timeSinceSwitch < 0.3 {
+                // Too soon after switch - skip check to prevent glitch
+                return
+            }
         }
         
         // Find current primary video
@@ -806,8 +826,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         
-        // If video is 50% or less visible (50% out of view), switch to appropriate video based on scroll direction
-        if visibilityRatio <= 0.5 {
+        // If video is less than 50% visible, switch to appropriate video based on scroll direction
+        if visibilityRatio < 0.5 {
             // Re-identify primary video based on current scroll direction
             // This handles both scrolling down (switch to next) and scrolling up (switch to previous)
             guard let newPrimary = identifyPrimaryVideo(), newPrimary.identifier != primaryId else {
@@ -817,20 +837,27 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Pause current video
             pauseVideo(currentPrimary)
             
-            // Switch to new primary video based on scroll direction
-            primaryVideoId = newPrimary.identifier
-            currentlyPlayingVideoIds = [newPrimary.identifier]
-            
-            NotificationCenter.default.post(
-                name: .shouldPlayVideo,
-                object: nil,
-                userInfo: [
-                    "tweetId": newPrimary.tweetId,
-                    "videoMid": newPrimary.videoMid,
-                    "videoIndex": newPrimary.index,
-                    "isPrimary": true
-                ]
-            )
+        // Switch to new primary video based on scroll direction
+        primaryVideoId = newPrimary.identifier
+        currentlyPlayingVideoIds = [newPrimary.identifier]
+        
+        // Initialize visibility ratio cache for new primary video to prevent immediate re-switching
+        // Set to 1.0 (fully visible) to prevent glitch where video stops shortly after becoming primary
+        cachedVisibilityRatios[newPrimary.identifier] = 1.0
+        
+        // Record switch time to prevent immediate re-checking
+        lastPrimarySwitchTime = Date()
+        
+        NotificationCenter.default.post(
+            name: .shouldPlayVideo,
+            object: nil,
+            userInfo: [
+                "tweetId": newPrimary.tweetId,
+                "videoMid": newPrimary.videoMid,
+                "videoIndex": newPrimary.index,
+                "isPrimary": true
+            ]
+        )
         }
     }
     
