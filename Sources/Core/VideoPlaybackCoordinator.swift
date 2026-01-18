@@ -95,6 +95,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var lastCacheClearTime: Date = Date()
     private let cellCacheClearInterval: TimeInterval = 5.0 // Clear cache every 5 seconds
     
+    /// Mapping from embedded tweet IDs to quoting tweet IDs (for cell lookup)
+    /// When embedded tweet videos are added, we store the relationship here
+    private var embeddedToQuotingTweetId: [String: String] = [:]
+    
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
     
@@ -222,6 +226,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         if !videosToAdd.isEmpty {
+            // Store mapping from embedded tweet ID to quoting tweet ID for cell lookup
+            embeddedToQuotingTweetId[embeddedTweet.mid] = quotingTweetId
+            
             allVideos.append(contentsOf: videosToAdd)
             print("VideoPlaybackCoordinator: Added \(videosToAdd.count) embedded tweet videos, total videos now: \(allVideos.count)")
 
@@ -368,6 +375,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                     // They will be added later when fetched asynchronously by TweetItem
                     if let embeddedTweet = embeddedTweet,
                        let embeddedAttachments = embeddedTweet.attachments {
+                        // Store mapping from embedded tweet ID to quoting tweet ID for cell lookup
+                        embeddedToQuotingTweetId[originalTweetId] = tweet.mid
+                        
                         for (index, attachment) in embeddedAttachments.enumerated() {
                             if attachment.type == .video || attachment.type == .hls_video {
                                 // Use embedded tweet's ID for tracking (not the quoting tweet's ID)
@@ -689,12 +699,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             for video in visibleVideos {
                 // PERF FIX: Use cached cell if available
+                // For embedded tweets, use the quoting tweet ID for cell lookup and caching
+                let cellLookupTweetId = getCellLookupTweetId(for: video.tweetId)
                 let cell: UITableViewCell
-                if let cachedCell = cellCache[video.tweetId] {
+                if let cachedCell = cellCache[cellLookupTweetId] {
                     cell = cachedCell
                 } else {
                     guard let foundCell = findCell(for: video.tweetId, in: tableView) else { continue }
-                    cellCache[video.tweetId] = foundCell
+                    // Cache using the cell lookup tweet ID (quoting tweet ID for embedded tweets)
+                    cellCache[cellLookupTweetId] = foundCell
                     cell = foundCell
                 }
                 
@@ -723,12 +736,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             for video in visibleVideos {
                 // PERF FIX: Use cached cell if available
+                // For embedded tweets, use the quoting tweet ID for cell lookup and caching
+                let cellLookupTweetId = getCellLookupTweetId(for: video.tweetId)
                 let cell: UITableViewCell
-                if let cachedCell = cellCache[video.tweetId] {
+                if let cachedCell = cellCache[cellLookupTweetId] {
                     cell = cachedCell
                 } else {
                     guard let foundCell = findCell(for: video.tweetId, in: tableView) else { continue }
-                    cellCache[video.tweetId] = foundCell
+                    // Cache using the cell lookup tweet ID (quoting tweet ID for embedded tweets)
+                    cellCache[cellLookupTweetId] = foundCell
                     cell = foundCell
                 }
                 
@@ -780,14 +796,17 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         // PERF FIX: Use cached cell if available, otherwise find and cache it
+        // For embedded tweets, use the quoting tweet ID for cell lookup and caching
+        let cellLookupTweetId = getCellLookupTweetId(for: currentPrimary.tweetId)
         let cell: UITableViewCell
-        if let cachedCell = cellCache[currentPrimary.tweetId] {
+        if let cachedCell = cellCache[cellLookupTweetId] {
             cell = cachedCell
         } else {
             guard let foundCell = findCell(for: currentPrimary.tweetId, in: tableView) else {
                 return
             }
-            cellCache[currentPrimary.tweetId] = foundCell
+            // Cache using the cell lookup tweet ID (quoting tweet ID for embedded tweets)
+            cellCache[cellLookupTweetId] = foundCell
             cell = foundCell
         }
         
@@ -861,18 +880,45 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
+    /// Get the actual tweet ID to use for cell lookup
+    /// For embedded tweets, returns the quoting tweet's ID (the one that appears in the feed)
+    /// For regular tweets, returns the tweet ID as-is
+    private func getCellLookupTweetId(for videoTweetId: String) -> String {
+        // First, check the embedded tweet mapping (most reliable, set when videos are added)
+        if let quotingTweetId = embeddedToQuotingTweetId[videoTweetId] {
+            return quotingTweetId
+        }
+        
+        // Fallback: Check if this is an embedded tweet (referenced as originalTweetId in another tweet)
+        // This handles cases where embedded videos were added via buildVideoList
+        for tweet in currentTweets {
+            if let originalTweetId = tweet.originalTweetId,
+               originalTweetId == videoTweetId {
+                // This tweet quotes the embedded tweet, so use the quoting tweet's ID for cell lookup
+                return tweet.mid
+            }
+        }
+        
+        // Not an embedded tweet, use the video's tweet ID directly
+        return videoTweetId
+    }
+    
     /// Find table view cell for a given tweet ID
+    /// Handles embedded tweets by looking up the quoting tweet's cell
     private func findCell(for tweetId: String, in tableView: UITableView) -> UITableViewCell? {
         // Ensure table view is in view hierarchy before accessing visibleCells
         guard tableView.window != nil else {
             return nil
         }
         
+        // Get the actual tweet ID to use for cell lookup (handles embedded tweets)
+        let cellLookupTweetId = getCellLookupTweetId(for: tweetId)
+        
         for cell in tableView.visibleCells {
             // This assumes TweetTableViewCell has a way to identify its tweet
             // We'll need to add this functionality
             if let tweetCell = cell as? TweetTableViewCell,
-               tweetCell.tweetId == tweetId {
+               tweetCell.tweetId == cellLookupTweetId {
                 return cell
             }
         }
