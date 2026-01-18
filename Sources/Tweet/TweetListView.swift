@@ -57,6 +57,14 @@ struct TweetListView<RowView: View>: View {
     @State private var needsMoreContent: Bool = true
     @State private var startupTime: Date = Date()
     @State private var foregroundObserver: NSObjectProtocol?
+    @State private var notificationObservers: [NSObjectProtocol] = []
+    @State private var videoManagerUpdateTask: Task<Void, Never>? = nil
+    @State private var lastCleanupTime: Date = Date()
+    private let cleanupInterval: TimeInterval = 10.0  // Cleanup every 10 seconds max
+    
+    // Memory management - limit total tweets in memory
+    private let maxTweetsInMemory: Int = 200  // Keep max 200 tweets to prevent unbounded growth
+    private let tweetsToKeepOnTrim: Int = 150  // When trimming, keep 150 most recent
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -65,17 +73,65 @@ struct TweetListView<RowView: View>: View {
     
     /// Update VideoLoadingManager with current tweet list
     /// Centralized method to avoid code duplication
+    /// Debounced to prevent excessive updates during rapid scrolling
     private func updateVideoLoadingManager(delay: TimeInterval = 0) {
-        Task.detached(priority: .background) {
+        // Cancel any pending update task
+        videoManagerUpdateTask?.cancel()
+        
+        // Create new debounced task
+        videoManagerUpdateTask = Task.detached(priority: .background) {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
+            
+            // Check if task was cancelled
+            guard !Task.isCancelled else { return }
+            
             let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
             await self.videoLoadingManager.updateTweetList(tweetIds)
 
-            // Also cleanup old tweet instances to prevent memory growth
-            let activeTweetIds = Set(tweetIds)
-            Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+            // Throttle cleanup to prevent excessive calls
+            let shouldCleanup = await MainActor.run {
+                let timeSinceLastCleanup = Date().timeIntervalSince(self.lastCleanupTime)
+                if timeSinceLastCleanup > self.cleanupInterval {
+                    self.lastCleanupTime = Date()
+                    return true
+                }
+                return false
+            }
+            
+            if shouldCleanup {
+                // Trim tweets array if it's too large
+                await self.trimTweetsIfNeeded()
+                
+                // Also cleanup old tweet instances to prevent memory growth
+                let activeTweetIds = Set(tweetIds)
+                Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+            }
+        }
+    }
+    
+    /// Trim oldest tweets from memory if array exceeds maximum size
+    /// Keeps most recent tweets to prevent unbounded memory growth
+    private func trimTweetsIfNeeded() async {
+        await MainActor.run {
+            guard tweets.count > maxTweetsInMemory else { return }
+            
+            print("⚠️ [MEMORY] Trimming tweets array from \(tweets.count) to \(tweetsToKeepOnTrim)")
+            
+            // Keep only the most recent tweets (sorted by timestamp descending)
+            // Already sorted in descending order, so just take first N
+            let tweetsToRemove = tweets.dropFirst(tweetsToKeepOnTrim)
+            
+            // Clear Tweet singleton instances for removed tweets
+            for tweet in tweetsToRemove {
+                Tweet.clearInstance(mid: tweet.mid)
+            }
+            
+            // Trim array
+            tweets = Array(tweets.prefix(tweetsToKeepOnTrim))
+            
+            print("✅ [MEMORY] Trimmed to \(tweets.count) tweets")
         }
     }
     
@@ -160,55 +216,6 @@ struct TweetListView<RowView: View>: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.3), value: showToast)
             }
-            
-            // OPTIMIZED: Handle all notifications using individual .onReceive modifiers
-            // This ensures each notification type has its own listener while avoiding ForEach overhead
-            // SwiftUI automatically cancels these Combine subscriptions when the view disappears
-            Group {
-                ForEach(Array(Set(notifications.map { $0.name })), id: \.rawValue) { name in
-                    EmptyView()
-                        .onReceive(NotificationCenter.default.publisher(for: name)) { notif in
-                            // Find matching notification handlers for this notification name
-                            for notification in notifications where notification.name == name {
-                                if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
-                                    notification.action(tweet)
-                                }
-                                // Special case: tweetId notifications send String instead of Tweet
-                                if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
-                                    // Find tweet once for efficiency (avoid multiple O(n) searches)
-                                    let tweetIndex = tweets.firstIndex(where: { $0.mid == tweetId })
-                                    
-                                    if notification.name == .tweetDeleted {
-                                        // For tweet deletion, handle directly in TweetListView
-                                        if let index = tweetIndex {
-                                            tweets.remove(at: index)
-                                        }
-                                        TweetCacheManager.shared.deleteTweet(mid: tweetId)
-                                    } else if notification.name == .tweetPrivacyChanged {
-                                        // For privacy changes, handle removal directly here
-                                        if let index = tweetIndex {
-                                            let tweetToRemove = tweets[index]
-                                            tweets.remove(at: index)
-                                            // Call custom handler with the tweet that was removed
-                                            notification.action(tweetToRemove)
-                                        }
-                                    } else {
-                                        // For other notifications, call the custom handler
-                                        if let index = tweetIndex {
-                                            notification.action(tweets[index])
-                                        }
-                                    }
-                                }
-                            }
-                            // Special case: blockUser may send blockedUserId to remove all tweets from that user
-                            // This applies to all notification types, so handle outside the loop
-                            if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
-                                tweets.removeAll { $0.authorId == blockedUserId }
-                            }
-                        }
-                }
-            }
-            .hidden() // Hide the Group to avoid affecting layout
             }  // Close ZStack
             .task {
                 // Only load if tweets are empty and we haven't completed initial load
@@ -231,6 +238,8 @@ struct TweetListView<RowView: View>: View {
         .onAppear {
             // Set up foreground observer to fetch new tweets when app returns
             setupForegroundObserver()
+            // Set up notification observers
+            setupNotificationObservers()
         }
         .onDisappear {
             // Clean up foreground observer
@@ -238,12 +247,83 @@ struct TweetListView<RowView: View>: View {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
             }
+            // Clean up notification observers
+            cleanupNotificationObservers()
         }
     }
     
     // MARK: - Helper Methods
     
     // MARK: - Methods
+    
+    /// Setup notification observers for tweet updates
+    private func setupNotificationObservers() {
+        // Remove existing observers if any
+        cleanupNotificationObservers()
+        
+        // Get unique notification names
+        let uniqueNames = Set(notifications.map { $0.name })
+        
+        // Set up one observer per unique notification name
+        for name in uniqueNames {
+            let observer = NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak tweetsBinding = _tweets, notificationHandlers = notifications] notif in
+                // Use weak reference to tweets binding to prevent retain cycles
+                // Access the binding's wrappedValue to modify the tweets array
+                guard let binding = tweetsBinding else { return }
+                
+                // Find matching notification handlers for this notification name
+                for notification in notificationHandlers where notification.name == name {
+                    if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
+                        notification.action(tweet)
+                    }
+                    // Special case: tweetId notifications send String instead of Tweet
+                    if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
+                        // Find tweet once for efficiency (avoid multiple O(n) searches)
+                        let tweetIndex = binding.wrappedValue.firstIndex(where: { $0.mid == tweetId })
+                        
+                        if notification.name == .tweetDeleted {
+                            // For tweet deletion, handle directly in TweetListView
+                            if let index = tweetIndex {
+                                binding.wrappedValue.remove(at: index)
+                            }
+                            TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                        } else if notification.name == .tweetPrivacyChanged {
+                            // For privacy changes, handle removal directly here
+                            if let index = tweetIndex {
+                                let tweetToRemove = binding.wrappedValue[index]
+                                binding.wrappedValue.remove(at: index)
+                                // Call custom handler with the tweet that was removed
+                                notification.action(tweetToRemove)
+                            }
+                        } else {
+                            // For other notifications, call the custom handler
+                            if let index = tweetIndex {
+                                notification.action(binding.wrappedValue[index])
+                            }
+                        }
+                    }
+                }
+                // Special case: blockUser may send blockedUserId to remove all tweets from that user
+                if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
+                    binding.wrappedValue.removeAll { $0.authorId == blockedUserId }
+                }
+            }
+            
+            notificationObservers.append(observer)
+        }
+    }
+    
+    /// Clean up notification observers
+    private func cleanupNotificationObservers() {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        notificationObservers.removeAll()
+    }
     
     /// Setup observer to fetch new tweets when app comes to foreground
     private func setupForegroundObserver() {
@@ -297,8 +377,8 @@ struct TweetListView<RowView: View>: View {
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
                     
-                    // Update video manager in background
-                    updateVideoLoadingManager()
+                    // Update video manager with debouncing
+                    updateVideoLoadingManager(delay: 0.2)
                     
                     print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
                 } else {
@@ -430,8 +510,8 @@ struct TweetListView<RowView: View>: View {
                         // Update hasMoreTweets based on whether we got a full page
                         self.hasMoreTweets = tweets.count >= self.pageSize
                         
-                        // Update video manager in background
-                        self.updateVideoLoadingManager()
+                        // Update video manager with debouncing (will batch multiple updates)
+                        self.updateVideoLoadingManager(delay: 0.2)
                     } else {
                         // No valid tweets - stop loading
                         self.hasMoreTweets = false
@@ -448,7 +528,7 @@ struct TweetListView<RowView: View>: View {
                 pagesLoaded += 1
                 
                 // Small delay between requests to avoid overwhelming server
-                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms (increased from 100ms)
                 
             } catch {
                 print("📥 [AUTO-LOAD] Error loading page \(nextPage): \(error)")
@@ -490,8 +570,8 @@ struct TweetListView<RowView: View>: View {
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
                     
-                    // Update VideoLoadingManager
-                    updateVideoLoadingManager()
+                    // Update VideoLoadingManager with debouncing
+                    updateVideoLoadingManager(delay: 0.2)
                     } else {
                         // Only clear if server returned no valid tweets AND we have no cached tweets
                         if tweets.isEmpty {
@@ -520,6 +600,13 @@ struct TweetListView<RowView: View>: View {
     }
 
     func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
+        // Prevent loading if we've reached memory limit
+        if tweets.count >= maxTweetsInMemory && !forceLoad {
+            print("⚠️ [MEMORY] Reached maximum tweets limit (\(maxTweetsInMemory)), stopping pagination")
+            hasMoreTweets = false
+            return
+        }
+        
         // Allow bypassing hasMoreTweets check for manual pull-to-load
         guard (hasMoreTweets || forceLoad), !isLoadingMore, initialLoadComplete else {
             return 
@@ -569,8 +656,8 @@ struct TweetListView<RowView: View>: View {
                             hasMoreTweets = true
                         }
                         
-                        // Update VideoLoadingManager
-                        updateVideoLoadingManager()
+                        // Update VideoLoadingManager with debouncing
+                        updateVideoLoadingManager(delay: 0.2)
                     }
                     print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
@@ -662,8 +749,8 @@ struct TweetListView<RowView: View>: View {
                 tweets.mergeTweets(validServerTweets)
             }
             
-            // Update VideoLoadingManager
-            updateVideoLoadingManager()
+            // Update VideoLoadingManager with debouncing
+            updateVideoLoadingManager(delay: 0.2)
 
             currentPage = page
 
@@ -694,7 +781,7 @@ struct TweetListView<RowView: View>: View {
             // Server returned fewer than pageSize tweets (or empty), so no more pages
             if page == 0 {
                 if tweets.isEmpty {
-                    // Update VideoLoadingManager with empty list
+                    // Update VideoLoadingManager with empty list (no debouncing needed for empty)
                     updateVideoLoadingManager()
                     isLoading = false
                     initialLoadComplete = true
