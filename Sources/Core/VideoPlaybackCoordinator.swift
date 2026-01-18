@@ -125,62 +125,37 @@ class VideoPlaybackCoordinator: ObservableObject {
         // CRITICAL: Sort by position (Y coordinate) to ensure correct playback order
         // This ensures videos play in feed order, not array order
         guard let tableView = tableView, tableView.window != nil else {
-            print("⚠️ [VideoPlaybackCoordinator] Table view not available, using filtered order (not sorted by position)")
-            // Fallback: sort by allVideos index, then by video index within same tweet
-            let sorted = filtered.sorted { video1, video2 in
-                // If same tweet, prefer lower index (first in MediaGrid)
-                if video1.cellTweetId == video2.cellTweetId {
-                    return video1.attachmentIndex < video2.attachmentIndex
-                }
-                // Otherwise use position in allVideos
-                if let index1 = allVideos.firstIndex(where: { $0.identifier == video1.identifier }),
-                   let index2 = allVideos.firstIndex(where: { $0.identifier == video2.identifier }) {
-                    return index1 < index2
-                }
-                return false
-            }
-            print("📋 [VISIBLE VIDEOS] Sorted (fallback): \(sorted.map { "(\($0.cellTweetId.prefix(8)), att:\($0.attachmentIndex))" }.joined(separator: ", "))")
-            return sorted
+            // No table view (or not in hierarchy): do NOT apply any position-based ordering.
+            // Keep the coordinator's canonical order (the order `allVideos` was built in).
+            return filtered
         }
         
-        // Sort by Y position (topmost first), with index as tiebreaker
-        let sorted = filtered.sorted { video1, video2 in
-            guard let cell1 = findCell(forCellTweetId: video1.cellTweetId, in: tableView),
-                  let cell2 = findCell(forCellTweetId: video2.cellTweetId, in: tableView) else {
-                // If we can't find cells, use position in allVideos as fallback
-                // This maintains original feed order
-                if let index1 = allVideos.firstIndex(where: { $0.identifier == video1.identifier }),
-                   let index2 = allVideos.firstIndex(where: { $0.identifier == video2.identifier }) {
-                    return index1 < index2
-                }
-                return false
+        // Build a fast map of visible cell tweetId -> minY.
+        // If any visible video cannot be mapped to a visible cell, do NOT apply position-based sorting
+        // (no stable-order fallback).
+        var yByCellTweetId: [String: CGFloat] = [:]
+        for cell in tableView.visibleCells {
+            guard let tweetCell = cell as? TweetTableViewCell else { continue }
+            guard let tweetId = tweetCell.tweetId else { continue }
+            yByCellTweetId[tweetId] = cell.frame.minY
+        }
+        for video in filtered {
+            if yByCellTweetId[video.cellTweetId] == nil {
+                return filtered
             }
-            
-            let frame1 = tableView.convert(cell1.frame, to: tableView)
-            let frame2 = tableView.convert(cell2.frame, to: tableView)
-            
-            let y1 = frame1.minY
-            let y2 = frame2.minY
-            
-            // Primary sort: Y position (lower Y = higher on screen = earlier in feed)
-            if y1 != y2 {
-                return y1 < y2
+        }
+        
+        return filtered.sorted { v1, v2 in
+            let y1 = yByCellTweetId[v1.cellTweetId] ?? 0
+            let y2 = yByCellTweetId[v2.cellTweetId] ?? 0
+            if y1 != y2 { return y1 < y2 }
+            // Same cell: order by attachment index.
+            if v1.cellTweetId == v2.cellTweetId {
+                return v1.attachmentIndex < v2.attachmentIndex
             }
-            
-            // Tiebreaker: If same Y position (same cell), prefer lower index (first in MediaGrid)
-            if video1.cellTweetId == video2.cellTweetId {
-                return video1.attachmentIndex < video2.attachmentIndex
-            }
-            
-            // Different tweets at same Y (shouldn't happen, but fallback to allVideos order)
-            if let index1 = allVideos.firstIndex(where: { $0.identifier == video1.identifier }),
-               let index2 = allVideos.firstIndex(where: { $0.identifier == video2.identifier }) {
-                return index1 < index2
-            }
-            
+            // If equal Y for different cells, keep existing order by returning false.
             return false
         }
-        return sorted
     }
     
     /// Is currently scrolling
