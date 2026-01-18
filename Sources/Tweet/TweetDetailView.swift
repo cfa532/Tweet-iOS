@@ -80,26 +80,20 @@ struct DetailMediaCell: View {
                     // Videos already use .fit in tweetDetail mode, wrap in black background
                     ZStack {
                         Color.black
-                        if shouldLoadVideo {
-                            SimpleVideoPlayer(
-                                url: url,
-                                mid: attachment.mid,
-                                parentTweetId: parentTweet.mid,
-                                isVisible: true,
-                                mediaType: attachment.type,
-                                authorId: parentTweet.authorId, // Pass authorId for health check
-                                autoPlay: true,
-                                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                                showNativeControls: true,
-                                isMuted: false,
-                                mode: .tweetDetail
-                            )
-                        } else {
-                            // Show placeholder for videos that haven't been loaded yet
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.5)
-                        }
+                        SimpleVideoPlayer(
+                            url: url,
+                            mid: attachment.mid,
+                            parentTweetId: parentTweet.mid,
+                            isVisible: shouldLoadVideo, // Control visibility instead of conditionally creating
+                            mediaType: attachment.type,
+                            authorId: parentTweet.authorId, // Pass authorId for health check
+                            autoPlay: shouldLoadVideo, // Only autoplay when selected
+                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            showNativeControls: true,
+                            isMuted: false,
+                            mode: .tweetDetail
+                        )
+                        .opacity(shouldLoadVideo ? 1.0 : 0.0) // Hide when not selected
                     }
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
@@ -161,9 +155,10 @@ struct DetailMediaCell: View {
             }
         }
         .onAppear {
-            print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid)")
+            print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid), shouldLoadVideo: \(shouldLoadVideo)")
             
             // For videos in detail view, check if we need to restore position
+            // This runs regardless of shouldLoadVideo since player is always created
             if attachment.type == .video || attachment.type == .hls_video {
                 if !hasRestoredPosition {
                     if let savedState = PersistentVideoStateManager.shared.getState(videoMid: attachment.mid, context: .detailView),
@@ -563,7 +558,7 @@ struct TweetDetailView: View {
                                 parentTweet: displayTweet,
                                 attachmentIndex: attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? index,
                                 aspectRatio: Float(aspectRatio(for: attachment, at: index)),
-                                shouldLoadVideo: index == selectedMediaIndex,
+                                shouldLoadVideo: index == selectedMediaIndex, // Only load current video
                                 showMuteButton: false
                             )
                             .tag(index)
@@ -576,9 +571,6 @@ struct TweetDetailView: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         showBrowser = true
-                    }
-                    .onChange(of: selectedMediaIndex) { [mediaAttachments] oldIndex, newIndex in
-                        handleMediaIndexChange(oldIndex: oldIndex, newIndex: newIndex, mediaAttachments: mediaAttachments)
                     }
                 }
             }
@@ -884,23 +876,6 @@ struct TweetDetailView: View {
         
         // Clamp to reasonable bounds
         return max(0.5, min(2.0, minAspectRatio))
-    }
-    
-    // Handle media index change to pause videos when swiping away
-    private func handleMediaIndexChange(oldIndex: Int, newIndex: Int, mediaAttachments: [MimeiFileType]) {
-        // Pause video when swiping away from it
-        guard oldIndex != newIndex,
-              oldIndex >= 0 && oldIndex < mediaAttachments.count else {
-            return
-        }
-        
-        let oldAttachment = mediaAttachments[oldIndex]
-        let isVideo = oldAttachment.type == .video || oldAttachment.type == .hls_video
-        
-        if isVideo && DetailVideoManager.shared.currentVideoMid == oldAttachment.mid {
-            print("DEBUG: [TweetDetailView] Pausing video \(oldAttachment.mid) as user swiped away from index \(oldIndex) to \(newIndex)")
-            DetailVideoManager.shared.pausePlayer()
-        }
     }
     
     // Helper to check if attachment is media type (image, video, audio)
