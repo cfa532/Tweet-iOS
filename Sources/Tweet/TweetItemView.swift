@@ -17,7 +17,8 @@ struct TweetItemView: View, Equatable {
         didSet {
             // CRITICAL: When original tweet first loads (nil -> value), clear cached height and notify
             // This only happens once per retweet/embedded tweet when original tweet loads
-            if originalTweet != nil && oldValue == nil {
+            // Skip notification if this is the initial cache load (suppressInitialNotification flag)
+            if originalTweet != nil && oldValue == nil && !suppressInitialNotification {
                 tweet.cachedHeight = nil
                 // Notify table view to recache height if cell is currently visible
                 NotificationCenter.default.post(
@@ -26,6 +27,7 @@ struct TweetItemView: View, Equatable {
                     userInfo: ["tweetId": tweet.mid]
                 )
             }
+            suppressInitialNotification = false // Reset flag after first load
         }
     }
     @State private var isVisible = false
@@ -35,6 +37,7 @@ struct TweetItemView: View, Equatable {
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
     @State private var hasRegisteredRetweetRelationship = false
+    @State private var suppressInitialNotification = false
     
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
@@ -162,6 +165,34 @@ struct TweetItemView: View, Equatable {
                 // print("⚡ [RENDER] Tweet ready (@\(tweet.author?.username ?? "?"))")
             }
         }
+        // CRITICAL: Pre-load original tweet from cache synchronously on appear
+        // This ensures the original tweet is available immediately if cached, preventing layout delays
+        .onAppear {
+            // Try to load from cache synchronously first (fast if cached)
+            if let originalTweetId = tweet.originalTweetId,
+               originalTweet == nil,
+               let cachedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
+                // Suppress notification for initial cache load to prevent premature height recalculation
+                suppressInitialNotification = true
+                originalTweet = cachedTweet
+                hasLoadedOriginalTweet = true
+                
+                // Notify VideoPlaybackCoordinator about the loaded embedded tweet from cache
+                VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+                    quotingTweetId: tweet.mid,
+                    embeddedTweet: cachedTweet
+                )
+                
+                // Register retweet relationship ASAP from cache
+                if !hasRegisteredRetweetRelationship {
+                    VideoLoadingManager.shared.registerRetweetRelationship(
+                        retweetId: tweet.mid,
+                        originalTweetId: cachedTweet.mid
+                    )
+                    hasRegisteredRetweetRelationship = true
+                }
+            }
+        }
         // Use .task(id:) instead of onAppear for stable async loading (like Android's LaunchedEffect)
         // This ensures the task only runs when originalTweetId changes, preventing duplicate loads
         .task(id: tweet.originalTweetId, priority: .userInitiated) {
@@ -172,25 +203,28 @@ struct TweetItemView: View, Equatable {
                 return
             }
             
-            // First, try to restore from cache immediately to prevent layout shifts
-            if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
-                await MainActor.run {
-                    originalTweet = cachedTweet
-                    hasLoadedOriginalTweet = true
+            // Skip cache load if already loaded synchronously in onAppear
+            if originalTweet == nil {
+                // First, try to restore from cache immediately to prevent layout shifts
+                if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
+                    await MainActor.run {
+                        originalTweet = cachedTweet
+                        hasLoadedOriginalTweet = true
 
-                    // Notify VideoPlaybackCoordinator about the loaded embedded tweet from cache
-                    VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
-                        quotingTweetId: tweet.mid,
-                        embeddedTweet: cachedTweet
-                    )
-
-                    // Register retweet relationship ASAP from cache for immediate priority boost
-                    if !hasRegisteredRetweetRelationship {
-                        VideoLoadingManager.shared.registerRetweetRelationship(
-                            retweetId: tweet.mid,
-                            originalTweetId: cachedTweet.mid
+                        // Notify VideoPlaybackCoordinator about the loaded embedded tweet from cache
+                        VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+                            quotingTweetId: tweet.mid,
+                            embeddedTweet: cachedTweet
                         )
-                        hasRegisteredRetweetRelationship = true
+
+                        // Register retweet relationship ASAP from cache for immediate priority boost
+                        if !hasRegisteredRetweetRelationship {
+                            VideoLoadingManager.shared.registerRetweetRelationship(
+                                retweetId: tweet.mid,
+                                originalTweetId: cachedTweet.mid
+                            )
+                            hasRegisteredRetweetRelationship = true
+                        }
                     }
                 }
             }
