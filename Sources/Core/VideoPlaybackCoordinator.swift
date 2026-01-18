@@ -23,7 +23,6 @@ extension Notification.Name {
 /// Video state during orchestration
 private enum VideoPlaybackPhase {
     case idle                    // No playback
-    case surveying               // Playing all visible videos for 2s each
     case primaryPlaying          // Primary video is playing to completion
 }
 
@@ -78,22 +77,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Flag to preserve state on foreground (cleared on explicit scroll)
     private var shouldPreserveStateOnForeground = false
     
-    /// Timer for survey phase (2s per video)
-    private var surveyTimer: Timer?
-    
-    /// Timer for detecting scroll stop (2s delay)
-    private var scrollStopTimer: Timer?
-    
     /// Timer for debouncing video playback (0.2s delay)
     private var playbackDebounceTimer: Timer?
-    
-    /// PERF FIX: Debounce timer for visibility checks to reduce expensive calculations
-    private var visibilityCheckDebounceTimer: Timer?
-    private let visibilityCheckDebounceInterval: TimeInterval = 0.15 // 150ms debounce
-    
-    /// PERF FIX: Cache for visibility ratios to avoid redundant calculations
-    private var cachedVisibilityRatios: [String: CGFloat] = [:]
-    private let visibilityRatioThreshold: CGFloat = 0.15 // Only update if ratio changes by 15%
     
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
@@ -118,6 +103,20 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Store current tweet list for embedded tweet lookup
     private var currentTweets: [Tweet] = []
+    
+    /// PERF FIX: Cache for visibility ratios to avoid redundant calculations
+    private var cachedVisibilityRatios: [String: CGFloat] = [:]
+    private let visibilityRatioThreshold: CGFloat = 0.15 // Only update if ratio changes by 15%
+    
+    /// PERF FIX: Debounce timer for visibility checks to reduce expensive calculations
+    private var visibilityCheckDebounceTimer: Timer?
+    private let visibilityCheckDebounceInterval: TimeInterval = 0.15 // 150ms debounce
+    
+    /// Timer for scroll stop detection
+    private var scrollStopTimer: Timer?
+    
+    /// Timer for survey phase (kept for compatibility)
+    private var surveyTimer: Timer?
 
     /// Currently visible videos (computed from visibleTweetIds + allVideos)
     /// Visible videos sorted by position (topmost first)
@@ -482,16 +481,47 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This excludes embedded/quoted tweet videos that shouldn't be coordinated
         let tweetsWithVideos = Set(allVideos.map { $0.tweetId })
         
-        var filteredTweetIds = tweetIds.intersection(tweetsWithVideos)
+        // Build set of embedded tweet IDs (tweets that are embedded in other tweets)
+        // These should NOT be added via direct intersection - only via explicit visibility check below
+        let embeddedTweetIdsSet = Set(embeddedToQuotingTweetId.keys)
+        
+        // Start with tweets that have videos AND are not embedded tweets
+        // Embedded tweets will be added later only if their quoting tweet is sufficiently visible
+        var filteredTweetIds = tweetIds.intersection(tweetsWithVideos).subtracting(embeddedTweetIdsSet)
         
         // CRITICAL: Also include embedded tweet IDs when their quoting tweets are visible
         // When a quoted tweet is visible, its embedded tweet should also be considered visible
+        // BUT: Only if the quoting tweet cell is sufficiently visible (at least 50%)
+        // This prevents embedded videos from autoplaying before they're actually on screen
         for visibleTweetId in tweetIds {
             if let quotingTweet = Tweet.getInstance(for: visibleTweetId) ?? TweetCacheManager.shared.fetchTweetSync(mid: visibleTweetId) {
                 if let embeddedTweetId = quotingTweet.originalTweetId,
                    tweetsWithVideos.contains(embeddedTweetId) {
-                    // The quoting tweet is visible, so include the embedded tweet ID
-                    filteredTweetIds.insert(embeddedTweetId)
+                    // Check if the quoting tweet cell is at least 50% visible before marking embedded content as visible
+                    if let tableView = tableView, tableView.window != nil,
+                       let cell = findCell(for: visibleTweetId, in: tableView) {
+                        let visibleRect = CGRect(
+                            x: 0,
+                            y: tableView.contentOffset.y,
+                            width: tableView.bounds.width,
+                            height: tableView.bounds.height
+                        )
+                        let cellFrame = tableView.convert(cell.frame, to: tableView)
+                        let intersection = cellFrame.intersection(visibleRect)
+                        let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+                        
+                        // Only include embedded tweet if quoting tweet cell is at least 50% visible
+                        if visibilityRatio >= 0.5 {
+                            filteredTweetIds.insert(embeddedTweetId)
+                            print("✅ [EMBEDDED VISIBILITY] Including embedded tweet \(embeddedTweetId.prefix(8)) - quoting tweet \(visibleTweetId.prefix(8)) is \(String(format: "%.1f", visibilityRatio * 100))% visible")
+                        } else {
+                            print("⏭️ [EMBEDDED VISIBILITY] Skipping embedded tweet \(embeddedTweetId.prefix(8)) - quoting tweet \(visibleTweetId.prefix(8)) only \(String(format: "%.1f", visibilityRatio * 100))% visible")
+                        }
+                    } else {
+                        // Cannot find cell or tableView - skip embedded tweet to be safe
+                        // This prevents embedded videos from autoplaying when visibility cannot be determined
+                        print("⚠️ [EMBEDDED VISIBILITY] Skipping embedded tweet \(embeddedTweetId.prefix(8)) - cannot determine quoting tweet \(visibleTweetId.prefix(8)) visibility (no cell/tableView)")
+                    }
                 }
             }
         }
@@ -700,22 +730,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 "isPrimary": true
             ]
         )
-    }
-    
-    /// Start survey phase - play all visible videos for 2s each (kept for backward compatibility)
-    private func startSurveyPhase() {
-        // Redirect to new immediate playback
-        startPrimaryVideoPlayback()
-    }
-    
-    /// Play a video during survey phase (2s duration) - kept for backward compatibility
-    private func playVideoForSurvey(_ video: VideoPlaybackInfo) {
-        // No-op - survey phase is no longer used
-    }
-    
-    /// End survey phase and identify primary video - kept for backward compatibility
-    private func endSurveyPhase() {
-        // No-op - survey phase is no longer used
     }
     
     /// Identify the primary video based on scroll direction

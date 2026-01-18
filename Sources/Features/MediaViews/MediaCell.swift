@@ -39,15 +39,13 @@ struct MediaCell: View, Equatable {
     @State private var isLoading = false
     @State private var showFullScreen = false
     @State private var isVisible = false
-    @State private var preloadTask: Task<Void, Never>?
-    @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
-    @State private var shouldAutoPlay = false // Track if video should autoplay
-    @State private var effectiveBaseUrl: URL // Reactive baseUrl that updates when author's baseUrl changes
-    @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
-    @State private var videoReloadTrigger = false // Trigger for video reload
-    @State private var videoFrame: CGRect = .zero // Track video frame for viewport visibility check
-    @State private var isInViewport: Bool = false // Track if video is actually in viewport
+    @State private var shouldAutoPlay = false
+    @State private var effectiveBaseUrl: URL
+    @State private var foregroundObserver: NSObjectProtocol? = nil
+    @State private var videoReloadTrigger = false
+    @State private var videoFrame: CGRect = .zero
+    @State private var isInViewport: Bool = false
     @ObservedObject private var muteState = MuteState.shared
 
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, sourceTweetId: String? = nil) {
@@ -217,14 +215,9 @@ struct MediaCell: View, Equatable {
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
-            // onDisappear fires when the view is scrolled completely off screen
             isVisible = false
             
-            // Cancel any ongoing preload tasks
-            cancelPreloadTask()
-            
             // Cancel any pending image loads to prevent memory leaks
-            // ✅ FIX: Use only mid as request ID (matching loadImageNormalPriority above)
             GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
             
             // Clean up foreground observer
@@ -241,11 +234,16 @@ struct MediaCell: View, Equatable {
             
             // For embedded videos in detail views, enable autoplay when visible
             // In detail views, they autoplay independently (not managed by coordinator)
+            // In feed views, embedded videos are managed by VideoPlaybackCoordinator
             if isEmbedded && isVideoAttachment && newValue {
-                // Check if we're in a detail view context
-                // Note: This check happens in SimpleVideoPlayer, but we enable autoplay here
-                // SimpleVideoPlayer will bypass coordinator check when DetailVideoManager.isDetailViewActive()
-                shouldAutoPlay = true
+                // Only autoplay embedded videos if we're actually in a detail view
+                // In feed/list views, the coordinator will manage playback
+                if NavigationStateManager.shared.isDetailViewActive {
+                    print("🎬 [MediaCell] Embedded video became visible in detail view - enabling autoplay: \(attachment.mid)")
+                    shouldAutoPlay = true
+                } else {
+                    print("📋 [MediaCell] Embedded video became visible in feed view - waiting for coordinator: \(attachment.mid)")
+                }
             }
         }
         
@@ -356,23 +354,6 @@ struct MediaCell: View, Equatable {
                 )
             }
         }
-    }
-    
-    // MARK: - Video Preloading Methods
-    
-    /// Start background preloading of video assets
-    /// DISABLED: Grid-level debouncing now handles all video preloading
-    private func startBackgroundPreloading() {
-        // This method is disabled because grid-level debouncing now handles all video preloading
-        // Individual cells no longer need to preload videos independently
-        return
-    }
-    
-    /// Cancel ongoing preload task
-    private func cancelPreloadTask() {
-        preloadTask?.cancel()
-        preloadTask = nil
-        isPreloading = false
     }
     
     private func saveVideoPositionForFullscreen() {
