@@ -15,10 +15,16 @@ struct TweetItemView: View, Equatable {
     var backgroundColor: Color = Color(.systemBackground)
     @State private var originalTweet: Tweet? {
         didSet {
-            // CRITICAL: When original tweet loads, clear cached height
-            // The tweet will re-render with full content, needs new height measurement
-            if originalTweet != nil {
+            // CRITICAL: When original tweet first loads (nil -> value), clear cached height and notify
+            // This only happens once per retweet/embedded tweet when original tweet loads
+            if originalTweet != nil && oldValue == nil {
                 tweet.cachedHeight = nil
+                // Notify table view to recache height if cell is currently visible
+                NotificationCenter.default.post(
+                    name: .tweetHeightNeedsRecalculation,
+                    object: nil,
+                    userInfo: ["tweetId": tweet.mid]
+                )
             }
         }
     }

@@ -94,6 +94,7 @@ class TweetTableViewController: UITableViewController {
     // Notification observer for scroll to top
     private var scrollToTopObserver: NSObjectProtocol?
     // Notification observer for tweet height changes
+    private var tweetHeightObserver: NSObjectProtocol?
     
     // Scroll position preservation
     private var savedScrollPosition: CGFloat?
@@ -108,6 +109,7 @@ class TweetTableViewController: UITableViewController {
         setupTableView()
         setupRefreshControl()
         setupScrollToTopObserver()
+        setupTweetHeightObserver()
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
@@ -116,6 +118,10 @@ class TweetTableViewController: UITableViewController {
     deinit {
         // Remove notification observers
         if let observer = scrollToTopObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
+        if let observer = tweetHeightObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         
@@ -131,6 +137,51 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] _ in
             self?.scrollToTop()
+        }
+    }
+    
+    private func setupTweetHeightObserver() {
+        tweetHeightObserver = NotificationCenter.default.addObserver(
+            forName: .tweetHeightNeedsRecalculation,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleTweetHeightChange(notification)
+        }
+    }
+    
+    private func handleTweetHeightChange(_ notification: Notification) {
+        guard let tweetId = notification.userInfo?["tweetId"] as? String else { return }
+        
+        // Find the index path for this tweet
+        var rowIndex: Int?
+        if let pinnedIndex = pinnedTweets.firstIndex(where: { $0.mid == tweetId }) {
+            rowIndex = pinnedIndex
+        } else if let regularIndex = tweets.firstIndex(where: { $0.mid == tweetId }) {
+            rowIndex = pinnedTweets.count + regularIndex
+        }
+        
+        guard let row = rowIndex else { return }
+        let indexPath = IndexPath(row: row, section: 0)
+        
+        // Check if cell is currently visible
+        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
+              visibleIndexPaths.contains(indexPath) else {
+            // Cell not visible - willDisplay will cache it when it becomes visible
+            return
+        }
+        
+        let tweet = row < pinnedTweets.count ? pinnedTweets[row] : tweets[row - pinnedTweets.count]
+        
+        // Trigger height recalculation, then cache the new height
+        tableView.beginUpdates()
+        tableView.endUpdates()
+        
+        // After layout updates, recache the height
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self,
+                  let cell = self.tableView.cellForRow(at: indexPath) else { return }
+            tweet.cachedHeight = cell.frame.height
         }
     }
     
