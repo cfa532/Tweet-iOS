@@ -1030,6 +1030,35 @@ class VideoPlaybackCoordinator: ObservableObject {
             ]
         )
     }
+
+    /// Returns true if the table cell hosting this video is actually visible enough.
+    ///
+    /// `UITableView.indexPathsForVisibleRows` can include rows that are only a few pixels on-screen.
+    /// If we auto-advance into those, the next video will "play" but appear invisible to the user.
+    private func isVideoCellVisibleEnough(_ video: VideoPlaybackInfo, minVisibilityRatio: CGFloat = 0.5) -> Bool {
+        guard let tableView = tableView, tableView.window != nil else { return false }
+
+        let cellLookupTweetId = getCellLookupTweetId(for: video.tweetId)
+        let cell: UITableViewCell
+        if let cached = cellCache[cellLookupTweetId] {
+            cell = cached
+        } else {
+            guard let found = findCell(for: video.tweetId, in: tableView) else { return false }
+            cellCache[cellLookupTweetId] = found
+            cell = found
+        }
+
+        let visibleRect = CGRect(
+            x: 0,
+            y: tableView.contentOffset.y,
+            width: tableView.bounds.width,
+            height: tableView.bounds.height
+        )
+        let cellFrame = cell.frame // already in tableView's coordinate space
+        let intersection = cellFrame.intersection(visibleRect)
+        let ratio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+        return ratio >= minVisibilityRatio
+    }
     
     /// Play next visible video after primary finishes
     private func playNextVisibleVideo() {
@@ -1068,7 +1097,26 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
 
-        let nextVideo = visibleVideos[targetIndex]
+        // IMPORTANT: `indexPathsForVisibleRows` can include rows that are barely visible.
+        // When the current video finishes, we should only advance to a video whose cell is
+        // sufficiently visible, otherwise it will "autoplay" while appearing invisible.
+        let step = scrollDirection ? 1 : -1
+        var candidateIndex = targetIndex
+        var nextVideo: VideoPlaybackInfo?
+        while candidateIndex >= 0 && candidateIndex < visibleVideos.count {
+            let candidate = visibleVideos[candidateIndex]
+            if isVideoCellVisibleEnough(candidate, minVisibilityRatio: 0.5) {
+                nextVideo = candidate
+                break
+            }
+            candidateIndex += step
+        }
+
+        guard let nextVideo else {
+            print("📹 [VideoPlaybackCoordinator] No sufficiently visible next video to play; stopping")
+            stopAllVideos()
+            return
+        }
         let currentVideo = visibleVideos[currentIndex]
         
 
