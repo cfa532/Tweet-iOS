@@ -79,102 +79,6 @@ struct TweetListView<RowView: View>: View {
         }
     }
     
-    // MARK: - Video Navigation for Fullscreen
-    
-    /// Find next video in tweet list starting from given SOURCE tweet (visible in feed) and video index
-    /// sourceTweetId: The visible tweet in feed (could be retweet)
-    /// currentVideoIndex: The current video index in the tweet's attachments
-    func findNextVideoInList(sourceTweetId: String, currentVideoIndex: Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
-        
-        // Combined tweet list: pinned tweets first, then regular tweets
-        // Consolidate MainActor calls into one to avoid multiple context switches
-        let (allTweets, pinnedCount, regularCount) = await MainActor.run { [pinnedTweets, tweets] in
-            let combined = pinnedTweets + tweets
-            return (combined, pinnedTweets.count, tweets.count)
-        }
-        print("🔍 [FIND NEXT VIDEO] Searching for next video after sourceTweetId: \(sourceTweetId), videoIndex: \(currentVideoIndex)")
-        print("🔍 [FIND NEXT VIDEO] Total tweets to search: \(allTweets.count) (pinned: \(pinnedCount), regular: \(regularCount))")
-        
-        // Find source tweet (the visible tweet in feed)
-        guard let sourceTweetIdx = allTweets.firstIndex(where: { $0.mid == sourceTweetId }) else {
-            print("❌ [FIND NEXT VIDEO] Source tweet not found in list")
-            return nil
-        }
-        
-        print("🔍 [FIND NEXT VIDEO] Found source tweet at index: \(sourceTweetIdx)")
-        
-        let sourceTweet = allTweets[sourceTweetIdx]
-        
-        // Get media tweet (handle retweets)
-        // Optimization: Check cache first, skip if not available (don't block on network)
-        let mediaTweet: Tweet
-        if let originalTweetId = sourceTweet.originalTweetId,
-           sourceTweet.attachments == nil {
-            // This is a retweet without attachments - check cache (singleton + Core Data)
-            let original = Tweet.getInstance(for: originalTweetId)
-                ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
-            
-            if let original = original {
-                mediaTweet = original
-            } else {
-                // Original not in cache - skip to next tweet instead of blocking on network
-                mediaTweet = sourceTweet
-            }
-        } else {
-            mediaTweet = sourceTweet
-        }
-        
-        // Find all video attachments in media tweet
-        if let attachments = mediaTweet.attachments {
-            let videoIndices = attachments.enumerated().compactMap { index, attachment in
-                (attachment.type == .video || attachment.type == .hls_video) ? index : nil
-            }
-            
-            
-            // Check if there are more videos in current media tweet
-            if let currentPosInVideoList = videoIndices.firstIndex(of: currentVideoIndex),
-               currentPosInVideoList + 1 < videoIndices.count {
-                let nextVideoIdx = videoIndices[currentPosInVideoList + 1]
-                return (mediaTweet, nextVideoIdx, sourceTweetId) // Same source tweet
-            }
-        }
-        
-        // No more videos in current tweet, search next VISIBLE tweets in feed (including both pinned and regular)
-        print("🔍 [FIND NEXT VIDEO] No more videos in current tweet, searching from index \(sourceTweetIdx + 1) to \(allTweets.count - 1)")
-        for idx in (sourceTweetIdx + 1)..<allTweets.count {
-            let nextTweet = allTweets[idx]
-            
-            // Get media tweet (handle retweets)
-            // Optimization: Check cache first, skip if not available (don't block on network)
-            let nextMediaTweet: Tweet
-            if let originalTweetId = nextTweet.originalTweetId,
-               nextTweet.attachments == nil {
-                // This is a retweet without attachments - check cache (singleton + Core Data)
-                let original = Tweet.getInstance(for: originalTweetId)
-                    ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
-                
-                if let original = original {
-                    nextMediaTweet = original
-                } else {
-                    // Original not in cache - skip to next tweet instead of blocking on network
-                    nextMediaTweet = nextTweet
-                }
-            } else {
-                nextMediaTweet = nextTweet
-            }
-            
-            if let attachments = nextMediaTweet.attachments {
-                if let firstVideoIdx = attachments.firstIndex(where: { $0.type == .video || $0.type == .hls_video }) {
-                    print("✅ [FIND NEXT VIDEO] Found next video at index \(idx): tweetId=\(nextTweet.mid), videoMid=\(attachments[firstVideoIdx].mid)")
-                    return (nextMediaTweet, firstVideoIdx, nextTweet.mid) // Return source tweet ID
-                }
-            }
-        }
-        
-        print("❌ [FIND NEXT VIDEO] No next video found in list")
-        return nil
-    }
-
     // MARK: - Initialization
     let onRefreshExtra: (() async -> Void)?  // Optional extra refresh callback
     
@@ -319,19 +223,8 @@ struct TweetListView<RowView: View>: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Set up fullscreen video search function for auto-advance
-            setupVideoSearchFunction()
-            
             // Set up foreground observer to fetch new tweets when app returns
             setupForegroundObserver()
-        }
-        .onChange(of: tweets) { _, _ in
-            // Update search function when tweets change
-            setupVideoSearchFunction()
-        }
-        .onChange(of: pinnedTweets) { _, _ in
-            // Update search function when pinned tweets change
-            setupVideoSearchFunction()
         }
         .onDisappear {
             // Clean up foreground observer
@@ -344,93 +237,6 @@ struct TweetListView<RowView: View>: View {
     
     // MARK: - Helper Methods
     
-    /// Set up the video search function with current tweet arrays
-    private func setupVideoSearchFunction() {
-        // Capture current tweet arrays - this runs whenever tweets/pinnedTweets change
-        let currentTweets = tweets
-        let currentPinnedTweets = pinnedTweets
-        let hproseRef = hproseInstance
-        
-        FullScreenVideoManager.shared.setVideoSearchFunction(
-            { [currentTweets, currentPinnedTweets, hproseRef] sourceTweetId, currentVideoIndex in
-                    // Combined tweet list: pinned tweets first, then regular tweets
-                    let allTweets = currentPinnedTweets + currentTweets
-                    print("🔍 [FIND NEXT VIDEO] Searching for next video after sourceTweetId: \(sourceTweetId), videoIndex: \(currentVideoIndex)")
-                    print("🔍 [FIND NEXT VIDEO] Total tweets to search: \(allTweets.count) (pinned: \(currentPinnedTweets.count), regular: \(currentTweets.count))")
-                    
-                    // Find source tweet
-                    guard let sourceTweetIdx = allTweets.firstIndex(where: { $0.mid == sourceTweetId }) else {
-                        print("❌ [FIND NEXT VIDEO] Source tweet not found in list")
-                        return nil
-                    }
-                    
-                    print("🔍 [FIND NEXT VIDEO] Found source tweet at index: \(sourceTweetIdx)")
-                    let sourceTweet = allTweets[sourceTweetIdx]
-                    
-                    // Get media tweet (handle retweets)
-                    // Optimization: Only fetch if retweet doesn't already have attachments
-                    let mediaTweet: Tweet
-                    if let originalTweetId = sourceTweet.originalTweetId,
-                       let originalAuthorId = sourceTweet.originalAuthorId,
-                       sourceTweet.attachments == nil {
-                        if let original = try? await hproseRef.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                            mediaTweet = original
-                        } else {
-                            mediaTweet = sourceTweet
-                        }
-                    } else {
-                        mediaTweet = sourceTweet
-                    }
-                    
-                    // Check for more videos in current tweet
-                    if let attachments = mediaTweet.attachments {
-                        let videoIndices = attachments.enumerated().compactMap { index, attachment in
-                            (attachment.type == .video || attachment.type == .hls_video) ? index : nil
-                        }
-                        
-                        if let currentPosInVideoList = videoIndices.firstIndex(of: currentVideoIndex),
-                           currentPosInVideoList + 1 < videoIndices.count {
-                            let nextVideoIdx = videoIndices[currentPosInVideoList + 1]
-                            return (mediaTweet, nextVideoIdx, sourceTweetId)
-                        }
-                    }
-                    
-                    // Search next tweets
-                    print("🔍 [FIND NEXT VIDEO] No more videos in current tweet, searching from index \(sourceTweetIdx + 1) to \(allTweets.count - 1)")
-                    for idx in (sourceTweetIdx + 1)..<allTweets.count {
-                        let nextTweet = allTweets[idx]
-                        
-                        // Optimization: Only fetch if retweet doesn't already have attachments
-                        let nextMediaTweet: Tweet
-                        if let originalTweetId = nextTweet.originalTweetId,
-                           let originalAuthorId = nextTweet.originalAuthorId,
-                           nextTweet.attachments == nil {
-                            if let original = try? await hproseRef.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                                nextMediaTweet = original
-                            } else {
-                                nextMediaTweet = nextTweet
-                            }
-                        } else {
-                            nextMediaTweet = nextTweet
-                        }
-                        
-                        if let attachments = nextMediaTweet.attachments {
-                            if let firstVideoIdx = attachments.firstIndex(where: { $0.type == .video || $0.type == .hls_video }) {
-                                print("✅ [FIND NEXT VIDEO] Found next video at index \(idx): tweetId=\(nextTweet.mid), videoMid=\(attachments[firstVideoIdx].mid)")
-                                return (nextMediaTweet, firstVideoIdx, nextTweet.mid)
-                            }
-                        }
-                    }
-                    
-                    print("❌ [FIND NEXT VIDEO] No next video found in list")
-                    return nil
-                },
-                onNavigate: { tweet, videoIndex, sourceTweetId in
-                    // MediaBrowserView will handle the actual navigation
-                }
-            )
-    }
-
     // MARK: - Methods
     
     /// Setup observer to fetch new tweets when app comes to foreground

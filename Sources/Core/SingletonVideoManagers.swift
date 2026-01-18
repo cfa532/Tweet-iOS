@@ -341,8 +341,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     @Published var isPlaying = false
     @Published var isBuffering = false // Track buffering state for spinner
     
-    // Closures for finding and navigating to next video
-    var findNextVideo: ((String, Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)?)? // Async closure to find next video
+    // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)? // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onExitFullScreen: (() -> Void)? // Callback to exit fullscreen
     
@@ -408,12 +407,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 // Don't attach to player - just warm up the cache
             }
         }
-    }
-    
-    /// Set the video search function from TweetListView
-    func setVideoSearchFunction(_ findNext: @escaping (String, Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)?, onNavigate: @escaping (Tweet, Int, String) -> Void) {
-        self.findNextVideo = findNext
-        self.onNavigateToNextVideo = onNavigate
     }
     
     /// Load and play a video in the singleton player
@@ -1116,28 +1109,33 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Handle video completion and auto-advance to next video
     func handleVideoFinished() {
-        guard let currentSourceTweetId = currentSourceTweetId,
-              let findNextVideo = findNextVideo else {
+        guard let currentSourceTweetId = currentSourceTweetId else {
             // Don't rewind here - will check position when user tries to play
             isPlaying = false
             return
         }
         
         isPlaying = false
-        
-        // Use TweetListView's async search function to find next video
-        // Pass sourceTweetId (visible tweet position in feed) not currentTweetId (could be original tweet)
-        Task {
-            if let nextVideo = await findNextVideo(currentSourceTweetId, currentVideoIndex) {
-                await MainActor.run {
-                    onNavigateToNextVideo?(nextVideo.tweet, nextVideo.videoIndex, nextVideo.sourceTweetId)
-                }
-            } else {
-                await MainActor.run {
-                    // Don't rewind here - will check position when user tries to play
-                }
-            }
+
+        if let next = VideoPlaybackCoordinator.shared.findNextVideoForFullscreen(
+            sourceTweetId: currentSourceTweetId,
+            currentAttachmentIndex: currentVideoIndex,
+            currentVideoMid: currentVideoMid
+        ) {
+            onNavigateToNextVideo?(next.tweet, next.videoIndex, next.sourceTweetId)
+            return
         }
+
+        // If this fullscreen wasn't opened from a feed-backed context, do nothing (avoid accidental dismiss).
+        if !VideoPlaybackCoordinator.shared.containsFullscreenItem(
+            sourceTweetId: currentSourceTweetId,
+            currentAttachmentIndex: currentVideoIndex,
+            currentVideoMid: currentVideoMid
+        ) {
+            return
+        }
+
+        // End of canonical list: keep last frame (user can swipe; don't auto-dismiss).
     }
     
     /// Check if video is at the end and rewind if needed before playing
@@ -1188,22 +1186,25 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return
         }
 
-        guard let currentSourceTweetId = currentSourceTweetId,
-              let findNextVideo = findNextVideo else {
+        guard let currentSourceTweetId = currentSourceTweetId else { return }
+
+        if let next = VideoPlaybackCoordinator.shared.findNextVideoForFullscreen(
+            sourceTweetId: currentSourceTweetId,
+            currentAttachmentIndex: currentVideoIndex,
+            currentVideoMid: currentVideoMid
+        ) {
+            onNavigateToNextVideo?(next.tweet, next.videoIndex, next.sourceTweetId)
             return
         }
-        
-        
-        Task {
-            if let nextVideo = await findNextVideo(currentSourceTweetId, currentVideoIndex) {
-                await MainActor.run {
-                    onNavigateToNextVideo?(nextVideo.tweet, nextVideo.videoIndex, nextVideo.sourceTweetId)
-                }
-            } else {
-                await MainActor.run {
-                    onExitFullScreen?()
-                }
-            }
+
+        // If this fullscreen wasn't opened from a feed-backed context, ignore the gesture (no dismiss).
+        let isFeedBacked = VideoPlaybackCoordinator.shared.containsFullscreenItem(
+            sourceTweetId: currentSourceTweetId,
+            currentAttachmentIndex: currentVideoIndex,
+            currentVideoMid: currentVideoMid
+        )
+        if isFeedBacked {
+            onExitFullScreen?()
         }
     }
     
@@ -1408,11 +1409,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
     }
     
-    /// Clear search function
-    func clearSearchFunction() {
-        findNextVideo = nil
-        onNavigateToNextVideo = nil
-    }
+    // No "search function" anymore; the coordinator is canonical.
 }
 
 /// Singleton video manager for detail view context

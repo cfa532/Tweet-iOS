@@ -26,23 +26,25 @@ private enum VideoPlaybackPhase {
     case primaryPlaying          // Primary video is playing to completion
 }
 
-/// Individual video tracking info for feed orchestration.
-/// Note: Only videos in the first 4 attachment positions are tracked, as `MediaGridView` only displays the first 4 items.
-/// Fullscreen playback builds its own "all attachments" list and must not share this feed-visible list.
+/// Canonical video tracking info.
+///
+/// - `cellTweetId`: The tweet ID of the *feed cell* (retweet ID for retweets, quoting tweet ID for embedded/quoted media).
+/// - `mediaTweetId`: The tweet ID that actually owns the attachments (original tweet for retweets, embedded tweet for quoted media).
+/// - `attachmentIndex`: The index in `mediaTweetId.attachments` (can be > 3; fullscreen needs this).
+///
+/// Feed playback coordination only considers `attachmentIndex < 4` because `MediaGridView` only renders the first 4 items.
 struct VideoPlaybackInfo: Equatable {
-    let tweetId: String
+    let cellTweetId: String
+    let mediaTweetId: String
     let videoMid: String
-    let index: Int  // Attachment index (0-3, since only first 4 items are visible in MediaGrid)
+    let attachmentIndex: Int
     
     var identifier: String {
-        "\(tweetId)_\(videoMid)"
+        "\(cellTweetId)_\(videoMid)_\(attachmentIndex)"
     }
     
-    /// Check if this video is in the first 4 items (visible in MediaGrid)
-    /// Returns true if index is 0-3, false otherwise
-    /// Note: This should always be true since we only add videos with index < 4 to the video list
     var isInVisibleMediaRange: Bool {
-        return index < 4
+        attachmentIndex < 4
     }
     
     static func == (lhs: VideoPlaybackInfo, rhs: VideoPlaybackInfo) -> Bool {
@@ -88,17 +90,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var lastCacheClearTime: Date = Date()
     private let cellCacheClearInterval: TimeInterval = 5.0 // Clear cache every 5 seconds
     
-    /// Mapping from embedded tweet IDs to quoting tweet IDs (for cell lookup)
-    /// When embedded tweet videos are added, we store the relationship here
-    private var embeddedToQuotingTweetId: [String: String] = [:]
-    
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
     
-    /// All videos in the feed (ordered)
+    /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
 
-    /// Track seen video identifiers (tweetId_videoMid) to prevent duplicates across video list updates
+    /// Track seen video identifiers to prevent duplicates across list updates
     private var seenVideoIdentifiers = Set<String>()
 
     /// Store current tweet list for embedded tweet lookup
@@ -118,10 +116,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Timer for survey phase (kept for compatibility)
     private var surveyTimer: Timer?
 
-    /// Currently visible videos (computed from visibleTweetIds + allVideos)
-    /// Visible videos sorted by position (topmost first)
+    /// Feed-visible videos (computed from visibleTweetIds + allVideos).
+    /// Only includes videos that can actually appear in `MediaGridView` (first 4 attachments).
+    /// Sorted by position (topmost cell first; then attachmentIndex within the same cell).
     private var visibleVideos: [VideoPlaybackInfo] {
-        let filtered = allVideos.filter { visibleTweetIds.contains($0.tweetId) }
+        let filtered = allVideos.filter { visibleTweetIds.contains($0.cellTweetId) && $0.isInVisibleMediaRange }
         
         // CRITICAL: Sort by position (Y coordinate) to ensure correct playback order
         // This ensures videos play in feed order, not array order
@@ -130,8 +129,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Fallback: sort by allVideos index, then by video index within same tweet
             let sorted = filtered.sorted { video1, video2 in
                 // If same tweet, prefer lower index (first in MediaGrid)
-                if video1.tweetId == video2.tweetId {
-                    return video1.index < video2.index
+                if video1.cellTweetId == video2.cellTweetId {
+                    return video1.attachmentIndex < video2.attachmentIndex
                 }
                 // Otherwise use position in allVideos
                 if let index1 = allVideos.firstIndex(where: { $0.identifier == video1.identifier }),
@@ -140,14 +139,14 @@ class VideoPlaybackCoordinator: ObservableObject {
                 }
                 return false
             }
-            print("📋 [VISIBLE VIDEOS] Sorted (fallback): \(sorted.map { "(\($0.tweetId.prefix(8)), idx:\($0.index))" }.joined(separator: ", "))")
+            print("📋 [VISIBLE VIDEOS] Sorted (fallback): \(sorted.map { "(\($0.cellTweetId.prefix(8)), att:\($0.attachmentIndex))" }.joined(separator: ", "))")
             return sorted
         }
         
         // Sort by Y position (topmost first), with index as tiebreaker
         let sorted = filtered.sorted { video1, video2 in
-            guard let cell1 = findCell(for: video1.tweetId, in: tableView),
-                  let cell2 = findCell(for: video2.tweetId, in: tableView) else {
+            guard let cell1 = findCell(forCellTweetId: video1.cellTweetId, in: tableView),
+                  let cell2 = findCell(forCellTweetId: video2.cellTweetId, in: tableView) else {
                 // If we can't find cells, use position in allVideos as fallback
                 // This maintains original feed order
                 if let index1 = allVideos.firstIndex(where: { $0.identifier == video1.identifier }),
@@ -169,9 +168,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
             
             // Tiebreaker: If same Y position (same cell), prefer lower index (first in MediaGrid)
-            if video1.tweetId == video2.tweetId {
-                print("🔀 [SORT TIEBREAKER] Same cell (tweetId: \(video1.tweetId.prefix(8))), comparing index \(video1.index) vs \(video2.index): returning \(video1.index < video2.index)")
-                return video1.index < video2.index
+            if video1.cellTweetId == video2.cellTweetId {
+                return video1.attachmentIndex < video2.attachmentIndex
             }
             
             // Different tweets at same Y (shouldn't happen, but fallback to allVideos order)
@@ -182,9 +180,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             return false
         }
-        
-        print("📋 [VISIBLE VIDEOS] Sorted result: \(sorted.map { "(\($0.tweetId.prefix(8)), idx:\($0.index))" }.joined(separator: ", "))")
-        
         return sorted
     }
     
@@ -248,17 +243,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         var videosToAdd: [VideoPlaybackInfo] = []
 
         if let embeddedAttachments = embeddedTweet.attachments {
-            var videoIndex = 0
             for (attachmentIndex, attachment) in embeddedAttachments.enumerated() {
-                guard attachmentIndex < 4 else { break }
-                
                 if attachment.type == .video || attachment.type == .hls_video {
-                    // CRITICAL: Use the QUOTING tweet's ID as tweetId, not the embedded tweet's ID
-                    // The quoting tweet is what appears in the feed and has the visible cell
                     let videoInfo = VideoPlaybackInfo(
-                        tweetId: quotingTweetId,  // Use quoting tweet's ID (the visible cell)
+                        cellTweetId: quotingTweetId,          // visible cell in feed
+                        mediaTweetId: embeddedTweet.mid,      // owns attachments
                         videoMid: attachment.mid,
-                        index: videoIndex
+                        attachmentIndex: attachmentIndex
                     )
 
                     if seenVideoIdentifiers.contains(videoInfo.identifier) {
@@ -267,16 +258,122 @@ class VideoPlaybackCoordinator: ObservableObject {
 
                     videosToAdd.append(videoInfo)
                     seenVideoIdentifiers.insert(videoInfo.identifier)
-                    videoIndex += 1
                 }
             }
         }
 
         if !videosToAdd.isEmpty {
-            embeddedToQuotingTweetId[embeddedTweet.mid] = quotingTweetId
             allVideos.append(contentsOf: videosToAdd)
             print("VideoPlaybackCoordinator: Added \(videosToAdd.count) embedded tweet videos, total: \(allVideos.count)")
         }
+    }
+
+    /// Add videos for a pure retweet once the original tweet (media owner) is available.
+    ///
+    /// This keeps a single canonical list owned by the coordinator while still allowing fullscreen
+    /// navigation to work for retweets whose attachments arrive later.
+    func addRetweetVideos(retweetId: String, originalTweet: Tweet) {
+        var videosToAdd: [VideoPlaybackInfo] = []
+
+        if let attachments = originalTweet.attachments {
+            for (attachmentIndex, attachment) in attachments.enumerated() {
+                if attachment.type == .video || attachment.type == .hls_video {
+                    let info = VideoPlaybackInfo(
+                        cellTweetId: retweetId,
+                        mediaTweetId: originalTweet.mid,
+                        videoMid: attachment.mid,
+                        attachmentIndex: attachmentIndex
+                    )
+                    if seenVideoIdentifiers.contains(info.identifier) { continue }
+                    videosToAdd.append(info)
+                    seenVideoIdentifiers.insert(info.identifier)
+                }
+            }
+        }
+
+        if !videosToAdd.isEmpty {
+            allVideos.append(contentsOf: videosToAdd)
+            print("VideoPlaybackCoordinator: Added \(videosToAdd.count) retweet videos, total: \(allVideos.count)")
+        }
+    }
+
+    /// Returns true if the canonical list contains the current fullscreen item.
+    /// This is used to distinguish "no next video" from "not a feed-backed fullscreen context".
+    func containsFullscreenItem(sourceTweetId: String, currentAttachmentIndex: Int, currentVideoMid: String?) -> Bool {
+        let mid = currentVideoMid
+        return allVideos.contains { v in
+            // Prefer matching by sourceTweetId+attachmentIndex; if mid is available, also require it.
+            if v.cellTweetId == sourceTweetId && v.attachmentIndex == currentAttachmentIndex {
+                return mid.map { v.videoMid == $0 } ?? true
+            }
+            // Fallback: some callers pass mediaTweetId as sourceTweetId; accept that too.
+            if v.mediaTweetId == sourceTweetId && v.attachmentIndex == currentAttachmentIndex {
+                return mid.map { v.videoMid == $0 } ?? true
+            }
+            // Last resort: if only mid is reliable, match by mid (+ attachmentIndex when provided).
+            if let mid, v.videoMid == mid {
+                return v.attachmentIndex == currentAttachmentIndex
+            }
+            return false
+        }
+    }
+
+    /// Canonical "next video" lookup for fullscreen browsing.
+    /// Returns the tweet that owns the attachments (mediaTweet) + the attachment index + the next source tweet id (cell tweet id).
+    ///
+    /// IMPORTANT: `sourceTweetId` might be the feed cell id (retweet id) OR the media tweet id depending on call site,
+    /// so we match both, and also optionally match by `currentVideoMid` for extra resilience.
+    func findNextVideoForFullscreen(sourceTweetId: String, currentAttachmentIndex: Int, currentVideoMid: String?) -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
+        // Find the current position in the global list.
+        let startIndex: Int?
+        let mid = currentVideoMid
+
+        // 1) Exact match on (cellTweetId, attachmentIndex, mid?)
+        startIndex = allVideos.firstIndex(where: { v in
+            v.cellTweetId == sourceTweetId &&
+            v.attachmentIndex == currentAttachmentIndex &&
+            (mid.map { v.videoMid == $0 } ?? true)
+        })
+        // 2) If caller passed mediaTweetId as sourceTweetId, accept that.
+        ?? allVideos.firstIndex(where: { v in
+            v.mediaTweetId == sourceTweetId &&
+            v.attachmentIndex == currentAttachmentIndex &&
+            (mid.map { v.videoMid == $0 } ?? true)
+        })
+        // 3) Match by mid (more stable across retweet/original id mismatches).
+        ?? (mid.flatMap { m in
+            allVideos.firstIndex(where: { $0.videoMid == m && $0.attachmentIndex == currentAttachmentIndex })
+        })
+        // 4) Fallback to first video within the source cell/media tweet.
+        ?? allVideos.firstIndex(where: { $0.cellTweetId == sourceTweetId })
+        ?? allVideos.firstIndex(where: { $0.mediaTweetId == sourceTweetId })
+
+        guard let startIndex else { return nil }
+
+        // Scan forward for the next playable entry (must have a resolvable media tweet with attachments).
+        for nextIdx in (startIndex + 1)..<allVideos.count {
+            let candidate = allVideos[nextIdx]
+
+            // Resolve the tweet that owns attachments.
+            let mediaTweet = currentTweets.first(where: { $0.mid == candidate.mediaTweetId })
+                ?? TweetCacheManager.shared.fetchTweetSync(mid: candidate.mediaTweetId)
+                ?? Tweet.getInstance(for: candidate.mediaTweetId)
+
+            guard let mediaTweet,
+                  let attachments = mediaTweet.attachments,
+                  candidate.attachmentIndex >= 0,
+                  candidate.attachmentIndex < attachments.count else {
+                continue
+            }
+
+            // Ensure the attachment is still a video.
+            let attachment = attachments[candidate.attachmentIndex]
+            guard attachment.type == .video || attachment.type == .hls_video else { continue }
+
+            return (tweet: mediaTweet, videoIndex: candidate.attachmentIndex, sourceTweetId: candidate.cellTweetId)
+        }
+
+        return nil
     }
 
     /// Build video list from tweets (including pinned tweets)
@@ -319,17 +416,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         for (_, tweet) in pinnedTweets.enumerated() {
             guard let attachments = tweet.attachments else { continue }
             
-            // CRITICAL: Only process first 4 attachments (MediaGrid maxImages limit)
-            // Track videos in order they appear, assigning sequential indices (0, 1, 2...)
-            var videoIndex = 0
             for (attachmentIndex, attachment) in attachments.enumerated() {
-                guard attachmentIndex < 4 else { break }
-                
                 if attachment.type == .video || attachment.type == .hls_video {
                     let videoInfo = VideoPlaybackInfo(
-                        tweetId: tweet.mid,
+                        cellTweetId: tweet.mid,
+                        mediaTweetId: tweet.mid,
                         videoMid: attachment.mid,
-                        index: videoIndex  // Sequential video index (0 for first video, 1 for second)
+                        attachmentIndex: attachmentIndex
                     )
                     
                     // CRITICAL: Always add videos from standalone tweets, even if they appear elsewhere as embedded
@@ -337,7 +430,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                     // This ensures videos play correctly whether viewed standalone or embedded
                     videos.append(videoInfo)
                     seenVideoIdentifiers.insert(videoInfo.identifier)
-                    videoIndex += 1
                     
                     if embeddedTweetIds.contains(tweet.mid) {
                         print("VideoPlaybackCoordinator: Tweet \(tweet.mid.prefix(8)) appears both standalone and embedded - tracking in both contexts")
@@ -369,15 +461,13 @@ class VideoPlaybackCoordinator: ObservableObject {
                     if let originalTweet = originalTweet,
                        let originalAttachments = originalTweet.attachments {
 
-                        var videoIndex = 0
                         for (attachmentIndex, attachment) in originalAttachments.enumerated() {
-                            guard attachmentIndex < 4 else { break }
-                            
                             if attachment.type == .video || attachment.type == .hls_video {
                                 let videoInfo = VideoPlaybackInfo(
-                                    tweetId: tweet.mid,
+                                    cellTweetId: tweet.mid,
+                                    mediaTweetId: originalTweet.mid,
                                     videoMid: attachment.mid,
-                                    index: videoIndex
+                                    attachmentIndex: attachmentIndex
                                 )
 
                                 if seenVideoIdentifiers.contains(videoInfo.identifier) {
@@ -386,7 +476,6 @@ class VideoPlaybackCoordinator: ObservableObject {
 
                                 videos.append(videoInfo)
                                 seenVideoIdentifiers.insert(videoInfo.identifier)
-                                videoIndex += 1
                             }
                         }
                     } else {
@@ -396,15 +485,13 @@ class VideoPlaybackCoordinator: ObservableObject {
             } else {
                 // REGULAR TWEET or QUOTED TWEET
                 if let attachments = tweet.attachments {
-                    var videoIndex = 0
                     for (attachmentIndex, attachment) in attachments.enumerated() {
-                        guard attachmentIndex < 4 else { break }
-                        
                         if attachment.type == .video || attachment.type == .hls_video {
                             let videoInfo = VideoPlaybackInfo(
-                                tweetId: tweet.mid,
+                                cellTweetId: tweet.mid,
+                                mediaTweetId: tweet.mid,
                                 videoMid: attachment.mid,
-                                index: videoIndex
+                                attachmentIndex: attachmentIndex
                             )
                             
                             // CRITICAL: Always add videos from standalone tweets, even if they appear elsewhere as embedded
@@ -412,13 +499,12 @@ class VideoPlaybackCoordinator: ObservableObject {
                             // Don't skip based on seenVideoIdentifiers for regular tweets
                             videos.append(videoInfo)
                             seenVideoIdentifiers.insert(videoInfo.identifier)
-                            videoIndex += 1
                             
                             // Log if this tweet also appears embedded elsewhere
                             if embeddedTweetIds.contains(tweet.mid) {
-                                print("VideoPlaybackCoordinator: Tweet \(tweet.mid.prefix(8)) appears both standalone and embedded - tracking standalone context with tweetId: \(videoInfo.tweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
+                                print("VideoPlaybackCoordinator: Tweet \(tweet.mid.prefix(8)) appears both standalone and embedded - tracking standalone context with tweetId: \(videoInfo.cellTweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
                             } else {
-                                print("VideoPlaybackCoordinator: Added standalone tweet video - tweetId: \(videoInfo.tweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
+                                print("VideoPlaybackCoordinator: Added standalone tweet video - tweetId: \(videoInfo.cellTweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
                             }
                         }
                     }
@@ -429,20 +515,13 @@ class VideoPlaybackCoordinator: ObservableObject {
 
                     if let embeddedTweet = embeddedTweet,
                        let embeddedAttachments = embeddedTweet.attachments {
-                        embeddedToQuotingTweetId[originalTweetId] = tweet.mid
-                        
-                        var videoIndex = 0
                         for (attachmentIndex, attachment) in embeddedAttachments.enumerated() {
-                            guard attachmentIndex < 4 else { break }
-                            
                             if attachment.type == .video || attachment.type == .hls_video {
-                                // CRITICAL: Use the QUOTING tweet's ID as tweetId, not the embedded tweet's ID
-                                // The quoting tweet is what appears in the feed and has the visible cell
-                                // This ensures the coordinator can find the correct cell for visibility checking
                                 let videoInfo = VideoPlaybackInfo(
-                                    tweetId: tweet.mid,  // Use quoting tweet's ID (the visible cell)
+                                    cellTweetId: tweet.mid,           // visible cell in feed
+                                    mediaTweetId: embeddedTweet.mid,  // owns attachments
                                     videoMid: attachment.mid,
-                                    index: videoIndex
+                                    attachmentIndex: attachmentIndex
                                 )
 
                                 if seenVideoIdentifiers.contains(videoInfo.identifier) {
@@ -453,7 +532,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                                 videos.append(videoInfo)
                                 seenVideoIdentifiers.insert(videoInfo.identifier)
                                 print("VideoPlaybackCoordinator: Added embedded tweet video - quotingTweetId: \(tweet.mid.prefix(8)), embeddedTweetId: \(originalTweetId.prefix(8)), videoMid: \(attachment.mid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
-                                videoIndex += 1
                             }
                         }
                     } else {
@@ -489,57 +567,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
             previousContentOffset = currentOffset
         }
-        // CRITICAL: Filter to only tweets that have videos in allVideos (similar to Android's playbackTweetId check)
-        // This excludes embedded/quoted tweet videos that shouldn't be coordinated
-        let tweetsWithVideos = Set(allVideos.map { $0.tweetId })
-        
-        // Build set of embedded tweet IDs (tweets that are embedded in other tweets)
-        // These are added separately via explicit visibility check below
-        let embeddedTweetIdsSet = Set(embeddedToQuotingTweetId.keys)
-        
-        // CRITICAL FIX: Don't subtract embeddedTweetIdsSet here!
-        // A tweet can appear both standalone AND embedded in the feed
-        // We need to track both occurrences separately
-        // The visibility check below will add embedded tweets when their quoting tweets are visible
-        // But we also want standalone tweets to be included directly
-        var filteredTweetIds = tweetIds.intersection(tweetsWithVideos)
-        
-        // CRITICAL: Also include embedded tweet IDs when their quoting tweets are visible
-        // When a quoted tweet is visible, its embedded tweet should also be considered visible
-        // BUT: Only if the quoting tweet cell is sufficiently visible (at least 50%)
-        // This prevents embedded videos from autoplaying before they're actually on screen
-        for visibleTweetId in tweetIds {
-            if let quotingTweet = Tweet.getInstance(for: visibleTweetId) ?? TweetCacheManager.shared.fetchTweetSync(mid: visibleTweetId) {
-                if let embeddedTweetId = quotingTweet.originalTweetId,
-                   tweetsWithVideos.contains(embeddedTweetId) {
-                    // Check if the quoting tweet cell is at least 50% visible before marking embedded content as visible
-                    if let tableView = tableView, tableView.window != nil,
-                       let cell = findCell(for: visibleTweetId, in: tableView) {
-                        let visibleRect = CGRect(
-                            x: 0,
-                            y: tableView.contentOffset.y,
-                            width: tableView.bounds.width,
-                            height: tableView.bounds.height
-                        )
-                        let cellFrame = tableView.convert(cell.frame, to: tableView)
-                        let intersection = cellFrame.intersection(visibleRect)
-                        let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
-                        
-                        // Only include embedded tweet if quoting tweet cell is at least 50% visible
-                        if visibilityRatio >= 0.5 {
-                            filteredTweetIds.insert(embeddedTweetId)
-                            print("✅ [EMBEDDED VISIBILITY] Including embedded tweet \(embeddedTweetId.prefix(8)) - quoting tweet \(visibleTweetId.prefix(8)) is \(String(format: "%.1f", visibilityRatio * 100))% visible")
-                        } else {
-                            print("⏭️ [EMBEDDED VISIBILITY] Skipping embedded tweet \(embeddedTweetId.prefix(8)) - quoting tweet \(visibleTweetId.prefix(8)) only \(String(format: "%.1f", visibilityRatio * 100))% visible")
-                        }
-                    } else {
-                        // Cannot find cell or tableView - skip embedded tweet to be safe
-                        // This prevents embedded videos from autoplaying when visibility cannot be determined
-                        print("⚠️ [EMBEDDED VISIBILITY] Skipping embedded tweet \(embeddedTweetId.prefix(8)) - cannot determine quoting tweet \(visibleTweetId.prefix(8)) visibility (no cell/tableView)")
-                    }
-                }
-            }
-        }
+        // CRITICAL: Only consider feed-visible video entries (MediaGrid only shows first 4 attachments).
+        // The canonical list can include attachmentIndex > 3 for fullscreen, but those must not affect feed playback.
+        let tweetsWithFeedVideos = Set(allVideos.filter { $0.isInVisibleMediaRange }.map { $0.cellTweetId })
+        let filteredTweetIds = tweetIds.intersection(tweetsWithFeedVideos)
         
         self.visibleTweetIds = filteredTweetIds
         self.isScrolling = true
@@ -568,11 +599,11 @@ class VideoPlaybackCoordinator: ObservableObject {
             
             // PERF FIX: Clear caches for videos that are no longer visible
             // This prevents stale cell references and visibility ratios
-            let tweetsToRemove = Set(allVideos.filter { videosToStop.contains($0.videoMid) }.map { $0.tweetId })
-            for tweetId in tweetsToRemove {
-                cellCache.removeValue(forKey: tweetId)
-                // Clear visibility ratios for all videos in this tweet
-                for video in allVideos where video.tweetId == tweetId {
+            let cellsToRemove = Set(allVideos.filter { videosToStop.contains($0.videoMid) }.map { $0.cellTweetId })
+            for cellTweetId in cellsToRemove {
+                cellCache.removeValue(forKey: cellTweetId)
+                // Clear visibility ratios for all videos in this cell
+                for video in allVideos where video.cellTweetId == cellTweetId {
                     cachedVisibilityRatios.removeValue(forKey: video.identifier)
                 }
             }
@@ -739,9 +770,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             name: .shouldPlayVideo,
             object: nil,
             userInfo: [
-                "tweetId": primary.tweetId,
+                "tweetId": primary.cellTweetId,
                 "videoMid": primary.videoMid,
-                "videoIndex": primary.index,
+                "videoIndex": primary.attachmentIndex,
                 "isPrimary": true
             ]
         )
@@ -758,7 +789,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             // visibleVideos is already sorted by index within same tweet
             let firstVideo = visibleVideos.first
             if let video = firstVideo {
-                print("✅ [PRIMARY SELECT] Fallback selection (no tableView): \(video.videoMid) (tweetId: \(video.tweetId), index: \(video.index))")
+                print("✅ [PRIMARY SELECT] Fallback selection (no tableView): \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex))")
             }
             return firstVideo
         }
@@ -785,7 +816,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling DOWN: Find topmost video that is at least 50% visible
             // CRITICAL: Use CELL visibility for all videos in that cell, not individual video visibility
             for video in visibleVideos {
-                let cellLookupTweetId = getCellLookupTweetId(for: video.tweetId)
+                let cellLookupTweetId = video.cellTweetId
                 
                 // Check if we already calculated this cell's visibility
                 let visibilityRatio: CGFloat
@@ -799,7 +830,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                     if let cachedCell = cellCache[cellLookupTweetId] {
                         cell = cachedCell
                     } else {
-                        guard let foundCell = findCell(for: video.tweetId, in: tableView) else { continue }
+                        guard let foundCell = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { continue }
                         cellCache[cellLookupTweetId] = foundCell
                         cell = foundCell
                     }
@@ -814,7 +845,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 }
                 
                 if visibilityRatio >= 0.5 {
-                    print("✅ [PRIMARY SELECT] Found 50%+ visible video: \(video.videoMid) (tweetId: \(video.tweetId.prefix(8)), index: \(video.index), CELL visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
+                    print("✅ [PRIMARY SELECT] Found 50%+ visible video: \(video.videoMid) (cellTweetId: \(video.cellTweetId.prefix(8)), attachmentIndex: \(video.attachmentIndex), CELL visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
                     return video
                 } else {
                     print("⏭️ [PRIMARY SELECT] Skipping <50% visible: \(video.videoMid) (CELL visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
@@ -824,19 +855,19 @@ class VideoPlaybackCoordinator: ObservableObject {
             // No video is 50% visible, return first one anyway
             let fallback = visibleVideos.first
             if let video = fallback {
-                print("⚠️ [PRIMARY SELECT] No 50% visible video, using first: \(video.videoMid) (tweetId: \(video.tweetId), index: \(video.index))")
+                print("⚠️ [PRIMARY SELECT] No 50% visible video, using first: \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex))")
             }
             return fallback
         } else {
             // Scrolling UP: Find bottommost video (highest Y coordinate) that is at least 50% visible
             // Iterate from end of sorted array (bottommost first)
             for video in visibleVideos.reversed() {
-                let cellLookupTweetId = getCellLookupTweetId(for: video.tweetId)
+                let cellLookupTweetId = video.cellTweetId
                 let cell: UITableViewCell
                 if let cachedCell = cellCache[cellLookupTweetId] {
                     cell = cachedCell
                 } else {
-                    guard let foundCell = findCell(for: video.tweetId, in: tableView) else { continue }
+                    guard let foundCell = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { continue }
                     cellCache[cellLookupTweetId] = foundCell
                     cell = foundCell
                 }
@@ -846,7 +877,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
                 
                 if visibilityRatio >= 0.5 {
-                    print("✅ [PRIMARY SELECT] Found 50%+ visible video (scrolling UP): \(video.videoMid) (tweetId: \(video.tweetId), index: \(video.index), Y: \(cellFrame.minY), visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
+                    print("✅ [PRIMARY SELECT] Found 50%+ visible video (scrolling UP): \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex), Y: \(cellFrame.minY), visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
                     return video
                 }
             }
@@ -854,7 +885,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             // No video is 50% visible, return last one anyway
             let fallback = visibleVideos.last
             if let video = fallback {
-                print("⚠️ [PRIMARY SELECT] No 50% visible video (scrolling UP), using last: \(video.videoMid) (tweetId: \(video.tweetId), index: \(video.index))")
+                print("⚠️ [PRIMARY SELECT] No 50% visible video (scrolling UP), using last: \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex))")
             }
             return fallback
         }
@@ -887,16 +918,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         // PERF FIX: Use cached cell if available, otherwise find and cache it
-        // For embedded tweets, use the quoting tweet ID for cell lookup and caching
-        let cellLookupTweetId = getCellLookupTweetId(for: currentPrimary.tweetId)
+        let cellLookupTweetId = currentPrimary.cellTweetId
         let cell: UITableViewCell
         if let cachedCell = cellCache[cellLookupTweetId] {
             cell = cachedCell
         } else {
-            guard let foundCell = findCell(for: currentPrimary.tweetId, in: tableView) else {
+            guard let foundCell = findCell(forCellTweetId: currentPrimary.cellTweetId, in: tableView) else {
                 return
             }
-            // Cache using the cell lookup tweet ID (quoting tweet ID for embedded tweets)
             cellCache[cellLookupTweetId] = foundCell
             cell = foundCell
         }
@@ -962,54 +991,27 @@ class VideoPlaybackCoordinator: ObservableObject {
             name: .shouldPlayVideo,
             object: nil,
             userInfo: [
-                "tweetId": newPrimary.tweetId,
+                "tweetId": newPrimary.cellTweetId,
                 "videoMid": newPrimary.videoMid,
-                "videoIndex": newPrimary.index,
+                "videoIndex": newPrimary.attachmentIndex,
                 "isPrimary": true
             ]
         )
         }
     }
-    
-    /// Get the actual tweet ID to use for cell lookup
-    /// For embedded tweets, returns the quoting tweet's ID (the one that appears in the feed)
-    /// For regular tweets, returns the tweet ID as-is
-    private func getCellLookupTweetId(for videoTweetId: String) -> String {
-        // First, check the embedded tweet mapping (most reliable, set when videos are added)
-        if let quotingTweetId = embeddedToQuotingTweetId[videoTweetId] {
-            return quotingTweetId
-        }
-        
-        // Fallback: Check if this is an embedded tweet (referenced as originalTweetId in another tweet)
-        // This handles cases where embedded videos were added via buildVideoList
-        for tweet in currentTweets {
-            if let originalTweetId = tweet.originalTweetId,
-               originalTweetId == videoTweetId {
-                // This tweet quotes the embedded tweet, so use the quoting tweet's ID for cell lookup
-                return tweet.mid
-            }
-        }
-        
-        // Not an embedded tweet, use the video's tweet ID directly
-        return videoTweetId
-    }
-    
-    /// Find table view cell for a given tweet ID
-    /// Handles embedded tweets by looking up the quoting tweet's cell
-    private func findCell(for tweetId: String, in tableView: UITableView) -> UITableViewCell? {
+
+    /// Find table view cell for a given feed cell tweet ID.
+    private func findCell(forCellTweetId tweetId: String, in tableView: UITableView) -> UITableViewCell? {
         // Ensure table view is in view hierarchy before accessing visibleCells
         guard tableView.window != nil else {
             return nil
         }
-        
-        // Get the actual tweet ID to use for cell lookup (handles embedded tweets)
-        let cellLookupTweetId = getCellLookupTweetId(for: tweetId)
-        
+
         for cell in tableView.visibleCells {
             // This assumes TweetTableViewCell has a way to identify its tweet
             // We'll need to add this functionality
             if let tweetCell = cell as? TweetTableViewCell,
-               tweetCell.tweetId == cellLookupTweetId {
+               tweetCell.tweetId == tweetId {
                 return cell
             }
         }
@@ -1038,12 +1040,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func isVideoCellVisibleEnough(_ video: VideoPlaybackInfo, minVisibilityRatio: CGFloat = 0.5) -> Bool {
         guard let tableView = tableView, tableView.window != nil else { return false }
 
-        let cellLookupTweetId = getCellLookupTweetId(for: video.tweetId)
+        let cellLookupTweetId = video.cellTweetId
         let cell: UITableViewCell
         if let cached = cellCache[cellLookupTweetId] {
             cell = cached
         } else {
-            guard let found = findCell(for: video.tweetId, in: tableView) else { return false }
+            guard let found = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { return false }
             cellCache[cellLookupTweetId] = found
             cell = found
         }
@@ -1138,9 +1140,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             name: .shouldPlayVideo,
             object: nil,
             userInfo: [
-                "tweetId": nextVideo.tweetId,
+                "tweetId": nextVideo.cellTweetId,
                 "videoMid": nextVideo.videoMid,
-                "videoIndex": nextVideo.index,
+                "videoIndex": nextVideo.attachmentIndex,
                 "isPrimary": true
             ]
         )
@@ -1179,17 +1181,13 @@ class VideoPlaybackCoordinator: ObservableObject {
             shouldPreserveStateOnForeground = false
             
             if phase == .primaryPlaying, let primaryId = primaryVideoId {
-                // Resume primary video - find by videoMid (stable across refreshes)
-                
-                // Extract videoMid from identifier (format: tweetId_videoMid)
-                let primaryVideoMid = primaryId.split(separator: "_").last.map(String.init)
-                
-                if let primaryVideoMid = primaryVideoMid,
-                   let primary = visibleVideos.first(where: { $0.videoMid == primaryVideoMid }) {
+                // Resume primary video - prefer identifier match (stable across rebuilds).
+                if let primary = visibleVideos.first(where: { $0.identifier == primaryId })
+                    ?? visibleVideos.first(where: { primaryId.contains($0.videoMid) }) {
                     
                     // CRITICAL: If primary is not the first visible video, restart from first
                     // This ensures playback always starts from top when multiple videos are visible
-                    let primaryIndex = visibleVideos.firstIndex(where: { $0.videoMid == primaryVideoMid }) ?? 0
+                    let primaryIndex = visibleVideos.firstIndex(where: { $0.identifier == primary.identifier }) ?? 0
                     
                     if primaryIndex > 0 && visibleVideos.count > 1 {
                         // Primary is not first - restart from first video
@@ -1214,9 +1212,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                             name: .shouldPlayVideo,
                             object: nil,
                             userInfo: [
-                                "tweetId": firstVideo.tweetId,
+                                "tweetId": firstVideo.cellTweetId,
                                 "videoMid": firstVideo.videoMid,
-                                "videoIndex": firstVideo.index,
+                                "videoIndex": firstVideo.attachmentIndex,
                                 "isPrimary": true
                             ]
                         )
@@ -1229,9 +1227,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                             name: .shouldPlayVideo,
                             object: nil,
                             userInfo: [
-                                "tweetId": primary.tweetId,
+                                "tweetId": primary.cellTweetId,
                                 "videoMid": primary.videoMid,
-                                "videoIndex": primary.index,
+                                "videoIndex": primary.attachmentIndex,
                                 "isPrimary": true
                             ]
                         )

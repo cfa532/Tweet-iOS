@@ -177,11 +177,23 @@ struct TweetItemView: View, Equatable {
                 originalTweet = cachedTweet
                 hasLoadedOriginalTweet = true
                 
-                // Notify VideoPlaybackCoordinator about the loaded embedded tweet from cache
-                VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
-                    quotingTweetId: tweet.mid,
-                    embeddedTweet: cachedTweet
-                )
+                // Keep coordinator's canonical list updated:
+                // - Quoted tweet: embedded tweet videos belong to the quoting cell.
+                // - Pure retweet: original tweet videos belong to the retweet cell.
+                let hasContentText = tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                let hasAttachments = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
+                let hasOwnContent = hasContentText || hasAttachments
+                if hasOwnContent {
+                    VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+                        quotingTweetId: tweet.mid,
+                        embeddedTweet: cachedTweet
+                    )
+                } else {
+                    VideoPlaybackCoordinator.shared.addRetweetVideos(
+                        retweetId: tweet.mid,
+                        originalTweet: cachedTweet
+                    )
+                }
                 
                 // Register retweet relationship ASAP from cache
                 if !hasRegisteredRetweetRelationship {
@@ -211,11 +223,21 @@ struct TweetItemView: View, Equatable {
                         originalTweet = cachedTweet
                         hasLoadedOriginalTweet = true
 
-                        // Notify VideoPlaybackCoordinator about the loaded embedded tweet from cache
-                        VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
-                            quotingTweetId: tweet.mid,
-                            embeddedTweet: cachedTweet
-                        )
+                        // Keep coordinator's canonical list updated (quoted vs pure retweet).
+                        let hasContentText = tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                        let hasAttachments = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
+                        let hasOwnContent = hasContentText || hasAttachments
+                        if hasOwnContent {
+                            VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+                                quotingTweetId: tweet.mid,
+                                embeddedTweet: cachedTweet
+                            )
+                        } else {
+                            VideoPlaybackCoordinator.shared.addRetweetVideos(
+                                retweetId: tweet.mid,
+                                originalTweet: cachedTweet
+                            )
+                        }
 
                         // Register retweet relationship ASAP from cache for immediate priority boost
                         if !hasRegisteredRetweetRelationship {
@@ -254,11 +276,21 @@ struct TweetItemView: View, Equatable {
                     originalTweet = t    // Then set to new value
                     hasLoadedOriginalTweet = true
 
-                    // Notify VideoPlaybackCoordinator about the loaded embedded tweet
-                    VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
-                        quotingTweetId: tweet.mid,
-                        embeddedTweet: t
-                    )
+                    // Keep coordinator's canonical list updated (quoted vs pure retweet).
+                    let hasContentText = tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                    let hasAttachments = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
+                    let hasOwnContent = hasContentText || hasAttachments
+                    if hasOwnContent {
+                        VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+                            quotingTweetId: tweet.mid,
+                            embeddedTweet: t
+                        )
+                    } else {
+                        VideoPlaybackCoordinator.shared.addRetweetVideos(
+                            retweetId: tweet.mid,
+                            originalTweet: t
+                        )
+                    }
 
                     // If it's the same instance, trigger objectWillChange to notify observers
                     if previousTweet === t {

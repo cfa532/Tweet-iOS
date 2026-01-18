@@ -203,6 +203,74 @@ struct MediaBrowserView: View {
         let resetControlsTimer: () -> Void
         let onShareVisibilityChange: (Bool) -> Void
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
+
+        /// A vertical-only swipe gesture that coexists with TabView's horizontal paging.
+        /// This fixes the case where multi-attachment paging swallows the outer drag gesture,
+        /// disabling "swipe up to next video".
+        private var verticalSwipeGesture: some Gesture {
+            DragGesture()
+                .onChanged { value in
+                    // Disable gestures during transition
+                    guard !isTransitioning else { return }
+
+                    // Only handle gestures if no image is zoomed
+                    guard !isImageZoomed else { return }
+
+                    // Only react to predominantly-vertical drags (let TabView own horizontal paging).
+                    guard abs(value.translation.height) > abs(value.translation.width) else { return }
+
+                    dragOffset = value.translation
+                    isDragging = true
+                    showControls = true
+                }
+                .onEnded { value in
+                    // Disable gestures during transition
+                    guard !isTransitioning else { return }
+
+                    // Only handle gestures if no image is zoomed
+                    guard !isImageZoomed else {
+                        // Reset drag offset
+                        withAnimation(.spring()) { dragOffset = .zero }
+                        isDragging = false
+                        resetControlsTimer()
+                        return
+                    }
+
+                    // Only react to predominantly-vertical drags (let TabView own horizontal paging).
+                    guard abs(value.translation.height) > abs(value.translation.width) else {
+                        // Reset drag offset
+                        withAnimation(.spring()) { dragOffset = .zero }
+                        isDragging = false
+                        resetControlsTimer()
+                        return
+                    }
+
+                    let swipeThreshold: CGFloat = 100
+                    let velocityThreshold: CGFloat = 500
+                    // Ignore system home-indicator swipe-ups (close app / go Home).
+                    // Only treat swipe-up as "next video" if the gesture started away from the bottom edge.
+                    let bottomExclusion: CGFloat = 44 + MediaBrowserView.currentBottomSafeAreaInset()
+                    let startedNearBottomEdge = value.startLocation.y > (UIScreen.main.bounds.height - bottomExclusion)
+
+                    // Swipe down - exit fullscreen
+                    if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
+                        dismiss()
+                        return
+                    }
+
+                    // Swipe up - next video (in fullscreen list)
+                    if !startedNearBottomEdge,
+                       (value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold) {
+                        print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
+                        FullScreenVideoManager.shared.navigateToNext()
+                    }
+
+                    // Reset drag offset
+                    withAnimation(.spring()) { dragOffset = .zero }
+                    isDragging = false
+                    resetControlsTimer()
+                }
+        }
         
         var body: some View {
             ZStack {
@@ -232,6 +300,8 @@ struct MediaBrowserView: View {
                     .background(Color.black)
                     .tabViewStyle(.page)
                     .indexViewStyle(.page(backgroundDisplayMode: .always))
+                    // Allow vertical swipe up/down to coexist with horizontal paging.
+                    .simultaneousGesture(verticalSwipeGesture)
                     .onChange(of: currentIndex) { _, newIndex in
                         previousIndex = newIndex
                         
@@ -282,58 +352,6 @@ struct MediaBrowserView: View {
                 .opacity(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 500.0))
             }
             .statusBar(hidden: true)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        // Disable gestures during transition
-                        if isTransitioning {
-                            return
-                        }
-                        
-                        // Allow vertical swipes if no image is zoomed
-                        if !isImageZoomed {
-                            dragOffset = value.translation
-                            isDragging = true
-                            showControls = true
-                        }
-                    }
-                    .onEnded { value in
-                        // Disable gestures during transition
-                        if isTransitioning {
-                            return
-                        }
-                        
-                        // Only handle gestures if no image is zoomed
-                        if !isImageZoomed {
-                            let swipeThreshold: CGFloat = 100
-                            let velocityThreshold: CGFloat = 500
-                            // Ignore system home-indicator swipe-ups (close app / go Home).
-                            // Only treat swipe-up as "next video" if the gesture started away from the bottom edge.
-                            let bottomExclusion: CGFloat = 44 + MediaBrowserView.currentBottomSafeAreaInset()
-                            let startedNearBottomEdge = value.startLocation.y > (UIScreen.main.bounds.height - bottomExclusion)
-                            
-                            // Swipe down - exit fullscreen
-                            if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
-                                dismiss()
-                                return
-                            }
-                            
-                            // Swipe up - next video
-                            if !startedNearBottomEdge,
-                               (value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold) {
-                                print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
-                                FullScreenVideoManager.shared.navigateToNext()
-                            }
-                        }
-                        
-                        // Reset drag offset
-                        withAnimation(.spring()) {
-                            dragOffset = .zero
-                        }
-                        isDragging = false
-                        resetControlsTimer()
-                    }
-            )
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showControls = true
@@ -932,7 +950,6 @@ struct SingletonVideoPlayerView: View {
                     if manager.singletonPlayer == nil || manager.currentVideoMid != mid {
                         if !hasAttemptedReload {
                             hasAttemptedReload = true
-                            print("DEBUG: [SingletonVideoPlayerView] Player missing or mismatched - reloading video for mid: \(mid)")
                             // Reload the video
                             manager.loadVideo(
                                 url: url,
@@ -983,7 +1000,6 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         
         // Rotate landscape videos (aspectRatio > 1) by -90 degrees
         if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
-            print("DEBUG: [SingletonVideoPlayer] Landscape video detected (aspectRatio: \(aspectRatio)), rotating -90 degrees")
             controller.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
         }
         
@@ -992,7 +1008,6 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         
         // Observe currentItem changes to set up observer for new items
         context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
-            print("DEBUG: [SingletonVideoPlayer] Player currentItem changed, setting up new observer")
             setupPlayerItemObserver(player: player, context: context)
         }
         
@@ -1006,13 +1021,10 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         // FullScreenVideoManager will check for saved state and seek/play accordingly
         if let playerItem = player.currentItem {
             if playerItem.status == .readyToPlay {
-                print("DEBUG: [SingletonVideoPlayer] Player already ready - FullScreenVideoManager will handle playback")
                 // FullScreenVideoManager will handle playback after checking for saved state
             } else {
-                print("DEBUG: [SingletonVideoPlayer] Player not ready yet, setting up observer")
                 context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                     if item.status == .readyToPlay {
-                        print("DEBUG: [SingletonVideoPlayer] Player became ready - FullScreenVideoManager will handle playback")
                         // FullScreenVideoManager will handle playback after checking for saved state
                         context.coordinator.statusObserver?.invalidate()
                         context.coordinator.statusObserver = nil
@@ -1028,12 +1040,10 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         // Update rotation based on aspect ratio
         if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
             if uiViewController.view.transform == .identity {
-                print("DEBUG: [SingletonVideoPlayer] Applying rotation on update (aspectRatio: \(aspectRatio))")
                 uiViewController.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
             }
         } else {
             if uiViewController.view.transform != .identity {
-                print("DEBUG: [SingletonVideoPlayer] Removing rotation on update")
                 uiViewController.view.transform = .identity
             }
         }
@@ -1045,12 +1055,10 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             context.coordinator.statusObserver?.invalidate()
             if let playerItem = player.currentItem {
                 if playerItem.status == .readyToPlay {
-                    print("DEBUG: [SingletonVideoPlayer] Player ready on update - FullScreenVideoManager will handle playback")
                     // FullScreenVideoManager will handle playback after checking for saved state
                 } else {
                     context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                         if item.status == .readyToPlay {
-                            print("DEBUG: [SingletonVideoPlayer] Player ready after update - FullScreenVideoManager will handle playback")
                             // FullScreenVideoManager will handle playback after checking for saved state
                             context.coordinator.statusObserver?.invalidate()
                             context.coordinator.statusObserver = nil
