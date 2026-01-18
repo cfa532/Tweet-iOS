@@ -434,28 +434,31 @@ class VideoPlaybackCoordinator: ObservableObject {
         let embeddedTweetIds = Set(quotedTweets.map { $0.originalTweetId })
         
         // Process pinned tweets first (they appear at the top)
+        // CRITICAL: If a pinned tweet appears as embedded elsewhere, skip its standalone videos.
+        // Videos should only be indexed at their feed position (where the quoting tweet appears).
         for (_, tweet) in pinnedTweets.enumerated() {
-            guard let attachments = tweet.attachments else { continue }
+            let shouldSkipStandaloneVideos = embeddedTweetIds.contains(tweet.mid)
             
-            for (attachmentIndex, attachment) in attachments.enumerated() {
-                if attachment.type == .video || attachment.type == .hls_video {
-                    let videoInfo = VideoPlaybackInfo(
-                        cellTweetId: tweet.mid,
-                        mediaTweetId: tweet.mid,
-                        videoMid: attachment.mid,
-                        attachmentIndex: attachmentIndex
-                    )
-                    
-                    // CRITICAL: Always add videos from standalone tweets, even if they appear elsewhere as embedded
-                    // The seenVideoIdentifiers check is removed here to allow same video in multiple contexts
-                    // This ensures videos play correctly whether viewed standalone or embedded
-                    videos.append(videoInfo)
-                    seenVideoIdentifiers.insert(videoInfo.identifier)
-                    
-                    if embeddedTweetIds.contains(tweet.mid) {
-                        print("VideoPlaybackCoordinator: Tweet \(tweet.mid.prefix(8)) appears both standalone and embedded - tracking in both contexts")
+            if !shouldSkipStandaloneVideos {
+                guard let attachments = tweet.attachments else { continue }
+                
+                for (attachmentIndex, attachment) in attachments.enumerated() {
+                    if attachment.type == .video || attachment.type == .hls_video {
+                        let videoInfo = VideoPlaybackInfo(
+                            cellTweetId: tweet.mid,
+                            mediaTweetId: tweet.mid,
+                            videoMid: attachment.mid,
+                            attachmentIndex: attachmentIndex
+                        )
+                        
+                        videos.append(videoInfo)
+                        seenVideoIdentifiers.insert(videoInfo.identifier)
+                        
+                        print("VideoPlaybackCoordinator: Added pinned standalone tweet video - tweetId: \(videoInfo.cellTweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
                     }
                 }
+            } else {
+                print("VideoPlaybackCoordinator: Skipping pinned standalone videos for tweet \(tweet.mid.prefix(8)) - appears embedded elsewhere, videos indexed at quoting tweet position")
             }
         }
         
@@ -505,30 +508,32 @@ class VideoPlaybackCoordinator: ObservableObject {
                 }
             } else {
                 // REGULAR TWEET or QUOTED TWEET
-                if let attachments = tweet.attachments {
-                    for (attachmentIndex, attachment) in attachments.enumerated() {
-                        if attachment.type == .video || attachment.type == .hls_video {
-                            let videoInfo = VideoPlaybackInfo(
-                                cellTweetId: tweet.mid,
-                                mediaTweetId: tweet.mid,
-                                videoMid: attachment.mid,
-                                attachmentIndex: attachmentIndex
-                            )
-                            
-                            // CRITICAL: Always add videos from standalone tweets, even if they appear elsewhere as embedded
-                            // This ensures videos play correctly whether viewed standalone or embedded
-                            // Don't skip based on seenVideoIdentifiers for regular tweets
-                            videos.append(videoInfo)
-                            seenVideoIdentifiers.insert(videoInfo.identifier)
-                            
-                            // Log if this tweet also appears embedded elsewhere
-                            if embeddedTweetIds.contains(tweet.mid) {
-                                print("VideoPlaybackCoordinator: Tweet \(tweet.mid.prefix(8)) appears both standalone and embedded - tracking standalone context with tweetId: \(videoInfo.cellTweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
-                            } else {
+                // CRITICAL: If this tweet appears as embedded elsewhere, skip its standalone videos.
+                // Videos should only be indexed at their feed position (where the quoting tweet appears),
+                // not at the original tweet's standalone position. This ensures correct playback order.
+                let shouldSkipStandaloneVideos = embeddedTweetIds.contains(tweet.mid)
+                
+                if !shouldSkipStandaloneVideos {
+                    // Only add standalone videos if this tweet doesn't appear embedded elsewhere
+                    if let attachments = tweet.attachments {
+                        for (attachmentIndex, attachment) in attachments.enumerated() {
+                            if attachment.type == .video || attachment.type == .hls_video {
+                                let videoInfo = VideoPlaybackInfo(
+                                    cellTweetId: tweet.mid,
+                                    mediaTweetId: tweet.mid,
+                                    videoMid: attachment.mid,
+                                    attachmentIndex: attachmentIndex
+                                )
+                                
+                                videos.append(videoInfo)
+                                seenVideoIdentifiers.insert(videoInfo.identifier)
+                                
                                 print("VideoPlaybackCoordinator: Added standalone tweet video - tweetId: \(videoInfo.cellTweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
                             }
                         }
                     }
+                } else {
+                    print("VideoPlaybackCoordinator: Skipping standalone videos for tweet \(tweet.mid.prefix(8)) - appears embedded elsewhere, videos indexed at quoting tweet position")
                 }
                 
                 if isQuotedTweet, let originalTweetId = tweet.originalTweetId {
