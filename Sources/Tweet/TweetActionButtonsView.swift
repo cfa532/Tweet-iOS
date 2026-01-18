@@ -1057,24 +1057,27 @@ struct TweetActionButtonsView: View {
         let playerId = ObjectIdentifier(player)
         
         // Wait for any existing capture on this player to complete
-        Self.captureLock.lock()
-        if let existingTask = Self.activeCaptures[playerId] {
-            Self.captureLock.unlock()
+        let existingTask = Self.captureLock.withLock { () -> Task<Void, Never>? in
+            return Self.activeCaptures[playerId]
+        }
+        
+        if let existingTask = existingTask {
             _ = await existingTask.value
-            Self.captureLock.lock()
         }
         
         // Mark this capture as active
         let captureTask = Task<Void, Never> {
             // Task will complete when we exit this scope
         }
-        Self.activeCaptures[playerId] = captureTask
-        Self.captureLock.unlock()
+        
+        Self.captureLock.withLock {
+            Self.activeCaptures[playerId] = captureTask
+        }
         
         defer {
-            Self.captureLock.lock()
-            Self.activeCaptures.removeValue(forKey: playerId)
-            Self.captureLock.unlock()
+            Self.captureLock.withLock {
+                _ = Self.activeCaptures.removeValue(forKey: playerId)
+            }
         }
         
         // CRITICAL FIX: Save playback state before modifying player
