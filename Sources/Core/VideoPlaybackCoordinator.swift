@@ -26,9 +26,9 @@ private enum VideoPlaybackPhase {
     case primaryPlaying          // Primary video is playing to completion
 }
 
-/// Individual video tracking info for orchestration
-/// Shared structure for video metadata (used by VideoPlaybackCoordinator and FullScreenVideoManager)
-/// Note: Only videos in the first 4 attachment positions are tracked, as MediaGridView only displays the first 4 items
+/// Individual video tracking info for feed orchestration.
+/// Note: Only videos in the first 4 attachment positions are tracked, as `MediaGridView` only displays the first 4 items.
+/// Fullscreen playback builds its own "all attachments" list and must not share this feed-visible list.
 struct VideoPlaybackInfo: Equatable {
     let tweetId: String
     let videoMid: String
@@ -253,8 +253,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                 guard attachmentIndex < 4 else { break }
                 
                 if attachment.type == .video || attachment.type == .hls_video {
+                    // CRITICAL: Use the QUOTING tweet's ID as tweetId, not the embedded tweet's ID
+                    // The quoting tweet is what appears in the feed and has the visible cell
                     let videoInfo = VideoPlaybackInfo(
-                        tweetId: embeddedTweet.mid,
+                        tweetId: quotingTweetId,  // Use quoting tweet's ID (the visible cell)
                         videoMid: attachment.mid,
                         index: videoIndex
                     )
@@ -274,7 +276,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             embeddedToQuotingTweetId[embeddedTweet.mid] = quotingTweetId
             allVideos.append(contentsOf: videosToAdd)
             print("VideoPlaybackCoordinator: Added \(videosToAdd.count) embedded tweet videos, total: \(allVideos.count)")
-            FullScreenVideoManager.shared.updateVideoList(videos: allVideos, tweets: currentTweets)
         }
     }
 
@@ -331,15 +332,15 @@ class VideoPlaybackCoordinator: ObservableObject {
                         index: videoIndex  // Sequential video index (0 for first video, 1 for second)
                     )
                     
-                    if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                        continue
-                    }
-                    
+                    // CRITICAL: Always add videos from standalone tweets, even if they appear elsewhere as embedded
+                    // The seenVideoIdentifiers check is removed here to allow same video in multiple contexts
+                    // This ensures videos play correctly whether viewed standalone or embedded
                     videos.append(videoInfo)
                     seenVideoIdentifiers.insert(videoInfo.identifier)
                     videoIndex += 1
                     
                     if embeddedTweetIds.contains(tweet.mid) {
+                        print("VideoPlaybackCoordinator: Tweet \(tweet.mid.prefix(8)) appears both standalone and embedded - tracking in both contexts")
                     }
                 }
             }
@@ -406,13 +407,19 @@ class VideoPlaybackCoordinator: ObservableObject {
                                 index: videoIndex
                             )
                             
-                            if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                continue
-                            }
-                            
+                            // CRITICAL: Always add videos from standalone tweets, even if they appear elsewhere as embedded
+                            // This ensures videos play correctly whether viewed standalone or embedded
+                            // Don't skip based on seenVideoIdentifiers for regular tweets
                             videos.append(videoInfo)
                             seenVideoIdentifiers.insert(videoInfo.identifier)
                             videoIndex += 1
+                            
+                            // Log if this tweet also appears embedded elsewhere
+                            if embeddedTweetIds.contains(tweet.mid) {
+                                print("VideoPlaybackCoordinator: Tweet \(tweet.mid.prefix(8)) appears both standalone and embedded - tracking standalone context with tweetId: \(videoInfo.tweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
+                            } else {
+                                print("VideoPlaybackCoordinator: Added standalone tweet video - tweetId: \(videoInfo.tweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
+                            }
                         }
                     }
                 }
@@ -429,18 +436,23 @@ class VideoPlaybackCoordinator: ObservableObject {
                             guard attachmentIndex < 4 else { break }
                             
                             if attachment.type == .video || attachment.type == .hls_video {
+                                // CRITICAL: Use the QUOTING tweet's ID as tweetId, not the embedded tweet's ID
+                                // The quoting tweet is what appears in the feed and has the visible cell
+                                // This ensures the coordinator can find the correct cell for visibility checking
                                 let videoInfo = VideoPlaybackInfo(
-                                    tweetId: originalTweetId,
+                                    tweetId: tweet.mid,  // Use quoting tweet's ID (the visible cell)
                                     videoMid: attachment.mid,
                                     index: videoIndex
                                 )
 
                                 if seenVideoIdentifiers.contains(videoInfo.identifier) {
+                                    print("VideoPlaybackCoordinator: Skipping duplicate embedded video - tweetId: \(tweet.mid.prefix(8)), videoMid: \(attachment.mid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24)) (already seen)")
                                     continue
                                 }
 
                                 videos.append(videoInfo)
                                 seenVideoIdentifiers.insert(videoInfo.identifier)
+                                print("VideoPlaybackCoordinator: Added embedded tweet video - quotingTweetId: \(tweet.mid.prefix(8)), embeddedTweetId: \(originalTweetId.prefix(8)), videoMid: \(attachment.mid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
                                 videoIndex += 1
                             }
                         }
@@ -459,8 +471,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         lastCacheClearTime = Date()
         
         // Share the video list with FullScreenVideoManager to avoid duplicate tracking
-        // This consolidates video tracking in one place
-        FullScreenVideoManager.shared.updateVideoList(videos: videos, tweets: tweets)
+        // IMPORTANT: Fullscreen must NOT use this feed-visible list.
+        // Fullscreen builds its own list from tweet attachments (all videos), while the coordinator only tracks on-screen MediaGrid videos.
     }
     
     /// Previously visible video IDs (to detect actual video changes, not just tweet changes)
@@ -482,12 +494,15 @@ class VideoPlaybackCoordinator: ObservableObject {
         let tweetsWithVideos = Set(allVideos.map { $0.tweetId })
         
         // Build set of embedded tweet IDs (tweets that are embedded in other tweets)
-        // These should NOT be added via direct intersection - only via explicit visibility check below
+        // These are added separately via explicit visibility check below
         let embeddedTweetIdsSet = Set(embeddedToQuotingTweetId.keys)
         
-        // Start with tweets that have videos AND are not embedded tweets
-        // Embedded tweets will be added later only if their quoting tweet is sufficiently visible
-        var filteredTweetIds = tweetIds.intersection(tweetsWithVideos).subtracting(embeddedTweetIdsSet)
+        // CRITICAL FIX: Don't subtract embeddedTweetIdsSet here!
+        // A tweet can appear both standalone AND embedded in the feed
+        // We need to track both occurrences separately
+        // The visibility check below will add embedded tweets when their quoting tweets are visible
+        // But we also want standalone tweets to be included directly
+        var filteredTweetIds = tweetIds.intersection(tweetsWithVideos)
         
         // CRITICAL: Also include embedded tweet IDs when their quoting tweets are visible
         // When a quoted tweet is visible, its embedded tweet should also be considered visible

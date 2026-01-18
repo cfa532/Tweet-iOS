@@ -346,9 +346,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)? // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onExitFullScreen: (() -> Void)? // Callback to exit fullscreen
     
-    // Consolidated video tracking (shared with VideoPlaybackCoordinator to avoid duplicate tracking)
-    private var cachedVideos: [VideoPlaybackInfo] = []
-    private var cachedTweets: [Tweet] = []
+    // NOTE: Fullscreen navigation should not share the feed-only video list from VideoPlaybackCoordinator.
+    // Fullscreen uses per-tweet attachment scanning (all videos) via the search function set by `TweetListView`.
     
     // Video completion observer
     private var videoCompletionObserver: NSObjectProtocol?
@@ -409,12 +408,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 // Don't attach to player - just warm up the cache
             }
         }
-    }
-    
-    /// Update video list from VideoPlaybackCoordinator (consolidated tracking)
-    func updateVideoList(videos: [VideoPlaybackInfo], tweets: [Tweet]) {
-        self.cachedVideos = videos
-        self.cachedTweets = tweets
     }
     
     /// Set the video search function from TweetListView
