@@ -13,7 +13,6 @@ struct ProfileView: View {
     private static let resyncLock = NSLock()
     
     /// Navigation state
-    @State private var selectedTweetForNavigation: Tweet? = nil
     @State private var selectedUserForNavigation: User? = nil
     @State private var userListDestination: UserListDestination? = nil
     
@@ -119,7 +118,7 @@ struct ProfileView: View {
                     }
                 }
             }
-            .navigationDestination(item: $selectedTweetForNavigation) { tweet in
+            .navigationDestination(for: Tweet.self) { tweet in
                 tweetDestinationView(for: tweet)
             }
             .navigationDestination(item: $selectedUserForNavigation) { user in
@@ -219,8 +218,9 @@ struct ProfileView: View {
                     hproseInstance: hproseInstance,
                     onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
                     onTweetTap: { tweet in
-                        // This should never be called since we'll use NavigationLink directly
-                        print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
+                        // Append tweet to navigationPath to navigate to detail view
+                        // This matches the pattern used in HomeViewModel
+                        navigationPath.append(tweet)
                     },
                     onAvatarTapInProfile: { tappedUser in
                         // Check if the tapped avatar is the same as the profile user

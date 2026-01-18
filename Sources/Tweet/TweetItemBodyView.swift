@@ -109,9 +109,11 @@ struct TweetItemBodyView: View {
                     .if(enableTap) { $0.contentShape(Rectangle()) }
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
-                    .onTapGesture {
-                        // Tap to open tweet detail
-                        onTweetBodyTap?()
+                    .if(onTweetBodyTap != nil) { view in
+                        view.onTapGesture {
+                            // Tap to open tweet detail
+                            onTweetBodyTap?()
+                        }
                     }
                     .task(id: content) {
                         // Cancel previous task if content changed
@@ -131,7 +133,7 @@ struct TweetItemBodyView: View {
                         }
                     }
                 
-                if isTruncated {
+                if isTruncated && onTweetBodyTap != nil {
                     Button(action: { 
                         // Navigate to detail view
                         onTweetBodyTap?()

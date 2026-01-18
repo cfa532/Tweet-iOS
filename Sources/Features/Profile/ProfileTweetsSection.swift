@@ -233,7 +233,7 @@ struct ProfileTweetsSection<Header: View>: View {
                     onAvatarTap: { user in
                         onUserSelect(user)
                     },
-                    onTap: nil, // Will use NavigationLink instead
+                    onTap: onTweetTap,
                     onAvatarTapInProfile: onAvatarTapInProfile,
                     currentProfileUser: user,
                     onRemove: { tweetId in

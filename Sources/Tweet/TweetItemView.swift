@@ -85,6 +85,7 @@ struct TweetItemView: View, Equatable {
                     let navigationValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
                     NavigationLink(value: navigationValue) {
                         tweetContent
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(PlainButtonStyle())
                 } else {

@@ -1040,12 +1040,56 @@ struct TweetActionButtonsView: View {
         return url.lastPathComponent
     }
     
+    // Track active captures per player to prevent concurrent captures
+    private static var activeCaptures: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private static let captureQueue = DispatchQueue(label: "com.tweet.videoCapture", attributes: .concurrent)
+    private static let captureLock = NSLock()
+    
     private func captureFrameFromPlayer(_ player: AVPlayer, at seconds: Double) async -> UIImage? {
         print("DEBUG: [SHARE] Attempting to capture frame from player at \(seconds)s")
         
         guard let playerItem = player.currentItem else {
             print("DEBUG: [SHARE] Player has no current item")
             return nil
+        }
+        
+        // CRITICAL FIX: Serialize captures per player to prevent concurrent interference
+        let playerId = ObjectIdentifier(player)
+        
+        // Wait for any existing capture on this player to complete
+        Self.captureLock.lock()
+        if let existingTask = Self.activeCaptures[playerId] {
+            Self.captureLock.unlock()
+            _ = await existingTask.value
+            Self.captureLock.lock()
+        }
+        
+        // Mark this capture as active
+        let captureTask = Task<Void, Never> {
+            // Task will complete when we exit this scope
+        }
+        Self.activeCaptures[playerId] = captureTask
+        Self.captureLock.unlock()
+        
+        defer {
+            Self.captureLock.lock()
+            Self.activeCaptures.removeValue(forKey: playerId)
+            Self.captureLock.unlock()
+        }
+        
+        // CRITICAL FIX: Save playback state before modifying player
+        let savedState = await MainActor.run { () -> (wasPlaying: Bool, originalTime: CMTime, originalRate: Float) in
+            let wasPlaying = player.rate > 0
+            let originalTime = player.currentTime()
+            let originalRate = player.rate
+            
+            // Pause player before seeking to prevent interference
+            if wasPlaying {
+                player.pause()
+                print("DEBUG: [SHARE] Paused player for frame capture (was playing)")
+            }
+            
+            return (wasPlaying: wasPlaying, originalTime: originalTime, originalRate: originalRate)
         }
         
         // AVPlayer operations must be on main thread
@@ -1061,6 +1105,37 @@ struct TweetActionButtonsView: View {
         
         defer {
             Task { @MainActor in
+                // CRITICAL FIX: Restore playback state after capture
+                // Check if player still has the same item (might have been replaced)
+                guard player.currentItem === playerItem else {
+                    print("DEBUG: [SHARE] Player item was replaced during capture, skipping restore")
+                    playerItem.remove(videoOutput)
+                    return
+                }
+                
+                // Restore original playback position
+                let restoreTime = savedState.originalTime
+                player.seek(to: restoreTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if finished {
+                        // Restore playback state if it was playing
+                        if savedState.wasPlaying {
+                            Task { @MainActor in
+                                // Double-check player item is still valid before resuming
+                                if player.currentItem === playerItem {
+                                    player.rate = savedState.originalRate
+                                    print("DEBUG: [SHARE] Restored player playback state (was playing at \(CMTimeGetSeconds(restoreTime))s)")
+                                } else {
+                                    print("DEBUG: [SHARE] Player item changed, not restoring playback")
+                                }
+                            }
+                        } else {
+                            print("DEBUG: [SHARE] Restored player position (was paused at \(CMTimeGetSeconds(restoreTime))s)")
+                        }
+                    } else {
+                        print("DEBUG: [SHARE] Failed to restore player position")
+                    }
+                }
+                
                 playerItem.remove(videoOutput)
             }
         } // swiftlint:disable:this line_length
@@ -1070,6 +1145,13 @@ struct TweetActionButtonsView: View {
         let retryTimes = [0.1, 0.3, 0.5]
         
         for retryOffset in retryTimes {
+            // CRITICAL FIX: Check if player item was replaced during capture
+            let currentItem = await MainActor.run { player.currentItem }
+            guard currentItem === playerItem else {
+                print("DEBUG: [SHARE] Player item was replaced during capture, aborting")
+                return nil
+            }
+            
             let targetTime = seconds + retryOffset
             print("DEBUG: [SHARE] Attempting capture at \(targetTime)s (offset: \(retryOffset)s)")
             
@@ -1079,6 +1161,11 @@ struct TweetActionButtonsView: View {
             // CRITICAL: Wait for seek to complete using completion handler
             // This is especially important for HLS videos where segments need to load
             let seekCompleted = await MainActor.run { () -> Task<Bool, Never> in
+                // Double-check player item is still valid before seeking
+                guard player.currentItem === playerItem else {
+                    return Task { false }
+                }
+                
                 return Task {
                     await withCheckedContinuation { continuation in
                         player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
@@ -1103,6 +1190,12 @@ struct TweetActionButtonsView: View {
             
             while attempts < maxAttempts {
                 hasDataAtTime = await MainActor.run { () -> Bool in
+                    // CRITICAL FIX: Check if player item was replaced
+                    guard player.currentItem === playerItem else {
+                        print("DEBUG: [SHARE] Player item replaced during segment loading check")
+                        return false
+                    }
+                    
                     let currentTime = playerItem.currentTime()
                     let loadedRanges = playerItem.loadedTimeRanges
                     
@@ -1141,6 +1234,12 @@ struct TweetActionButtonsView: View {
             // CRITICAL: All CVBuffer operations must happen within MainActor.run to avoid Sendable warnings
             // The pixel buffer is converted to UIImage (which is Sendable) before leaving this context
             let initialImage = await MainActor.run { () -> UIImage? in
+                // CRITICAL FIX: Check if player item was replaced before capturing
+                guard player.currentItem === playerItem else {
+                    print("DEBUG: [SHARE] Player item replaced before frame capture")
+                    return nil
+                }
+                
                 let currentTime = playerItem.currentTime()
                 print("DEBUG: [SHARE] Attempting capture at seeked time: \(CMTimeGetSeconds(currentTime))s")
                 
