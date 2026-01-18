@@ -767,7 +767,14 @@ class GlobalImageLoadManager: ObservableObject {
         
         print("🚨 [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
         
-        // AGGRESSIVE cleanup on ANY memory warning
+        // Only perform aggressive cleanup if memory usage exceeds 1.2GB
+        // This prevents wasteful cleanup when memory usage is actually low
+        guard memoryUsageMB > 1200 else {
+            print("ℹ️ [GlobalImageLoadManager] Memory usage low (\(memoryUsageMB)MB), skipping aggressive cleanup")
+            return
+        }
+        
+        // AGGRESSIVE cleanup on memory warning when usage is high
         print("🧹 [GlobalImageLoadManager] Performing aggressive cleanup")
         
         // Cancel all low and normal priority requests

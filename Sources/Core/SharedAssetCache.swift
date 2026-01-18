@@ -1653,11 +1653,24 @@ class SharedAssetCache: ObservableObject {
             return
         }
         
-        // System warning means iOS is serious - be more aggressive
-        cancelAllLoadingTasks()
-        releasePartialCache(percentage: 60) // Release 60% (not 100% - preserve some UX)
+        // Check memory usage before aggressive cleanup
+        // Only cleanup if usage exceeds threshold to prevent unnecessary cache clearing
+        let memoryUsage = getCurrentMemoryUsage()
+        let memoryUsageMB = memoryUsage / (1024 * 1024)
         
-        print("✅ [SYSTEM MEMORY WARNING] Released 60% of cache")
+        print("🚨 [SYSTEM MEMORY WARNING] Current usage: \(memoryUsageMB)MB")
+        
+        // Only perform aggressive cleanup if memory usage exceeds 1.2GB
+        // This prevents wasteful cleanup when memory usage is actually low
+        if memoryUsageMB > 1200 {
+            // System warning means iOS is serious - be more aggressive
+            cancelAllLoadingTasks()
+            releasePartialCache(percentage: 60) // Release 60% (not 100% - preserve some UX)
+            
+            print("✅ [SYSTEM MEMORY WARNING] Released 60% of cache")
+        } else {
+            print("ℹ️ [SYSTEM MEMORY WARNING] Memory usage low (\(memoryUsageMB)MB), skipping aggressive cleanup")
+        }
     }
     
     private func handleMemoryWarning() {        // CRITICAL: Check if video upload is in progress
