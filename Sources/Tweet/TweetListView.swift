@@ -264,17 +264,21 @@ struct TweetListView<RowView: View>: View {
         // Get unique notification names
         let uniqueNames = Set(notifications.map { $0.name })
         
+        // Capture binding and notification handlers by value to avoid capturing entire self
+        // This is safe because:
+        // 1. Binding is a lightweight value type (just a reference wrapper)
+        // 2. We properly clean up observers in onDisappear
+        // 3. No retain cycle since structs don't have reference semantics
+        let tweetsBinding = _tweets
+        let notificationHandlers = notifications
+        
         // Set up one observer per unique notification name
         for name in uniqueNames {
             let observer = NotificationCenter.default.addObserver(
                 forName: name,
                 object: nil,
                 queue: .main
-            ) { [weak tweetsBinding = _tweets, notificationHandlers = notifications] notif in
-                // Use weak reference to tweets binding to prevent retain cycles
-                // Access the binding's wrappedValue to modify the tweets array
-                guard let binding = tweetsBinding else { return }
-                
+            ) { notif in
                 // Find matching notification handlers for this notification name
                 for notification in notificationHandlers where notification.name == name {
                     if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
@@ -283,33 +287,33 @@ struct TweetListView<RowView: View>: View {
                     // Special case: tweetId notifications send String instead of Tweet
                     if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
                         // Find tweet once for efficiency (avoid multiple O(n) searches)
-                        let tweetIndex = binding.wrappedValue.firstIndex(where: { $0.mid == tweetId })
+                        let tweetIndex = tweetsBinding.wrappedValue.firstIndex(where: { $0.mid == tweetId })
                         
                         if notification.name == .tweetDeleted {
                             // For tweet deletion, handle directly in TweetListView
                             if let index = tweetIndex {
-                                binding.wrappedValue.remove(at: index)
+                                tweetsBinding.wrappedValue.remove(at: index)
                             }
                             TweetCacheManager.shared.deleteTweet(mid: tweetId)
                         } else if notification.name == .tweetPrivacyChanged {
                             // For privacy changes, handle removal directly here
                             if let index = tweetIndex {
-                                let tweetToRemove = binding.wrappedValue[index]
-                                binding.wrappedValue.remove(at: index)
+                                let tweetToRemove = tweetsBinding.wrappedValue[index]
+                                tweetsBinding.wrappedValue.remove(at: index)
                                 // Call custom handler with the tweet that was removed
                                 notification.action(tweetToRemove)
                             }
                         } else {
                             // For other notifications, call the custom handler
                             if let index = tweetIndex {
-                                notification.action(binding.wrappedValue[index])
+                                notification.action(tweetsBinding.wrappedValue[index])
                             }
                         }
                     }
                 }
                 // Special case: blockUser may send blockedUserId to remove all tweets from that user
                 if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
-                    binding.wrappedValue.removeAll { $0.authorId == blockedUserId }
+                    tweetsBinding.wrappedValue.removeAll { $0.authorId == blockedUserId }
                 }
             }
             
