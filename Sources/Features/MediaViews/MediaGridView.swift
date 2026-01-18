@@ -59,6 +59,12 @@ struct MediaGridView: View, Equatable {
         return ar > 1.0
     }
     
+    // DEPRECATED: All dead code below - MediaGrid no longer manages video playback
+    // VideoPlaybackCoordinator handles all playback decisions
+    
+    // These functions were part of the old sequential video play system
+    // They are kept commented out for reference but should be deleted eventually
+    /*
     private func shouldAutostart(for index: Int) -> Bool {
         // Only autostart if the grid has been visible for 0.3 seconds
         guard shouldLoadVideo else { return false }
@@ -76,8 +82,47 @@ struct MediaGridView: View, Equatable {
         }?.offset ?? -1
     }
     
-    // Removed shouldPlayVideo and onVideoFinished methods
-    // Videos are now controlled by global VideoPlaybackCoordinator via notifications
+    private func notifyGridVideosVisible(isVisible: Bool) {
+        // Only proceed if video loading is enabled for this grid
+        guard shouldLoadVideo else {
+            print("📹 [MediaGrid] Skipping video notifications - shouldLoadVideo is false")
+            return
+        }
+        
+        // Only process first 4 attachments (MediaGrid's maxImages limit)
+        let visibleAttachments = Array(attachments.prefix(4))
+        
+        for (index, attachment) in visibleAttachments.enumerated() {
+            guard attachment.type == .video || attachment.type == .hls_video else { continue }
+            
+            if isVisible {
+                // Send play command for each video in the grid
+                print("📹 [MediaGrid] Sending play command for video \(index) in grid: \(attachment.mid)")
+                NotificationCenter.default.post(
+                    name: .shouldPlayVideo,
+                    object: nil,
+                    userInfo: [
+                        "tweetId": parentTweet.mid,
+                        "videoMid": attachment.mid,
+                        "videoIndex": index,
+                        "isPrimary": false  // Grid videos don't compete for primary status
+                    ]
+                )
+            } else {
+                // Stop video when grid disappears
+                print("📹 [MediaGrid] Sending stop command for video \(index) in grid: \(attachment.mid)")
+                NotificationCenter.default.post(
+                    name: .shouldStopVideo,
+                    object: nil,
+                    userInfo: ["videoMid": attachment.mid]
+                )
+            }
+        }
+    }
+    */
+    
+    // Note: shouldPlayVideo and onVideoFinished methods were removed
+    // Videos are now controlled exclusively by VideoPlaybackCoordinator via notifications
     
     var body: some View {
         // Use cached dimensions to prevent repeated UIScreen.main calls
@@ -655,11 +700,17 @@ struct MediaGridView: View, Equatable {
                 // If shouldLoadVideo is already true, don't check or change it
                 // This keeps already-loaded videos loaded, preventing layout instability
             }
+            
+            // Note: MediaGrid no longer sends play commands directly
+            // VideoPlaybackCoordinator handles all playback decisions based on scroll position
         }
         .onDisappear {
             // Update visibility when grid disappears
             // Global VideoPlaybackCoordinator handles video state
             isVisible = false
+            
+            // Note: MediaGrid no longer sends stop commands directly
+            // VideoPlaybackCoordinator handles all playback decisions based on scroll position
         }
         .onChange(of: isVisible) { _, newVisibility in
             // Visibility changes handled by global coordinator

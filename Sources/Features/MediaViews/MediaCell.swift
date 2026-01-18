@@ -249,7 +249,59 @@ struct MediaCell: View, Equatable {
             }
         }
         
-        // Embedded videos are now managed by coordinator - no need to manually control autoplay based on shouldLoadVideo
+        // Listen for coordinator play/pause commands
+        .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
+            guard let videoMid = notification.userInfo?["videoMid"] as? String,
+                  videoMid == attachment.mid else { return }
+            
+            print("▶️ [MediaCell] Received play command for video: \(videoMid), setting shouldAutoPlay = true")
+            shouldAutoPlay = true
+            print("▶️ [MediaCell] shouldAutoPlay is now: \(shouldAutoPlay)")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shouldPauseVideo)) { notification in
+            guard let videoMid = notification.userInfo?["videoMid"] as? String,
+                  videoMid == attachment.mid else { return }
+            
+            print("⏸️ [MediaCell] Received pause command for video: \(videoMid), setting shouldAutoPlay = false")
+            shouldAutoPlay = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shouldStopVideo)) { notification in
+            guard let videoMid = notification.userInfo?["videoMid"] as? String,
+                  videoMid == attachment.mid else { return }
+            
+            print("⏹️ [MediaCell] Received stop command for video: \(videoMid), setting shouldAutoPlay = false")
+            shouldAutoPlay = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in
+            print("⏹️ [MediaCell] Received stop all videos command for: \(attachment.mid)")
+            shouldAutoPlay = false
+        }
+        .onChange(of: shouldAutoPlay) { oldValue, newValue in
+            print("🔄 [MediaCell] shouldAutoPlay changed from \(oldValue) to \(newValue) for video: \(attachment.mid)")
+            
+            // Notify SimpleVideoPlayer to start/stop playback
+            if newValue && isVideoAttachment {
+                print("▶️ [MediaCell] Posting play notification for SimpleVideoPlayer: \(attachment.mid)")
+                NotificationCenter.default.post(
+                    name: .shouldPlayVideo,
+                    object: nil,
+                    userInfo: [
+                        "videoMid": attachment.mid,
+                        "fromMediaCell": true  // Distinguish from coordinator commands
+                    ]
+                )
+            } else if !newValue && isVideoAttachment {
+                print("⏸️ [MediaCell] Posting pause notification for SimpleVideoPlayer: \(attachment.mid)")
+                NotificationCenter.default.post(
+                    name: .shouldPauseVideo,
+                    object: nil,
+                    userInfo: [
+                        "videoMid": attachment.mid,
+                        "fromMediaCell": true
+                    ]
+                )
+            }
+        }
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Update effectiveBaseUrl when app becomes active (author may have been resolved)
