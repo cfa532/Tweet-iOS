@@ -115,6 +115,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Timer for survey phase (kept for compatibility)
     private var surveyTimer: Timer?
+    
+    /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
+    /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
+    private var isPlaybackSuppressedByOverlay: Bool = false
+    
+    /// Debounced restart after an overlay is dismissed.
+    private var overlayUncoverPlaybackTimer: Timer?
 
     /// Feed-visible videos (computed from visibleTweetIds + allVideos).
     /// Only includes videos that can actually appear in `MediaGridView` (first 4 attachments).
@@ -189,6 +196,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil
         )
         
+        // Listen for overlay coverage changes (fullscreen cover / sheet / login / share).
+        // While covered, we must stop and suppress playback decisions for the feed.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleOverlayCoverageChanged),
+            name: .overlayCoverageChanged,
+            object: nil
+        )
+        
         // Listen for app background to set preservation flag
         NotificationCenter.default.addObserver(
             self,
@@ -196,6 +212,36 @@ class VideoPlaybackCoordinator: ObservableObject {
             name: UIApplication.didEnterBackgroundNotification,
             object: nil
         )
+    }
+    
+    @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
+        guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
+        
+        isPlaybackSuppressedByOverlay = isCovered
+        
+        // Cancel any pending "resume after overlay" timer.
+        overlayUncoverPlaybackTimer?.invalidate()
+        overlayUncoverPlaybackTimer = nil
+        
+        if isCovered {
+            // Hard stop so no audio bleeds under the overlay, and so we don't preserve stale primary state.
+            stopAllVideos()
+            return
+        }
+        
+        // Overlay dismissed: give UIKit/SwiftUI a beat to reattach layers, then restart if needed.
+        let timer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                guard !self.isPlaybackSuppressedByOverlay else { return }
+                guard self.phase == .idle else { return }
+                guard !self.visibleVideos.isEmpty else { return }
+                guard let tableView = self.tableView, tableView.window != nil else { return }
+                self.startPrimaryVideoPlayback()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        overlayUncoverPlaybackTimer = timer
     }
     
     /// Handle app entering background - set flag to preserve state on foreground
@@ -561,6 +607,13 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         
+        // If the feed is covered by an overlay (fullscreen cover/sheet/login/etc), do not start playback.
+        // Keep the "previous" snapshot up to date so we don't treat uncover as a visibility change spike.
+        if isPlaybackSuppressedByOverlay {
+            previousVisibleVideoIds = currentVisibleVideoIds
+            return
+        }
+        
         // Stop videos that are no longer visible
         if videoVisibilityChanged {
             let videosToStop = previousVisibleVideoIds.subtracting(currentVisibleVideoIds)
@@ -708,6 +761,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Start primary video playback - play topmost video immediately
     private func startPrimaryVideoPlayback() {
+        // Never start feed playback while the UI is covered by an overlay.
+        guard !isPlaybackSuppressedByOverlay else { return }
+        
         // Guard against starting if not in idle phase
         guard phase == .idle else {
             print("⚠️ [VideoPlaybackCoordinator] startPrimaryVideoPlayback called but not in idle phase (current: \(phase))")

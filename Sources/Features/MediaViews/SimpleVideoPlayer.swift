@@ -1605,71 +1605,26 @@ struct SimpleVideoPlayer: View {
             }
         } else {
             // Video is no longer covered.
-            // If it was playing before it got covered (fullscreen/login/sheet), resume immediately
-            // (don't depend on coordinator here, since state can be stale/cleared).
-            if isVisible, let player = player {
-                let wasPlayingBeforeCover = VideoStateCache.shared.getCachedPlaybackInfo(for: mid)?.wasPlaying ?? false
-                let shouldResume = wasPlayingBeforeCover || playbackState == .playing
-                let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
-
-                if shouldResume && noDetailViewActive {
-                    // CRITICAL: Check for saved position from fullscreen exit before resuming
-                    if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .mediaCell),
-                       let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .mediaCell) {
-                        // CRITICAL: Validate saved time before seeking to prevent crash
-                        guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
-                            PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .mediaCell)
-                            if player.rate == 0 {
-                                player.isMuted = MuteState.shared.isMuted
-                                player.volume = 0
-                                player.play()
-                                UIView.animate(withDuration: 0.3) {
-                                    player.volume = 1.0
-                                }
-                                playbackState = .playing
-                            }
-                            return
-                        }
-                        
-                        
-                        player.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                            guard finished else { return }
-                            
-                            Task { @MainActor in
-                                
-                                // Apply mute state and resume playback if it was playing in fullscreen
-                                self.player?.isMuted = MuteState.shared.isMuted
-                                if savedState.wasPlaying {
-                                    self.player?.volume = 0
-                                    self.player?.play()
-                                    if let player = self.player {
-                                        UIView.animate(withDuration: 0.3) {
-                                            player.volume = 1.0
-                                        }
-                                    }
-                                    self.playbackState = .playing
-                                }
-                                
-                                // Clear the saved state so we don't restore again
-                                PersistentVideoStateManager.shared.clearState(videoMid: self.mid, context: .mediaCell)
-                            }
-                        }
-                    } else if player.rate == 0 {
-                        // No saved position from fullscreen - resume normally
-                        player.isMuted = MuteState.shared.isMuted
-                        player.volume = 0
-                        player.play()
-                        UIView.animate(withDuration: 0.3) {
-                            player.volume = 1.0
-                        }
-                        playbackState = .playing
-                    }
-                } else {
-                    // Otherwise, re-check playback conditions on uncover (coordinator decides).
-                    if player.rate == 0 {
-                        checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
-                    }
+            //
+            // IMPORTANT: In feed (MediaCell), playback must be decided by VideoPlaybackCoordinator.
+            // Auto-resuming here based on cached "wasPlaying" can cause "invisible autoplay" after
+            // dismissing fullscreen (the cell might not actually be on-screen yet / layer not attached).
+            //
+            // If a coordinator play command arrived while we were covered, it may have set
+            // `coordinatorWantsToPlay`. In that case, resume now; otherwise wait for coordinator.
+            guard isVisible else { return }
+            guard !DetailVideoManager.shared.isDetailViewActive() else { return }
+            guard coordinatorWantsToPlay else { return }
+            guard let player = player, loadingState == .loaded else { return }
+            
+            if player.rate == 0 {
+                player.isMuted = MuteState.shared.isMuted
+                player.volume = 0
+                player.play()
+                UIView.animate(withDuration: 0.3) {
+                    player.volume = 1.0
                 }
+                playbackState = .playing
             }
         }
     }
@@ -1806,6 +1761,13 @@ struct SimpleVideoPlayer: View {
         
         // Set flag to play when ready (will be checked after seek completes if seeking)
         coordinatorWantsToPlay = true
+        
+        // If the feed is currently covered (fullscreen cover / sheet / login / etc), do not start
+        // playback now. We'll resume when uncovered (or when coordinator re-sends after dismiss).
+        if mode == .mediaCell && isCoveredByOverlay {
+            print("⏸️ [COORDINATOR] Play command received while covered - deferring playback for \(mid)")
+            return
+        }
         
         // If seeking to beginning, let seek completion handle playback
         if isSeekingToBeginning {
