@@ -86,9 +86,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var lastPrimarySwitchTime: Date?
     
     /// PERF FIX: Cache for cell lookups to avoid repeated expensive operations
+    /// Memory: ~200 bytes per cell reference × 200 = ~40KB (negligible)
     private var cellCache: [String: UITableViewCell] = [:]
     private var lastCacheClearTime: Date = Date()
-    private let cellCacheClearInterval: TimeInterval = 5.0 // Clear cache every 5 seconds
+    private let cellCacheClearInterval: TimeInterval = 15.0 // Clear cache every 15 seconds (increased for better performance)
+    private let maxCellCacheSize = 200 // Limit cache to 200 entries (~40KB, allows caching ~2-3 screens of cells)
     
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
@@ -103,12 +105,14 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var currentTweets: [Tweet] = []
     
     /// PERF FIX: Cache for visibility ratios to avoid redundant calculations
+    /// Memory: ~100 bytes per ratio × 500 = ~50KB (negligible)
     private var cachedVisibilityRatios: [String: CGFloat] = [:]
-    private let visibilityRatioThreshold: CGFloat = 0.15 // Only update if ratio changes by 15%
+    private let visibilityRatioThreshold: CGFloat = 0.10 // Only update if ratio changes by 10% (more responsive, reduced from 15%)
+    private let maxVisibilityRatioCacheSize = 500 // Limit cache to 500 entries (~50KB, allows tracking many videos during long scrolls)
     
     /// PERF FIX: Debounce timer for visibility checks to reduce expensive calculations
     private var visibilityCheckDebounceTimer: Timer?
-    private let visibilityCheckDebounceInterval: TimeInterval = 0.15 // 150ms debounce
+    private let visibilityCheckDebounceInterval: TimeInterval = 0.10 // 100ms debounce (reduced from 150ms for better responsiveness)
     
     /// Timer for scroll stop detection
     private var scrollStopTimer: Timer?
@@ -165,6 +169,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
+    /// Stored observer tokens for proper cleanup
+    private var notificationObservers: [NSObjectProtocol] = []
+    
     /// Is currently scrolling
     private var isScrolling: Bool = false
     
@@ -180,38 +187,59 @@ class VideoPlaybackCoordinator: ObservableObject {
     // MARK: - Initialization
     
     private init() {
-        // Listen for video finished notifications
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleVideoFinished),
-            name: .videoDidFinishPlaying,
-            object: nil
-        )
+        // Listen for video finished notifications and store observer token
+        let videoFinishedObserver = NotificationCenter.default.addObserver(
+            forName: .videoDidFinishPlaying,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleVideoFinished(notification)
+        }
+        notificationObservers.append(videoFinishedObserver)
 
         // Listen for foreground recovery and intelligently decide whether to preserve state
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleForegroundRecovery),
-            name: .reloadVisibleVideosOnly,
-            object: nil
-        )
+        let foregroundRecoveryObserver = NotificationCenter.default.addObserver(
+            forName: .reloadVisibleVideosOnly,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleForegroundRecovery(notification)
+        }
+        notificationObservers.append(foregroundRecoveryObserver)
         
         // Listen for overlay coverage changes (fullscreen cover / sheet / login / share).
         // While covered, we must stop and suppress playback decisions for the feed.
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleOverlayCoverageChanged),
-            name: .overlayCoverageChanged,
-            object: nil
-        )
+        let overlayCoverageObserver = NotificationCenter.default.addObserver(
+            forName: .overlayCoverageChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleOverlayCoverageChanged(notification)
+        }
+        notificationObservers.append(overlayCoverageObserver)
         
         // Listen for app background to set preservation flag
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleAppDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
+        let backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppDidEnterBackground()
+        }
+        notificationObservers.append(backgroundObserver)
+    }
+    
+    deinit {
+        // Clean up all notification observers
+        notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        notificationObservers.removeAll()
+        
+        // Invalidate all timers
+        playbackDebounceTimer?.invalidate()
+        scrollStopTimer?.invalidate()
+        surveyTimer?.invalidate()
+        visibilityCheckDebounceTimer?.invalidate()
+        overlayUncoverPlaybackTimer?.invalidate()
     }
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
@@ -250,6 +278,49 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This flag will be cleared if user explicitly scrolls
         if phase != .idle {
             shouldPreserveStateOnForeground = true
+        }
+    }
+    
+    // MARK: - Cache Management
+    
+    /// Clear stale caches to prevent unbounded growth during fast scrolling
+    /// 
+    /// Memory targets (for 1GB normal usage, 2GB max):
+    /// - cellCache: ~40KB (200 entries × 200 bytes)
+    /// - cachedVisibilityRatios: ~50KB (500 entries × 100 bytes)
+    /// - Total coordinator cache overhead: ~90KB (negligible)
+    ///
+    /// The real memory usage comes from:
+    /// - Video player buffers: ~50-100MB per active video
+    /// - Image caches: ~200-500MB
+    /// - Tweet data: ~50-100MB
+    /// Total typical: ~400-700MB, leaves comfortable headroom under 1GB target
+    private func clearStaleCache() {
+        let now = Date()
+        
+        // Time-based clearing: Every 15 seconds to allow better caching during normal scrolling
+        // This balances memory vs performance - cells stay cached longer for smoother re-renders
+        if now.timeIntervalSince(lastCacheClearTime) > cellCacheClearInterval {
+            cellCache.removeAll()
+            lastCacheClearTime = now
+        }
+        
+        // Size-based clearing for cell cache
+        // At 200 entries, we're only using ~40KB - this is a safety limit, not a memory concern
+        if cellCache.count > maxCellCacheSize {
+            // Remove oldest entries (simple approach: clear all when limit exceeded)
+            // This rarely happens in practice since time-based clearing occurs first
+            cellCache.removeAll()
+            lastCacheClearTime = now
+        }
+        
+        // Smart clearing for visibility ratios (keep only visible videos)
+        // At 500 entries (~50KB), this is still negligible memory
+        // But we prune to keep the cache relevant and lookup performance fast
+        if cachedVisibilityRatios.count > maxVisibilityRatioCacheSize {
+            // Keep only entries for currently visible videos
+            let visibleVideoIds = Set(visibleVideos.map { $0.identifier })
+            cachedVisibilityRatios = cachedVisibilityRatios.filter { visibleVideoIds.contains($0.key) }
         }
     }
     
@@ -739,7 +810,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Stop all videos and reset state
     func stopAllVideos() {
-        // Cancel all timers
+        // Cancel all timers to prevent resource accumulation
         surveyTimer?.invalidate()
         surveyTimer = nil
         
@@ -757,9 +828,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
         
-        // PERF FIX: Clear caches
+        // PERF FIX: Clear caches to free memory
         cachedVisibilityRatios.removeAll()
         cellCache.removeAll()
+        lastCacheClearTime = Date()
         
         // Clear state
         currentlyPlayingVideoIds.removeAll()
@@ -940,6 +1012,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Check if current primary video is less than 50% visible and switch to next video if needed
     private func checkAndSwitchVideoIfNeeded() {
+        // Enforce cache size limits to prevent unbounded growth
+        clearStaleCache()
+        
         // Only check during primary playing phase
         guard phase == .primaryPlaying,
               let primaryId = primaryVideoId,
@@ -950,10 +1025,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         // Prevent immediate re-switching after a video becomes primary (prevents glitch when scrolling up)
-        // Wait at least 0.3 seconds after a switch before allowing another switch
+        // Wait at least 0.2 seconds after a switch before allowing another switch
+        // (Reduced from 0.3s for more responsive video switching during fast scrolling)
         if let lastSwitchTime = lastPrimarySwitchTime {
             let timeSinceSwitch = Date().timeIntervalSince(lastSwitchTime)
-            if timeSinceSwitch < 0.3 {
+            if timeSinceSwitch < 0.2 {
                 // Too soon after switch - skip check to prevent glitch
                 return
             }

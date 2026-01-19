@@ -41,6 +41,10 @@ Documentation is now organized into focused categories:
 | [**performance/LAYOUT_STABILITY_REVIEW.md**](./performance/LAYOUT_STABILITY_REVIEW.md) | Layout stability analysis | ✅ Current |
 | [**performance/MEMORY_AUDIT_REPORT.md**](./performance/MEMORY_AUDIT_REPORT.md) | Memory usage audit | ✅ Current |
 | [**performance/LOAD_MORE_ENHANCEMENTS.md**](./performance/LOAD_MORE_ENHANCEMENTS.md) | Load more functionality improvements | ✅ Current |
+| [**performance/CACHE_OPTIMIZATION_SUMMARY.md**](./performance/CACHE_OPTIMIZATION_SUMMARY.md) | VideoPlaybackCoordinator cache optimization | ✅ Current |
+| [**performance/MEMORY_LEAK_ANALYSIS.md**](./performance/MEMORY_LEAK_ANALYSIS.md) | Memory leak analysis and fixes | ✅ Current |
+| [**performance/OPTIMIZATION_BEFORE_AFTER.md**](./performance/OPTIMIZATION_BEFORE_AFTER.md) | Performance optimization before/after comparison | ✅ Current |
+| [**performance/docsperformanceVideoPlaybackOptimization.md**](./performance/docsperformanceVideoPlaybackOptimization.md) | Video playback performance optimization guide | ✅ Current |
 
 ### Features & Functionality
 | Document | Description | Status |
@@ -180,9 +184,10 @@ All main documents should include:
 - ✅ **Complete Documentation Restructure**: Moved all .md files into organized docs/ folder
   - **Created subfolders**: `architecture/`, `performance/`, `features/`, `api/`, `guides/`
   - **Moved scattered files**: Relocated docs from root, Sources/Core/, Sources/Tweet/ to docs/
+  - **Moved additional Core files**: 4 performance docs moved to [performance/](./performance/) folder
   - **Consolidated duplicates**: Removed redundant documentation update files
-  - **Updated index**: Comprehensive INDEX.md with new organization
-- ✅ **Performance Documentation**: Organized all performance-related docs in [performance/](./performance/) folder
+  - **Updated index**: Comprehensive INDEX.md with new organization and additional files
+- ✅ **Performance Documentation**: 13 performance-related docs organized in [performance/](./performance/) folder
 - ✅ **Architecture Documentation**: System design docs now in [architecture/](./architecture/) folder
 
 ### December 29, 2025
