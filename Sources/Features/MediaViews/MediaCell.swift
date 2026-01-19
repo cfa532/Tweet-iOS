@@ -153,24 +153,12 @@ struct MediaCell: View, Equatable {
                                 .transition(.opacity)
                         }
                         
-                        // Layer 2: Loading indicator (only show if no cached image available)
-                        // CRITICAL: Use memory-only cache check to avoid blocking disk I/O
-                        if isLoading, imageCache.getCompressedImageFromMemory(for: attachment) == nil {
+                        // Layer 2: Loading indicator (only show if actually loading and no image available)
+                        if isLoading && image == nil {
+                            // Show loading spinner only when actively loading and no image is displayed
                             ProgressView()
                                 .progressViewStyle(CircularProgressViewStyle())
                                 .scaleEffect(1.2)
-                        } else if isLoading, image == nil {
-                            // Small indicator when refining cached image
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(0.6)
-                                .padding(8)
-                                .background(
-                                    Circle()
-                                        .fill(Color.black.opacity(0.3))
-                                )
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                                .padding(8)
                         }
                     }
                     // STABILITY: Fixed frame prevents any size changes during loading
@@ -415,21 +403,32 @@ struct MediaCell: View, Equatable {
     }
     
     private func loadImage() {
-        guard let url = attachment.getUrl(effectiveBaseUrl) else { 
+        guard let url = attachment.getUrl(effectiveBaseUrl) else {
             // If no URL, ensure isLoading is false
             isLoading = false
-            return 
+            return
         }
-        
-        // First, try to get cached image immediately (disk check is OK in async context)
-        // This happens in onAppear which is safe for disk I/O
-        if let cachedImage = imageCache.getCompressedImage(for: attachment) {
+
+        // First, try to get cached image from memory only (fastest, no I/O)
+        if let cachedImage = imageCache.getCompressedImageFromMemory(for: attachment) {
+            print("DEBUG: [MediaCell] Found image in memory cache for \(attachment.mid)")
             self.image = cachedImage
             self.isLoading = false
             return
         }
-        
-        // If no cached image, start loading with global manager
+
+        // For images not in memory, check disk cache synchronously
+        // This is acceptable for individual cells (not during mass scrolling)
+        // but avoids the async delay that would show spinners for cached images
+        if let cachedImage = imageCache.getCompressedImage(for: attachment) {
+            print("DEBUG: [MediaCell] Found image in disk cache for \(attachment.mid)")
+            self.image = cachedImage
+            self.isLoading = false
+            return
+        }
+
+        print("DEBUG: [MediaCell] No cached image found, starting network load for \(attachment.mid)")
+        // If no cached image at all, start loading with global manager
         isLoading = true
         
         // Use normal priority for grid images (they're visible but not as critical as detail view)
