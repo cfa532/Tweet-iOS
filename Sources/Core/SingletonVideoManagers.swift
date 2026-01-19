@@ -226,6 +226,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Activate manager when fullscreen view appears
     func activateForFullscreen() {
+        // Pause any detail view videos when entering fullscreen mode
+        // This ensures videos playing in TweetDetailView or CommentDetailView are paused
+        // when opening attachments in fullscreen, but can resume when fullscreen closes
+        if DetailVideoManager.shared.getPlayer()?.rate ?? 0 > 0 {
+            DetailVideoManager.shared.pausePlayer()
+            print("🎬 [FullScreenVideoManager] Paused detail view videos before activating fullscreen")
+        }
+
         guard !isActive else { return }
         isActive = true
         registerLifecycleObservers()
@@ -1447,12 +1455,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     
     /// Activate manager when detail view appears
     func activateForDetail() {
-        // Stop any currently playing video when a new detail view becomes active
-        // This ensures videos from previous detail views (like TweetDetailView) are stopped
+        // Completely stop and clear any currently playing video when a new detail view becomes active
+        // This ensures videos from previous detail views (like TweetDetailView) are completely stopped
         // when navigating to another detail view (like CommentDetailView)
-        if let player = getPlayer(), player.rate > 0 {
-            print("📱 [DetailVideoManager] Stopping video from previous detail view")
-            pausePlayer()
+        if getPlayer() != nil {
+            print("📱 [DetailVideoManager] Completely stopping video from previous detail view")
+            clearCurrentVideo()
         }
 
         // CRITICAL: Always call beginDetailViewSession() to increment count

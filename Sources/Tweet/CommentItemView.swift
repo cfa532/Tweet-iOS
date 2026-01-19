@@ -82,5 +82,16 @@ struct CommentItemView: View {
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
         }
+        .if(linkToComment) { view in
+            view.contentShape(Rectangle())
+                .onTapGesture {
+                    // Navigate to comment detail by posting notification
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("NavigateToCommentDetail"),
+                        object: nil,
+                        userInfo: ["comment": comment, "parentTweet": parentTweet]
+                    )
+                }
+        }
     }
 }
