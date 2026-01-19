@@ -565,7 +565,10 @@ struct TweetActionButtonsView: View {
             isPreparingShare = false
             print("DEBUG: [SHARE] Sheet dismissed, state cleared")
             onShareVisibilityChange?(false)
-            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+            
+            // CRITICAL: Always end the overlay, even if it was never registered properly
+            // This prevents the coordinator from getting stuck in "covered" state
+            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
             
             // CRITICAL FIX: Force reload of visible videos after dismissing share sheet
             // This handles the case where app returned from background while share sheet was active:
@@ -576,6 +579,10 @@ struct TweetActionButtonsView: View {
             Task { @MainActor in
                 // Small delay to ensure overlay state is fully updated
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                
+                // Double-check that overlay was properly cleaned up
+                OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
+                
                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                 print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
             }

@@ -245,6 +245,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
         guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
         
+        let source = notification.userInfo?["source"] as? String ?? "unknown"
+        let activeCount = notification.userInfo?["activeCount"] as? Int ?? 0
+        
+        print("DEBUG: [VideoPlaybackCoordinator] Overlay coverage changed: \(isCovered ? "COVERED" : "UNCOVERED"), source: \(source), active overlays: \(activeCount)")
+        
         isPlaybackSuppressedByOverlay = isCovered
         
         // Cancel any pending "resume after overlay" timer.
@@ -253,18 +258,38 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         if isCovered {
             // Hard stop so no audio bleeds under the overlay, and so we don't preserve stale primary state.
+            print("DEBUG: [VideoPlaybackCoordinator] Stopping all videos due to overlay coverage")
             stopAllVideos()
             return
         }
+        
+        print("DEBUG: [VideoPlaybackCoordinator] Overlay dismissed, scheduling playback restart in 0.15s")
         
         // Overlay dismissed: give UIKit/SwiftUI a beat to reattach layers, then restart if needed.
         let timer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                guard !self.isPlaybackSuppressedByOverlay else { return }
-                guard self.phase == .idle else { return }
-                guard !self.visibleVideos.isEmpty else { return }
-                guard let tableView = self.tableView, tableView.window != nil else { return }
+                
+                print("DEBUG: [VideoPlaybackCoordinator] Overlay restart timer fired. Suppressed: \(self.isPlaybackSuppressedByOverlay), Phase: \(self.phase), Videos: \(self.visibleVideos.count)")
+                
+                guard !self.isPlaybackSuppressedByOverlay else {
+                    print("DEBUG: [VideoPlaybackCoordinator] Still suppressed, not restarting")
+                    return
+                }
+                guard self.phase == .idle else {
+                    print("DEBUG: [VideoPlaybackCoordinator] Not in idle phase (\(self.phase)), not restarting")
+                    return
+                }
+                guard !self.visibleVideos.isEmpty else {
+                    print("DEBUG: [VideoPlaybackCoordinator] No visible videos, not restarting")
+                    return
+                }
+                guard let tableView = self.tableView, tableView.window != nil else {
+                    print("DEBUG: [VideoPlaybackCoordinator] TableView not in window, not restarting")
+                    return
+                }
+                
+                print("DEBUG: [VideoPlaybackCoordinator] ✅ Starting primary video playback after overlay dismissal")
                 self.startPrimaryVideoPlayback()
             }
         }
@@ -666,6 +691,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Update visible tweets (called during scrolling)
     func updateVisibleTweets(_ tweetIds: Set<String>) {
+        // Safety check: Verify overlay coordinator consistency
+        // This helps detect and fix stuck overlay state
+        OverlayVisibilityCoordinator.shared.verifyConsistency(source: "VideoPlaybackCoordinator.updateVisibleTweets")
+        
         // Track scroll direction based on content offset
         if let tableView = tableView, tableView.window != nil {
             let currentOffset = tableView.contentOffset.y

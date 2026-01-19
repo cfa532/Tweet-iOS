@@ -135,21 +135,44 @@ final class OverlayVisibilityCoordinator: ObservableObject {
     func beginOverlay(id: String, source: String? = nil) {
         let inserted = activeOverlayIds.insert(id).inserted
         if inserted {
+            print("DEBUG: [OverlayVisibilityCoordinator] Began overlay '\(id)' from source: \(source ?? "unknown"). Active count: \(activeOverlayIds.count)")
             updateIfNeeded(source: source)
+        } else {
+            print("WARNING: [OverlayVisibilityCoordinator] Overlay '\(id)' was already registered. Active overlays: \(activeOverlayIds)")
         }
     }
 
     func endOverlay(id: String, source: String? = nil) {
         let removed = activeOverlayIds.remove(id) != nil
         if removed {
+            print("DEBUG: [OverlayVisibilityCoordinator] Ended overlay '\(id)' from source: \(source ?? "unknown")")
             updateIfNeeded(source: source)
+        } else {
+            print("WARNING: [OverlayVisibilityCoordinator] Attempted to end overlay '\(id)' but it wasn't registered. Active overlays: \(activeOverlayIds)")
         }
     }
 
     func reset(source: String? = nil) {
         guard !activeOverlayIds.isEmpty else { return }
+        print("WARNING: [OverlayVisibilityCoordinator] Resetting coordinator state. Clearing \(activeOverlayIds.count) active overlays: \(activeOverlayIds)")
         activeOverlayIds.removeAll()
         updateIfNeeded(source: source)
+    }
+    
+    /// Force check if the coordinator is in a stuck state (has active overlays but no actual visible overlays)
+    /// This can happen if beginOverlay was called but endOverlay was never called due to dismiss issues
+    func verifyConsistency(source: String? = nil) {
+        // If we think we're covered but the count seems wrong, log it
+        if isCovered && activeOverlayIds.isEmpty {
+            print("ERROR: [OverlayVisibilityCoordinator] Inconsistent state detected: isCovered=true but no active overlays!")
+            // Force update to fix the inconsistency
+            isCovered = false
+            NotificationCenter.default.post(
+                name: .overlayCoverageChanged,
+                object: nil,
+                userInfo: ["isCovered": false, "activeCount": 0, "source": source ?? "consistency-check"]
+            )
+        }
     }
 
     private func updateIfNeeded(source: String?) {
