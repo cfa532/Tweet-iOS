@@ -4,6 +4,17 @@
 //
 //  Consolidated video player with asset sharing
 //
+//  MEMORY LEAK FIX (January 19, 2026):
+//  Fixed memory deadlock during fast scrolling where videos start loading but get
+//  scrolled past before ready. The waiting tasks (up to 3s each) weren't being cancelled,
+//  causing memory to accumulate (1GB+ after scrolling hundreds of tweets).
+//
+//  Changes:
+//  - Added waitingForPlayerTask tracking variable
+//  - Cancel waiting task when video goes off-screen (handleOnDisappear)
+//  - Cancel waiting task when stop/pause command received
+//  - Cancel recovery cover and timer tasks in handleOnDisappear
+//
 
 import SwiftUI
 import AVKit
@@ -391,6 +402,7 @@ struct SimpleVideoPlayer: View {
     @State private var needsHealthCheckAfterForeground = false  // Only check health once after foreground entry
     @State private var isSeekingToBeginning = false  // Track if we're seeking to beginning (don't check health during seek)
     @State private var isWaitingForPlayerReady = false  // Track if we're waiting for player to be ready (prevent concurrent tasks)
+    @State private var waitingForPlayerTask: Task<Void, Never>? = nil  // Track waiting task so it can be cancelled
     @State private var isBuffering = false // Track buffering state
     @State private var playerItem: AVPlayerItem? // Keep reference for observer cleanup
     @State private var isCoveredByOverlay: Bool = false
@@ -1121,6 +1133,17 @@ struct SimpleVideoPlayer: View {
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
         
+        // CRITICAL FIX: Cancel any pending waiting task to prevent memory leaks during fast scrolling
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        isWaitingForPlayerReady = false
+        
+        // CRITICAL FIX: Cancel recovery cover and timer tasks to prevent memory leaks
+        recoveryCoverTask?.cancel()
+        recoveryCoverTask = nil
+        timeRemainingDisplayTask?.cancel()
+        timeRemainingDisplayTask = nil
+        
         // Handle idle timer for fullscreen modes
         if mode == .mediaBrowser {
             UIApplication.shared.isIdleTimerDisabled = false
@@ -1690,6 +1713,11 @@ struct SimpleVideoPlayer: View {
         
         coordinatorWantsToPlay = false
         
+        // CRITICAL: Cancel any pending waiting task to prevent memory leaks
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        isWaitingForPlayerReady = false
+        
         // PERFORMANCE FIX: Save position before pausing (Twitter-style)
         // CRITICAL: Capture wasPlaying state BEFORE pausing
         if let player = player {
@@ -1722,6 +1750,11 @@ struct SimpleVideoPlayer: View {
         guard videoMid == mid else { return }
 
         coordinatorWantsToPlay = false
+        
+        // CRITICAL: Cancel any pending waiting task to prevent memory leaks
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        isWaitingForPlayerReady = false
         if let player = player {
             // CRITICAL: Capture wasPlaying state BEFORE pausing
             let wasPlaying = (player.rate > 0) || (playbackState == .playing)
@@ -1789,9 +1822,11 @@ struct SimpleVideoPlayer: View {
             isWaitingForPlayerReady = true
             
             // CRITICAL: Wait for player to be ready, then play (max 3 seconds)
-            Task { @MainActor in
+            // Store task so it can be cancelled if video goes off-screen or receives stop command
+            waitingForPlayerTask = Task { @MainActor in
                 defer { 
-                    self.isWaitingForPlayerReady = false 
+                    self.isWaitingForPlayerReady = false
+                    self.waitingForPlayerTask = nil
                 }
                 
                 var attempts = 0

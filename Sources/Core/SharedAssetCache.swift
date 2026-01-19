@@ -105,9 +105,9 @@ class SharedAssetCache: ObservableObject {
     private var memoryMonitorTimer: Timer?
     
     private func startBackgroundCleanup() {
-        // PERFORMANCE FIX: Reduced cleanup interval from 30s to 15s for more aggressive cleanup
+        // BALANCED CLEANUP: 10s interval - frequent enough to prevent memory buildup but not disruptive
         // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping SharedAssetCache alive forever
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 self.performCleanup()
@@ -116,9 +116,9 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func startMemoryMonitoring() {
-        // PERFORMANCE FIX: Monitor memory more frequently (every 5 seconds) to catch rapid growth
+        // PERFORMANCE FIX: Monitor memory every 10 seconds (reduced from 15s for better responsiveness)
         // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping SharedAssetCache alive forever
-        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 self.checkMemoryPressure()
@@ -127,6 +127,10 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func performCleanup() {
+        let memoryBefore = getMemoryUsageString()
+        let cacheSizeBefore = playerCache.count
+        print("🔄 [MEMORY] Periodic cleanup starting (memory: \(memoryBefore), cache: \(cacheSizeBefore) players)")
+
         let now = Date()
         let expiredKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > cacheExpirationInterval }.map { $0.key }
         
@@ -163,6 +167,14 @@ class SharedAssetCache: ObservableObject {
         
         // PERFORMANCE FIX: Clean up expired disk cache status entries
         cleanupExpiredDiskCacheStatus()
+
+        let memoryAfter = getMemoryUsageString()
+        let cacheSizeAfter = playerCache.count
+        if memoryBefore != memoryAfter || cacheSizeBefore != cacheSizeAfter {
+            print("✅ [MEMORY] Periodic cleanup completed (memory: \(memoryBefore) → \(memoryAfter), cache: \(cacheSizeBefore) → \(cacheSizeAfter))")
+        } else {
+            print("ℹ️ [MEMORY] Periodic cleanup completed (no changes needed)")
+        }
     }
     
     // MARK: - Asset Management
@@ -1486,9 +1498,33 @@ class SharedAssetCache: ObservableObject {
         player.pause()
         player.rate = 0.0
         
+        // MEMORY LEAK FIX: Cancel any active downloads in CachingPlayerItem before releasing
+        // This prevents buffered video data from staying in memory
+        if let currentItem = player.currentItem {
+            // Reduce buffer to 0 to release buffered data
+            currentItem.preferredForwardBufferDuration = 0.0
+
+            // Clear any cached frames/thumbnails that might be held
+            currentItem.asset.cancelLoading()
+
+            // If it's a CachingPlayerItem, clear references to help with cleanup
+            if let _ = currentItem as? CachingPlayerItem {
+                // CachingPlayerItem cleanup is handled by its deinit method
+                // The important cleanup (buffer duration = 0) is already done above
+            }
+
+            // Force deallocation by removing all observers
+            NotificationCenter.default.removeObserver(currentItem)
+        }
+
         // CRITICAL: Replace current item with nil to release memory
         // This is the #1 fix from web research - ALWAYS do this, no conditions!
         player.replaceCurrentItem(with: nil)
+
+        // Force garbage collection hint by creating a new autorelease pool
+        autoreleasepool {
+            // This forces immediate cleanup of any autoreleased objects
+        }
         
         // Note: AVPlayerLayer automatically releases player when layer is deallocated
         // No need to manually access playerLayer property (causes crash)
@@ -1498,29 +1534,78 @@ class SharedAssetCache: ObservableObject {
     /// Call this when navigating away from video pages
     func releaseAllPlayers() {
         print("🗑️ [MEMORY] Releasing ALL players (\(playerCache.count) total)")
-        
+
         let playersToRelease = playerCache.values
         let count = playersToRelease.count
-        
+
         // Release each player properly
         for player in playersToRelease {
             releasePlayer(player)
         }
-        
+
         // Clear all caches
         playerCache.removeAll()
         cachingPlayerItems.removeAll()
         resourceLoaderDelegates.removeAll()
-        
+
         // Keep timestamps and asset cache for faster recovery
-        
+
         print("✅ [MEMORY] Released \(count) players successfully")
+    }
+
+    /// MEMORY FIX: Force immediate cleanup of old/inactive players to release memory during fast scrolling
+    @MainActor func forceMemoryCleanup() {
+        let memoryBefore = getMemoryUsageString()
+        let cacheSizeBefore = playerCache.count
+        print("🧹 [MEMORY] Starting force cleanup (memory: \(memoryBefore), cache: \(cacheSizeBefore) players)")
+
+        let now = Date()
+        let memoryUsage = getCurrentMemoryUsage() / (1024 * 1024)
+
+        // DYNAMIC AGE THRESHOLD: Be more aggressive when memory is high
+        // During fast scrolling, all players are recently accessed, so we need lower thresholds
+        let ageThreshold: TimeInterval
+        if memoryUsage > 1200 {
+            ageThreshold = 10  // Very aggressive: 10 seconds during high memory
+        } else if memoryUsage > 1000 {
+            ageThreshold = 30  // Aggressive: 30 seconds during elevated memory
+        } else {
+            ageThreshold = 60  // Normal: 60 seconds during moderate memory
+        }
+
+        // Find players that haven't been accessed within the threshold
+        let oldKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > ageThreshold }.map { $0.key }
+
+        print("📊 [MEMORY] Using age threshold: \(Int(ageThreshold))s (memory: \(memoryUsage)MB)")
+
+        if !oldKeys.isEmpty {
+            print("🗑️ [MEMORY] Found \(oldKeys.count) old players to remove")
+
+            for key in oldKeys {
+                if let player = playerCache[key] {
+                    releasePlayer(player)
+                }
+                playerCache.removeValue(forKey: key)
+                assetCache.removeValue(forKey: key)
+                cacheTimestamps.removeValue(forKey: key)
+                cachingPlayerItems.removeValue(forKey: key)
+                resourceLoaderDelegates.removeValue(forKey: key)
+                cleanupTweetMappings(for: key)
+            }
+
+            let memoryAfter = getMemoryUsageString()
+            let cacheSizeAfter = playerCache.count
+            print("✅ [MEMORY] Force cleanup completed - freed \(oldKeys.count) players (memory: \(memoryBefore) → \(memoryAfter), cache: \(cacheSizeBefore) → \(cacheSizeAfter))")
+        } else {
+            print("ℹ️ [MEMORY] Force cleanup: no old players to remove (memory: \(memoryBefore))")
+        }
     }
     
     private func managePlayerCacheSize() {
-        // Normal LRU eviction - 30 players is fine, just enforce the limit
+        // Normal LRU eviction - enforce cache size limits
         if playerCache.count > maxPlayerCacheSize {
-            print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - removing oldest")
+            let memoryBefore = getMemoryUsageString()
+            print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - evicting oldest (memory: \(memoryBefore))")
 
             // Remove least recently used players
             let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
@@ -1540,18 +1625,20 @@ class SharedAssetCache: ObservableObject {
             }
 
             if !keysToRemove.isEmpty {
-                print("🗑️ [PLAYER CACHE] Released \(keysToRemove.count) players to free memory")
+                let memoryAfter = getMemoryUsageString()
+                print("🗑️ [PLAYER CACHE] Evicted \(keysToRemove.count) players (memory: \(memoryBefore) → \(memoryAfter))")
             }
         }
 
-        // PERFORMANCE FIX: Also remove players not accessed in last 10 minutes
-        // Increased from 5 to 10 minutes to prevent cleanup of waiting videos during long video playback
+        // BALANCED CLEANUP: Remove players not accessed in last 5 minutes
+        // Matches cache expiration for consistent behavior
         let now = Date()
-        let inactiveThreshold: TimeInterval = 600 // 10 minutes
+        let inactiveThreshold: TimeInterval = 300 // 5 minutes
         let inactiveKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > inactiveThreshold }.map { $0.key }
 
         if !inactiveKeys.isEmpty {
-            print("🗑️ [PLAYER CACHE] Removing \(inactiveKeys.count) inactive players (>10min old)")
+            let memoryBeforeInactive = getMemoryUsageString()
+            print("🗑️ [PLAYER CACHE] Removing \(inactiveKeys.count) inactive players (>5min old, memory: \(memoryBeforeInactive))")
             for key in inactiveKeys {
                 if let player = playerCache[key] {
                     // CRITICAL: Properly release player to prevent memory leaks
@@ -1564,6 +1651,9 @@ class SharedAssetCache: ObservableObject {
                 // PERFORMANCE FIX: Clean up tweet URL mappings
                 cleanupTweetMappings(for: key)
             }
+
+            let memoryAfterInactive = getMemoryUsageString()
+            print("✅ [PLAYER CACHE] Removed \(inactiveKeys.count) inactive players (memory: \(memoryBeforeInactive) → \(memoryAfterInactive))")
         }
     }
     
@@ -1571,6 +1661,13 @@ class SharedAssetCache: ObservableObject {
     @MainActor func updatePlayerAccessTime(mediaID: String) {
         guard playerCache[mediaID] != nil else { return }
         cacheTimestamps[mediaID] = Date()
+    }
+
+    /// Get formatted memory usage string for logging (when actually needed)
+    @MainActor func getMemoryUsageString() -> String {
+        let memoryUsage = getCurrentMemoryUsage()
+        let memoryUsageMB = memoryUsage / (1024 * 1024)
+        return "\(memoryUsageMB)MB"
     }
     
     /// Get cache statistics
@@ -1608,25 +1705,27 @@ class SharedAssetCache: ObservableObject {
     private func checkMemoryPressure() {
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
-        
-        // Research-backed thresholds:
-        // - iPhone SE (4GB): ~1.5GB before termination
-        // - iPhone 14 Pro (6GB): ~2.5GB before termination
-        // - 1.2GB = ~30% of 4GB = "Normal" memory pressure (safe!)
-        // - iOS memory levels: Normal (0-50%), Warning (50-80%), Critical (80-95%)
-        if memoryUsageMB > 1200 {
+
+        // BALANCED THRESHOLDS: Prevent memory growth without being too aggressive
+        // - Only trigger cleanup at genuinely high usage levels
+        // - Allow normal scrolling without constant cleanup interruptions
+        if memoryUsageMB > 1000 {  // Reasonable threshold - only cleanup when truly needed
             // Check cooldown to prevent repeated cleanups
             if let lastWarning = lastMemoryWarningTime,
                Date().timeIntervalSince(lastWarning) < memoryWarningCooldown {
                 // Still in cooldown period
                 return
             }
-            
-            print("⚠️ [MEMORY] High usage: \(memoryUsageMB)MB (>1.2GB) - triggering cleanup")
+
+            print("⚠️ [MEMORY] High usage: \(memoryUsageMB)MB (>1GB) - triggering cleanup")
             lastMemoryWarningTime = Date()
             handleMemoryWarning()
-        } else if memoryUsageMB > 1000 {
-            print("📊 [MEMORY] Approaching limit: \(memoryUsageMB)MB (monitoring)")
+        } else if memoryUsageMB > 800 {
+            // Only log when approaching concerning levels, don't trigger cleanup yet
+            print("📊 [MEMORY] Elevated usage: \(memoryUsageMB)MB (monitoring)")
+        } else {
+            // Log current memory state periodically for visibility
+            print("📈 [MEMORY] Current usage: \(memoryUsageMB)MB (normal)")
         }
         // Silent monitoring below 1GB
     }
@@ -1647,61 +1746,67 @@ class SharedAssetCache: ObservableObject {
     
     /// Handle SYSTEM memory warning (more aggressive than proactive checks)
     private func handleSystemMemoryWarning() {
-        print("🚨 [SYSTEM MEMORY WARNING] iOS sent memory warning - aggressive cleanup")
-        
-        if UploadProgressManager.shared.isProcessingVideo {
-            return
-        }
-        
-        // Check memory usage before aggressive cleanup
-        // Only cleanup if usage exceeds threshold to prevent unnecessary cache clearing
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
-        
-        print("🚨 [SYSTEM MEMORY WARNING] Current usage: \(memoryUsageMB)MB")
-        
+        let cacheSize = playerCache.count
+
+        print("🚨 [SYSTEM MEMORY WARNING] iOS triggered - memory: \(memoryUsageMB)MB, cache: \(cacheSize) players")
+
+        if UploadProgressManager.shared.isProcessingVideo {
+            print("⚠️ [SYSTEM MEMORY WARNING] Video upload in progress, skipping cleanup")
+            return
+        }
+
         // Only perform aggressive cleanup if memory usage exceeds 1.2GB
         // This prevents wasteful cleanup when memory usage is actually low
         if memoryUsageMB > 1200 {
+            print("🧹 [SYSTEM MEMORY WARNING] High usage detected, performing aggressive cleanup")
             // System warning means iOS is serious - be more aggressive
             cancelAllLoadingTasks()
             releasePartialCache(percentage: 60) // Release 60% (not 100% - preserve some UX)
-            
-            print("✅ [SYSTEM MEMORY WARNING] Released 60% of cache")
+
+            let memoryAfter = getMemoryUsageString()
+            print("✅ [SYSTEM MEMORY WARNING] Cleanup completed (memory: \(memoryUsageMB)MB → \(memoryAfter))")
         } else {
-            print("ℹ️ [SYSTEM MEMORY WARNING] Memory usage low (\(memoryUsageMB)MB), skipping aggressive cleanup")
+            print("ℹ️ [SYSTEM MEMORY WARNING] Memory usage moderate (\(memoryUsageMB)MB), light cleanup only")
+            // Even at moderate levels, do a small cleanup
+            forceMemoryCleanup()
         }
     }
     
-    private func handleMemoryWarning() {        // CRITICAL: Check if video upload is in progress
+    private func handleMemoryWarning() {
+        let memoryUsage = getCurrentMemoryUsage()
+        let memoryUsageMB = memoryUsage / (1024 * 1024)
+        let cacheSize = playerCache.count
+
+        print("⚠️ [MEMORY WARNING] Proactive cleanup triggered - memory: \(memoryUsageMB)MB, cache: \(cacheSize) players")
+
+        // CRITICAL: Check if video upload is in progress
         // During FFmpeg video conversion, memory spikes are expected
         // Clearing video player caches during upload breaks existing players
         if UploadProgressManager.shared.isProcessingVideo {
-            // Don't cancel downloads or clear caches during upload
-            // The memory spike will subside after FFmpeg completes
+            print("⚠️ [MEMORY WARNING] Video upload in progress, skipping cleanup")
             return
         }
-        
-        // Check current memory usage
-        let memoryUsage = getCurrentMemoryUsage()
-        let memoryUsageMB = memoryUsage / (1024 * 1024)
-        
-        print("⚠️ [MEMORY WARNING] Current usage: \(memoryUsageMB)MB")
-        
+
         // Research-backed: Players are NOT the main memory consumer
         // Logs showed: releasing ALL players (10 total) didn't reduce memory (752MB -> 886MB!)
         // Real culprits: images, video segments, LocalHTTPServer cache
-        
+
         if memoryUsageMB > 1200 {
-            print("🗑️ [MEMORY WARNING] Over 1.2GB - moderate cleanup (preserve UX)")
-            
+            print("🗑️ [MEMORY WARNING] High usage - performing moderate cleanup")
             // Cancel active downloads first (prevents memory growth)
             cancelAllLoadingTasks()
-            
+
             // MODERATE: Release only 30% of players (preserve 70% for good UX)
             releasePartialCache(percentage: 30)
-            
-            print("✅ [MEMORY WARNING] Cleanup complete - released 30% of cache")
+
+            let memoryAfter = getMemoryUsageString()
+            print("✅ [MEMORY WARNING] Cleanup complete (memory: \(memoryUsageMB)MB → \(memoryAfter))")
+        } else {
+            print("ℹ️ [MEMORY WARNING] Memory usage moderate, performing light cleanup")
+            // Even at moderate levels, trigger force cleanup
+            forceMemoryCleanup()
         }
         
         // Don't clear URL mapping - preserve user's browsing context

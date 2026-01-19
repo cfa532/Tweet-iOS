@@ -14,11 +14,11 @@ enum Constants {
     // Localhost Configuration
     static let LOCAL_HOST = "http://127.0.0.1"
     
-    // Cache Configuration  
-    static let MAX_ASSET_CACHE_SIZE = 40 // Maximum number of cached assets (lightweight - just metadata)
-    static let MAX_PLAYER_CACHE_SIZE = 30 // Research-backed: Safe on modern devices (iPhone SE ~1.5GB limit, iPhone 14 Pro ~2.5GB limit)
+    // Cache Configuration - BALANCED LIMITS for good UX while preventing memory growth
+    static let MAX_ASSET_CACHE_SIZE = 25 // Reduced from 40 - reasonable limit
+    static let MAX_PLAYER_CACHE_SIZE = 20 // Reduced from 30 - good balance of performance vs memory
     static let MAX_CONCURRENT_PLAYER_CREATIONS = 4 // Research-backed: iPhone supports 4 connections/host by default, matches iOS network best practices
-    static let CACHE_EXPIRATION_SECONDS: TimeInterval = 600 // 10 minutes (reduced from 30 minutes)
+    static let CACHE_EXPIRATION_SECONDS: TimeInterval = 300 // 5 minutes - reasonable balance of memory vs performance
     
     // File Upload Limits
     static let MAX_FILE_SIZE = 512 * 1024 * 1024 // 512MB in bytes - applies to all file types

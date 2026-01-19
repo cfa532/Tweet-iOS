@@ -780,6 +780,19 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Stop videos that are no longer visible
         if videoVisibilityChanged {
             let videosToStop = previousVisibleVideoIds.subtracting(currentVisibleVideoIds)
+            if !videosToStop.isEmpty {
+                // MEMORY MONITOR: Log when videos are stopped (scrolled out of view)
+                print("📊 [MEMORY] Stopping \(videosToStop.count) videos (scrolled out of view)")
+
+                // SMART CLEANUP: Only trigger cleanup if we've stopped several videos
+                // This prevents excessive cleanup during normal scrolling while still
+                // preventing memory accumulation during fast scrolling
+                if videosToStop.count >= 3 || scrollDirection == false {
+                    // Trigger cleanup when: 3+ videos stopped, or scrolling up (reappearing videos)
+                    SharedAssetCache.shared.forceMemoryCleanup()
+                }
+            }
+
             for videoMid in videosToStop {
                 NotificationCenter.default.post(
                     name: .shouldStopVideo,
@@ -787,7 +800,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                     userInfo: ["videoMid": videoMid]
                 )
             }
-            
+
             // PERF FIX: Clear caches for videos that are no longer visible
             // This prevents stale cell references and visibility ratios
             let cellsToRemove = Set(allVideos.filter { videosToStop.contains($0.videoMid) }.map { $0.cellTweetId })
@@ -803,6 +816,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Start playback when videos become visible OR when in idle phase with videos
         // This handles both "new videos" and "coming back to idle with videos present"
         if videoVisibilityChanged && !currentVisibleVideoIds.isEmpty {
+            // MEMORY MONITOR: Log significant visibility changes (>3 videos) to track memory trends
+            if currentVisibleVideoIds.count > 3 {
+                let memoryStr = SharedAssetCache.shared.getMemoryUsageString()
+                print("📊 [MEMORY] Major visibility change - \(currentVisibleVideoIds.count) videos visible, memory: \(memoryStr)")
+            }
             // Allow primary video to change during scroll - re-identify primary video if needed
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
@@ -825,7 +843,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                 
                 // Start debounce timer for new visible videos
                 // Use .common mode so timer fires even during active scrolling
-                let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
+                // MEMORY FIX: When scrolling up (videos reappearing), give more time for restoration
+                let debounceInterval = scrollDirection ? 0.2 : 0.3  // Longer delay when scrolling up
+                let timer = Timer(timeInterval: debounceInterval, repeats: false) { [weak self] _ in
                     // Use DispatchQueue to ensure MainActor isolation
                     DispatchQueue.main.async {
                         guard let self = self else { return }
