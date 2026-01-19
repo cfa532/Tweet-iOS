@@ -21,13 +21,20 @@ struct CommentItemView: View {
 
     var body: some View {
         Group {
-            if linkToComment {
+            if linkToComment || onTap == nil {
+                // Use NavigationLink when linkToComment is true or no onTap callback is provided
                 NavigationLink(value: CommentNavigation(comment: comment, parentTweet: parentTweet)) {
                     commentContent
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
             } else {
+                // Use tap gesture when onTap callback is provided
                 commentContent
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onTap?(comment)
+                    }
             }
         }
         .task {
@@ -43,8 +50,9 @@ struct CommentItemView: View {
     private var commentContent: some View {
         HStack(alignment: .top, spacing: 8) {
             if let user = comment.author {
-                if isInProfile {
-                    Avatar(user: user) // Don't navigate if we're in the same profile
+                if isInProfile || linkToComment {
+                    // Don't navigate if we're in the same profile or using NavigationLink for comment
+                    Avatar(user: user)
                 } else {
                     NavigationLink(value: user) {
                         Avatar(user: user)
@@ -63,13 +71,14 @@ struct CommentItemView: View {
                 
                 TweetItemBodyView(
                     tweet: comment,
-                    enableTap: false,
+                    enableTap: true, // Always enable tap for proper gesture recognition
                     isVisible: isVisible,
                     onTweetBodyTap: {
-                        // Navigate to comment detail when body is tapped
+                        // Handle tap via callback when using callback approach
                         if let callback = onTap {
                             callback(comment)
                         }
+                        // When using NavigationLink, the tap is handled by the NavigationLink wrapper
                     }
                 )
                 

@@ -192,11 +192,19 @@ struct CommentDetailView: View {
         Group {
             if let attachments = comment.attachments, !attachments.isEmpty {
                 let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
+                let _ = print("DEBUG: [CommentDetailView] Showing \(attachments.count) attachments from comment \(comment.mid)")
+                let _ = print("DEBUG: [CommentDetailView]   comment.author = \(comment.author?.username ?? "nil")")
+                let _ = print("DEBUG: [CommentDetailView]   comment.author.baseUrl = \(comment.author?.baseUrl?.absoluteString ?? "nil")")
+                let _ = attachments.enumerated().forEach { index, att in
+                    print("DEBUG: [CommentDetailView]   [\(index)] type=\(att.type), mid=\(att.mid)")
+                }
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         DetailMediaCell(
                             parentTweet: comment,
                             attachmentIndex: index,
+                            aspectRatio: attachments[index].aspectRatio ?? 16.0/9.0,
+                            shouldLoadVideo: index == selectedMediaIndex, // Only load current video
                             showMuteButton: false
                         )
                         .tag(index)
@@ -206,6 +214,13 @@ struct CommentDetailView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: UIScreen.main.bounds.width / aspect)
                 .background(Color.black)
+            } else {
+                let _ = print("DEBUG: [CommentDetailView] No attachments found for comment \(comment.mid)")
+                let _ = print("DEBUG: [CommentDetailView]   comment.attachments = \(comment.attachments?.description ?? "nil")")
+                let _ = print("DEBUG: [CommentDetailView]   comment.author = \(comment.author?.username ?? "nil")")
+                let _ = print("DEBUG: [CommentDetailView]   parentTweet.mid = \(parentTweet.mid)")
+                let _ = print("DEBUG: [CommentDetailView]   parentTweet.attachments = \(parentTweet.attachments?.count ?? 0) items")
+                EmptyView()
             }
         }
     }
@@ -327,7 +342,7 @@ struct CommentDetailView: View {
     
     private func refreshComment() async {
         do {
-            if let refreshedComment = try await hproseInstance.refreshTweet(tweetId: comment.mid, authorId: comment.authorId) {
+            if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
                 try comment.update(from: refreshedComment)
             }
         } catch {
