@@ -120,6 +120,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Timer for survey phase (kept for compatibility)
     private var surveyTimer: Timer?
     
+    /// PERF FIX: Batched notification system to prevent notification spam
+    private var pendingStopVideos: Set<String> = []
+    private var pendingPlayVideo: VideoPlaybackInfo?
+    private var notificationBatchTimer: Timer?
+    private let notificationBatchInterval: TimeInterval = 0.05 // 50ms batch window
+    
     /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
     /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
     private var isPlaybackSuppressedByOverlay: Bool = false
@@ -235,6 +241,18 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
         notificationObservers.append(backgroundObserver)
+        
+        // Listen for memory warnings to proactively clean up
+        let memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleMemoryWarning()
+            }
+        }
+        notificationObservers.append(memoryWarningObserver)
     }
     
     deinit {
@@ -248,6 +266,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         surveyTimer?.invalidate()
         visibilityCheckDebounceTimer?.invalidate()
         overlayUncoverPlaybackTimer?.invalidate()
+        notificationBatchTimer?.invalidate()
     }
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
@@ -312,6 +331,93 @@ class VideoPlaybackCoordinator: ObservableObject {
         if phase != .idle {
             shouldPreserveStateOnForeground = true
         }
+    }
+    
+    /// Handle memory warning - aggressively clean up to prevent system daemon crashes
+    @objc private func handleMemoryWarning() {
+        print("⚠️ [VideoPlaybackCoordinator] Memory warning - performing aggressive cleanup")
+        
+        // Stop all playback immediately to free video buffers
+        stopAllVideos()
+        
+        // Clear all caches aggressively
+        cellCache.removeAll()
+        cachedVisibilityRatios.removeAll()
+        seenVideoIdentifiers.removeAll()
+        
+        // Clear previous state tracking
+        previousVisibleVideoIds.removeAll()
+        
+        // Reset timestamps
+        lastCacheClearTime = Date()
+        lastPrimarySwitchTime = nil
+        
+        print("✅ [VideoPlaybackCoordinator] Memory cleanup complete - all caches cleared, playback stopped")
+    }
+    
+    // MARK: - Batched Notification System
+    
+    /// Schedule a video to be stopped (batched to reduce notification spam)
+    private func scheduleStopVideo(_ videoMid: String) {
+        pendingStopVideos.insert(videoMid)
+        scheduleBatchedNotificationFlush()
+    }
+    
+    /// Schedule a video to be played (batched, but prioritized for responsiveness)
+    private func schedulePlayVideo(_ video: VideoPlaybackInfo, isPrimary: Bool = true) {
+        pendingPlayVideo = video
+        // Play commands are more urgent - flush immediately with short delay
+        scheduleBatchedNotificationFlush(urgentPlay: true)
+    }
+    
+    /// Schedule a batched notification flush
+    private func scheduleBatchedNotificationFlush(urgentPlay: Bool = false) {
+        // Cancel existing batch timer
+        notificationBatchTimer?.invalidate()
+        
+        // Use shorter interval for urgent play commands (more responsive)
+        let interval = urgentPlay ? 0.02 : notificationBatchInterval
+        
+        notificationBatchTimer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.flushBatchedNotifications()
+            }
+        }
+        RunLoop.main.add(notificationBatchTimer!, forMode: .common)
+    }
+    
+    /// Flush all pending batched notifications
+    private func flushBatchedNotifications() {
+        // Send play command first (most important for UX)
+        if let playVideo = pendingPlayVideo {
+            NotificationCenter.default.post(
+                name: .shouldPlayVideo,
+                object: nil,
+                userInfo: [
+                    "tweetId": playVideo.cellTweetId,
+                    "videoMid": playVideo.videoMid,
+                    "videoIndex": playVideo.attachmentIndex,
+                    "isPrimary": true
+                ]
+            )
+            pendingPlayVideo = nil
+        }
+        
+        // Send stop commands in batch
+        if !pendingStopVideos.isEmpty {
+            // Option 1: Send individual stop commands (keeps existing receiver logic)
+            for videoMid in pendingStopVideos {
+                NotificationCenter.default.post(
+                    name: .shouldStopVideo,
+                    object: nil,
+                    userInfo: ["videoMid": videoMid]
+                )
+            }
+            
+            pendingStopVideos.removeAll()
+        }
+        
+        notificationBatchTimer = nil
     }
     
     // MARK: - Cache Management
@@ -741,12 +847,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Stop videos that are no longer visible
         if videoVisibilityChanged {
             let videosToStop = previousVisibleVideoIds.subtracting(currentVisibleVideoIds)
+            
+            // PERF FIX: Batch stop commands to reduce notification spam
             for videoMid in videosToStop {
-                NotificationCenter.default.post(
-                    name: .shouldStopVideo,
-                    object: nil,
-                    userInfo: ["videoMid": videoMid]
-                )
+                scheduleStopVideo(videoMid)
             }
             
             // PERF FIX: Clear caches for videos that are no longer visible
@@ -865,6 +969,12 @@ class VideoPlaybackCoordinator: ObservableObject {
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
         
+        // PERF FIX: Cancel and flush batched notifications
+        notificationBatchTimer?.invalidate()
+        notificationBatchTimer = nil
+        pendingStopVideos.removeAll()
+        pendingPlayVideo = nil
+        
         // PERF FIX: Clear caches to free memory
         cachedVisibilityRatios.removeAll()
         cellCache.removeAll()
@@ -926,16 +1036,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Send play command for primary video (topmost when scrolling down, bottommost when scrolling up)
         let direction = scrollDirection ? "topmost (scrolling DOWN)" : "bottommost (scrolling UP)"
         print("📤 [VideoPlaybackCoordinator] Sending play command for \(direction) video: \(primary.videoMid)")
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: [
-                "tweetId": primary.cellTweetId,
-                "videoMid": primary.videoMid,
-                "videoIndex": primary.attachmentIndex,
-                "isPrimary": true
-            ]
-        )
+        
+        // PERF FIX: Use batched notification system (urgent for play commands)
+        schedulePlayVideo(primary, isPrimary: true)
     }
     
     /// Identify the primary video based on scroll direction
@@ -1147,16 +1250,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Record switch time to prevent immediate re-checking
         lastPrimarySwitchTime = Date()
         
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: [
-                "tweetId": newPrimary.cellTweetId,
-                "videoMid": newPrimary.videoMid,
-                "videoIndex": newPrimary.attachmentIndex,
-                "isPrimary": true
-            ]
-        )
+        // PERF FIX: Use batched notification system (urgent for play commands)
+        schedulePlayVideo(newPrimary, isPrimary: true)
         }
     }
 
@@ -1296,16 +1391,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         primaryVideoId = nextVideo.identifier
         currentlyPlayingVideoIds = [nextVideo.identifier]
 
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: [
-                "tweetId": nextVideo.cellTweetId,
-                "videoMid": nextVideo.videoMid,
-                "videoIndex": nextVideo.attachmentIndex,
-                "isPrimary": true
-            ]
-        )
+        // PERF FIX: Use batched notification system (urgent for play commands)
+        schedulePlayVideo(nextVideo, isPrimary: true)
     }
     
     /// Handle video finished notification
@@ -1355,44 +1442,22 @@ class VideoPlaybackCoordinator: ObservableObject {
                         // CRITICAL: Clear stale coordinatorWantsToPlay flags from other videos
                         // Send pause commands to all videos except the first one
                         for (index, video) in visibleVideos.enumerated() where index > 0 {
-                            NotificationCenter.default.post(
-                                name: .shouldPauseVideo,
-                                object: nil,
-                                userInfo: [
-                                    "videoMid": video.videoMid
-                                ]
-                            )
+                            pauseVideo(video)
                         }
                         
                         let firstVideo = visibleVideos[0]
                         primaryVideoId = firstVideo.identifier
                         currentlyPlayingVideoIds = [firstVideo.identifier]
                         
-                        NotificationCenter.default.post(
-                            name: .shouldPlayVideo,
-                            object: nil,
-                            userInfo: [
-                                "tweetId": firstVideo.cellTweetId,
-                                "videoMid": firstVideo.videoMid,
-                                "videoIndex": firstVideo.attachmentIndex,
-                                "isPrimary": true
-                            ]
-                        )
+                        // PERF FIX: Use batched notification system (urgent for play commands)
+                        schedulePlayVideo(firstVideo, isPrimary: true)
                     } else {
                         // Primary is first or only video - resume it
                         primaryVideoId = primary.identifier
                         currentlyPlayingVideoIds = [primary.identifier]
 
-                        NotificationCenter.default.post(
-                            name: .shouldPlayVideo,
-                            object: nil,
-                            userInfo: [
-                                "tweetId": primary.cellTweetId,
-                                "videoMid": primary.videoMid,
-                                "videoIndex": primary.attachmentIndex,
-                                "isPrimary": true
-                            ]
-                        )
+                        // PERF FIX: Use batched notification system (urgent for play commands)
+                        schedulePlayVideo(primary, isPrimary: true)
                     }
                 } else {
                     // Primary video no longer in list (scrolled out), restart playback
