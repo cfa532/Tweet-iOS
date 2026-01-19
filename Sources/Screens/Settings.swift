@@ -56,7 +56,8 @@ struct SettingsView: View {
                             Spacer()
                             if isCleaningCache {
                                 ProgressView()
-                                    .scaleEffect(0.8)
+                                    .scaleEffect(1.2)
+                                    .frame(width: 20, height: 20)
                             }
                         }
                     }
@@ -94,36 +95,45 @@ struct SettingsView: View {
     }
     
     private func cleanupCache() {
+        print("DEBUG: [Settings] Starting cache cleanup with spinner")
         isCleaningCache = true
-        Task.detached(priority: .background) {
+
+        Task {
             // Use tweet-centered cleanup - clears ALL tweets (including private) and their media
+            print("DEBUG: [Settings] Clearing TweetCacheManager")
             TweetCacheManager.shared.manualClearAllCache()
-            
+
             // Clear chat cache
+            print("DEBUG: [Settings] Clearing ChatCacheManager")
             ChatCacheManager.shared.clearAllCache()
-            
+
+            // Clear all memory caches
+            print("DEBUG: [Settings] Clearing memory caches")
+            VideoStateCache.shared.clearAllCache()
+            DetailVideoManager.shared.clearCurrentVideo()
+            Tweet.clearAllInstances()
+            GlobalImageLoadManager.shared.clearAll()
+
             // Clear all video cache files from disk
+            print("DEBUG: [Settings] Clearing CachingPlayerItem")
             await CachingPlayerItem.clearAllCache()
-            
-            // Clear all memory caches on main actor
-            await MainActor.run {
-                // Clear video state cache (player states and positions)
-                VideoStateCache.shared.clearAllCache()
-                
-                // Clear detail video manager state
-                DetailVideoManager.shared.clearCurrentVideo()
-            }
-            
+
             // Reinitialize app entry to refresh user and tweet data
+            print("DEBUG: [Settings] Reinitializing app entry")
             do {
                 try await hproseInstance.initAppEntry()
+                print("DEBUG: [Settings] App entry reinitialized after cache clear")
             } catch {
                 print("Failed to reinitialize app entry: \(error)")
             }
-            
+
+            // Force UI refresh by posting notification
             await MainActor.run {
+                NotificationCenter.default.post(name: NSNotification.Name("CacheCleared"), object: nil)
+                print("DEBUG: [Settings] Posted CacheCleared notification")
                 isCleaningCache = false
                 showCacheCleanedAlert = true
+                print("DEBUG: [Settings] Cache cleanup complete")
             }
         }
     }

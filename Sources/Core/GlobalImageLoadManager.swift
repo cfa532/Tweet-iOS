@@ -233,7 +233,7 @@ class GlobalImageLoadManager: ObservableObject {
         retryCounts.removeAll()
         nonImageResponses.removeAll()
         permanentlyFailedRequests.removeAll()
-        
+
         // Cancel all scheduled retries
         if !scheduledRetries.isEmpty {
             print("DEBUG: [GlobalImageLoadManager] Clearing history, cancelling \(scheduledRetries.count) scheduled retries")
@@ -242,8 +242,29 @@ class GlobalImageLoadManager: ObservableObject {
             }
             scheduledRetries.removeAll()
         }
-        
+
         updateStatistics()
+    }
+
+    /// Clear ALL cache and cancel ALL operations (for settings cache clear)
+    func clearAll() {
+        print("DEBUG: [GlobalImageLoadManager] Clearing ALL cache and operations")
+
+        // Cancel all active loads
+        activeLoads.values.forEach { $0.cancel() }
+        activeLoads.removeAll()
+        print("DEBUG: [GlobalImageLoadManager] Cancelled \(activeLoads.count) active loads")
+
+        // Clear all pending requests
+        pendingRequests.removeAll()
+        print("DEBUG: [GlobalImageLoadManager] Cleared \(pendingRequests.count) pending requests")
+
+        // Clear all history and retries
+        clearHistory()
+        print("DEBUG: [GlobalImageLoadManager] Cleared history and retries")
+
+        updateStatistics()
+        print("DEBUG: [GlobalImageLoadManager] Clear all complete")
     }
     
     /// Get current loading statistics

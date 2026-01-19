@@ -245,6 +245,13 @@ struct TweetListView<RowView: View>: View {
             // Set up notification observers
             setupNotificationObservers()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CacheCleared"))) { _ in
+            // Refresh tweets when cache is cleared
+            print("DEBUG: [TweetListView] Received CacheCleared notification, refreshing tweets")
+            Task {
+                await refreshTweets()
+            }
+        }
         .onDisappear {
             // Clean up foreground observer
             if let observer = foregroundObserver {
@@ -556,10 +563,15 @@ struct TweetListView<RowView: View>: View {
         guard !isLoading else {
             return
         }
-        
+
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
+
+        // Clear existing tweets immediately to show empty state during refresh
+        await MainActor.run {
+            tweets.removeAll()
+        }
         
         do {
             // Always load fresh data from server for refresh

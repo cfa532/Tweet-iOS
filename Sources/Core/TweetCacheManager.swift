@@ -121,41 +121,58 @@ final class TweetCacheManager: @unchecked Sendable {
     /// Manual cleanup from settings screen - clears everything including private tweets
     func manualClearAllCache() {
         print("DEBUG: [TweetCacheManager] Manual cache clear - clearing EVERYTHING")
-        
+
+        // Log initial state
+        let initialTweetCount = context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            return (try? context.fetch(request).count) ?? 0
+        }
+        print("DEBUG: [TweetCacheManager] Initial tweet count: \(initialTweetCount)")
+
         context.performAndWait {
             // Get all tweets
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             if let allTweets = try? context.fetch(request) {
                 print("DEBUG: [TweetCacheManager] Manual clear: deleting \(allTweets.count) tweets and their media")
-                
+
                 for cdTweet in allTweets {
                     // Delete associated media (clears from caches per media ID)
                     if let tweet = try? Tweet.from(cdTweet: cdTweet) {
                         deleteMediaForTweet(tweet)
                     }
-                    
+
                     // Delete tweet from CoreData
                     context.delete(cdTweet)
                 }
-                
+
                 try? context.save()
+                print("DEBUG: [TweetCacheManager] CoreData tweets deleted successfully")
             }
         }
-        
+
         // Clear access times
         tweetAccessTimes.removeAll()
         saveAccessTimes()
-        
+        print("DEBUG: [TweetCacheManager] Access times cleared")
+
         // Final sweep: clear any remaining caches that might not be tweet-associated
         Task { @MainActor in
             SharedAssetCache.shared.clearAllCaches()
+            print("DEBUG: [TweetCacheManager] SharedAssetCache cleared")
         }
         ImageCacheManager.shared.clearAllCache()
-        
+        print("DEBUG: [TweetCacheManager] ImageCacheManager cleared")
+
         // Clear memory cache
         Tweet.clearAllInstances()
-        
-        print("✅ Manual cache clear complete")
+        print("DEBUG: [TweetCacheManager] Memory cache cleared")
+
+        // Verify cleanup
+        let finalTweetCount = context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            return (try? context.fetch(request).count) ?? 0
+        }
+        print("✅ Manual cache clear complete - final tweet count: \(finalTweetCount)")
     }
     
     // MARK: - Signout Cleanup

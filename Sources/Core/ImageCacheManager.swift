@@ -250,18 +250,25 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     func clearAllCache() {
+        print("DEBUG: [ImageCacheManager] Clearing all cache - memory and disk")
+
         // Clear memory cache
         cache.removeAllObjects()
-        
+        print("DEBUG: [ImageCacheManager] Cleared memory cache")
+
         // Clear all disk cache files
         do {
             let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [])
+            print("DEBUG: [ImageCacheManager] Found \(contents.count) files in disk cache")
             for fileURL in contents {
                 try? fileManager.removeItem(at: fileURL)
             }
+            print("DEBUG: [ImageCacheManager] Cleared all disk cache files")
         } catch {
             print("Error clearing all cache: \(error)")
         }
+
+        print("DEBUG: [ImageCacheManager] Cache clearing complete")
     }
     
     /// Clear cache for a specific media ID (image)
