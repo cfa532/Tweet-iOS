@@ -20,23 +20,7 @@ struct CommentItemView: View {
     @State private var isVisible = false
 
     var body: some View {
-        Group {
-            if linkToComment || onTap == nil {
-                // Use NavigationLink when linkToComment is true or no onTap callback is provided
-                NavigationLink(value: CommentNavigation(comment: comment, parentTweet: parentTweet)) {
-                    commentContent
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
-            } else {
-                // Use tap gesture when onTap callback is provided
-                commentContent
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onTap?(comment)
-                    }
-            }
-        }
+        commentContent
         .task {
             isVisible = true
             comment.isVisible = true
@@ -74,11 +58,17 @@ struct CommentItemView: View {
                     enableTap: true, // Always enable tap for proper gesture recognition
                     isVisible: isVisible,
                     onTweetBodyTap: {
-                        // Handle tap via callback when using callback approach
-                        if let callback = onTap {
+                        if linkToComment {
+                            // Navigate to comment detail by posting notification
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("NavigateToCommentDetail"),
+                                object: nil,
+                                userInfo: ["comment": comment, "parentTweet": parentTweet]
+                            )
+                        } else if let callback = onTap {
+                            // Handle tap via callback when using callback approach
                             callback(comment)
                         }
-                        // When using NavigationLink, the tap is handled by the NavigationLink wrapper
                     }
                 )
                 

@@ -135,6 +135,13 @@ struct HomeView: View {
                 try await HproseInstance.shared.initialize()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NavigateToCommentDetail"))) { notification in
+            if let comment = notification.userInfo?["comment"] as? Tweet,
+               let parentTweet = notification.userInfo?["parentTweet"] as? Tweet {
+                let commentNav = CommentNavigation(comment: comment, parentTweet: parentTweet)
+                navigationPath.append(commentNav)
+            }
+        }
         .onDisappear {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isNavigationVisible = true
