@@ -202,6 +202,7 @@ struct ProfileTweetsSection<Header: View>: View {
             leadingPadding: 5,  // Profile left padding (reduced by 3 from 8pt)
             trailingPadding: 7,  // Profile right padding (increased by 2 from 5pt)
             pinnedTweets: pinnedTweets,  // Pass pinned tweets - they'll be rendered as table rows
+            feedIdentifier: "profile_\(user.mid)",  // Unique identifier per user profile
             header: {
                 AnyView(
                     VStack(spacing: 0) {

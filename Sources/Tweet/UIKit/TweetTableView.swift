@@ -19,6 +19,7 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
     let leadingPadding: CGFloat  // Leading padding for cells
     let trailingPadding: CGFloat  // Trailing padding for cells
     let pinnedTweets: [Tweet]  // Pinned tweets for video coordination and visibility
+    let feedIdentifier: String  // Unique identifier for persistent scroll position
     
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -49,6 +50,7 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         controller.onScroll = onScroll
         controller.leadingPadding = leadingPadding
         controller.trailingPadding = trailingPadding
+        controller.feedIdentifier = feedIdentifier
         controller.headerViewBuilder = header
         controller.rowViewBuilder = { tweet in
             AnyView(rowView(tweet))
@@ -90,6 +92,7 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         uiViewController.onScroll = onScroll
         uiViewController.leadingPadding = leadingPadding
         uiViewController.trailingPadding = trailingPadding
+        uiViewController.feedIdentifier = feedIdentifier
         uiViewController.headerViewBuilder = header
         uiViewController.rowViewBuilder = { tweet in
             AnyView(rowView(tweet))
