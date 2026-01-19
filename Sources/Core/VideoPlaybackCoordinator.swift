@@ -193,7 +193,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleVideoFinished(notification)
+            Task { @MainActor in
+                self?.handleVideoFinished(notification)
+            }
         }
         notificationObservers.append(videoFinishedObserver)
 
@@ -203,7 +205,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleForegroundRecovery(notification)
+            Task { @MainActor in
+                self?.handleForegroundRecovery(notification)
+            }
         }
         notificationObservers.append(foregroundRecoveryObserver)
         
@@ -214,7 +218,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleOverlayCoverageChanged(notification)
+            Task { @MainActor in
+                self?.handleOverlayCoverageChanged(notification)
+            }
         }
         notificationObservers.append(overlayCoverageObserver)
         
@@ -224,7 +230,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.handleAppDidEnterBackground()
+            Task { @MainActor in
+                self?.handleAppDidEnterBackground()
+            }
         }
         notificationObservers.append(backgroundObserver)
     }
