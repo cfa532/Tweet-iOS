@@ -1158,7 +1158,6 @@ final class HproseInstance: ObservableObject {
                         }
                         
                         // Return the stale cached user immediately for better UX (non-login flows)
-                        print("DEBUG: [fetchUser] Returning stale cached user while refreshing in background")
                         return cachedUser
                     }
                 }

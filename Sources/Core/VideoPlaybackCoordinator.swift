@@ -398,14 +398,41 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Build video list from tweets (including pinned tweets)
+    /// Now runs asynchronously to avoid blocking UI
     func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = []) {
+        // Run expensive operation in background
+        Task.detached(priority: .userInitiated) {
+            let videos = await self.buildVideoListAsync(tweets: tweets, pinnedTweets: pinnedTweets)
+            
+            // Update state on main actor
+            await MainActor.run {
+                self.allVideos = videos
+                
+                // PERF FIX: Clear caches when video list is rebuilt to prevent stale data
+                self.cellCache.removeAll()
+                self.cachedVisibilityRatios.removeAll()
+                self.lastCacheClearTime = Date()
+                
+                // Store tweet list for embedded tweet lookup
+                self.currentTweets = pinnedTweets + tweets
+                
+                // Trigger playback update after video list is rebuilt if in idle phase and videos are visible
+                if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
+                    self.startPrimaryVideoPlayback()
+                }
+            }
+        }
+    }
+    
+    /// Async implementation of video list building (runs on background thread)
+    private func buildVideoListAsync(tweets: [Tweet], pinnedTweets: [Tweet]) async -> [VideoPlaybackInfo] {
         var videos: [VideoPlaybackInfo] = []
 
-        // Clear and reset seen identifiers when rebuilding video list
-        seenVideoIdentifiers.removeAll()
+        // Reset seen identifiers for this build
+        var seenVideoIdentifiers = Set<String>()
 
-        // Store tweet list for embedded tweet lookup
-        currentTweets = pinnedTweets + tweets
+        // Store tweet list for embedded tweet lookup (temporarily, will be set on main actor)
+        // let currentTweets = pinnedTweets + tweets
 
         // CRITICAL: Build a map of embedded tweet IDs (tweets that are quoted in other tweets)
         // A tweet is embedded if its ID appears as originalTweetId in another tweet
@@ -453,12 +480,8 @@ class VideoPlaybackCoordinator: ObservableObject {
                         
                         videos.append(videoInfo)
                         seenVideoIdentifiers.insert(videoInfo.identifier)
-                        
-                        print("VideoPlaybackCoordinator: Added pinned standalone tweet video - tweetId: \(videoInfo.cellTweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
                     }
                 }
-            } else {
-                print("VideoPlaybackCoordinator: Skipping pinned standalone videos for tweet \(tweet.mid.prefix(8)) - appears embedded elsewhere, videos indexed at quoting tweet position")
             }
         }
         
@@ -527,13 +550,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                                 
                                 videos.append(videoInfo)
                                 seenVideoIdentifiers.insert(videoInfo.identifier)
-                                
-                                print("VideoPlaybackCoordinator: Added standalone tweet video - tweetId: \(videoInfo.cellTweetId.prefix(8)), videoMid: \(videoInfo.videoMid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
                             }
                         }
                     }
-                } else {
-                    print("VideoPlaybackCoordinator: Skipping standalone videos for tweet \(tweet.mid.prefix(8)) - appears embedded elsewhere, videos indexed at quoting tweet position")
                 }
                 
                 if isQuotedTweet, let originalTweetId = tweet.originalTweetId {
@@ -567,16 +586,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
         
-        self.allVideos = videos
-        
-        // PERF FIX: Clear caches when video list is rebuilt to prevent stale data
-        cellCache.removeAll()
-        cachedVisibilityRatios.removeAll()
-        lastCacheClearTime = Date()
-        
-        // Share the video list with FullScreenVideoManager to avoid duplicate tracking
-        // IMPORTANT: Fullscreen must NOT use this feed-visible list.
-        // Fullscreen builds its own list from tweet attachments (all videos), while the coordinator only tracks on-screen MediaGrid videos.
+        // Return the built video list (async function)
+        return videos
     }
     
     /// Previously visible video IDs (to detect actual video changes, not just tweet changes)
@@ -881,14 +892,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                     
                     // Cache for other videos in same cell
                     cellVisibilityCache[cellLookupTweetId] = visibilityRatio
-                    print("📋 [CELL VISIBILITY] Calculated visibility for cell \(cellLookupTweetId.prefix(8)): \(String(format: "%.1f", visibilityRatio * 100))%")
                 }
                 
                 if visibilityRatio >= 0.5 {
-                    print("✅ [PRIMARY SELECT] Found 50%+ visible video: \(video.videoMid) (cellTweetId: \(video.cellTweetId.prefix(8)), attachmentIndex: \(video.attachmentIndex), CELL visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
                     return video
-                } else {
-                    print("⏭️ [PRIMARY SELECT] Skipping <50% visible: \(video.videoMid) (CELL visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
                 }
             }
             

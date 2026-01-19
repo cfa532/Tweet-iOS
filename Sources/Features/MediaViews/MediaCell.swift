@@ -266,7 +266,6 @@ struct MediaCell: View, Equatable {
         .onChange(of: shouldAutoPlay) { oldValue, newValue in
             // Notify SimpleVideoPlayer to start/stop playback
             if newValue && isVideoAttachment {
-                print("▶️ [MediaCell] Posting play notification for SimpleVideoPlayer: \(attachment.mid)")
                 NotificationCenter.default.post(
                     name: .shouldPlayVideo,
                     object: nil,
