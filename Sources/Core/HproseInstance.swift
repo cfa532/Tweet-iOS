@@ -2015,6 +2015,13 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [login] Invoking login API...")
             let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
             print("DEBUG: [login] Got raw response, unwrapping...")
+            
+            // Check if the response is nil (network error)
+            guard rawResponse != nil else {
+                print("ERROR: [login] Network request failed - nil response (timeout or connection error)")
+                throw NSError(domain: "NSURLErrorDomain", code: -1001, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Request timed out", comment: "Network timeout error")])
+            }
+            
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             guard let response = unwrappedResponse as? [String: Any] else {
