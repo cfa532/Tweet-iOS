@@ -376,18 +376,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         if !videosToAdd.isEmpty {
-            // Insert embedded videos after existing videos from the same quoting tweet
-            // to maintain feed order grouping
-            let existingIndices = allVideos.enumerated()
-                .filter { $0.element.cellTweetId == quotingTweetId }
-                .map { $0.offset }
-
-            if let lastIndex = existingIndices.max() {
-                // Insert after the last video from this tweet
-                allVideos.insert(contentsOf: videosToAdd, at: lastIndex + 1)
-            } else {
-                // No existing videos from this tweet, append
-                allVideos.append(contentsOf: videosToAdd)
+            // Rebuild the video list to ensure correct feed ordering
+            // This is necessary because embedded videos may be loaded after initial list building
+            Task {
+                let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
+                await MainActor.run {
+                    self.allVideos = newVideos
+                }
             }
 
         }
@@ -416,17 +411,12 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         if !videosToAdd.isEmpty {
-            // Insert retweet videos after existing videos from the same retweet
-            let existingIndices = allVideos.enumerated()
-                .filter { $0.element.cellTweetId == retweetId }
-                .map { $0.offset }
-
-            if let lastIndex = existingIndices.max() {
-                // Insert after the last video from this retweet
-                allVideos.insert(contentsOf: videosToAdd, at: lastIndex + 1)
-            } else {
-                // No existing videos from this retweet, append
-                allVideos.append(contentsOf: videosToAdd)
+            // Rebuild the video list to ensure correct feed ordering
+            Task {
+                let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
+                await MainActor.run {
+                    self.allVideos = newVideos
+                }
             }
         }
     }
