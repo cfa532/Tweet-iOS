@@ -129,9 +129,25 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Background queue for expensive visibility calculations to avoid blocking main thread
     private let visibilityCalculationQueue = DispatchQueue(label: "com.tweet.VideoPlaybackCoordinator.visibility", qos: .userInitiated)
 
+    /// Track async tasks to prevent leaks
+    private nonisolated(unsafe) var activeAsyncTasks: Set<Task<Void, Never>> = []
+
     /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
     /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
     private var isPlaybackSuppressedByOverlay: Bool = false
+
+    /// Track an async task for proper cleanup
+    private nonisolated func trackAsyncTask(_ task: Task<Void, Never>) {
+        activeAsyncTasks.insert(task)
+        // Clean up completed tasks
+        activeAsyncTasks = activeAsyncTasks.filter { !$0.isCancelled }
+    }
+
+    /// Cancel all active async tasks
+    private nonisolated func cancelActiveAsyncTasks() {
+        activeAsyncTasks.forEach { $0.cancel() }
+        activeAsyncTasks.removeAll()
+    }
     
     /// Debounced restart after an overlay is dismissed.
     private var overlayUncoverPlaybackTimer: Timer?
@@ -320,10 +336,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     deinit {
+        // Cancel all active async tasks
+        cancelActiveAsyncTasks()
+
         // Clean up all notification observers
         notificationObservers.forEach { NotificationCenter.default.removeObserver($0) }
         notificationObservers.removeAll()
-        
+
         // Invalidate all timers
         playbackDebounceTimer?.invalidate()
         scrollStopTimer?.invalidate()
@@ -938,11 +957,13 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // If we have visible videos but no primary video playing, start playback
         if phase == .idle && !visibleVideos.isEmpty {
-            Task { await startPrimaryVideoPlaybackAsync() }
+            let task = Task { await startPrimaryVideoPlaybackAsync() }
+            trackAsyncTask(task)
         }
         // If primary video is playing but might need switching, check it
         else if phase == .primaryPlaying {
-            Task { await checkAndSwitchVideoIfNeededAsync() }
+            let task = Task { await checkAndSwitchVideoIfNeededAsync() }
+            trackAsyncTask(task)
         }
     }
 
@@ -979,11 +1000,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         cellCache.removeAll()
         lastCacheClearTime = Date()
         
+        // Cancel all active async tasks
+        cancelActiveAsyncTasks()
+
         // Clear state
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
         phase = .idle
-        
+
         // Notify all videos to stop
         NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
     }
