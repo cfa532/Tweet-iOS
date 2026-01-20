@@ -13,6 +13,7 @@ struct TweetItemView: View, Equatable {
     var currentProfileUser: User? = nil
     var hideActions: Bool = false
     var backgroundColor: Color = Color(.systemBackground)
+    var quotingTweetId: String? = nil // For embedded tweets: ID of the tweet that quotes this tweet
     @State private var originalTweet: Tweet? {
         didSet {
             // CRITICAL: When original tweet first loads (nil -> value), clear cached height and notify
@@ -433,7 +434,8 @@ struct TweetItemView: View, Equatable {
                             isEmbedded: true,
                             isInProfile: isInProfile,
                             currentProfileUser: currentProfileUser,
-                            onAvatarTapInProfile: onAvatarTapInProfile
+                            onAvatarTapInProfile: onAvatarTapInProfile,
+                            quotingTweetId: tweet.mid  // The current tweet is quoting the originalTweet
                         )
                         .cornerRadius(8)
                         .padding(.leading, -4)
@@ -614,6 +616,7 @@ struct EmbeddedTweetView: View, Equatable {
     var isInProfile: Bool = false
     var currentProfileUser: User? = nil
     var onAvatarTapInProfile: ((User) -> Void)? = nil
+    var quotingTweetId: String? = nil // For embedded videos, ID of the tweet that quotes this tweet
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -680,6 +683,7 @@ struct EmbeddedTweetView: View, Equatable {
                     enableTap: false,
                     isVisible: isVisible,
                     isEmbedded: isEmbedded,
+                    sourceTweetId: quotingTweetId,  // For embedded videos, use quoting tweet's ID
                     onTweetBodyTap: {
                         // Navigate to embedded tweet detail when body is tapped
                         if let callback = onTap {
@@ -704,6 +708,7 @@ struct EmbeddedTweetView: View, Equatable {
                lhs.backgroundColor == rhs.backgroundColor &&
                lhs.isEmbedded == rhs.isEmbedded &&
                lhs.isInProfile == rhs.isInProfile &&
-               lhs.currentProfileUser?.mid == rhs.currentProfileUser?.mid
+               lhs.currentProfileUser?.mid == rhs.currentProfileUser?.mid &&
+               lhs.quotingTweetId == rhs.quotingTweetId
     }
 }

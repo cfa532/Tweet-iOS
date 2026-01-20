@@ -98,8 +98,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
 
-    /// Track seen video identifiers to prevent duplicates across list updates
-    private var seenVideoIdentifiers = Set<String>()
 
     /// Store current tweet list for embedded tweet lookup
     private var currentTweets: [Tweet] = []
@@ -387,18 +385,27 @@ class VideoPlaybackCoordinator: ObservableObject {
                         attachmentIndex: attachmentIndex
                     )
 
-                    if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                        continue
-                    }
-
                     videosToAdd.append(videoInfo)
-                    seenVideoIdentifiers.insert(videoInfo.identifier)
+                    // Allow duplicates like Android - videos appear as many times as they appear in feed
                 }
             }
         }
 
         if !videosToAdd.isEmpty {
-            allVideos.append(contentsOf: videosToAdd)
+            // Insert embedded videos after existing videos from the same quoting tweet
+            // to maintain feed order grouping
+            let existingIndices = allVideos.enumerated()
+                .filter { $0.element.cellTweetId == quotingTweetId }
+                .map { $0.offset }
+
+            if let lastIndex = existingIndices.max() {
+                // Insert after the last video from this tweet
+                allVideos.insert(contentsOf: videosToAdd, at: lastIndex + 1)
+            } else {
+                // No existing videos from this tweet, append
+                allVideos.append(contentsOf: videosToAdd)
+            }
+
             print("VideoPlaybackCoordinator: Added \(videosToAdd.count) embedded tweet videos, total: \(allVideos.count)")
         }
     }
@@ -419,16 +426,25 @@ class VideoPlaybackCoordinator: ObservableObject {
                         videoMid: attachment.mid,
                         attachmentIndex: attachmentIndex
                     )
-                    if seenVideoIdentifiers.contains(info.identifier) { continue }
                     videosToAdd.append(info)
-                    seenVideoIdentifiers.insert(info.identifier)
+                    // Allow duplicates like Android - videos appear as many times as they appear in feed
                 }
             }
         }
 
         if !videosToAdd.isEmpty {
-            allVideos.append(contentsOf: videosToAdd)
-            print("VideoPlaybackCoordinator: Added \(videosToAdd.count) retweet videos, total: \(allVideos.count)")
+            // Insert retweet videos after existing videos from the same retweet
+            let existingIndices = allVideos.enumerated()
+                .filter { $0.element.cellTweetId == retweetId }
+                .map { $0.offset }
+
+            if let lastIndex = existingIndices.max() {
+                // Insert after the last video from this retweet
+                allVideos.insert(contentsOf: videosToAdd, at: lastIndex + 1)
+            } else {
+                // No existing videos from this retweet, append
+                allVideos.append(contentsOf: videosToAdd)
+            }
         }
     }
 
@@ -459,35 +475,38 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// IMPORTANT: `sourceTweetId` might be the feed cell id (retweet id) OR the media tweet id depending on call site,
     /// so we match both, and also optionally match by `currentVideoMid` for extra resilience.
     func findNextVideoForFullscreen(sourceTweetId: String, currentAttachmentIndex: Int, currentVideoMid: String?) -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
-        // Find the current position in the global list.
+        // Use allVideos in its current order (approximately feed order)
+        let feedOrderedVideos = allVideos
+
+        // Find the current position in the list.
         let startIndex: Int?
         let mid = currentVideoMid
 
         // 1) Exact match on (cellTweetId, attachmentIndex, mid?)
-        startIndex = allVideos.firstIndex(where: { v in
+        startIndex = feedOrderedVideos.firstIndex(where: { v in
             v.cellTweetId == sourceTweetId &&
             v.attachmentIndex == currentAttachmentIndex &&
             (mid.map { v.videoMid == $0 } ?? true)
         })
         // 2) If caller passed mediaTweetId as sourceTweetId, accept that.
-        ?? allVideos.firstIndex(where: { v in
+        ?? feedOrderedVideos.firstIndex(where: { v in
             v.mediaTweetId == sourceTweetId &&
             v.attachmentIndex == currentAttachmentIndex &&
             (mid.map { v.videoMid == $0 } ?? true)
         })
         // 3) Match by mid (more stable across retweet/original id mismatches).
         ?? (mid.flatMap { m in
-            allVideos.firstIndex(where: { $0.videoMid == m && $0.attachmentIndex == currentAttachmentIndex })
+            feedOrderedVideos.firstIndex(where: { $0.videoMid == m && $0.attachmentIndex == currentAttachmentIndex })
         })
         // 4) Fallback to first video within the source cell/media tweet.
-        ?? allVideos.firstIndex(where: { $0.cellTweetId == sourceTweetId })
-        ?? allVideos.firstIndex(where: { $0.mediaTweetId == sourceTweetId })
+        ?? feedOrderedVideos.firstIndex(where: { $0.cellTweetId == sourceTweetId })
+        ?? feedOrderedVideos.firstIndex(where: { $0.mediaTweetId == sourceTweetId })
 
         guard let startIndex else { return nil }
 
-        // Scan forward for the next playable entry (must have a resolvable media tweet with attachments).
-        for nextIdx in (startIndex + 1)..<allVideos.count {
-            let candidate = allVideos[nextIdx]
+        // Scan forward for the next playable entry
+        for nextIdx in (startIndex + 1)..<feedOrderedVideos.count {
+            let candidate = feedOrderedVideos[nextIdx]
 
             // Resolve the tweet that owns attachments.
             let mediaTweet = currentTweets.first(where: { $0.mid == candidate.mediaTweetId })
@@ -542,8 +561,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func buildVideoListAsync(tweets: [Tweet], pinnedTweets: [Tweet]) async -> [VideoPlaybackInfo] {
         var videos: [VideoPlaybackInfo] = []
 
-        // Reset seen identifiers for this build
-        var seenVideoIdentifiers = Set<String>()
 
         // Store tweet list for embedded tweet lookup (temporarily, will be set on main actor)
         // let currentTweets = pinnedTweets + tweets
@@ -575,30 +592,25 @@ class VideoPlaybackCoordinator: ObservableObject {
         let embeddedTweetIds = Set(quotedTweets.map { $0.originalTweetId })
         
         // Process pinned tweets first (they appear at the top)
-        // CRITICAL: If a pinned tweet appears as embedded elsewhere, skip its standalone videos.
-        // Videos should only be indexed at their feed position (where the quoting tweet appears).
+        // Allow both embedded and standalone instances of the same video to be tracked
+        // Both should be able to autoplay when visible
         for (_, tweet) in pinnedTweets.enumerated() {
-            let shouldSkipStandaloneVideos = embeddedTweetIds.contains(tweet.mid)
-            
-            if !shouldSkipStandaloneVideos {
-                guard let attachments = tweet.attachments else { continue }
-                
-                for (attachmentIndex, attachment) in attachments.enumerated() {
-                    if attachment.type == .video || attachment.type == .hls_video {
-                        let videoInfo = VideoPlaybackInfo(
-                            cellTweetId: tweet.mid,
-                            mediaTweetId: tweet.mid,
-                            videoMid: attachment.mid,
-                            attachmentIndex: attachmentIndex
-                        )
-                        
+            guard let attachments = tweet.attachments else { continue }
+
+            for (attachmentIndex, attachment) in attachments.enumerated() {
+                if attachment.type == .video || attachment.type == .hls_video {
+                    let videoInfo = VideoPlaybackInfo(
+                        cellTweetId: tweet.mid,
+                        mediaTweetId: tweet.mid,
+                        videoMid: attachment.mid,
+                        attachmentIndex: attachmentIndex
+                    )
+
                         videos.append(videoInfo)
-                        seenVideoIdentifiers.insert(videoInfo.identifier)
-                    }
                 }
             }
         }
-        
+
         // Then process regular tweets
         for (_, tweet) in tweets.enumerated() {
             // Include embedded tweets - they should be managed by coordinator
@@ -631,40 +643,27 @@ class VideoPlaybackCoordinator: ObservableObject {
                                     attachmentIndex: attachmentIndex
                                 )
 
-                                if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                    continue
-                                }
-
                                 videos.append(videoInfo)
-                                seenVideoIdentifiers.insert(videoInfo.identifier)
+                                // Don't deduplicate - allow videos to appear multiple times like Android
                             }
                         }
-                    } else {
-                        print("VideoPlaybackCoordinator: Original tweet \(originalTweetId) not cached yet for retweet \(tweet.mid), will be added later when fetched by TweetItemView")
                     }
                 }
             } else {
                 // REGULAR TWEET or QUOTED TWEET
-                // CRITICAL: If this tweet appears as embedded elsewhere, skip its standalone videos.
-                // Videos should only be indexed at their feed position (where the quoting tweet appears),
-                // not at the original tweet's standalone position. This ensures correct playback order.
-                let shouldSkipStandaloneVideos = embeddedTweetIds.contains(tweet.mid)
-                
-                if !shouldSkipStandaloneVideos {
-                    // Only add standalone videos if this tweet doesn't appear embedded elsewhere
-                    if let attachments = tweet.attachments {
-                        for (attachmentIndex, attachment) in attachments.enumerated() {
-                            if attachment.type == .video || attachment.type == .hls_video {
-                                let videoInfo = VideoPlaybackInfo(
-                                    cellTweetId: tweet.mid,
-                                    mediaTweetId: tweet.mid,
-                                    videoMid: attachment.mid,
-                                    attachmentIndex: attachmentIndex
-                                )
-                                
-                                videos.append(videoInfo)
-                                seenVideoIdentifiers.insert(videoInfo.identifier)
-                            }
+                // Allow both embedded and standalone instances to be tracked
+                // Both should be able to autoplay when visible
+                if let attachments = tweet.attachments {
+                    for (attachmentIndex, attachment) in attachments.enumerated() {
+                        if attachment.type == .video || attachment.type == .hls_video {
+                            let videoInfo = VideoPlaybackInfo(
+                                cellTweetId: tweet.mid,
+                                mediaTweetId: tweet.mid,
+                                videoMid: attachment.mid,
+                                attachmentIndex: attachmentIndex
+                            )
+
+                        videos.append(videoInfo)
                         }
                     }
                 }
@@ -683,18 +682,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                                     attachmentIndex: attachmentIndex
                                 )
 
-                                if seenVideoIdentifiers.contains(videoInfo.identifier) {
-                                    print("VideoPlaybackCoordinator: Skipping duplicate embedded video - tweetId: \(tweet.mid.prefix(8)), videoMid: \(attachment.mid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24)) (already seen)")
-                                    continue
-                                }
-
                                 videos.append(videoInfo)
-                                seenVideoIdentifiers.insert(videoInfo.identifier)
-                                print("VideoPlaybackCoordinator: Added embedded tweet video - quotingTweetId: \(tweet.mid.prefix(8)), embeddedTweetId: \(originalTweetId.prefix(8)), videoMid: \(attachment.mid.prefix(12)), identifier: \(videoInfo.identifier.prefix(24))")
+                                // Don't deduplicate - allow videos to appear multiple times like Android
                             }
                         }
-                    } else {
-                        print("VideoPlaybackCoordinator: Embedded tweet \(originalTweetId) not cached yet, will be added later when fetched by TweetItemView")
                     }
                 }
             }
@@ -750,13 +741,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
 
-        // Trigger immediate primary video check if threshold was crossed
+        // Android-style immediate scroll responses (50ms throttle)
         if thresholdCrossed {
+            print("⚡ [ANDROID IMMEDIATE] Threshold crossed, triggering immediate check")
             // Throttle immediate checks to avoid expensive operations on every update during fast scrolling
             // This keeps scrolling smooth while still being responsive
             immediateCheckThrottleTimer?.invalidate()
             immediateCheckThrottleTimer = Timer(timeInterval: 0.05, repeats: false) { [weak self] _ in
                 DispatchQueue.main.async {
+                    print("⚡ [ANDROID IMMEDIATE] Executing immediate check")
                     self?.checkPrimaryVideoDuringScroll()
                 }
             }
@@ -841,40 +834,35 @@ class VideoPlaybackCoordinator: ObservableObject {
                 playbackDebounceTimer?.invalidate()
                 playbackDebounceTimer = nil
                 
-                // Start debounce timer for new visible videos
-                // Use .common mode so timer fires even during active scrolling
-                // MEMORY FIX: When scrolling up (videos reappearing), give more time for restoration
-                let debounceInterval = scrollDirection ? 0.2 : 0.3  // Longer delay when scrolling up
-                let timer = Timer(timeInterval: debounceInterval, repeats: false) { [weak self] _ in
-                    // Use DispatchQueue to ensure MainActor isolation
+                // Android-style deferred batching: Use 150ms intervals for performance
+                // Cancel existing debounce timer
+                visibilityUpdateDebounceTimer?.invalidate()
+
+                // Start new debounce timer (150ms for Android-style batching)
+                visibilityUpdateDebounceTimer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
                     DispatchQueue.main.async {
                         guard let self = self else { return }
-                        if self.phase == .idle && !self.visibleVideos.isEmpty {
-                            self.startPrimaryVideoPlayback()
-                        } else {
-                            print("⚠️ [VideoPlaybackCoordinator] Skipping playback - phase: \(self.phase), videos: \(self.visibleVideos.count)")
-                        }
+                        // Perform batched visibility update (Android-style)
+                        self.performBatchedVisibilityUpdate()
                     }
                 }
-                RunLoop.main.add(timer, forMode: .common)
-                playbackDebounceTimer = timer
-                
+                RunLoop.main.add(visibilityUpdateDebounceTimer!, forMode: .common)
+
                 // Update previous state
                 previousVisibleVideoIds = currentVisibleVideoIds
             }
-        } else if !videoVisibilityChanged && phase == .idle && !currentVisibleVideoIds.isEmpty && playbackDebounceTimer == nil {
-            // Handle case where videos are already visible but we're in idle (e.g., initial load)
-            let timer = Timer(timeInterval: 0.2, repeats: false) { [weak self] _ in
+        } else if phase == .idle && !currentVisibleVideoIds.isEmpty {
+            // Handle case where videos are visible but we're in idle (initial load or after reset)
+            // Use Android-style deferred batching
+            visibilityUpdateDebounceTimer?.invalidate()
+            visibilityUpdateDebounceTimer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    if self.phase == .idle && !self.visibleVideos.isEmpty {
-                        self.startPrimaryVideoPlayback()
-                    }
+                    self.performBatchedVisibilityUpdate()
                 }
             }
-            RunLoop.main.add(timer, forMode: .common)
-            playbackDebounceTimer = timer
-            
+            RunLoop.main.add(visibilityUpdateDebounceTimer!, forMode: .common)
+
             // Update previous state
             previousVisibleVideoIds = currentVisibleVideoIds
         } else {
@@ -904,16 +892,30 @@ class VideoPlaybackCoordinator: ObservableObject {
         scrollStopTimer = nil
     }
 
-    /// Perform batched visibility updates to reduce expensive operations
-    /// Similar to Android's visibility update debounce logic
+    /// Android-style deferred batching for visibility updates (150ms intervals)
+    /// This method handles batched visibility updates for performance optimization
     private func performBatchedVisibilityUpdate() {
-        // This method is called by the debounced timer and performs the same logic as updateVisibleTweets
-        // but in a batched manner to reduce expensive operations during scrolling
+        print("🔄 [ANDROID BATCH] Performing batched visibility update - phase: \(phase), videos: \(visibleVideos.count)")
 
-        // The actual visibility filtering and primary video management is handled by the regular
-        // updateVisibleTweets calls and the immediate check during scrolling.
-        // This method just ensures the debounced visibility check still happens.
-        checkAndSwitchVideoIfNeeded()
+        // Android-style: Check if primary video needs switching or if playback should start
+        guard !isPlaybackSuppressedByOverlay else {
+            print("🚫 [ANDROID BATCH] Suppressed by overlay")
+            return
+        }
+
+        // If we have visible videos but no primary video playing, start playback
+        if phase == .idle && !visibleVideos.isEmpty {
+            print("🎬 [ANDROID BATCH] Starting primary video playback")
+            startPrimaryVideoPlayback()
+        }
+        // If primary video is playing but might need switching, check it
+        else if phase == .primaryPlaying {
+            print("🔄 [ANDROID BATCH] Checking if primary video needs switching")
+            checkAndSwitchVideoIfNeeded()
+        }
+        else {
+            print("⏸️ [ANDROID BATCH] No action needed - phase: \(phase), videos: \(visibleVideos.count)")
+        }
     }
 
     /// Stop all videos and reset state
@@ -968,16 +970,18 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     /// Start primary video playback - play topmost video immediately
+    /// Start primary video playback
+    /// Identifies the most appropriate video based on visibility and scroll direction
     private func startPrimaryVideoPlayback() {
         // Never start feed playback while the UI is covered by an overlay.
         guard !isPlaybackSuppressedByOverlay else { return }
-        
+
         // Guard against starting if not in idle phase
         guard phase == .idle else {
             print("⚠️ [VideoPlaybackCoordinator] startPrimaryVideoPlayback called but not in idle phase (current: \(phase))")
             return
         }
-        
+
         // Identify topmost video
         guard let primary = identifyPrimaryVideo() else {
             print("⚠️ [VideoPlaybackCoordinator] No primary video identified, stopping all videos")
@@ -1032,10 +1036,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Identify the primary video based on scroll direction
+    /// Identify the primary video based on scroll direction (Android behavior)
     /// - Scrolling down: topmost video (lowest Y coordinate)
     /// - Scrolling up: bottommost video (highest Y coordinate)
-    /// Note: visibleVideos is already sorted with index as tiebreaker, so we can use simple logic
+    /// Uses cell visibility (≥50% threshold) for primary selection
     private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
         guard let tableView = tableView,
               tableView.window != nil else {
@@ -1611,4 +1615,3 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 }
-
