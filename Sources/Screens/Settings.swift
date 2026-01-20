@@ -116,7 +116,7 @@ struct SettingsView: View {
 
             // Clear all video cache files from disk
             print("DEBUG: [Settings] Clearing CachingPlayerItem")
-            await CachingPlayerItem.clearAllCache()
+            CachingPlayerItem.clearAllCache()
 
             // Reinitialize app entry to refresh user and tweet data
             print("DEBUG: [Settings] Reinitializing app entry")

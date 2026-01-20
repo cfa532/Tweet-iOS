@@ -126,6 +126,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Throttle timer for immediate primary video checks during scroll (50ms throttle)
     private var immediateCheckThrottleTimer: Timer?
 
+    /// Background queue for expensive visibility calculations to avoid blocking main thread
+    private let visibilityCalculationQueue = DispatchQueue(label: "com.tweet.VideoPlaybackCoordinator.visibility", qos: .userInitiated)
+
     /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
     /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
     private var isPlaybackSuppressedByOverlay: Bool = false
@@ -133,20 +136,33 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Debounced restart after an overlay is dismissed.
     private var overlayUncoverPlaybackTimer: Timer?
 
-    /// Feed-visible videos (computed from visibleTweetIds + allVideos).
+    /// Cached feed-visible videos (computed from visibleTweetIds + allVideos).
     /// Only includes videos that can actually appear in `MediaGridView` (first 4 attachments).
     /// Sorted by position (topmost cell first; then attachmentIndex within the same cell).
+    private var _cachedVisibleVideos: [VideoPlaybackInfo] = []
+    private var _visibleVideoCacheKey: String = ""
+
+    /// PERF FIX: Cached visibleVideos to avoid expensive filtering/sorting on every access
     private var visibleVideos: [VideoPlaybackInfo] {
+        let cacheKey = "\(visibleTweetIds.sorted().joined(separator: ","))_\(allVideos.count)"
+
+        // Return cached result if inputs haven't changed
+        if cacheKey == _visibleVideoCacheKey && !_cachedVisibleVideos.isEmpty {
+            return _cachedVisibleVideos
+        }
+
         let filtered = allVideos.filter { visibleTweetIds.contains($0.cellTweetId) && $0.isInVisibleMediaRange }
-        
+
         // CRITICAL: Sort by position (Y coordinate) to ensure correct playback order
         // This ensures videos play in feed order, not array order
         guard let tableView = tableView, tableView.window != nil else {
             // No table view (or not in hierarchy): do NOT apply any position-based ordering.
             // Keep the coordinator's canonical order (the order `allVideos` was built in).
+            _cachedVisibleVideos = filtered
+            _visibleVideoCacheKey = cacheKey
             return filtered
         }
-        
+
         // Build a fast map of visible cell tweetId -> minY.
         // If any visible video cannot be mapped to a visible cell, do NOT apply position-based sorting
         // (no stable-order fallback).
@@ -158,11 +174,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         for video in filtered {
             if yByCellTweetId[video.cellTweetId] == nil {
+                _cachedVisibleVideos = filtered
+                _visibleVideoCacheKey = cacheKey
                 return filtered
             }
         }
-        
-        return filtered.sorted { v1, v2 in
+
+        let sorted = filtered.sorted { v1, v2 in
             let y1 = yByCellTweetId[v1.cellTweetId] ?? 0
             let y2 = yByCellTweetId[v2.cellTweetId] ?? 0
             if y1 != y2 { return y1 < y2 }
@@ -172,6 +190,64 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
             // If equal Y for different cells, keep existing order by returning false.
             return false
+        }
+
+        _cachedVisibleVideos = sorted
+        _visibleVideoCacheKey = cacheKey
+        return sorted
+    }
+
+    /// Invalidate visible videos cache when table view or video list changes
+    private func invalidateVisibleVideoCache() {
+        _visibleVideoCacheKey = ""
+        _cachedVisibleVideos.removeAll()
+    }
+
+    /// PERF FIX: Async cell visibility calculation to avoid blocking main thread
+    /// Captures UI state on main thread, then calculates visibility ratios in background
+    private func calculateCellVisibilityAsync() async -> [String: CGFloat] {
+        guard let tableView = tableView, tableView.window != nil else {
+            return [:]
+        }
+
+        // Capture UI state on main thread to avoid Main Thread Checker violations
+        let uiState = await MainActor.run {
+            // Update cell cache with fresh cell references
+            for cell in tableView.visibleCells {
+                guard let tweetCell = cell as? TweetTableViewCell,
+                      let tweetId = tweetCell.tweetId else { continue }
+                self.cellCache[tweetId] = cell
+            }
+
+            return (
+                visibleRect: CGRect(
+                    x: 0,
+                    y: tableView.contentOffset.y,
+                    width: tableView.bounds.width,
+                    height: tableView.bounds.height
+                ),
+                cellFrames: tableView.visibleCells.compactMap { cell -> (tweetId: String, frame: CGRect)? in
+                    guard let tweetCell = cell as? TweetTableViewCell,
+                          let tweetId = tweetCell.tweetId else { return nil }
+                    return (tweetId: tweetId, frame: cell.frame)
+                }
+            )
+        }
+
+        // Perform calculations on background thread
+        return await withCheckedContinuation { continuation in
+            visibilityCalculationQueue.async {
+                var visibilityRatios: [String: CGFloat] = [:]
+
+                // Calculate visibility for all captured cells
+                for (tweetId, cellFrame) in uiState.cellFrames {
+                    let intersection = cellFrame.intersection(uiState.visibleRect)
+                    let ratio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+                    visibilityRatios[tweetId] = ratio
+                }
+
+                continuation.resume(returning: visibilityRatios)
+            }
         }
     }
     
@@ -260,11 +336,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
         guard let isCovered = notification.userInfo?["isCovered"] as? Bool else { return }
-        
-        let source = notification.userInfo?["source"] as? String ?? "unknown"
-        let activeCount = notification.userInfo?["activeCount"] as? Int ?? 0
-        
-        
+                
         isPlaybackSuppressedByOverlay = isCovered
         
         // Cancel any pending "resume after overlay" timer.
@@ -513,15 +585,16 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Update state on main actor
             await MainActor.run {
                 self.allVideos = videos
-                
+
                 // PERF FIX: Clear caches when video list is rebuilt to prevent stale data
                 self.cellCache.removeAll()
                 self.cachedVisibilityRatios.removeAll()
+                self.invalidateVisibleVideoCache() // Clear visible videos cache
                 self.lastCacheClearTime = Date()
-                
+
                 // Store tweet list for embedded tweet lookup
                 self.currentTweets = pinnedTweets + tweets
-                
+
                 // Trigger playback update after video list is rebuilt if in idle phase and videos are visible
                 if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
                     self.startPrimaryVideoPlayback()
@@ -560,9 +633,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 }
             }
         }
-        
-        // Build set of embedded tweet IDs (IDs that are referenced as originalTweetId in quoted tweets)
-        let embeddedTweetIds = Set(quotedTweets.map { $0.originalTweetId })
         
         // Process pinned tweets first (they appear at the top)
         // Allow both embedded and standalone instances of the same video to be tracked
@@ -692,6 +762,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         let filteredTweetIds = tweetIds.intersection(tweetsWithFeedVideos)
         
         self.visibleTweetIds = filteredTweetIds
+        self.invalidateVisibleVideoCache() // Invalidate cache when visible tweets change
         self.isScrolling = true
         
         // Get current visible video IDs
@@ -779,10 +850,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Start playback when videos become visible OR when in idle phase with videos
         // This handles both "new videos" and "coming back to idle with videos present"
         if videoVisibilityChanged && !currentVisibleVideoIds.isEmpty {
-            // MEMORY MONITOR: Log significant visibility changes (>3 videos) to track memory trends
-            if currentVisibleVideoIds.count > 3 {
-                let memoryStr = SharedAssetCache.shared.getMemoryUsageString()
-            }
             // Allow primary video to change during scroll - re-identify primary video if needed
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
@@ -871,11 +938,11 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // If we have visible videos but no primary video playing, start playback
         if phase == .idle && !visibleVideos.isEmpty {
-            startPrimaryVideoPlayback()
+            Task { await startPrimaryVideoPlaybackAsync() }
         }
         // If primary video is playing but might need switching, check it
         else if phase == .primaryPlaying {
-            checkAndSwitchVideoIfNeeded()
+            Task { await checkAndSwitchVideoIfNeededAsync() }
         }
     }
 
@@ -930,10 +997,15 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Videos continue playing through scroll and beyond
     }
     
+    /// Synchronous wrapper for startPrimaryVideoPlaybackAsync
+    private func startPrimaryVideoPlayback() {
+        Task { await startPrimaryVideoPlaybackAsync() }
+    }
+
     /// Start primary video playback - play topmost video immediately
     /// Start primary video playback
     /// Identifies the most appropriate video based on visibility and scroll direction
-    private func startPrimaryVideoPlayback() {
+    private func startPrimaryVideoPlaybackAsync() async {
         // Never start feed playback while the UI is covered by an overlay.
         guard !isPlaybackSuppressedByOverlay else { return }
 
@@ -943,7 +1015,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         // Identify topmost video
-        guard let primary = identifyPrimaryVideo() else {
+        guard let primary = await identifyPrimaryVideoAsync() else {
             stopAllVideos()
             return
         }
@@ -979,7 +1051,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             self.lastPrimarySwitchTime = Date()
 
             // Send play command for primary video (topmost when scrolling down, bottommost when scrolling up)
-            let direction = self.scrollDirection ? "topmost (scrolling DOWN)" : "bottommost (scrolling UP)"
             NotificationCenter.default.post(
                 name: .shouldPlayVideo,
                 object: nil,
@@ -993,107 +1064,40 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Identify the primary video based on scroll direction (Android behavior)
+    /// Async version: Identify the primary video based on scroll direction (Android behavior)
     /// - Scrolling down: topmost video (lowest Y coordinate)
     /// - Scrolling up: bottommost video (highest Y coordinate)
     /// Uses cell visibility (≥50% threshold) for primary selection
-    private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
+    private func identifyPrimaryVideoAsync() async -> VideoPlaybackInfo? {
         guard let tableView = tableView,
               tableView.window != nil else {
             // Fallback: return first visible video if table view not in hierarchy
-            // visibleVideos is already sorted by index within same tweet
-            let firstVideo = visibleVideos.first
-            if let video = firstVideo {
-            }
-            return firstVideo
+            return visibleVideos.first
         }
-        
-        let visibleRect = CGRect(
-            x: 0,
-            y: tableView.contentOffset.y,
-            width: tableView.bounds.width,
-            height: tableView.bounds.height
-        )
-        
-        // PERF FIX: Clear cell cache periodically
-        let now = Date()
-        if now.timeIntervalSince(lastCacheClearTime) > cellCacheClearInterval {
-            cellCache.removeAll()
-            lastCacheClearTime = now
-        }
-        
-        // CRITICAL: Cache cell visibility by tweetId
-        // All videos in the same MediaGrid/cell share the SAME cell visibility
-        var cellVisibilityCache: [String: CGFloat] = [:]
-        
+
+        // Get cell visibility ratios from background thread (also updates cell cache)
+        let cellVisibilityRatios = await calculateCellVisibilityAsync()
+
         if scrollDirection {
             // Scrolling DOWN: Find topmost video that is at least 50% visible
-            // CRITICAL: Use CELL visibility for all videos in that cell, not individual video visibility
             for video in visibleVideos {
-                let cellLookupTweetId = video.cellTweetId
-                
-                // Check if we already calculated this cell's visibility
-                let visibilityRatio: CGFloat
-                if let cached = cellVisibilityCache[cellLookupTweetId] {
-                    // Reuse cached cell visibility
-                    visibilityRatio = cached
-                } else {
-                    // Calculate cell visibility for the first time
-                    let cell: UITableViewCell
-                    if let cachedCell = cellCache[cellLookupTweetId] {
-                        cell = cachedCell
-                    } else {
-                        guard let foundCell = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { continue }
-                        cellCache[cellLookupTweetId] = foundCell
-                        cell = foundCell
-                    }
-                    
-                    let cellFrame = tableView.convert(cell.frame, to: tableView)
-                    let intersection = cellFrame.intersection(visibleRect)
-                    visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
-                    
-                    // Cache for other videos in same cell
-                    cellVisibilityCache[cellLookupTweetId] = visibilityRatio
-                }
-                
+                let visibilityRatio = cellVisibilityRatios[video.cellTweetId] ?? 0
                 if visibilityRatio >= 0.5 {
                     return video
                 }
             }
-            
             // No video is 50% visible, return first one anyway
-            let fallback = visibleVideos.first
-            if let video = fallback {
-            }
-            return fallback
+            return visibleVideos.first
         } else {
             // Scrolling UP: Find bottommost video (highest Y coordinate) that is at least 50% visible
-            // Iterate from end of sorted array (bottommost first)
             for video in visibleVideos.reversed() {
-                let cellLookupTweetId = video.cellTweetId
-                let cell: UITableViewCell
-                if let cachedCell = cellCache[cellLookupTweetId] {
-                    cell = cachedCell
-                } else {
-                    guard let foundCell = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { continue }
-                    cellCache[cellLookupTweetId] = foundCell
-                    cell = foundCell
-                }
-                
-                let cellFrame = tableView.convert(cell.frame, to: tableView)
-                let intersection = cellFrame.intersection(visibleRect)
-                let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
-                
+                let visibilityRatio = cellVisibilityRatios[video.cellTweetId] ?? 0
                 if visibilityRatio >= 0.5 {
                     return video
                 }
             }
-            
             // No video is 50% visible, return last one anyway
-            let fallback = visibleVideos.last
-            if let video = fallback {
-            }
-            return fallback
+            return visibleVideos.last
         }
     }
     
@@ -1101,44 +1105,50 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// This makes playback start immediately even while scrolling, not waiting for debounce
     /// Optimized to avoid expensive operations during fast scrolling
     private func checkPrimaryVideoDuringScroll() {
-        // Simply use the existing identifyPrimaryVideo() method which already handles
-        // sorting and direction-based selection. This keeps the logic consistent.
-        guard let correctPrimary = identifyPrimaryVideo(), correctPrimary.identifier != primaryVideoId else {
-            return
-        }
-
-        // Immediately start playback for the new primary video
-        let previousPrimaryId = primaryVideoId
-        primaryVideoId = correctPrimary.identifier
-
-        // Use DispatchQueue.main.async for immediate response during scroll
-        DispatchQueue.main.async {
-            // Stop previous primary if different
-            if let previousPrimaryId = previousPrimaryId, previousPrimaryId != correctPrimary.identifier,
-               let previousPrimary = self.allVideos.first(where: { $0.identifier == previousPrimaryId }) {
-                NotificationCenter.default.post(
-                    name: .shouldStopVideo,
-                    object: nil,
-                    userInfo: ["videoMid": previousPrimary.videoMid]
-                )
+        // Use async version to avoid blocking main thread
+        Task {
+            guard let correctPrimary = await identifyPrimaryVideoAsync(), correctPrimary.identifier != primaryVideoId else {
+                return
             }
 
-            // Start new primary video immediately
-            NotificationCenter.default.post(
-                name: .shouldPlayVideo,
-                object: nil,
-                userInfo: [
-                    "tweetId": correctPrimary.cellTweetId,
-                    "videoMid": correctPrimary.videoMid,
-                    "videoIndex": correctPrimary.attachmentIndex,
-                    "isPrimary": true
-                ]
-            )
+            // Immediately start playback for the new primary video
+            let previousPrimaryId = primaryVideoId
+            primaryVideoId = correctPrimary.identifier
+
+            // Use DispatchQueue.main.async for immediate response during scroll
+            DispatchQueue.main.async {
+                // Stop previous primary if different
+                if let previousPrimaryId = previousPrimaryId, previousPrimaryId != correctPrimary.identifier,
+                   let previousPrimary = self.allVideos.first(where: { $0.identifier == previousPrimaryId }) {
+                    NotificationCenter.default.post(
+                        name: .shouldStopVideo,
+                        object: nil,
+                        userInfo: ["videoMid": previousPrimary.videoMid]
+                    )
+                }
+
+                // Start new primary video immediately
+                NotificationCenter.default.post(
+                    name: .shouldPlayVideo,
+                    object: nil,
+                    userInfo: [
+                        "tweetId": correctPrimary.cellTweetId,
+                        "videoMid": correctPrimary.videoMid,
+                        "videoIndex": correctPrimary.attachmentIndex,
+                        "isPrimary": true
+                    ]
+                )
+            }
         }
     }
 
-    /// Check if current primary video is less than 50% visible and switch to next video if needed
+    /// Synchronous wrapper for checkAndSwitchVideoIfNeededAsync
     private func checkAndSwitchVideoIfNeeded() {
+        Task { await checkAndSwitchVideoIfNeededAsync() }
+    }
+
+    /// Check if current primary video is less than 50% visible and switch to next video if needed
+    private func checkAndSwitchVideoIfNeededAsync() async {
         // Enforce cache size limits to prevent unbounded growth
         clearStaleCache()
         
@@ -1166,44 +1176,54 @@ class VideoPlaybackCoordinator: ObservableObject {
         guard let currentPrimary = visibleVideos.first(where: { $0.identifier == primaryId }) else {
             return
         }
-        
-        // PERF FIX: Use cached cell if available, otherwise find and cache it
-        let cellLookupTweetId = currentPrimary.cellTweetId
-        let cell: UITableViewCell
-        if let cachedCell = cellCache[cellLookupTweetId] {
-            cell = cachedCell
-        } else {
-            guard let foundCell = findCell(forCellTweetId: currentPrimary.cellTweetId, in: tableView) else {
-                return
+
+        // Capture UI state on main thread to avoid Main Thread Checker violations
+        let uiState: (visibilityRatio: CGFloat, cellLookupTweetId: String)? = await MainActor.run {
+            // PERF FIX: Use cached cell if available, otherwise find and cache it
+            let cellLookupTweetId = currentPrimary.cellTweetId
+            let cell: UITableViewCell
+            if let cachedCell = self.cellCache[cellLookupTweetId] {
+                cell = cachedCell
+            } else {
+                guard let foundCell = self.findCell(forCellTweetId: currentPrimary.cellTweetId, in: tableView) else {
+                    // Return early if cell not found - we need to capture this state
+                    return nil
+                }
+                self.cellCache[cellLookupTweetId] = foundCell
+                cell = foundCell
             }
-            cellCache[cellLookupTweetId] = foundCell
-            cell = foundCell
+
+            // PERF FIX: Clear cell cache periodically to prevent stale references
+            let now = Date()
+            if now.timeIntervalSince(self.lastCacheClearTime) > self.cellCacheClearInterval {
+                self.cellCache.removeAll()
+                self.lastCacheClearTime = now
+            }
+
+            let visibleRect = CGRect(
+                x: 0,
+                y: tableView.contentOffset.y,
+                width: tableView.bounds.width,
+                height: tableView.bounds.height
+            )
+
+            let cellFrame = tableView.convert(cell.frame, to: tableView)
+            let intersection = cellFrame.intersection(visibleRect)
+
+            // Calculate visibility ratio (0.0 = completely out of view, 1.0 = fully visible)
+            let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+
+            return (visibilityRatio: visibilityRatio, cellLookupTweetId: cellLookupTweetId)
         }
-        
-        // PERF FIX: Clear cell cache periodically to prevent stale references
-        let now = Date()
-        if now.timeIntervalSince(lastCacheClearTime) > cellCacheClearInterval {
-            cellCache.removeAll()
-            lastCacheClearTime = now
-        }
-        
-        let visibleRect = CGRect(
-            x: 0,
-            y: tableView.contentOffset.y,
-            width: tableView.bounds.width,
-            height: tableView.bounds.height
-        )
-        
-        let cellFrame = tableView.convert(cell.frame, to: tableView)
-        let intersection = cellFrame.intersection(visibleRect)
-        
-        // Calculate visibility ratio (0.0 = completely out of view, 1.0 = fully visible)
-        let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+
+        guard let uiState = uiState else { return }
+
+        let visibilityRatio = uiState.visibilityRatio
         
         // PERF FIX: Only proceed if visibility ratio changed significantly or crossed threshold
         let previousRatio = cachedVisibilityRatios[primaryId] ?? 1.0
         let ratioChange = abs(visibilityRatio - previousRatio)
-        
+
         // Update cache
         cachedVisibilityRatios[primaryId] = visibilityRatio
         
@@ -1219,7 +1239,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         if visibilityRatio < 0.5 {
             // Re-identify primary video based on current scroll direction
             // This handles both scrolling down (switch to next) and scrolling up (switch to previous)
-            guard let newPrimary = identifyPrimaryVideo(), newPrimary.identifier != primaryId else {
+            guard let newPrimary = await identifyPrimaryVideoAsync(), newPrimary.identifier != primaryId else {
                 return
             }
 
