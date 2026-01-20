@@ -825,7 +825,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         cleanupObservers()
         
         guard let player = singletonPlayer, let playerItem = player.currentItem else {
-            print("⚠️ [FULLSCREEN WAITING] Cannot setup observer - no player or playerItem")
             return
         }
         
@@ -919,7 +918,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                        let savedState = PersistentVideoStateManager.shared.getState(videoMid: videoMid, context: .fullScreen) {
                         // CRITICAL: Validate saved time before seeking to prevent crash
                         guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
-                            print("⚠️ [FULLSCREEN DATA READY] Invalid saved time (\(savedState.currentTime.seconds)s) - clearing and starting normally")
                             PersistentVideoStateManager.shared.clearState(videoMid: videoMid, context: .fullScreen)
                             self.hasRestoredPosition = true
                             self.isSeekingToRestoredPosition = false
@@ -1105,7 +1103,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                 self.startRetryMonitoring()
                             }
                         } else if hasData {
-                            print("⏳ [FULLSCREEN RETRY] Partial data (\(String(format: "%.1f", bufferedDuration))s), waiting for more...")
                         }
                     }
                     
@@ -1114,7 +1111,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         Task { @MainActor in
                             guard let self = self else { return }
                             if self.bufferObserver != nil {
-                                print("⚠️ [FULLSCREEN RETRY] Timeout waiting for data, will retry on next cycle")
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
                                 self.startRetryMonitoring()
@@ -1257,7 +1253,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 wasPlaying: wasPlaying,
                 context: .mediaCell
             )
-            print("💾 [FULLSCREEN] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying) (saved to both fullScreen and mediaCell contexts)")
         }
         
         // Pause and clear the current item, but keep the player instance

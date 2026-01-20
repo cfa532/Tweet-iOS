@@ -107,7 +107,7 @@ class SharedAssetCache: ObservableObject {
     private func startBackgroundCleanup() {
         // BALANCED CLEANUP: 10s interval - frequent enough to prevent memory buildup but not disruptive
         // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping SharedAssetCache alive forever
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 self.performCleanup()
@@ -116,9 +116,9 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func startMemoryMonitoring() {
-        // PERFORMANCE FIX: Monitor memory every 10 seconds (reduced from 15s for better responsiveness)
+        // PERFORMANCE FIX: Monitor memory every 30 seconds (reduced from 15s for better responsiveness)
         // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping SharedAssetCache alive forever
-        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        memoryMonitorTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 self.checkMemoryPressure()

@@ -264,7 +264,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         let source = notification.userInfo?["source"] as? String ?? "unknown"
         let activeCount = notification.userInfo?["activeCount"] as? Int ?? 0
         
-        print("DEBUG: [VideoPlaybackCoordinator] Overlay coverage changed: \(isCovered ? "COVERED" : "UNCOVERED"), source: \(source), active overlays: \(activeCount)")
         
         isPlaybackSuppressedByOverlay = isCovered
         
@@ -274,38 +273,23 @@ class VideoPlaybackCoordinator: ObservableObject {
         
         if isCovered {
             // Hard stop so no audio bleeds under the overlay, and so we don't preserve stale primary state.
-            print("DEBUG: [VideoPlaybackCoordinator] Stopping all videos due to overlay coverage")
             stopAllVideos()
             return
         }
         
-        print("DEBUG: [VideoPlaybackCoordinator] Overlay dismissed, scheduling playback restart in 0.15s")
         
         // Overlay dismissed: give UIKit/SwiftUI a beat to reattach layers, then restart if needed.
         let timer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 
-                print("DEBUG: [VideoPlaybackCoordinator] Overlay restart timer fired. Suppressed: \(self.isPlaybackSuppressedByOverlay), Phase: \(self.phase), Videos: \(self.visibleVideos.count)")
-                
-                guard !self.isPlaybackSuppressedByOverlay else {
-                    print("DEBUG: [VideoPlaybackCoordinator] Still suppressed, not restarting")
+                guard !self.isPlaybackSuppressedByOverlay,
+                      self.phase == .idle,
+                      !self.visibleVideos.isEmpty,
+                      let tableView = self.tableView,
+                      tableView.window != nil else {
                     return
                 }
-                guard self.phase == .idle else {
-                    print("DEBUG: [VideoPlaybackCoordinator] Not in idle phase (\(self.phase)), not restarting")
-                    return
-                }
-                guard !self.visibleVideos.isEmpty else {
-                    print("DEBUG: [VideoPlaybackCoordinator] No visible videos, not restarting")
-                    return
-                }
-                guard let tableView = self.tableView, tableView.window != nil else {
-                    print("DEBUG: [VideoPlaybackCoordinator] TableView not in window, not restarting")
-                    return
-                }
-                
-                print("DEBUG: [VideoPlaybackCoordinator] ✅ Starting primary video playback after overlay dismissal")
                 self.startPrimaryVideoPlayback()
             }
         }
@@ -406,7 +390,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 allVideos.append(contentsOf: videosToAdd)
             }
 
-            print("VideoPlaybackCoordinator: Added \(videosToAdd.count) embedded tweet videos, total: \(allVideos.count)")
         }
     }
 
@@ -743,13 +726,11 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Android-style immediate scroll responses (50ms throttle)
         if thresholdCrossed {
-            print("⚡ [ANDROID IMMEDIATE] Threshold crossed, triggering immediate check")
             // Throttle immediate checks to avoid expensive operations on every update during fast scrolling
             // This keeps scrolling smooth while still being responsive
             immediateCheckThrottleTimer?.invalidate()
             immediateCheckThrottleTimer = Timer(timeInterval: 0.05, repeats: false) { [weak self] _ in
                 DispatchQueue.main.async {
-                    print("⚡ [ANDROID IMMEDIATE] Executing immediate check")
                     self?.checkPrimaryVideoDuringScroll()
                 }
             }
@@ -775,7 +756,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             let videosToStop = previousVisibleVideoIds.subtracting(currentVisibleVideoIds)
             if !videosToStop.isEmpty {
                 // MEMORY MONITOR: Log when videos are stopped (scrolled out of view)
-                print("📊 [MEMORY] Stopping \(videosToStop.count) videos (scrolled out of view)")
 
                 // SMART CLEANUP: Only trigger cleanup if we've stopped several videos
                 // This prevents excessive cleanup during normal scrolling while still
@@ -812,7 +792,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // MEMORY MONITOR: Log significant visibility changes (>3 videos) to track memory trends
             if currentVisibleVideoIds.count > 3 {
                 let memoryStr = SharedAssetCache.shared.getMemoryUsageString()
-                print("📊 [MEMORY] Major visibility change - \(currentVisibleVideoIds.count) videos visible, memory: \(memoryStr)")
             }
             // Allow primary video to change during scroll - re-identify primary video if needed
             if phase == .primaryPlaying,
@@ -895,26 +874,18 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Android-style deferred batching for visibility updates (150ms intervals)
     /// This method handles batched visibility updates for performance optimization
     private func performBatchedVisibilityUpdate() {
-        print("🔄 [ANDROID BATCH] Performing batched visibility update - phase: \(phase), videos: \(visibleVideos.count)")
-
         // Android-style: Check if primary video needs switching or if playback should start
         guard !isPlaybackSuppressedByOverlay else {
-            print("🚫 [ANDROID BATCH] Suppressed by overlay")
             return
         }
 
         // If we have visible videos but no primary video playing, start playback
         if phase == .idle && !visibleVideos.isEmpty {
-            print("🎬 [ANDROID BATCH] Starting primary video playback")
             startPrimaryVideoPlayback()
         }
         // If primary video is playing but might need switching, check it
         else if phase == .primaryPlaying {
-            print("🔄 [ANDROID BATCH] Checking if primary video needs switching")
             checkAndSwitchVideoIfNeeded()
-        }
-        else {
-            print("⏸️ [ANDROID BATCH] No action needed - phase: \(phase), videos: \(visibleVideos.count)")
         }
     }
 
@@ -978,13 +949,11 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Guard against starting if not in idle phase
         guard phase == .idle else {
-            print("⚠️ [VideoPlaybackCoordinator] startPrimaryVideoPlayback called but not in idle phase (current: \(phase))")
             return
         }
 
         // Identify topmost video
         guard let primary = identifyPrimaryVideo() else {
-            print("⚠️ [VideoPlaybackCoordinator] No primary video identified, stopping all videos")
             stopAllVideos()
             return
         }
@@ -992,7 +961,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // First, stop the previous primary video (use Stop instead of Pause for immediate effect)
         if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier,
            let previousPrimary = allVideos.first(where: { $0.identifier == previousPrimaryId }) {
-            print("DEBUG: [VideoPlaybackCoordinator] Stopping previous primary video: \(previousPrimary.videoMid)")
             NotificationCenter.default.post(
                 name: .shouldStopVideo,
                 object: nil,
@@ -1022,7 +990,6 @@ class VideoPlaybackCoordinator: ObservableObject {
 
             // Send play command for primary video (topmost when scrolling down, bottommost when scrolling up)
             let direction = self.scrollDirection ? "topmost (scrolling DOWN)" : "bottommost (scrolling UP)"
-            print("📤 [VideoPlaybackCoordinator] Sending play command for \(direction) video: \(primary.videoMid)")
             NotificationCenter.default.post(
                 name: .shouldPlayVideo,
                 object: nil,
@@ -1047,7 +1014,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // visibleVideos is already sorted by index within same tweet
             let firstVideo = visibleVideos.first
             if let video = firstVideo {
-                print("✅ [PRIMARY SELECT] Fallback selection (no tableView): \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex))")
             }
             return firstVideo
         }
@@ -1081,7 +1047,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 if let cached = cellVisibilityCache[cellLookupTweetId] {
                     // Reuse cached cell visibility
                     visibilityRatio = cached
-                    print("📋 [CELL VISIBILITY] Using cached visibility for cell \(cellLookupTweetId.prefix(8)): \(String(format: "%.1f", visibilityRatio * 100))%")
                 } else {
                     // Calculate cell visibility for the first time
                     let cell: UITableViewCell
@@ -1109,7 +1074,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // No video is 50% visible, return first one anyway
             let fallback = visibleVideos.first
             if let video = fallback {
-                print("⚠️ [PRIMARY SELECT] No 50% visible video, using first: \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex))")
             }
             return fallback
         } else {
@@ -1131,7 +1095,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
                 
                 if visibilityRatio >= 0.5 {
-                    print("✅ [PRIMARY SELECT] Found 50%+ visible video (scrolling UP): \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex), Y: \(cellFrame.minY), visibility: \(String(format: "%.1f", visibilityRatio * 100))%)")
                     return video
                 }
             }
@@ -1139,7 +1102,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // No video is 50% visible, return last one anyway
             let fallback = visibleVideos.last
             if let video = fallback {
-                print("⚠️ [PRIMARY SELECT] No 50% visible video (scrolling UP), using last: \(video.videoMid) (cellTweetId: \(video.cellTweetId), attachmentIndex: \(video.attachmentIndex))")
             }
             return fallback
         }
@@ -1155,7 +1117,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
-        print("DEBUG: [VideoPlaybackCoordinator] Detected primary video change during scroll to: \(correctPrimary.videoMid)")
         // Immediately start playback for the new primary video
         let previousPrimaryId = primaryVideoId
         primaryVideoId = correctPrimary.identifier
@@ -1394,7 +1355,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // But we need to ensure we're advancing to the next video in feed order (by Y position)
         // Find current primary in visible videos list (sorted by position)
         guard let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentPrimary }) else {
-            print("⚠️ [VideoPlaybackCoordinator] Current primary \(currentPrimary) not found in visibleVideos")
             stopAllVideos()
             return
         }
@@ -1407,7 +1367,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling DOWN: advance to next video
             targetIndex = currentIndex + 1
             guard targetIndex < visibleVideos.count else {
-                print("📹 [VideoPlaybackCoordinator] No more videos to play (current index: \(currentIndex), total: \(visibleVideos.count))")
                 stopAllVideos()
                 return
             }
@@ -1415,7 +1374,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling UP: go back to previous video
             targetIndex = currentIndex - 1
             guard targetIndex >= 0 else {
-                print("📹 [VideoPlaybackCoordinator] No previous video to play (current index: \(currentIndex))")
                 stopAllVideos()
                 return
             }
@@ -1437,7 +1395,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         guard let nextVideo else {
-            print("📹 [VideoPlaybackCoordinator] No sufficiently visible next video to play; stopping")
             stopAllVideos()
             return
         }
