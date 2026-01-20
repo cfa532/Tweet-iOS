@@ -83,7 +83,8 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: Date?
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.25 // 250ms throttle - reduced frequency
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.4 // 400ms throttle - reduce frequency further
+    private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     
     // Cached main content rect to avoid recalculating on every visibility check
     private var cachedMainContentRect: CGRect?
@@ -960,9 +961,12 @@ class TweetTableViewController: UITableViewController {
             }
         })
 
-        // Update coordinator with visible tweets
-        // The coordinator can handle its own visibility filtering if needed
-        videoCoordinator.updateVisibleTweets(visibleTweetIds)
+        // Only update coordinator if visible tweets actually changed
+        // This prevents unnecessary video coordinator work during smooth scrolling
+        if visibleTweetIds != lastVisibleTweetIds {
+            lastVisibleTweetIds = visibleTweetIds
+            videoCoordinator.updateVisibleTweets(visibleTweetIds)
+        }
     }
     
     /// Calculate the visible main content area (excluding header and footer)
