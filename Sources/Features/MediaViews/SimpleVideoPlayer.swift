@@ -1847,6 +1847,7 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 if self.loadingState == .loaded, let player = self.player {
+                    print("▶️ [VIDEO STARTED] Video \(self.mid) started playing after waiting for player")
                     player.volume = 0
                     player.play()
                     UIView.animate(withDuration: 0.3) {
@@ -1890,6 +1891,34 @@ struct SimpleVideoPlayer: View {
             }
         } else if isPrimary {
             // Primary phase: continue from current position without interruption
+            // CRITICAL: If video is at the end (finished), restart from beginning for better UX
+            if isVideoAtEnd(player) {
+                // Video finished - restarting from beginning for primary playback
+                VideoStateCache.shared.clearCachedState(for: mid)
+                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    Task { @MainActor in
+                        if finished, let player = self.player {
+                            // Start playback from beginning after seek completes
+                            let isCurrentlyPlayingAfterSeek = player.rate > 0 && self.playbackState == .playing
+                            if !isCurrentlyPlayingAfterSeek {
+                                print("▶️ [VIDEO RESTARTED] Video \(self.mid) restarted from beginning after finishing")
+                                player.volume = 0
+                                player.play()
+                                UIView.animate(withDuration: 0.3) {
+                                    player.volume = 1.0
+                                }
+
+                                // CRITICAL: Release recovery cover when playback starts
+                                if self.isHoldingRecoveryCover {
+                                    self.isHoldingRecoveryCover = false
+                                }
+                            }
+                        }
+                    }
+                }
+                return // Don't start playback immediately - wait for seek to complete
+            }
+
             // CRITICAL: If already playing from survey phase, don't restart
             if isCurrentlyPlaying {
                 // Video already playing - continuing seamlessly
@@ -1902,6 +1931,7 @@ struct SimpleVideoPlayer: View {
         
         // Only start/restart playback if not already playing
         if !isCurrentlyPlaying {
+            print("▶️ [VIDEO STARTED] Video \(mid) started playing from coordinator command")
             player.volume = 0
             player.play()
             UIView.animate(withDuration: 0.3) {
@@ -3098,9 +3128,9 @@ struct SimpleVideoPlayer: View {
                     // 1. Holding recovery cover (background recovery)
                     // 2. Player explicitly detached (app lifecycle)
                     // 3. Video is being initialized (prevents black flicker when scrolling back)
-                    // NOTE: Do NOT show cached frame when video naturally finishes - let it show the actual last frame from AVPlayer
+                    // 4. Video is finished (AVPlayer may show black instead of last frame)
                     let isInitializing = loadingState.isLoading && player.rate == 0
-                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isInitializing
+                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isInitializing || isFinished
                     
                     if shouldShowPlaceholder {
                         // IMPORTANT: This overlay must be tap-through so taps still reach the video layer
@@ -4714,12 +4744,13 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Clear cached playback state when video finishes
         // This prevents stale "wasPlaying: true" state from causing issues
         // after background/foreground cycles
-        // NOTE: We don't rewind here - video stays at last frame (better UX)
-        // Rewind happens when video comes back into view (see setupPlayer)
+        // CRITICAL: Capture last frame to prevent black screen after video finishes
+        // AVPlayer doesn't always reliably hold the last frame
         if mode == .mediaCell {
             player?.isMuted = MuteState.shared.isMuted
             VideoStateCache.shared.clearCachedState(for: mid)
-            // Cleared cached state - will restart from beginning when scrolled back
+            // Capture last frame to show instead of black screen
+            captureLastFrameIfPossible(reason: "videoFinished")
         }
         
         // Notify the coordinator that video finished (for sequential playback)
