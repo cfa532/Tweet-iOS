@@ -458,6 +458,8 @@ struct ProfileView: View {
     
     // MARK: - Scroll Handling
     @State private var lastSignificantDelta: CGFloat = 0
+    @State private var lastNotificationTime: Date?
+    private let notificationThrottleInterval: TimeInterval = 0.1 // 100ms - prevent rapid-fire notifications
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
         // Threshold for detecting intentional scroll
@@ -473,11 +475,7 @@ struct ProfileView: View {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = true
                 }
-                NotificationCenter.default.post(
-                    name: .navigationVisibilityChanged,
-                    object: nil,
-                    userInfo: ["isVisible": true]
-                )
+                postNavigationVisibilityNotification(isVisible: true)
             }
             previousScrollOffset = offset
             return
@@ -499,26 +497,34 @@ struct ProfileView: View {
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = false
             }
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": false]
-            )
+            postNavigationVisibilityNotification(isVisible: false)
             lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show bottom bar
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = true
             }
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": true]
-            )
+            postNavigationVisibilityNotification(isVisible: true)
             lastSignificantDelta = delta
         }
         
         previousScrollOffset = offset
+    }
+    
+    // Helper to post navigation visibility notification with throttling
+    private func postNavigationVisibilityNotification(isVisible: Bool) {
+        // Throttle notifications to prevent excessive posting during rapid scroll
+        let now = Date()
+        if let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
+            return
+        }
+        
+        lastNotificationTime = now
+        NotificationCenter.default.post(
+            name: .navigationVisibilityChanged,
+            object: nil,
+            userInfo: ["isVisible": isVisible]
+        )
     }
     
     // MARK: - Helper Methods
