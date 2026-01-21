@@ -512,8 +512,9 @@ struct MediaCell: View, Equatable {
                                 }
                         } else {
                             // Regular feed videos should NOT have gestures to avoid blocking scrolling
+                            // Use Color.clear without contentShape to avoid intercepting scroll gestures
                             Color.clear
-                                .contentShape(Rectangle())
+                                .allowsHitTesting(false)
                         }
                     }
                 )

@@ -460,67 +460,65 @@ struct ProfileView: View {
     @State private var lastSignificantDelta: CGFloat = 0
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
-        // Defer state changes to avoid "Modifying state during view update" warning
-        DispatchQueue.main.async {
-            // Threshold for detecting intentional scroll
-            let scrollThreshold: CGFloat = 15
-            
-            // CRITICAL: Always show toolbar when near the top (like TweetDetailView)
-            // This prevents toolbar from disappearing during pull-to-refresh
-            // Profile view content offset starts negative (due to header), so use a reasonable threshold
-            if offset > -200 {
-                // Near the top - always show toolbar
-                if !self.isNavigationVisible {
-                    withAnimation(.easeInOut(duration: 0.4)) {
-                        self.isNavigationVisible = true
-                    }
-                    NotificationCenter.default.post(
-                        name: .navigationVisibilityChanged,
-                        object: nil,
-                        userInfo: ["isVisible": true]
-                    )
-                }
-                self.previousScrollOffset = offset
-                return
-            }
-            
-            // Only process scroll direction changes when scrolled down into content
-            // Ignore very small deltas (noise from rendering/layout)
-            guard abs(delta) > 2 else { return }
-            
-            // Detect significant scroll direction changes
-            // Positive delta = scrolling down (content moves up)
-            // Negative delta = scrolling up (content moves down)
-            let isScrollingDown = delta > scrollThreshold
-            let isScrollingUp = delta < -scrollThreshold
-            
-            // Update navigation visibility based on scroll direction
-            if isScrollingDown && self.isNavigationVisible {
-                // Scrolling down significantly - hide bottom bar
+        // Threshold for detecting intentional scroll
+        let scrollThreshold: CGFloat = 15
+        
+        // CRITICAL: Always show toolbar when near the top
+        // Profile view has a header, so we need to account for negative offsets
+        // When scrolled to the very top, offset will be around -100 to 0 depending on header height
+        // We want to show toolbar when user is in the header area or just below it
+        if offset < 100 {
+            // Near the top - always show toolbar
+            if !isNavigationVisible {
                 withAnimation(.easeInOut(duration: 0.25)) {
-                    self.isNavigationVisible = false
-                }
-                NotificationCenter.default.post(
-                    name: .navigationVisibilityChanged,
-                    object: nil,
-                    userInfo: ["isVisible": false]
-                )
-                self.lastSignificantDelta = delta
-            } else if isScrollingUp && !self.isNavigationVisible {
-                // Scrolling up significantly - show bottom bar
-                withAnimation(.easeInOut(duration: 0.4)) {
-                    self.isNavigationVisible = true
+                    isNavigationVisible = true
                 }
                 NotificationCenter.default.post(
                     name: .navigationVisibilityChanged,
                     object: nil,
                     userInfo: ["isVisible": true]
                 )
-                self.lastSignificantDelta = delta
             }
-            
-            self.previousScrollOffset = offset
+            previousScrollOffset = offset
+            return
         }
+        
+        // Only process scroll direction changes when scrolled down into content
+        // Ignore very small deltas (noise from rendering/layout)
+        guard abs(delta) > 2 else { return }
+        
+        // Detect significant scroll direction changes
+        // Positive delta = scrolling down (content moves up)
+        // Negative delta = scrolling up (content moves down)
+        let isScrollingDown = delta > scrollThreshold
+        let isScrollingUp = delta < -scrollThreshold
+        
+        // Update navigation visibility based on scroll direction
+        if isScrollingDown && isNavigationVisible {
+            // Scrolling down significantly - hide bottom bar
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isNavigationVisible = false
+            }
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": false]
+            )
+            lastSignificantDelta = delta
+        } else if isScrollingUp && !isNavigationVisible {
+            // Scrolling up significantly - show bottom bar
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isNavigationVisible = true
+            }
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
+            lastSignificantDelta = delta
+        }
+        
+        previousScrollOffset = offset
     }
     
     // MARK: - Helper Methods

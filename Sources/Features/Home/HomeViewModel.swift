@@ -146,16 +146,24 @@ struct HomeView: View {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isNavigationVisible = true
             }
-            onNavigationVisibilityChanged?(true)
+            // Post notification for bottom tab bar
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
             
-            // Clean up complete
-            
-            print("DEBUG: [HomeView] View disappeared")
+            print("DEBUG: [HomeView] View disappeared, navigation reset to visible")
         }
         .onAppear {
             // Ensure navigation is visible when view appears
             isNavigationVisible = true
-            onNavigationVisibilityChanged?(true)
+            // Post notification for bottom tab bar
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
             print("DEBUG: [HomeView] View appeared, navigation set to visible")
         }
     }
@@ -173,7 +181,12 @@ struct HomeView: View {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = true
                 }
-                onNavigationVisibilityChanged?(true)
+                // Post notification for bottom tab bar
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": true]
+                )
             }
             return
         }
@@ -193,14 +206,24 @@ struct HomeView: View {
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = false
             }
-            onNavigationVisibilityChanged?(false)
+            // Post notification for bottom tab bar
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": false]
+            )
             lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show header and bottom bar
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = true
             }
-            onNavigationVisibilityChanged?(true)
+            // Post notification for bottom tab bar
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
             lastSignificantDelta = delta
         }
     }

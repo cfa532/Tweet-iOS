@@ -568,10 +568,10 @@ struct TweetListView<RowView: View>: View {
         initialLoadComplete = false
         currentPage = 0
 
-        // Clear existing tweets immediately to show empty state during refresh
-        await MainActor.run {
-            tweets.removeAll()
-        }
+        // DON'T clear existing tweets - keep them while refreshing for better UX
+        // await MainActor.run {
+        //     tweets.removeAll()
+        // }
         
         do {
             // Always load fresh data from server for refresh
@@ -583,10 +583,11 @@ struct TweetListView<RowView: View>: View {
             }
             
             await MainActor.run {
-                // Update tweets with server data - REPLACE on refresh, don't merge
+                // Update tweets with server data - MERGE on refresh to keep existing content
                 if hasValidTweet {
-                    // On refresh, replace existing tweets with fresh server data
-                    tweets = validTweets
+                    // On refresh, merge new tweets with existing ones (will sort by timestamp)
+                    // This prevents screen from going blank during refresh
+                    tweets.mergeTweets(validTweets)
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
                     
