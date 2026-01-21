@@ -492,20 +492,30 @@ struct MediaCell: View, Equatable {
                 // Embedded videos are now managed by coordinator - no viewport checking needed
                 .overlay(
                     // Invisible overlay to prevent tap propagation to parent views and add long press
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            // Save current playback position before opening fullscreen
-                            saveVideoPositionForFullscreen()
-                            isOpeningFullScreen = true
-                            Task { @MainActor in
-                                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-                                showFullScreen = true
-                            }
+                    // Only apply gestures in embedded/detail views to avoid interfering with scrolling in feed
+                    Group {
+                        if isEmbedded {
+                            // Embedded videos in detail views should have gestures
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    // Save current playback position before opening fullscreen
+                                    saveVideoPositionForFullscreen()
+                                    isOpeningFullScreen = true
+                                    Task { @MainActor in
+                                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                                        showFullScreen = true
+                                    }
+                                }
+                                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                                    handleVideoReload()
+                                }
+                        } else {
+                            // Regular feed videos should NOT have gestures to avoid blocking scrolling
+                            Color.clear
+                                .contentShape(Rectangle())
                         }
-                        .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                            handleVideoReload()
-                        }
+                    }
                 )
                 .overlay(
                     // Loading spinner overlay when opening fullscreen
