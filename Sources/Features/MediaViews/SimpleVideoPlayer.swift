@@ -972,9 +972,14 @@ struct SimpleVideoPlayer: View {
     
     private var gestureModifiers: AnyViewModifier {
         AnyViewModifier { content in
-            content
-                .onTapGesture { handleTap() }
-                .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
+            // Only apply gestures in fullscreen/browser modes to avoid interfering with scrolling in feed
+            if mode == .mediaBrowser || mode == .tweetDetail {
+                content
+                    .onTapGesture { handleTap() }
+                    .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
+            } else {
+                content
+            }
         }
     }
     
