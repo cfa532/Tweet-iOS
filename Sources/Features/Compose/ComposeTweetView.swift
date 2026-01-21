@@ -36,9 +36,15 @@ struct ComposeTweetView: View {
                 mainContent
                 toastOverlay
             }
-            .navigationTitle(NSLocalizedString("New Tweet", comment: "New tweet screen title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        Avatar(user: hproseInstance.appUser, size: 32)
+                        Text(NSLocalizedString("New Tweet", comment: "New tweet screen title"))
+                            .font(.headline)
+                    }
+                }
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
                         if hasContentOrAttachments {

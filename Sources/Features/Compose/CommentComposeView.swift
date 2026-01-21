@@ -143,9 +143,15 @@ struct CommentComposeView: View {
                     }
                 }
             }
-            .navigationTitle(isQuoting ? "Quote Tweet" : "Reply")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        Avatar(user: hproseInstance.appUser, size: 32)
+                        Text(isQuoting ? "Quote Tweet" : "Reply")
+                            .font(.headline)
+                    }
+                }
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(NSLocalizedString("Cancel", comment: "Cancel button")) {
                         if hasContentOrAttachments {
