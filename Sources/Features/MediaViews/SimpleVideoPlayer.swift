@@ -3096,11 +3096,6 @@ struct SimpleVideoPlayer: View {
                         // MediaCell: Use custom AVPlayerLayer wrapper (no controls, respects mute state)
                         AVPlayerLayerView(player: player)
                             .id(uniqueViewId) // Hash of tweet+video+state for unique identity
-                            .onTapGesture {
-                                if let onVideoTap = onVideoTap {
-                                    onVideoTap()
-                                }
-                            }
                     }
                 } else {
                     // Show placeholder when player is detached (background state)
