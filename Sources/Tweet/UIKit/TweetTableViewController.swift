@@ -104,6 +104,9 @@ class TweetTableViewController: UITableViewController {
     // Feed identifier for persistent scroll position storage
     var feedIdentifier: String = "mainFeed"  // Default to main feed
     
+    // Counter for periodic cache cleanup during scrolling
+    private var scrollUpdateCount: Int = 0
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -111,6 +114,7 @@ class TweetTableViewController: UITableViewController {
         setupRefreshControl()
         setupScrollToTopObserver()
         setupTweetHeightObserver()
+        setupMemoryWarningObserver()
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
@@ -126,9 +130,22 @@ class TweetTableViewController: UITableViewController {
             NotificationCenter.default.removeObserver(observer)
         }
         
+        if let observer = memoryWarningObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
         // Clean up timers
         noMoreTweetsMessageTimer?.invalidate()
         loadingTimeoutTimer?.invalidate()
+        
+        // MEMORY FIX: Clear view cache to free memory
+        SwiftUIViewCache.shared.clearCache()
+        
+        // MEMORY FIX: Stop all videos and clear coordinator caches
+        // Use detached task since deinit cannot be async or @MainActor
+        Task { @MainActor in
+            videoCoordinator.stopAllVideos()
+        }
     }
     
     private func setupScrollToTopObserver() {
@@ -148,6 +165,30 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] notification in
             self?.handleTweetHeightChange(notification)
+        }
+    }
+    
+    // MEMORY FIX: Respond to memory warnings by aggressively clearing caches
+    private var memoryWarningObserver: NSObjectProtocol?
+    
+    private func setupMemoryWarningObserver() {
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            print("⚠️ [MEMORY] Memory warning received - clearing caches")
+            
+            // Clear SwiftUI view cache
+            SwiftUIViewCache.shared.clearCache()
+            
+            // Stop all videos and clear coordinator caches
+            self?.videoCoordinator.stopAllVideos()
+            
+            // Force reload visible cells to free up old hosting controllers
+            if let visibleIndexPaths = self?.tableView.indexPathsForVisibleRows {
+                self?.tableView.reloadRows(at: visibleIndexPaths, with: .none)
+            }
         }
     }
     
@@ -883,6 +924,15 @@ class TweetTableViewController: UITableViewController {
         if shouldUpdate {
             lastVideoVisibilityUpdate = now
             updateVisibleTweetsForVideoPlayback()
+            
+            // MEMORY FIX: Periodically clean up SwiftUI view cache during long scroll sessions
+            // This prevents cache from growing unbounded during extended scrolling
+            // The cache has its own LRU eviction, but this provides an extra safety net
+            scrollUpdateCount += 1
+            if scrollUpdateCount % 50 == 0 { // Every 50 scroll updates (~20 seconds of scrolling)
+                let cacheCount: () = SwiftUIViewCache.shared.clearCache()
+                print("🧹 [MEMORY] Periodic cache cleanup during scroll")
+            }
         }
         
         // Detect bottom pull-to-load gesture (always check, even before initial layout)

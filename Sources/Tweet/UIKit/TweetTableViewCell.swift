@@ -9,26 +9,66 @@ import UIKit
 import SwiftUI
 
 /// Cache for SwiftUI views to reduce recreation during scrolling
+/// MEMORY FIX: Added LRU eviction and size limits to prevent unbounded growth
 class SwiftUIViewCache {
     static let shared = SwiftUIViewCache()
     private var viewCache: [String: AnyView] = [:]
-    private let maxCacheSize = 50 // Cache up to 50 views
+    private var accessOrder: [String] = [] // LRU tracking
+    private let maxCacheSize = 50 // Cache up to 50 views (~5-10MB depending on view complexity)
+    private let lock = NSLock() // Thread safety
 
     private init() {}
 
     func getView(for key: String) -> AnyView? {
-        return viewCache[key]
+        lock.lock()
+        defer { lock.unlock() }
+        
+        guard let view = viewCache[key] else {
+            return nil
+        }
+        
+        // Update LRU order
+        if let index = accessOrder.firstIndex(of: key) {
+            accessOrder.remove(at: index)
+        }
+        accessOrder.append(key)
+        
+        return view
     }
 
     func setView(_ view: AnyView, for key: String) {
-        // Only cache if under limit
-        if viewCache.count < maxCacheSize {
+        lock.lock()
+        defer { lock.unlock() }
+        
+        // If already in cache, update and refresh LRU
+        if viewCache[key] != nil {
+            if let index = accessOrder.firstIndex(of: key) {
+                accessOrder.remove(at: index)
+            }
+            accessOrder.append(key)
             viewCache[key] = view
+            return
         }
+        
+        // Evict oldest entry if at capacity
+        if viewCache.count >= maxCacheSize {
+            if let oldestKey = accessOrder.first {
+                viewCache.removeValue(forKey: oldestKey)
+                accessOrder.removeFirst()
+            }
+        }
+        
+        // Add new entry
+        viewCache[key] = view
+        accessOrder.append(key)
     }
 
     func clearCache() {
+        lock.lock()
+        defer { lock.unlock() }
+        
         viewCache.removeAll()
+        accessOrder.removeAll()
     }
 }
 
@@ -38,6 +78,9 @@ class TweetTableViewCell: UITableViewCell {
     private var hostingController: UIHostingController<AnyView>?
     private var currentTweetId: String?
     private var lastViewKey: String?
+    
+    // MEMORY FIX: Track constraints so we can remove them during reuse
+    private var activeConstraints: [NSLayoutConstraint] = []
 
     /// Publicly accessible tweet ID for video orchestration
     var tweetId: String? {
@@ -91,11 +134,20 @@ class TweetTableViewCell: UITableViewCell {
         currentTweetId = tweet.mid
         lastViewKey = viewKey
 
-        // Remove old hosting controller if it exists
+        // MEMORY FIX: Remove old hosting controller if it exists
+        // This must be done carefully to avoid leaks
         if let oldHostingController = hostingController {
+            // Deactivate and clear old constraints first
+            NSLayoutConstraint.deactivate(activeConstraints)
+            activeConstraints.removeAll()
+            
+            // Properly remove from hierarchy
             oldHostingController.willMove(toParent: nil)
             oldHostingController.view.removeFromSuperview()
             oldHostingController.removeFromParent()
+            
+            // Clear reference
+            self.hostingController = nil
         }
 
         // Try to get cached view first to avoid recreation
@@ -131,24 +183,44 @@ class TweetTableViewCell: UITableViewCell {
 
         // Layout with constraints (configurable horizontal padding)
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
+        
+        // MEMORY FIX: Store constraints so we can deactivate them during reuse
+        let newConstraints = [
             hostingController.view.topAnchor.constraint(equalTo: contentView.topAnchor),
             hostingController.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: leadingPadding),
             hostingController.view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -trailingPadding),
             hostingController.view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
-        ])
+        ]
+        NSLayoutConstraint.activate(newConstraints)
+        activeConstraints = newConstraints
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        // Clear tweet association for reuse but keep hosting controller
-        // The hosting controller will be reused or replaced in configure()
+        
+        // MEMORY FIX: Deactivate constraints to prevent accumulation
+        NSLayoutConstraint.deactivate(activeConstraints)
+        activeConstraints.removeAll()
+        
+        // MEMORY FIX: Remove hosting controller from parent to prevent leak
+        // The controller will be reused or replaced in configure()
+        if let hostingController = hostingController {
+            hostingController.willMove(toParent: nil)
+            hostingController.view.removeFromSuperview()
+            hostingController.removeFromParent()
+        }
+        
+        // Clear references
+        hostingController = nil
         currentTweetId = nil
         lastViewKey = nil
     }
 
     deinit {
-        // Clean up when cell is deallocated
+        // MEMORY FIX: Clean up all resources when cell is deallocated
+        NSLayoutConstraint.deactivate(activeConstraints)
+        activeConstraints.removeAll()
+        
         if let hostingController = hostingController {
             hostingController.willMove(toParent: nil)
             hostingController.view.removeFromSuperview()
