@@ -116,6 +116,11 @@ class TweetTableViewCell: UITableViewCell {
 
         // CRITICAL: Set sizing options to prevent constant recalculation
         hostingController.sizingOptions = [.intrinsicContentSize]
+        
+        // PERFORMANCE: Disable implicit animations during initial layout
+        // This prevents expensive CoreAnimation work during cell prefetch/creation
+        hostingController.view.layer.allowsEdgeAntialiasing = false
+        hostingController.view.layer.shouldRasterize = false
 
         self.hostingController = hostingController
 

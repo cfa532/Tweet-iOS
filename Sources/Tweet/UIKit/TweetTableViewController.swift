@@ -312,8 +312,14 @@ class TweetTableViewController: UITableViewController {
         tableView.delegate = self
         tableView.dataSource = self
         
-        // Disable prefetching to reduce complexity
+        // CRITICAL: Disable ALL prefetching to prevent SwiftUI layout hangs during cell preparation
+        // Setting prefetchDataSource to nil only disables custom prefetching, but iOS still
+        // does automatic prefetching. We must explicitly disable it to avoid the 8ms+ hang
+        // seen in Instruments when UITableView prefetches cells with UIHostingView content.
         tableView.prefetchDataSource = nil
+        if #available(iOS 15.0, *) {
+            tableView.isPrefetchingEnabled = false
+        }
         
         // CRITICAL: Disable section header pinning so headers scroll naturally
         if #available(iOS 15.0, *) {
