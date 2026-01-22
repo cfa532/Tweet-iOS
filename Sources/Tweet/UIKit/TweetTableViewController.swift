@@ -83,7 +83,8 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: Date?
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.4 // 400ms throttle - reduce frequency further
+    // SMOOTHNESS FIX: Reduced from 0.4s to 0.2s for more responsive video updates
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.2 // 200ms throttle
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     
     // Cached main content rect to avoid recalculating on every visibility check
