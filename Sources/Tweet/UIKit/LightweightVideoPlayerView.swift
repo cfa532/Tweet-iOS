@@ -14,9 +14,11 @@ import SwiftUI
 class LightweightVideoPlayerView: UIView {
     
     private var playerLayer: AVPlayerLayer?
+    private var playerItemObserver: NSKeyValueObservation?
     private var player: AVPlayer? {
         didSet {
             playerLayer?.player = player
+            setupPlayerObserver()
         }
     }
     
@@ -32,14 +34,44 @@ class LightweightVideoPlayerView: UIView {
     
     private func setupPlayerLayer() {
         let layer = AVPlayerLayer()
+        // CRITICAL: Use .resizeAspect to maintain aspect ratio and center video
         layer.videoGravity = .resizeAspect
         layer.needsDisplayOnBoundsChange = true
         self.layer.addSublayer(layer)
         self.playerLayer = layer
     }
     
+    private func setupPlayerObserver() {
+        // Clean up old observer
+        playerItemObserver?.invalidate()
+        playerItemObserver = nil
+        
+        // Observe player item status to trigger layout when video is ready
+        guard let player = player else { return }
+        
+        playerItemObserver = player.observe(\.currentItem?.status, options: [.new]) { [weak self] _, change in
+            guard let self = self,
+                  let status = change.newValue,
+                  status == .readyToPlay else { return }
+            
+            // Video is ready - trigger layout to center it
+            DispatchQueue.main.async {
+                self.setNeedsLayout()
+                self.layoutIfNeeded()
+            }
+        }
+    }
+    
+    deinit {
+        playerItemObserver?.invalidate()
+    }
+    
     override func layoutSubviews() {
         super.layoutSubviews()
+        
+        // Set player layer to fill entire view bounds
+        // videoGravity = .resizeAspect will automatically center the video
+        // both horizontally and vertically while maintaining aspect ratio
         playerLayer?.frame = bounds
     }
     

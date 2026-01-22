@@ -461,79 +461,85 @@ struct MediaCell: View, Equatable {
     // MARK: - Video Player View
     @ViewBuilder
     private func videoPlayerViewContent(url: URL) -> some View {
-        GeometryReader { geometry in
-            SimpleVideoPlayer(
-                    url: url,
-                    mid: attachment.mid,
-                    parentTweetId: parentTweet.mid,
-                    isVisible: isVisible,
-                    mediaType: attachment.type,
-                    authorId: parentTweet.authorId, // Pass authorId for health check
-                    autoPlay: shouldAutoPlay, // Use state variable instead of computed value
-                    onVideoFinished: onVideoFinished,
-                    cellAspectRatio: CGFloat(aspectRatio),
-                    videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                    showNativeControls: false,
-                    isMuted: muteState.isMuted,
-                    onVideoTap: isEmbedded ? nil : {
-                        // Save current playback position before opening fullscreen
-                        saveVideoPositionForFullscreen()
-                        isOpeningFullScreen = true
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-                            showFullScreen = true
-                        }
-                    },
-                    disableAutoRestart: true,
-                    shouldLoadVideo: shouldLoadVideo,
-                    mode: isEmbedded ? .embeddedDetail : .mediaCell
-                )
-                .id("video_\(attachment.mid)_\(videoReloadTrigger)")
-                // Embedded videos are now managed by coordinator - no viewport checking needed
-                .overlay(
-                    // Invisible overlay to prevent tap propagation to parent views and add long press
-                    // Only apply gestures in embedded/detail views to avoid interfering with scrolling in feed
-                    Group {
-                        if isEmbedded {
-                            // Embedded videos in detail views should have gestures
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    // Save current playback position before opening fullscreen
-                                    saveVideoPositionForFullscreen()
-                                    isOpeningFullScreen = true
-                                    Task { @MainActor in
-                                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-                                        showFullScreen = true
-                                    }
-                                }
-                                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                                    handleVideoReload()
-                                }
-                        } else {
-                            // Regular feed videos should NOT have gestures to avoid blocking scrolling
-                            // Use Color.clear without contentShape to avoid intercepting scroll gestures
-                            Color.clear
-                                .allowsHitTesting(false)
-                        }
-                    }
-                )
-                .overlay(
-                    // Loading spinner overlay when opening fullscreen
-                    Group {
-                        if isOpeningFullScreen {
-                            ZStack {
-                                Color.black.opacity(0.4)
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(1.5)
+        // Use ZStack with center alignment to ensure video is vertically centered
+        ZStack(alignment: .center) {
+            Color.black // Background color
+            
+            GeometryReader { geometry in
+                SimpleVideoPlayer(
+                        url: url,
+                        mid: attachment.mid,
+                        parentTweetId: parentTweet.mid,
+                        isVisible: isVisible,
+                        mediaType: attachment.type,
+                        authorId: parentTweet.authorId, // Pass authorId for health check
+                        autoPlay: shouldAutoPlay, // Use state variable instead of computed value
+                        onVideoFinished: onVideoFinished,
+                        cellAspectRatio: CGFloat(aspectRatio),
+                        videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                        showNativeControls: false,
+                        isMuted: muteState.isMuted,
+                        onVideoTap: isEmbedded ? nil : {
+                            // Save current playback position before opening fullscreen
+                            saveVideoPositionForFullscreen()
+                            isOpeningFullScreen = true
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                                showFullScreen = true
                             }
-                            .transition(.opacity)
-                            .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
-                        }
-                    }
-                )
+                        },
+                        disableAutoRestart: true,
+                        shouldLoadVideo: shouldLoadVideo,
+                        mode: isEmbedded ? .embeddedDetail : .mediaCell
+                    )
+                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
+                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                    .id("video_\(attachment.mid)_\(videoReloadTrigger)")
+            }
         }
+        .overlay(
+            // Invisible overlay to prevent tap propagation to parent views and add long press
+            // Only apply gestures in embedded/detail views to avoid interfering with scrolling in feed
+            Group {
+                if isEmbedded {
+                    // Embedded videos in detail views should have gestures
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // Save current playback position before opening fullscreen
+                            saveVideoPositionForFullscreen()
+                            isOpeningFullScreen = true
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                                showFullScreen = true
+                            }
+                        }
+                        .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                            handleVideoReload()
+                        }
+                } else {
+                    // Regular feed videos should NOT have gestures to avoid blocking scrolling
+                    // Use Color.clear without contentShape to avoid intercepting scroll gestures
+                    Color.clear
+                        .allowsHitTesting(false)
+                }
+            }
+        )
+        .overlay(
+            // Loading spinner overlay when opening fullscreen
+            Group {
+                if isOpeningFullScreen {
+                    ZStack {
+                        Color.black.opacity(0.4)
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.5)
+                    }
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
+                }
+            }
+        )
     }
     
     // Preference key to track video frame changes
