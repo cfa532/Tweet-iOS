@@ -410,6 +410,17 @@ class TweetTableViewController: UITableViewController {
         let oldCount = pinnedTweets.count
         self.pinnedTweets = tweets
         
+        // CRITICAL: Pre-calculate heights for pinned tweets
+        let leadingPad = self.leadingPadding
+        let trailingPad = self.trailingPadding
+        Task.detached(priority: .userInitiated) {
+            TweetHeightCalculator.shared.precalculateHeights(
+                for: tweets,
+                leadingPadding: leadingPad,
+                trailingPadding: trailingPad
+            )
+        }
+        
         // CRITICAL: Rebuild video list when pinned tweets change
         // This ensures pinned tweet videos are registered with the coordinator
         print("🔵 [PINNED UPDATE] Rebuilding video list with \(self.tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
@@ -436,11 +447,30 @@ class TweetTableViewController: UITableViewController {
         let oldCount = tweets.count
         let oldTweets = tweets
         tweets = newTweets
+        
+        // CRITICAL: Pre-calculate heights for all new tweets to eliminate scroll jumps
+        // This ensures heights are known before cells are rendered, preventing jumps during fast scrolling
+        let leadingPad = self.leadingPadding
+        let trailingPad = self.trailingPadding
+        Task.detached(priority: .userInitiated) {
+            TweetHeightCalculator.shared.precalculateHeights(
+                for: newTweets,
+                leadingPadding: leadingPad,
+                trailingPadding: trailingPad
+            )
+        }
 
         // Cleanup old tweet instances to prevent memory growth
         Task.detached(priority: .background) {
             let activeTweetIds = Set(newTweets.map { $0.mid })
             Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+            
+            // Also clear height calculator cache for removed tweets
+            let oldTweetIds = Set(oldTweets.map { $0.mid })
+            let removedTweetIds = oldTweetIds.subtracting(activeTweetIds)
+            if !removedTweetIds.isEmpty {
+                TweetHeightCalculator.shared.clearCache(for: Array(removedTweetIds))
+            }
         }
         
         
