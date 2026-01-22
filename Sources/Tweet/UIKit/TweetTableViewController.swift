@@ -83,7 +83,7 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: Date?
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.2 // 200ms throttle for responsive video updates
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.2 // 200ms - responsive video updates
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     
     // Cached main content rect to avoid recalculating on every visibility check
@@ -351,6 +351,9 @@ class TweetTableViewController: UITableViewController {
         // CRITICAL: Explicitly set delegate to self
         tableView.delegate = self
         tableView.dataSource = self
+        
+        // Twitter-like scroll deceleration for smooth, controlled scrolling
+        tableView.decelerationRate = .normal
         
         // CRITICAL: Disable ALL prefetching to prevent SwiftUI layout hangs during cell preparation
         // Setting prefetchDataSource to nil only disables custom prefetching, but iOS still
