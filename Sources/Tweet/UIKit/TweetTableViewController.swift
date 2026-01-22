@@ -83,8 +83,7 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: Date?
-    // SMOOTHNESS FIX: Reduced from 0.4s to 0.2s for more responsive video updates
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.2 // 200ms throttle
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.2 // 200ms throttle for responsive video updates
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     
     // Cached main content rect to avoid recalculating on every visibility check
@@ -119,13 +118,6 @@ class TweetTableViewController: UITableViewController {
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
-        
-        // FIX: Pre-configure navigation bar to prevent transition hang
-        // This ensures the navigation bar is in the expected state before
-        // SwiftUI's BarAppearanceBridge tries to animate it during viewWillAppear
-        if let navigationController = navigationController {
-            navigationController.setNavigationBarHidden(false, animated: false)
-        }
     }
     
     deinit {
@@ -252,25 +244,6 @@ class TweetTableViewController: UITableViewController {
     
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        
-        // FIX: Prevent navigation bar animation hang during transition
-        // This addresses the 35ms+ hang in BarAppearanceBridge.updateBarsToConfiguration()
-        // by ensuring the navigation bar is already in the correct state before SwiftUI's
-        // BarAppearanceBridge tries to animate it.
-        if let navigationController = navigationController {
-            // Disable implicit animations during viewWillAppear to prevent
-            // UINavigationController from triggering expensive layout passes
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            
-            // Ensure navigation bar is visible without animation
-            // This prevents BarAppearanceBridge from calling setNavigationBarHidden:animated:
-            if navigationController.isNavigationBarHidden {
-                navigationController.setNavigationBarHidden(false, animated: false)
-            }
-            
-            CATransaction.commit()
-        }
         
         // Restore scroll position from persistent storage if available
         // This handles cases where the view controller was deallocated and recreated
