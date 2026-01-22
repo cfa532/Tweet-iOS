@@ -117,64 +117,50 @@ struct MediaCell: View, Equatable {
     }
     
     var body: some View {
-        Group {
-            if let url = attachment.getUrl(effectiveBaseUrl) {
-                switch attachment.type {
-                case .video, .hls_video:
-                    // MediaGrid already sets fixed frame - content should fill parent naturally
-                    videoPlayerViewContent(url: url)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .audio:
-                    // Audio autoplay controlled by visibility
-                    SimpleAudioPlayer(url: url, autoPlay: isVisible)
-                        .environmentObject(MuteState.shared)
-                        .onTapGesture {
-                            if !isEmbedded {
-                                handleTap()
+        // CRITICAL PERFORMANCE: Use fixed layout to prevent constraint solving
+        // The trace shows massive time in Auto Layout constraint generation (103ms+)
+        // By using GeometryReader with fixed frames, we bypass constraint system entirely
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+            
+            Group {
+                if let url = attachment.getUrl(effectiveBaseUrl) {
+                    switch attachment.type {
+                    case .video, .hls_video:
+                        // Video content with absolute positioning - no flexible frames
+                        videoPlayerViewContent(url: url, width: width, height: height)
+                    case .audio:
+                        // Audio autoplay controlled by visibility
+                        SimpleAudioPlayer(url: url, autoPlay: isVisible)
+                            .environmentObject(MuteState.shared)
+                            .frame(width: width, height: height, alignment: .center)
+                            .onTapGesture {
+                                if !isEmbedded {
+                                    handleTap()
+                                }
                             }
-                        }
-                case .image:
-                    // PERFORMANCE: Simplified layer hierarchy to reduce CA overhead
-                    // STABILITY: MediaGrid already sets fixed frame - content must maintain stable dimensions
-                    Group {
-                        if let displayImage = image ?? imageCache.getCompressedImageFromMemory(for: attachment) {
-                            // Image loaded - show it directly with minimal layers
-                            Image(uiImage: displayImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .clipped()
-                                .background(Color.gray.opacity(0.2))
-                        } else if isLoading {
-                            // Loading - show placeholder with spinner
-                            ZStack {
-                                Color.gray.opacity(0.2)
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
+                    case .image:
+                        // CRITICAL: Use absolute frames to avoid constraint updates
+                        imageViewContent(width: width, height: height)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if !isEmbedded {
+                                    handleTap()
+                                }
                             }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else {
-                            // No image and not loading - just show placeholder
-                            Color.gray.opacity(0.2)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
+                    default:
+                        // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
+                        Color.clear
+                            .frame(width: width, height: height, alignment: .center)
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if !isEmbedded {
-                            handleTap()
-                        }
-                    }
-                    // STABILITY: ID ensures SwiftUI doesn't recreate view when image changes
-                    .id("image_\(attachment.mid)")
-                default:
-                    // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
-                    EmptyView()
+                } else {
+                    Color.clear
+                        .frame(width: width, height: height, alignment: .center)
                 }
-            } else {
-                EmptyView()
             }
         }
+        .clipped() // Prevent content overflow without expensive masking
         .onAppear {
             // Set visibility to true immediately when cell appears
             // onAppear fires when any portion of the view becomes visible
@@ -453,6 +439,33 @@ struct MediaCell: View, Equatable {
     
     
     
+    // MARK: - Image View Content
+    @ViewBuilder
+    private func imageViewContent(width: CGFloat, height: CGFloat) -> some View {
+        // PERFORMANCE: Absolute positioning eliminates constraint solving
+        // No .infinity frames, no padding modifiers - just fixed positions
+        if let displayImage = image ?? imageCache.getCompressedImageFromMemory(for: attachment) {
+            // Image loaded - show it directly with minimal layers
+            Image(uiImage: displayImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: width, height: height, alignment: .center)
+                .clipped()
+        } else if isLoading {
+            // Loading - show placeholder with spinner
+            ZStack {
+                Color.gray.opacity(0.2)
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+            }
+            .frame(width: width, height: height, alignment: .center)
+        } else {
+            // No image and not loading - just show placeholder
+            Color.gray.opacity(0.2)
+                .frame(width: width, height: height, alignment: .center)
+        }
+    }
+    
     // MARK: - Equatable
     static func == (lhs: MediaCell, rhs: MediaCell) -> Bool {
         // Only compare the essential properties that should trigger recomposition
@@ -464,43 +477,42 @@ struct MediaCell: View, Equatable {
     
     // MARK: - Video Player View
     @ViewBuilder
-    private func videoPlayerViewContent(url: URL) -> some View {
-        // Use ZStack with center alignment to ensure video is vertically centered
+    private func videoPlayerViewContent(url: URL, width: CGFloat, height: CGFloat) -> some View {
+        // PERFORMANCE: Fixed dimensions eliminate recursive size calculations
         ZStack(alignment: .center) {
             Color.black // Background color
             
-            GeometryReader { geometry in
-                SimpleVideoPlayer(
-                        url: url,
-                        mid: attachment.mid,
-                        parentTweetId: parentTweet.mid,
-                        isVisible: isVisible,
-                        mediaType: attachment.type,
-                        authorId: parentTweet.authorId, // Pass authorId for health check
-                        autoPlay: shouldAutoPlay, // Use state variable instead of computed value
-                        onVideoFinished: onVideoFinished,
-                        cellAspectRatio: CGFloat(aspectRatio),
-                        videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                        showNativeControls: false,
-                        isMuted: muteState.isMuted,
-                        onVideoTap: isEmbedded ? nil : {
-                            // Save current playback position before opening fullscreen
-                            saveVideoPositionForFullscreen()
-                            isOpeningFullScreen = true
-                            Task { @MainActor in
-                                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-                                showFullScreen = true
-                            }
-                        },
-                        disableAutoRestart: true,
-                        shouldLoadVideo: shouldLoadVideo,
-                        mode: isEmbedded ? .embeddedDetail : .mediaCell
-                    )
-                    .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
-                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                    .id("video_\(attachment.mid)_\(videoReloadTrigger)")
-            }
+            SimpleVideoPlayer(
+                url: url,
+                mid: attachment.mid,
+                parentTweetId: parentTweet.mid,
+                isVisible: isVisible,
+                mediaType: attachment.type,
+                authorId: parentTweet.authorId,
+                autoPlay: shouldAutoPlay,
+                onVideoFinished: onVideoFinished,
+                cellAspectRatio: CGFloat(aspectRatio),
+                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                showNativeControls: false,
+                isMuted: muteState.isMuted,
+                onVideoTap: isEmbedded ? nil : {
+                    // Save current playback position before opening fullscreen
+                    saveVideoPositionForFullscreen()
+                    isOpeningFullScreen = true
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                        showFullScreen = true
+                    }
+                },
+                disableAutoRestart: true,
+                shouldLoadVideo: shouldLoadVideo,
+                mode: isEmbedded ? .embeddedDetail : .mediaCell
+            )
+            .frame(width: width, height: height, alignment: .center)
+            .id("video_\(attachment.mid)_\(videoReloadTrigger)")
         }
+        .frame(width: width, height: height, alignment: .center)
+        .frame(width: width, height: height, alignment: .center)
         .overlay(
             // Invisible overlay to prevent tap propagation to parent views and add long press
             // Only apply gestures in embedded/detail views to avoid interfering with scrolling in feed
@@ -508,6 +520,7 @@ struct MediaCell: View, Equatable {
                 if isEmbedded {
                     // Embedded videos in detail views should have gestures
                     Color.clear
+                        .frame(width: width, height: height, alignment: .center)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             // Save current playback position before opening fullscreen
@@ -525,6 +538,7 @@ struct MediaCell: View, Equatable {
                     // Regular feed videos should NOT have gestures to avoid blocking scrolling
                     // Use Color.clear without contentShape to avoid intercepting scroll gestures
                     Color.clear
+                        .frame(width: width, height: height, alignment: .center)
                         .allowsHitTesting(false)
                 }
             }
@@ -539,6 +553,7 @@ struct MediaCell: View, Equatable {
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             .scaleEffect(1.5)
                     }
+                    .frame(width: width, height: height, alignment: .center)
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
                 }
