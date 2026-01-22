@@ -100,16 +100,29 @@ class GlobalImageLoadManager: ObservableObject {
         
         // Check if already completed successfully
         if completedRequests.contains(request.id) {
-            // CRITICAL FIX: Always call completion handler to update UI state
-            // If cache has image, use it; otherwise return nil to reset loading state
-            let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment)
-            request.completion(cachedImage)
+            // PERFORMANCE FIX: Only check memory cache on main thread (no disk I/O)
+            // If not in memory, check disk asynchronously
+            let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: request.attachment)
             
-            // If image was evicted from cache, remove from completed so it can be reloaded
-            if cachedImage == nil {
-                completedRequests.remove(request.id)
-                // Don't return - let it load again
+            if let cachedImage = cachedImage {
+                // Found in memory cache - return immediately
+                request.completion(cachedImage)
+                return
             } else {
+                // Not in memory - check disk cache asynchronously
+                Task.detached(priority: .userInitiated) {
+                    let diskCachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment)
+                    await MainActor.run {
+                        if let diskCachedImage = diskCachedImage {
+                            request.completion(diskCachedImage)
+                        } else {
+                            // Image was evicted from cache, remove from completed so it can be reloaded
+                            self.completedRequests.remove(request.id)
+                            // Restart loading
+                            self.loadImage(request: request)
+                        }
+                    }
+                }
                 return
             }
         }
@@ -130,14 +143,13 @@ class GlobalImageLoadManager: ObservableObject {
         
         // Check if already loading
         if activeLoads[request.id] != nil {
-            // Already loading - check cache in case it just completed and was cached
-            // This handles race condition where image completes between checks
-            let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment)
+            // PERFORMANCE FIX: Only check memory cache on main thread (no disk I/O)
+            let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: request.attachment)
             if cachedImage != nil {
-                // Found in cache, return it immediately
+                // Found in memory cache, return it immediately
                 request.completion(cachedImage)
             }
-            // If not in cache, the existing request will call its completion when done
+            // If not in memory cache, the existing request will call completion when done
             // Don't call completion(nil) here as that would reset loading state prematurely
             return
         }

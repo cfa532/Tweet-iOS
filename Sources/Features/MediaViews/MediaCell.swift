@@ -134,35 +134,31 @@ struct MediaCell: View, Equatable {
                             }
                         }
                 case .image:
+                    // PERFORMANCE: Simplified layer hierarchy to reduce CA overhead
                     // STABILITY: MediaGrid already sets fixed frame - content must maintain stable dimensions
-                    // All image states (loading, cached, loaded) use same frame to prevent layout shifts
-                    ZStack {
-                        // Background: Always show gray placeholder to reserve space
-                        Color.gray.opacity(0.2)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        
-                        // Layer 1: Cached/Loaded image (fills parent with aspect ratio preserved)
-                        // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+                    Group {
                         if let displayImage = image ?? imageCache.getCompressedImageFromMemory(for: attachment) {
+                            // Image loaded - show it directly with minimal layers
                             Image(uiImage: displayImage)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .clipped()
-                                // STABILITY: Use transition to smooth appearance, reducing visual jump
-                                .transition(.opacity)
-                        }
-                        
-                        // Layer 2: Loading indicator (only show if actually loading and no image available)
-                        if isLoading && image == nil {
-                            // Show loading spinner only when actively loading and no image is displayed
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle())
-                                .scaleEffect(1.2)
+                                .background(Color.gray.opacity(0.2))
+                        } else if isLoading {
+                            // Loading - show placeholder with spinner
+                            ZStack {
+                                Color.gray.opacity(0.2)
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            // No image and not loading - just show placeholder
+                            Color.gray.opacity(0.2)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     }
-                    // STABILITY: Fixed frame prevents any size changes during loading
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         if !isEmbedded {
@@ -417,33 +413,41 @@ struct MediaCell: View, Equatable {
             return
         }
 
-        // For images not in memory, check disk cache synchronously
-        // This is acceptable for individual cells (not during mass scrolling)
-        // but avoids the async delay that would show spinners for cached images
-        if let cachedImage = imageCache.getCompressedImage(for: attachment) {
-            print("DEBUG: [MediaCell] Found image in disk cache for \(attachment.mid)")
-            self.image = cachedImage
-            self.isLoading = false
-            return
-        }
-
-        print("DEBUG: [MediaCell] No cached image found, starting network load for \(attachment.mid)")
-        // If no cached image at all, start loading with global manager
+        // CRITICAL PERFORMANCE FIX: Disk I/O MUST happen on background thread
+        // The getCompressedImage() call does synchronous File I/O which blocks the main thread
+        // causing the 227ms hang in -[CALayer _display]
+        print("DEBUG: [MediaCell] Checking disk cache asynchronously for \(attachment.mid)")
         isLoading = true
         
-        // Use normal priority for grid images (they're visible but not as critical as detail view)
-        // ✅ FIX: Use only mid as request ID - cache key is based on mid, so request ID should match
-        // This ensures cached images are reused even when baseUrl changes
-        GlobalImageLoadManager.shared.loadImageNormalPriority(
-            id: attachment.mid,
-            url: url,
-            attachment: attachment,
-            baseUrl: effectiveBaseUrl
-        ) { loadedImage in
-            // Completion is already @MainActor, update state immediately without additional Task wrapper
-            // The extra Task wrapper was causing a delay in UI updates, making spinners stick
-            self.image = loadedImage
-            self.isLoading = false
+        // Capture necessary data before entering detached task
+        let attachmentCopy = attachment
+        let effectiveBaseUrlCopy = effectiveBaseUrl
+        
+        Task.detached(priority: .userInitiated) {
+            // ✅ CRITICAL: This runs on BACKGROUND thread, not main thread
+            // Disk I/O happens here without blocking UI rendering
+            let cachedImage = imageCache.getCompressedImage(for: attachmentCopy)
+            
+            await MainActor.run {
+                if let cachedImage = cachedImage {
+                    print("DEBUG: [MediaCell] Found image in disk cache for \(attachmentCopy.mid)")
+                    self.image = cachedImage
+                    self.isLoading = false
+                } else {
+                    print("DEBUG: [MediaCell] No cached image found, starting network load for \(attachmentCopy.mid)")
+                    // If no cached image at all, start loading with global manager
+                    // Use normal priority for grid images (they're visible but not as critical as detail view)
+                    GlobalImageLoadManager.shared.loadImageNormalPriority(
+                        id: attachmentCopy.mid,
+                        url: url,
+                        attachment: attachmentCopy,
+                        baseUrl: effectiveBaseUrlCopy
+                    ) { loadedImage in
+                        self.image = loadedImage
+                        self.isLoading = false
+                    }
+                }
+            }
         }
     }
     

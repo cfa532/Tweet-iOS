@@ -377,22 +377,24 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     /// Get compressed image from memory or disk cache
-    /// ⚠️ WARNING: This method performs synchronous disk I/O and should NOT be called from view body
-    /// Use getCompressedImageFromMemory() for synchronous access in views
-    /// This method should only be used in async contexts (Task, loadImage, etc.)
+    /// ⚠️ WARNING: This method performs synchronous disk I/O and should NOT be called from main thread
+    /// Use getCompressedImageFromMemory() for main thread access
+    /// This method should only be used in background contexts (Task.detached, DispatchQueue.global, etc.)
     func getCompressedImage(for attachment: MimeiFileType) -> UIImage? {
         guard let key = getCacheKey(for: attachment) else { return nil }
         let cacheKey = "\(key)_compressed"
         
-        // Check memory cache first
+        // Check memory cache first (thread-safe, NSCache handles locking)
         if let cachedImage = cache.object(forKey: cacheKey as NSString) {
             return cachedImage
         }
         
-        // Check disk cache (synchronous I/O - only use in async contexts)
+        // PERFORMANCE: Disk I/O happens here - should only be called from background thread
+        // This is the source of the 227ms hang when called from main thread
         let fileURL = getCompressedCacheFileURL(for: key)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
+            // Cache in memory for next time (NSCache is thread-safe)
             cacheImageInMemory(image, forKey: cacheKey)
             return image
         }
