@@ -76,6 +76,7 @@ struct CachingVideoPlayer: View {
             if let player = player {
                 ZStack {
                     if showNativeControls {
+                        // Full AVPlayerViewController for fullscreen with native controls
                         VideoPlayer(player: player)
                             .aspectRatio(videoAspectRatio, contentMode: .fit)
                             .clipped()
@@ -84,7 +85,10 @@ struct CachingVideoPlayer: View {
                                 onVideoTap?()
                             }
                     } else {
-                        VideoPlayer(player: player)
+                        // Lightweight player for feed - no AVPlayerViewController overhead
+                        // Eliminates AVMobileGlassControlsViewController timers (1ms per video per fire)
+                        // Custom controls (volume button, etc.) are overlaid separately in MediaCell
+                        LightweightVideoPlayer(player: player)
                             .aspectRatio(videoAspectRatio, contentMode: .fit)
                             .clipped()
                             .id(playerRefreshID) // Force view refresh when player is recreated

@@ -131,20 +131,43 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Track async tasks to prevent leaks
     private nonisolated(unsafe) var activeAsyncTasks: Set<Task<Void, Never>> = []
+    private let taskCleanupLock = NSLock()
+    private let maxConcurrentTasks = 5  // Safety limit to prevent task accumulation
 
     /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
     /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
     private var isPlaybackSuppressedByOverlay: Bool = false
 
     /// Track an async task for proper cleanup
+    /// MEMORY FIX: Properly clean up completed tasks and enforce concurrency limits
     private nonisolated func trackAsyncTask(_ task: Task<Void, Never>) {
-        activeAsyncTasks.insert(task)
-        // Clean up completed tasks
+        taskCleanupLock.lock()
+        defer { taskCleanupLock.unlock() }
+        
+        // CRITICAL: Filter checks isCancelled but Task has no isCompleted property!
+        // This means completed tasks accumulate forever. We need a different approach.
+        // Solution: Just limit the set size and cancel oldest tasks
+        
+        // Clean up cancelled tasks
         activeAsyncTasks = activeAsyncTasks.filter { !$0.isCancelled }
+        
+        // If we're at the limit, cancel oldest task to prevent unbounded growth
+        if activeAsyncTasks.count >= maxConcurrentTasks {
+            print("⚠️ [TASK LIMIT] Hit max \(maxConcurrentTasks) tasks, cancelling oldest")
+            if let oldestTask = activeAsyncTasks.first {
+                oldestTask.cancel()
+                activeAsyncTasks.remove(oldestTask)
+            }
+        }
+        
+        activeAsyncTasks.insert(task)
     }
 
     /// Cancel all active async tasks
     private nonisolated func cancelActiveAsyncTasks() {
+        taskCleanupLock.lock()
+        defer { taskCleanupLock.unlock() }
+        
         activeAsyncTasks.forEach { $0.cancel() }
         activeAsyncTasks.removeAll()
     }
@@ -883,11 +906,13 @@ class VideoPlaybackCoordinator: ObservableObject {
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil
                 
-                // Cancel existing timers
+                // MEMORY FIX: Cancel ALL existing timers before creating new ones
                 surveyTimer?.invalidate()
                 surveyTimer = nil
                 playbackDebounceTimer?.invalidate()
                 playbackDebounceTimer = nil
+                scrollStopTimer?.invalidate()
+                scrollStopTimer = nil
                 
                 // Android-style deferred batching: Use 150ms intervals for performance
                 // Cancel existing debounce timer
@@ -929,22 +954,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This ensures foreground recovery knows user changed context
         shouldPreserveStateOnForeground = false
         
-        // PERF FIX: Batch visibility updates to reduce expensive filtering/sorting operations
-        // Cancel existing timer
-        visibilityUpdateDebounceTimer?.invalidate()
-
-        // Schedule batched visibility update
-        visibilityUpdateDebounceTimer = Timer(timeInterval: visibilityUpdateDebounceInterval, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.performBatchedVisibilityUpdate()
-            }
-        }
-        RunLoop.main.add(visibilityUpdateDebounceTimer!, forMode: .common)
-        
-        // Cancel scroll stop timer - we don't need re-evaluation anymore
-        // Videos start via debounce during scroll, no need for post-scroll restart
-        scrollStopTimer?.invalidate()
-        scrollStopTimer = nil
+        // MEMORY FIX: REMOVED DUPLICATE timer creation - already handled above
+        // The duplicate visibilityUpdateDebounceTimer was causing timer accumulation
     }
 
     /// Android-style deferred batching for visibility updates (150ms intervals)
@@ -954,6 +965,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         guard !isPlaybackSuppressedByOverlay else {
             return
         }
+
+        // MEMORY FIX: Cancel any pending tasks before creating new ones
+        // This prevents task accumulation during rapid scroll updates
+        cancelActiveAsyncTasks()
 
         // If we have visible videos but no primary video playing, start playback
         if phase == .idle && !visibleVideos.isEmpty {
@@ -1023,7 +1038,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Synchronous wrapper for startPrimaryVideoPlaybackAsync
     private func startPrimaryVideoPlayback() {
-        Task { await startPrimaryVideoPlaybackAsync() }
+        let task = Task { await startPrimaryVideoPlaybackAsync() }
+        trackAsyncTask(task)
     }
 
     /// Start primary video playback - play topmost video immediately
@@ -1129,8 +1145,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// This makes playback start immediately even while scrolling, not waiting for debounce
     /// Optimized to avoid expensive operations during fast scrolling
     private func checkPrimaryVideoDuringScroll() {
-        // Use async version to avoid blocking main thread
-        Task {
+        // MEMORY FIX: Track this task to prevent accumulation during rapid scrolling
+        let task = Task {
             guard let correctPrimary = await identifyPrimaryVideoAsync(), correctPrimary.identifier != primaryVideoId else {
                 return
             }
@@ -1164,11 +1180,13 @@ class VideoPlaybackCoordinator: ObservableObject {
                 )
             }
         }
+        trackAsyncTask(task)
     }
 
     /// Synchronous wrapper for checkAndSwitchVideoIfNeededAsync
     private func checkAndSwitchVideoIfNeeded() {
-        Task { await checkAndSwitchVideoIfNeededAsync() }
+        let task = Task { await checkAndSwitchVideoIfNeededAsync() }
+        trackAsyncTask(task)
     }
 
     /// Check if current primary video is less than 50% visible and switch to next video if needed

@@ -118,6 +118,13 @@ class TweetTableViewController: UITableViewController {
         
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
+        
+        // FIX: Pre-configure navigation bar to prevent transition hang
+        // This ensures the navigation bar is in the expected state before
+        // SwiftUI's BarAppearanceBridge tries to animate it during viewWillAppear
+        if let navigationController = navigationController {
+            navigationController.setNavigationBarHidden(false, animated: false)
+        }
     }
     
     deinit {
@@ -142,10 +149,9 @@ class TweetTableViewController: UITableViewController {
         SwiftUIViewCache.shared.clearCache()
         
         // MEMORY FIX: Stop all videos and clear coordinator caches
-        // Use detached task since deinit cannot be async or @MainActor
-        Task { @MainActor in
-            videoCoordinator.stopAllVideos()
-        }
+        // Post a notification instead of calling the method directly to avoid
+        // capturing self or requiring @MainActor in deinit
+        NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
     }
     
     private func setupScrollToTopObserver() {
@@ -182,8 +188,8 @@ class TweetTableViewController: UITableViewController {
             // Clear SwiftUI view cache
             SwiftUIViewCache.shared.clearCache()
             
-            // Stop all videos and clear coordinator caches
-            self?.videoCoordinator.stopAllVideos()
+            // Stop all videos and clear coordinator caches via notification
+            NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
             
             // Force reload visible cells to free up old hosting controllers
             if let visibleIndexPaths = self?.tableView.indexPathsForVisibleRows {
@@ -245,6 +251,25 @@ class TweetTableViewController: UITableViewController {
     
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        
+        // FIX: Prevent navigation bar animation hang during transition
+        // This addresses the 35ms+ hang in BarAppearanceBridge.updateBarsToConfiguration()
+        // by ensuring the navigation bar is already in the correct state before SwiftUI's
+        // BarAppearanceBridge tries to animate it.
+        if let navigationController = navigationController {
+            // Disable implicit animations during viewWillAppear to prevent
+            // UINavigationController from triggering expensive layout passes
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            
+            // Ensure navigation bar is visible without animation
+            // This prevents BarAppearanceBridge from calling setNavigationBarHidden:animated:
+            if navigationController.isNavigationBarHidden {
+                navigationController.setNavigationBarHidden(false, animated: false)
+            }
+            
+            CATransaction.commit()
+        }
         
         // Restore scroll position from persistent storage if available
         // This handles cases where the view controller was deallocated and recreated
@@ -930,7 +955,7 @@ class TweetTableViewController: UITableViewController {
             // The cache has its own LRU eviction, but this provides an extra safety net
             scrollUpdateCount += 1
             if scrollUpdateCount % 50 == 0 { // Every 50 scroll updates (~20 seconds of scrolling)
-                let cacheCount: () = SwiftUIViewCache.shared.clearCache()
+                let _ = SwiftUIViewCache.shared.clearCache()
                 print("🧹 [MEMORY] Periodic cache cleanup during scroll")
             }
         }
