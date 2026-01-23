@@ -1442,13 +1442,15 @@ class VideoPlaybackCoordinator: ObservableObject {
         // IMPORTANT: `indexPathsForVisibleRows` can include rows that are barely visible.
         // When the current video finishes, we should only advance to a video whose cell is
         // sufficiently visible, otherwise it will "autoplay" while appearing invisible.
+        // Use 25% threshold for sequential playback (lower than 50% for initial selection)
+        // to allow advancing to videos that are partially visible at screen edges
         let step = scrollDirection ? 1 : -1
         var candidateIndex = targetIndex
         var nextVideo: VideoPlaybackInfo?
         print("🔍 [VIDEO ADVANCE] Searching for next visible video starting at index \(targetIndex)")
         while candidateIndex >= 0 && candidateIndex < visibleVideos.count {
             let candidate = visibleVideos[candidateIndex]
-            let isVisible = isVideoCellVisibleEnough(candidate, minVisibilityRatio: 0.5)
+            let isVisible = isVideoCellVisibleEnough(candidate, minVisibilityRatio: 0.33)
             print("🔍 [VIDEO ADVANCE] Checking candidate at index \(candidateIndex): \(candidate.videoMid.prefix(10))... - visible enough: \(isVisible)")
             if isVisible {
                 nextVideo = candidate
