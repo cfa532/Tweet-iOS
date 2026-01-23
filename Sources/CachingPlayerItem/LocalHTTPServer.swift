@@ -180,6 +180,13 @@ private actor ActiveDownloadsActor {
     func removeTask(for key: String) {
         activeDownloads.removeValue(forKey: key)
     }
+
+    func cancelAllTasks() {
+        for (_, task) in activeDownloads {
+            task.cancel()
+        }
+        activeDownloads.removeAll()
+    }
 }
 
 public class LocalHTTPServer: @unchecked Sendable {
@@ -213,6 +220,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
     private let connectionPoolLock = NSLock()
+
+    // Network failure tracking for emergency cleanup
+    private var consecutiveNetworkFailures: Int = 0
+    private let maxConsecutiveFailures = 5 // Trigger cleanup after 5 consecutive failures
     private var connectionPool: URLSession {
         connectionPoolLock.lock()
         defer { connectionPoolLock.unlock() }
@@ -564,6 +575,36 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Next access will create a new session
         }
     }
+
+    /// Emergency cleanup during network failures
+    public func handleNetworkFailureCleanup() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+
+            print("DEBUG: [LocalHTTPServer] Network failure detected, performing emergency cleanup")
+
+            // Cancel all active download tasks
+            Task {
+                await self.activeDownloadsActor.cancelAllTasks()
+            }
+
+            // Reset streaming sessions
+            self.streamingSessionsLock.lock()
+            for (_, session) in self.streamingSessions {
+                session.invalidateAndCancel()
+            }
+            self.streamingSessions.removeAll()
+            self.streamingSessionsLock.unlock()
+
+            // Reset connection pool
+            self.connectionPoolLock.lock()
+            self._connectionPool?.invalidateAndCancel()
+            self._connectionPool = nil
+            self.connectionPoolLock.unlock()
+
+            print("DEBUG: [LocalHTTPServer] Emergency cleanup completed")
+        }
+    }
     
     public func registerMedia(mediaID: String, cachePath: String) {
         queue.async { [weak self] in
@@ -758,10 +799,24 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
 
                 if let error = error {
+                    // Track consecutive network failures
+                    consecutiveNetworkFailures += 1
+                    print("DEBUG: [LocalHTTPServer] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+
+                    // Trigger emergency cleanup if too many consecutive failures
+                    if consecutiveNetworkFailures >= maxConsecutiveFailures {
+                        print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
+                        handleNetworkFailureCleanup()
+                        consecutiveNetworkFailures = 0 // Reset counter after cleanup
+                    }
+
                     // Only log non-connection-reset errors
                     if (error as NSError).code != 54 {  // 54 = Connection reset by peer
                         print("ERROR: [LocalHTTPServer] Receive error: \(error)")
                     }
+                } else {
+                    // Reset network failure counter on successful receive
+                    consecutiveNetworkFailures = 0
                 }
 
                 if let data = data, !data.isEmpty {

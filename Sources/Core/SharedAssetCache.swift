@@ -82,7 +82,11 @@ class SharedAssetCache: ObservableObject {
     // MARK: - Retry Management (ID-based to avoid memory leaks)
     private var videoRetryCount: [String: Int] = [:] // mediaID -> retry count
     private var scheduledVideoRetries: [String: Task<Void, Never>] = [:] // mediaID -> retry task
-    
+
+    // MARK: - Network Failure Tracking
+    private var consecutiveNetworkFailures: Int = 0
+    private let maxConsecutiveFailures = 5 // Trigger cleanup after 5 consecutive failures
+
     // MARK: - Disk Cache Status Cache (to avoid repeated disk I/O)
     private var diskCacheStatus: [String: (exists: Bool, timestamp: Date)] = [:] // mediaID -> (cache exists, check timestamp)
     private let diskCacheStatusTTL: TimeInterval = 60 // Cache disk status for 60 seconds
@@ -513,10 +517,13 @@ class SharedAssetCache: ObservableObject {
                 self.assetCache[cacheKey] = asset
                 self.cacheTimestamps[cacheKey] = Date()
                 self.loadingTasks.removeValue(forKey: cacheKey)
-                
+
+                // Reset network failure counter on successful load
+                self.consecutiveNetworkFailures = 0
+
                 // Save cache metadata to persist across app restarts
                 self.saveCacheMetadata()
-                
+
                 // Notify VideoLoadingManager that the load completed
                 VideoLoadingManager.shared.videoLoadCompleted()
             }
@@ -532,13 +539,24 @@ class SharedAssetCache: ObservableObject {
             return asset
         } catch {
             loadingTasks.removeValue(forKey: cacheKey)
-            
+
             // Only notify failure if not cancelled (cancellation is normal cleanup)
             if !(error is CancellationError) {
+                // Track consecutive network failures
+                consecutiveNetworkFailures += 1
+                print("DEBUG: [SharedAssetCache] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+
+                // Trigger emergency cleanup if too many consecutive failures
+                if consecutiveNetworkFailures >= maxConsecutiveFailures {
+                    print("DEBUG: [SharedAssetCache] Too many consecutive network failures, triggering cleanup")
+                    handleNetworkFailureCleanup()
+                    consecutiveNetworkFailures = 0 // Reset counter after cleanup
+                }
+
                 // Notify VideoLoadingManager that the load failed
                 VideoLoadingManager.shared.videoLoadCompleted()
             }
-            
+
             throw error
         }
     }
@@ -1359,7 +1377,39 @@ class SharedAssetCache: ObservableObject {
         scheduledVideoRetries.removeAll()
         videoRetryCount.removeAll()
     }
-    
+
+    /// Emergency cleanup during network failures
+    @MainActor func handleNetworkFailureCleanup() {
+        print("DEBUG: [SharedAssetCache] Network failure detected, performing emergency cleanup")
+
+        // Cancel all active loading tasks
+        for (mediaID, task) in loadingTasks {
+            print("DEBUG: [SharedAssetCache] Cancelling active load: \(mediaID)")
+            task.cancel()
+        }
+        loadingTasks.removeAll()
+
+        // Cancel all preload tasks
+        for (mediaID, task) in preloadTasks {
+            print("DEBUG: [SharedAssetCache] Cancelling preload: \(mediaID)")
+            task.cancel()
+        }
+        preloadTasks.removeAll()
+
+        // Cancel all retry tasks
+        for (mediaID, task) in scheduledVideoRetries {
+            print("DEBUG: [SharedAssetCache] Cancelling retry: \(mediaID)")
+            task.cancel()
+        }
+        scheduledVideoRetries.removeAll()
+
+        // Clear retry counts for failed requests
+        videoRetryCount.removeAll()
+
+        // Release cache aggressively
+        releasePartialCache(percentage: 30)
+    }
+
     /// Release a percentage of cache to free memory (preserves current playing videos)
     @MainActor func releasePartialCache(percentage: Int) {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
