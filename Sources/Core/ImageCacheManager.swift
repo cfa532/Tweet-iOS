@@ -189,20 +189,21 @@ class ImageCacheManager: @unchecked Sendable {
                    let modificationDate = attributes[.modificationDate] as? Date,
                    let fileSize = attributes[.size] as? Int64 {
                     totalSize += fileSize
-                    
+
                     // Extract image ID from filename (format: imageID or imageID-thumb)
                     let filename = fileURL.deletingPathExtension().lastPathComponent
                     let imageID = filename.components(separatedBy: "-").first ?? filename
-                    
-                    // NEVER delete: private tweets OR bookmarks/favorites
+
+                    // NEVER delete: private tweets OR bookmarks/favorites OR avatars
                     let isPrivate = isPrivateTweet(imageID: imageID)
                     let isPermanent = isPermanentImageID(imageID)
-                    
-                    if isPrivate || isPermanent {
-                        print("💾 [ImageCacheManager] Skipping permanent image: \(imageID) (private: \(isPrivate), bookmarked: \(isPermanent))")
+                    let isAvatar = filename.contains("avatar_")
+
+                    if isPrivate || isPermanent || isAvatar {
+                        print("💾 [ImageCacheManager] Skipping permanent image: \(imageID) (private: \(isPrivate), bookmarked: \(isPermanent), avatar: \(isAvatar))")
                         continue
                     }
-                    
+
                     if now.timeIntervalSince(modificationDate) > maxCacheAge {
                         filesToDelete.append(fileURL)
                     }
@@ -221,12 +222,13 @@ class ImageCacheManager: @unchecked Sendable {
                     // Extract image ID from filename
                     let filename = fileURL.deletingPathExtension().lastPathComponent
                     let imageID = filename.components(separatedBy: "-").first ?? filename
-                    
-                    // NEVER delete: private tweets OR bookmarks/favorites
+
+                    // NEVER delete: private tweets OR bookmarks/favorites OR avatars
                     let isPrivate = isPrivateTweet(imageID: imageID)
                     let isPermanent = isPermanentImageID(imageID)
-                    
-                    if isPrivate || isPermanent {
+                    let isAvatar = filename.contains("avatar_")
+
+                    if isPrivate || isPermanent || isAvatar {
                         continue
                     }
                     
@@ -329,25 +331,31 @@ class ImageCacheManager: @unchecked Sendable {
         // Clear memory cache completely (NSCache doesn't support partial clearing)
         cache.removeAllObjects()
         
-        // Remove percentage of disk cache files (oldest first)
+        // Remove percentage of disk cache files (oldest first), but preserve avatars
         do {
             let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
-            
+
+            // Filter out avatar files to protect them from cleanup
+            let nonAvatarFiles = contents.filter { fileURL in
+                let fileName = fileURL.lastPathComponent
+                return !fileName.contains("avatar_")
+            }
+
             // Sort by modification date (oldest first)
-            let sortedFiles = contents.sorted { url1, url2 in
+            let sortedFiles = nonAvatarFiles.sorted { url1, url2 in
                 let date1 = (try? fileManager.attributesOfItem(atPath: url1.path)[.modificationDate] as? Date) ?? Date.distantPast
                 let date2 = (try? fileManager.attributesOfItem(atPath: url2.path)[.modificationDate] as? Date) ?? Date.distantPast
                 return date1 < date2
             }
-            
+
             let countToRemove = max(1, (sortedFiles.count * percentageToRemove) / 100)
             let filesToRemove = Array(sortedFiles.prefix(countToRemove))
-            
+
             for fileURL in filesToRemove {
                 try? fileManager.removeItem(at: fileURL)
             }
-            
-            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from cache")
+
+            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from cache (avatars protected)")
         } catch {
             print("Error releasing partial image cache: \(error)")
         }
