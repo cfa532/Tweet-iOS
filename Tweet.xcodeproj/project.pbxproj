@@ -43,6 +43,11 @@
 		462826222EAD92A9000E891A /* CircularImageCropper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 462826212EAD92A9000E891A /* CircularImageCropper.swift */; };
 		4629FB192DFFEA3100588941 /* MetricKitManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4629FB182DFFEA3100588941 /* MetricKitManager.swift */; };
 		46349FAD2F23491E00CBDE7D /* SharedVideoPlayerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46349FAC2F23491E00CBDE7D /* SharedVideoPlayerManager.swift */; };
+		46349FAF2F2393DF00CBDE7D /* PHASE_2_IMPLEMENTATION_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FAE2F2393DF00CBDE7D /* PHASE_2_IMPLEMENTATION_SUMMARY.md */; };
+		46349FB12F23941000CBDE7D /* PHASE_2_ARCHITECTURE_DIAGRAM.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FB02F23941000CBDE7D /* PHASE_2_ARCHITECTURE_DIAGRAM.md */; };
+		46349FB32F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FB22F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md */; };
+		46349FB52F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FB42F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md */; };
+		46349FB72F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FB62F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
@@ -192,6 +197,11 @@
 		462826212EAD92A9000E891A /* CircularImageCropper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularImageCropper.swift; sourceTree = "<group>"; };
 		4629FB182DFFEA3100588941 /* MetricKitManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricKitManager.swift; sourceTree = "<group>"; };
 		46349FAC2F23491E00CBDE7D /* SharedVideoPlayerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedVideoPlayerManager.swift; sourceTree = "<group>"; };
+		46349FAE2F2393DF00CBDE7D /* PHASE_2_IMPLEMENTATION_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_IMPLEMENTATION_SUMMARY.md; sourceTree = "<group>"; };
+		46349FB02F23941000CBDE7D /* PHASE_2_ARCHITECTURE_DIAGRAM.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_ARCHITECTURE_DIAGRAM.md; sourceTree = "<group>"; };
+		46349FB22F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_TESTING_GUIDE.md; sourceTree = "<group>"; };
+		46349FB42F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_COMPLETE_SUMMARY.md; sourceTree = "<group>"; };
+		46349FB62F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_QUICK_REFERENCE.md; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
@@ -410,6 +420,11 @@
 				464EA3512EEAE39C00FC6AD1 /* VideoPlaybackSettings.swift */,
 				464EA35F2EEAEB0F00FC6AD1 /* SimpleVideoPlayer+PersistentState.swift */,
 				465209852EEC5FEB00FA6DBA /* HproseClientPool.swift */,
+				46349FAE2F2393DF00CBDE7D /* PHASE_2_IMPLEMENTATION_SUMMARY.md */,
+				46349FB02F23941000CBDE7D /* PHASE_2_ARCHITECTURE_DIAGRAM.md */,
+				46349FB22F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md */,
+				46349FB42F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md */,
+				46349FB62F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -733,13 +748,17 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				46349FB32F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md in Resources */,
 				46B7958C2F21B2360060DCB3 /* VIDEO_PLAYER_ARCHITECTURE.md in Resources */,
+				46349FAF2F2393DF00CBDE7D /* PHASE_2_IMPLEMENTATION_SUMMARY.md in Resources */,
 				46B795922F21B8DD0060DCB3 /* SCROLL_SMOOTHNESS_OPTIMIZATION.md in Resources */,
 				46B795842F21B02B0060DCB3 /* NAVIGATION_HANG_FIX.md in Resources */,
 				46B795942F21EB650060DCB3 /* BUG_FIXES_WHITE_SPACE.md in Resources */,
 				460680F62E1660C700D9D15A /* Localizable.strings in Resources */,
+				46349FB12F23941000CBDE7D /* PHASE_2_ARCHITECTURE_DIAGRAM.md in Resources */,
 				460680F72E1660C700D9D15A /* Assets.xcassets in Resources */,
 				46A34AD42E8E8A0100C83177 /* InfoPlist.strings in Resources */,
+				46349FB72F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md in Resources */,
 				46B795982F226AFC0060DCB3 /* LAYOUT_PERFORMANCE_FIX.md in Resources */,
 				46B795822F21ADB10060DCB3 /* PERFORMANCE_FIXES.md in Resources */,
 				46A34AD62E8E8A0100C83177 /* InfoPlist.strings in Resources */,
@@ -747,6 +766,7 @@
 				46A34AD72E8E8A0100C83177 /* InfoPlist.strings in Resources */,
 				460680FA2E1660C700D9D15A /* Assets.xcassets in Resources */,
 				46B7958E2F21B2760060DCB3 /* VIDEO_PLAYER_ARCHITECTURE_FINAL.md in Resources */,
+				46349FB52F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

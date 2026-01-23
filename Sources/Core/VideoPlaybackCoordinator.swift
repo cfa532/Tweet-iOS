@@ -870,11 +870,13 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
 
             for videoMid in videosToStop {
-                NotificationCenter.default.post(
-                    name: .shouldStopVideo,
-                    object: nil,
-                    userInfo: ["videoMid": videoMid]
-                )
+                // PHASE 2: Use SharedVideoPlayerManager for coordinated video control
+                if allVideos.first(where: { $0.videoMid == videoMid }) != nil {
+                    // Only stop if this video instance is currently managed by SharedVideoPlayerManager
+                    if SharedVideoPlayerManager.shared.currentVideoMid == videoMid {
+                        SharedVideoPlayerManager.shared.stopCurrentVideo()
+                    }
+                }
             }
 
             // PERF FIX: Clear caches for videos that are no longer visible
@@ -1023,8 +1025,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         primaryVideoId = nil
         phase = .idle
 
-        // Notify all videos to stop
-        NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
+        // PHASE 2: Use SharedVideoPlayerManager to stop all videos
+        SharedVideoPlayerManager.shared.stopCurrentVideo()
     }
     
     // MARK: - Private Methods
@@ -1063,15 +1065,15 @@ class VideoPlaybackCoordinator: ObservableObject {
         // First, stop the previous primary video (use Stop instead of Pause for immediate effect)
         if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier,
            let previousPrimary = allVideos.first(where: { $0.identifier == previousPrimaryId }) {
-            NotificationCenter.default.post(
-                name: .shouldStopVideo,
-                object: nil,
-                userInfo: ["videoMid": previousPrimary.videoMid]
-            )
+            // PHASE 2: Use SharedVideoPlayerManager for coordinated stop
+            if SharedVideoPlayerManager.shared.currentVideoMid == previousPrimary.videoMid {
+                SharedVideoPlayerManager.shared.stopCurrentVideo()
+            }
         }
 
         // Pause all visible videos except the new primary
         for video in visibleVideos where video != primary {
+            // PHASE 2: Use SharedVideoPlayerManager for coordinated pause
             pauseVideo(video)
         }
 
@@ -1158,23 +1160,18 @@ class VideoPlaybackCoordinator: ObservableObject {
                 // Stop previous primary if different
                 if let previousPrimaryId = previousPrimaryId, previousPrimaryId != correctPrimary.identifier,
                    let previousPrimary = self.allVideos.first(where: { $0.identifier == previousPrimaryId }) {
-                    NotificationCenter.default.post(
-                        name: .shouldStopVideo,
-                        object: nil,
-                        userInfo: ["videoMid": previousPrimary.videoMid]
-                    )
+                    // PHASE 2: Use SharedVideoPlayerManager for coordinated stop
+                    if SharedVideoPlayerManager.shared.currentVideoMid == previousPrimary.videoMid {
+                        SharedVideoPlayerManager.shared.stopCurrentVideo()
+                    }
                 }
 
                 // Start new primary video immediately
-                NotificationCenter.default.post(
-                    name: .shouldPlayVideo,
-                    object: nil,
-                    userInfo: [
-                        "tweetId": correctPrimary.cellTweetId,
-                        "videoMid": correctPrimary.videoMid,
-                        "videoIndex": correctPrimary.attachmentIndex,
-                        "isPrimary": true
-                    ]
+                // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
+                SharedVideoPlayerManager.shared.playVideo(
+                    videoId: correctPrimary.identifier,
+                    videoMid: correctPrimary.videoMid,
+                    cellTweetId: correctPrimary.cellTweetId
                 )
             }
         }
@@ -1291,15 +1288,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Also pause the new primary temporarily, then we'll play it after a delay
             DispatchQueue.main.async {
                 // Stop the current primary video (use Stop for immediate effect)
-                NotificationCenter.default.post(
-                    name: .shouldStopVideo,
-                    object: nil,
-                    userInfo: ["videoMid": currentPrimary.videoMid]
-                )
+                // PHASE 2: Use SharedVideoPlayerManager for coordinated stop
+                if SharedVideoPlayerManager.shared.currentVideoMid == currentPrimary.videoMid {
+                    SharedVideoPlayerManager.shared.stopCurrentVideo()
+                }
 
                 // Pause all other visible videos (including the new primary temporarily)
                 self.visibleVideos.forEach { video in
                     if video.identifier != newPrimary.identifier {
+                        // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
                         NotificationCenter.default.post(
                             name: .shouldPauseVideo,
                             object: nil,
@@ -1322,15 +1319,11 @@ class VideoPlaybackCoordinator: ObservableObject {
                     // Record switch time to prevent immediate re-checking
                     self.lastPrimarySwitchTime = Date()
 
-                    NotificationCenter.default.post(
-                        name: .shouldPlayVideo,
-                        object: nil,
-                        userInfo: [
-                            "tweetId": newPrimary.cellTweetId,
-                            "videoMid": newPrimary.videoMid,
-                            "videoIndex": newPrimary.attachmentIndex,
-                            "isPrimary": true
-                        ]
+                    // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
+                    SharedVideoPlayerManager.shared.playVideo(
+                        videoId: newPrimary.identifier,
+                        videoMid: newPrimary.videoMid,
+                        cellTweetId: newPrimary.cellTweetId
                     )
                 }
             }
@@ -1360,14 +1353,20 @@ class VideoPlaybackCoordinator: ObservableObject {
         let videoId = video.identifier
         currentlyPlayingVideoIds.remove(videoId)
         
-        
-        NotificationCenter.default.post(
-            name: .shouldPauseVideo,
-            object: nil,
-            userInfo: [
-                "videoMid": video.videoMid
-            ]
-        )
+        // PHASE 2: Use SharedVideoPlayerManager for coordinated pause
+        // Only pause if this is the currently playing video
+        if SharedVideoPlayerManager.shared.currentVideoMid == video.videoMid {
+            SharedVideoPlayerManager.shared.pauseCurrentVideo()
+        } else {
+            // For non-current videos, send direct notification (they're not managed by SharedVideoPlayerManager)
+            NotificationCenter.default.post(
+                name: .shouldPauseVideo,
+                object: nil,
+                userInfo: [
+                    "videoMid": video.videoMid
+                ]
+            )
+        }
     }
 
     /// Returns true if the table cell hosting this video is actually visible enough.
@@ -1470,6 +1469,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // CRITICAL: Clear coordinatorWantsToPlay flag for finished video
         // This prevents it from auto-playing on next foreground recovery
+        // PHASE 2: Pause finished video (not managed by SharedVideoPlayerManager anymore)
         NotificationCenter.default.post(
             name: .shouldPauseVideo,
             object: nil,
@@ -1482,15 +1482,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         primaryVideoId = nextVideo.identifier
         currentlyPlayingVideoIds = [nextVideo.identifier]
 
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: [
-                "tweetId": nextVideo.cellTweetId,
-                "videoMid": nextVideo.videoMid,
-                "videoIndex": nextVideo.attachmentIndex,
-                "isPrimary": true
-            ]
+        // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
+        SharedVideoPlayerManager.shared.playVideo(
+            videoId: nextVideo.identifier,
+            videoMid: nextVideo.videoMid,
+            cellTweetId: nextVideo.cellTweetId
         )
     }
     
@@ -1540,6 +1536,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                         
                         // CRITICAL: Clear stale coordinatorWantsToPlay flags from other videos
                         // Send pause commands to all videos except the first one
+                        // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
                         for (index, video) in visibleVideos.enumerated() where index > 0 {
                             NotificationCenter.default.post(
                                 name: .shouldPauseVideo,
@@ -1554,30 +1551,22 @@ class VideoPlaybackCoordinator: ObservableObject {
                         primaryVideoId = firstVideo.identifier
                         currentlyPlayingVideoIds = [firstVideo.identifier]
                         
-                        NotificationCenter.default.post(
-                            name: .shouldPlayVideo,
-                            object: nil,
-                            userInfo: [
-                                "tweetId": firstVideo.cellTweetId,
-                                "videoMid": firstVideo.videoMid,
-                                "videoIndex": firstVideo.attachmentIndex,
-                                "isPrimary": true
-                            ]
+                        // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
+                        SharedVideoPlayerManager.shared.playVideo(
+                            videoId: firstVideo.identifier,
+                            videoMid: firstVideo.videoMid,
+                            cellTweetId: firstVideo.cellTweetId
                         )
                     } else {
                         // Primary is first or only video - resume it
                         primaryVideoId = primary.identifier
                         currentlyPlayingVideoIds = [primary.identifier]
 
-                        NotificationCenter.default.post(
-                            name: .shouldPlayVideo,
-                            object: nil,
-                            userInfo: [
-                                "tweetId": primary.cellTweetId,
-                                "videoMid": primary.videoMid,
-                                "videoIndex": primary.attachmentIndex,
-                                "isPrimary": true
-                            ]
+                        // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
+                        SharedVideoPlayerManager.shared.playVideo(
+                            videoId: primary.identifier,
+                            videoMid: primary.videoMid,
+                            cellTweetId: primary.cellTweetId
                         )
                     }
                 } else {

@@ -472,10 +472,13 @@ struct ProfileView: View {
         if offset < 100 {
             // Near the top - always show toolbar
             if !isNavigationVisible {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isNavigationVisible = true
+                // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isNavigationVisible = true
+                    }
+                    postNavigationVisibilityNotification(isVisible: true)
                 }
-                postNavigationVisibilityNotification(isVisible: true)
             }
             previousScrollOffset = offset
             return
@@ -494,17 +497,23 @@ struct ProfileView: View {
         // Update navigation visibility based on scroll direction
         if isScrollingDown && isNavigationVisible {
             // Scrolling down significantly - hide bottom bar
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isNavigationVisible = false
+            // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = false
+                }
+                postNavigationVisibilityNotification(isVisible: false)
             }
-            postNavigationVisibilityNotification(isVisible: false)
             lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show bottom bar
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isNavigationVisible = true
+            // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = true
+                }
+                postNavigationVisibilityNotification(isVisible: true)
             }
-            postNavigationVisibilityNotification(isVisible: true)
             lastSignificantDelta = delta
         }
         
