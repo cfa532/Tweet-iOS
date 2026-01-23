@@ -344,7 +344,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     @Published var singletonPlayer: AVPlayer?
     @Published var currentVideoMid: String?
     @Published var currentTweetId: String?
-    @Published var currentSourceTweetId: String? // The visible tweet ID in feed (for retweets)
+    @Published var currentCellTweetId: String? // The visible cell's tweet ID in feed (retweet ID for retweets, quoting tweet ID for quotes)
     @Published var currentVideoIndex: Int = 0 // Track current video index within tweet
     @Published var isPlaying = false
     @Published var isBuffering = false // Track buffering state for spinner
@@ -382,7 +382,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
     // MARK: - Navigation Debounce
     /// Prevent multiple rapid swipe-ups (or duplicate gesture endings) from racing navigation.
-    /// Without this, a second swipe can execute before `currentVideoMid/currentVideoIndex/currentSourceTweetId`
+    /// Without this, a second swipe can execute before `currentVideoMid/currentVideoIndex/currentCellTweetId`
     /// are updated for the first navigation, leading to spurious "no next" and fullscreen dismissal.
     private var nextNavigationAllowedAt: Date = .distantPast
     private let navigationDebounceInterval: TimeInterval = 0.6
@@ -432,7 +432,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     }
     
     /// Load and play a video in the singleton player
-    func loadVideo(url: URL, mid: String, tweetId: String, sourceTweetId: String, videoIndex: Int, mediaType: MediaType) {
+    func loadVideo(url: URL, mid: String, tweetId: String, cellTweetId: String, videoIndex: Int, mediaType: MediaType) {
 
         // If we already have the correct item loaded, don't thrash observers / state.
         if currentVideoMid == mid,
@@ -484,7 +484,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Store current video info
         self.currentVideoMid = mid
         self.currentTweetId = tweetId
-        self.currentSourceTweetId = sourceTweetId
+        self.currentCellTweetId = cellTweetId
         self.currentVideoIndex = videoIndex
         
         // CRITICAL: Create new playerItem from cached asset to avoid network timeout
@@ -791,7 +791,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.singletonPlayer = nil
                     self.currentVideoMid = nil
                     self.currentTweetId = nil
-                    self.currentSourceTweetId = nil
+                    self.currentCellTweetId = nil
                     self.currentVideoIndex = 0
                     self.isPlaying = false
                 }
@@ -1129,7 +1129,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     func handleVideoFinished() {
         // Guard against re-entrancy (finish event can fire twice during transitions / item swaps)
         guard canNavigateNow() else { return }
-        guard let currentSourceTweetId = currentSourceTweetId else {
+        guard let currentCellTweetId = currentCellTweetId else {
             // Don't rewind here - will check position when user tries to play
             isPlaying = false
             return
@@ -1138,17 +1138,17 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         isPlaying = false
 
         if let next = VideoPlaybackCoordinator.shared.findNextVideoForFullscreen(
-            sourceTweetId: currentSourceTweetId,
+            cellTweetId: currentCellTweetId,
             currentAttachmentIndex: currentVideoIndex,
             currentVideoMid: currentVideoMid
         ) {
-            onNavigateToNextVideo?(next.tweet, next.videoIndex, next.sourceTweetId)
+            onNavigateToNextVideo?(next.tweet, next.videoIndex, next.cellTweetId)
             return
         }
 
         // If this fullscreen wasn't opened from a feed-backed context, do nothing (avoid accidental dismiss).
         if !VideoPlaybackCoordinator.shared.containsFullscreenItem(
-            sourceTweetId: currentSourceTweetId,
+            cellTweetId: currentCellTweetId,
             currentAttachmentIndex: currentVideoIndex,
             currentVideoMid: currentVideoMid
         ) {
@@ -1208,20 +1208,20 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Ignore rapid repeated swipe-ups.
         guard canNavigateNow() else { return }
 
-        guard let currentSourceTweetId = currentSourceTweetId else { return }
+        guard let currentCellTweetId = currentCellTweetId else { return }
 
         if let next = VideoPlaybackCoordinator.shared.findNextVideoForFullscreen(
-            sourceTweetId: currentSourceTweetId,
+            cellTweetId: currentCellTweetId,
             currentAttachmentIndex: currentVideoIndex,
             currentVideoMid: currentVideoMid
         ) {
-            onNavigateToNextVideo?(next.tweet, next.videoIndex, next.sourceTweetId)
+            onNavigateToNextVideo?(next.tweet, next.videoIndex, next.cellTweetId)
             return
         }
 
         // If this fullscreen wasn't opened from a feed-backed context, ignore the gesture (no dismiss).
         let isFeedBacked = VideoPlaybackCoordinator.shared.containsFullscreenItem(
-            sourceTweetId: currentSourceTweetId,
+            cellTweetId: currentCellTweetId,
             currentAttachmentIndex: currentVideoIndex,
             currentVideoMid: currentVideoMid
         )
@@ -1261,7 +1261,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         currentVideoMid = nil
         currentTweetId = nil
-        currentSourceTweetId = nil
+        currentCellTweetId = nil
         currentVideoIndex = 0
         isPlaying = false
         
@@ -1337,7 +1337,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             clearBrokenPlayer()
             currentVideoMid = nil
             currentTweetId = nil
-            currentSourceTweetId = nil
+            currentCellTweetId = nil
             
             // For fullscreen, the view should recreate when it sees nil player
             // Unlike DetailView, fullscreen typically closes when backgrounded

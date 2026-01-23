@@ -127,14 +127,25 @@ protocol SharedDisplayLinkObserver: AnyObject {
 
 /// Shared video player coordinator for Twitter-style video playback
 /// Ensures only one video plays at a time while leveraging SimpleVideoPlayer instances
+/// 
+/// Video Identification:
+/// Videos are identified by a composite key: `cellTweetId + videoMid + attachmentIndex`
+/// - cellTweetId: The ID of the visible cell (retweet ID for retweets, quoting tweet ID for quoted tweets)
+/// - videoMid: The attachment's mid (unique file identifier)
+/// - attachmentIndex: Index in the attachments array
+///
+/// This allows the same video file to appear in multiple tweets (retweets, quotes) and be treated as separate instances.
 @MainActor
 class SharedVideoPlayerManager: ObservableObject {
     static let shared = SharedVideoPlayerManager()
 
     // MARK: - Properties
 
-    /// Currently playing video identifier
+    /// Currently playing video identifier (sourceTweetId_videoMid_attachmentIndex)
     @Published private(set) var currentlyPlayingVideoId: String?
+
+    /// Current video mid (for backward compatibility checks)
+    @Published private(set) var currentVideoMid: String?
 
     /// Current video URL (for debugging)
     private var currentVideoURL: URL?
@@ -154,30 +165,28 @@ class SharedVideoPlayerManager: ObservableObject {
 
     // MARK: - Public API
 
-    /// Request to play a specific video (coordinates to ensure only one plays)
-    func playVideo(videoId: String) {
-        print("🎬 [SHARED PLAYER] Coordinating playback for video: \(videoId)")
-
-        // If already playing this video, no action needed
+    /// Request to play a specific video instance (coordinates to ensure only one plays)
+    /// - Parameters:
+    ///   - videoId: Full identifier (cellTweetId_videoMid_attachmentIndex)
+    ///   - videoMid: The attachment's mid (for notification routing)
+    ///   - cellTweetId: The visible cell's tweet ID (retweet ID for retweets, quoting tweet ID for quotes)
+    func playVideo(videoId: String, videoMid: String, cellTweetId: String) {
+        // If already playing this video instance, no action needed (prevent duplicate notifications)
         if currentlyPlayingVideoId == videoId {
-            print("🎬 [SHARED PLAYER] Already playing this video")
+            print("🎬 [SHARED PLAYER] Already coordinating playback for \(videoId) - ignoring duplicate request")
             return
         }
+
+        print("🎬 [SHARED PLAYER] Coordinating playback for video: \(videoId) (mid: \(videoMid), cell: \(cellTweetId))")
 
         // Stop current video if different
         if let currentId = currentlyPlayingVideoId, currentId != videoId {
             pauseCurrentVideo()
         }
 
-        // Update state
+        // Update state BEFORE posting notification to prevent race conditions
         currentlyPlayingVideoId = videoId
-
-        // Notify MediaCell to start playback for this video
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: ["videoMid": videoId]
-        )
+        currentVideoMid = videoMid
 
         // Track playback
         playbackHistory.append(videoId)
@@ -185,12 +194,24 @@ class SharedVideoPlayerManager: ObservableObject {
             playbackHistory.removeFirst(playbackHistory.count - 100)
         }
 
+        // Notify MediaCell to start playback for this video instance
+        NotificationCenter.default.post(
+            name: .shouldPlayVideo,
+            object: nil,
+            userInfo: [
+                "videoId": videoId,           // Full identifier
+                "videoMid": videoMid,         // Attachment mid (for routing)
+                "cellTweetId": cellTweetId    // Cell tweet ID
+            ]
+        )
+
         print("🎬 [SHARED PLAYER] Started coordinated playback for: \(videoId)")
     }
 
     /// Pause the currently playing video
     func pauseCurrentVideo() {
-        guard let videoId = currentlyPlayingVideoId else { return }
+        guard let videoId = currentlyPlayingVideoId,
+              let videoMid = currentVideoMid else { return }
 
         print("⏸️ [SHARED PLAYER] Pausing video: \(videoId)")
 
@@ -198,21 +219,25 @@ class SharedVideoPlayerManager: ObservableObject {
         NotificationCenter.default.post(
             name: .shouldPauseVideo,
             object: nil,
-            userInfo: ["videoMid": videoId]
+            userInfo: [
+                "videoId": videoId,
+                "videoMid": videoMid
+            ]
         )
 
         // Update state
         saveCurrentVideoState()
 
         // Notify delegates
-        notifyDelegates(for: videoId) { delegate in
-            delegate.videoPlayerDidPause(videoId: videoId)
+        notifyDelegates(for: videoMid) { delegate in
+            delegate.videoPlayerDidPause(videoId: videoMid)
         }
     }
 
     /// Stop the currently playing video
     func stopCurrentVideo() {
-        guard let videoId = currentlyPlayingVideoId else { return }
+        guard let videoId = currentlyPlayingVideoId,
+              let videoMid = currentVideoMid else { return }
 
         print("⏹️ [SHARED PLAYER] Stopping video: \(videoId)")
 
@@ -220,12 +245,16 @@ class SharedVideoPlayerManager: ObservableObject {
         NotificationCenter.default.post(
             name: .shouldStopVideo,
             object: nil,
-            userInfo: ["videoMid": videoId]
+            userInfo: [
+                "videoId": videoId,
+                "videoMid": videoMid
+            ]
         )
 
         // Clean up state
         saveCurrentVideoState()
         currentlyPlayingVideoId = nil
+        currentVideoMid = nil
         currentVideoURL = nil
     }
 

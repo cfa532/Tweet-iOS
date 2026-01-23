@@ -33,7 +33,7 @@ struct MediaCell: View, Equatable {
     let shouldLoadVideo: Bool
     let onVideoFinished: (() -> Void)?
     let isEmbedded: Bool
-    let sourceTweetId: String?  // ID of tweet user is viewing (retweet ID for retweets)
+    let cellTweetId: String?    // ID of visible cell in feed (retweet ID for retweets, quoting tweet ID for quoted tweets)
     
     @State private var image: UIImage?
     @State private var isLoading = false
@@ -48,7 +48,7 @@ struct MediaCell: View, Equatable {
     @State private var isInViewport: Bool = false
     @ObservedObject private var muteState = MuteState.shared
 
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, sourceTweetId: String? = nil) {
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -56,7 +56,7 @@ struct MediaCell: View, Equatable {
         self.onVideoFinished = onVideoFinished
         self._isVisible = State(initialValue: isVisible)
         self.isEmbedded = isEmbedded
-        self.sourceTweetId = sourceTweetId
+        self.cellTweetId = cellTweetId
         
         // Initialize effectiveBaseUrl with fallback chain
         let initialBaseUrl = parentTweet.author?.baseUrl 
@@ -216,55 +216,69 @@ struct MediaCell: View, Equatable {
         
         // Listen for coordinator play/pause commands
         .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
+            // Extract notification data
             guard let videoMid = notification.userInfo?["videoMid"] as? String,
                   videoMid == attachment.mid else { return }
-
-            print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid)")
-            // PHASE 1: Only allow playback if SharedVideoPlayerManager approves
-            if SharedVideoPlayerManager.shared.currentlyPlayingVideoId == nil ||
-               SharedVideoPlayerManager.shared.currentlyPlayingVideoId == attachment.mid {
-                shouldAutoPlay = true
-            } else {
-                print("⏸️ [MediaCell] Blocking play for \(attachment.mid) - another video is playing")
+            
+            // If notification includes full videoId, validate it matches our instance
+            if let videoId = notification.userInfo?["videoId"] as? String {
+                let ourVideoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+                guard videoId == ourVideoId else {
+                    print("⚠️ [MediaCell] Ignoring play command for different instance - expected: \(ourVideoId), got: \(videoId)")
+                    return
+                }
             }
+
+            // Ignore duplicate notifications if already playing
+            guard !shouldAutoPlay else {
+                print("⚠️ [MediaCell] Ignoring duplicate play command for \(attachment.mid) - already set to play")
+                return
+            }
+
+            print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
+            
+            // Always allow playback when we receive a direct command for this instance
+            // The SharedVideoPlayerManager has already ensured only one video plays at a time
+            shouldAutoPlay = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .shouldPauseVideo)) { notification in
             guard let videoMid = notification.userInfo?["videoMid"] as? String,
                   videoMid == attachment.mid else { return }
+            
+            // Ignore duplicate pause notifications if already paused
+            guard shouldAutoPlay else {
+                print("⚠️ [MediaCell] Ignoring duplicate pause command for \(attachment.mid) - already paused")
+                return
+            }
+            
+            print("⏸️ [MediaCell] Received coordinated pause command for \(attachment.mid)")
             shouldAutoPlay = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .shouldStopVideo)) { notification in
             guard let videoMid = notification.userInfo?["videoMid"] as? String,
                   videoMid == attachment.mid else { return }
+            
+            // Ignore duplicate stop notifications if already stopped
+            guard shouldAutoPlay else {
+                print("⚠️ [MediaCell] Ignoring duplicate stop command for \(attachment.mid) - already stopped")
+                return
+            }
+            
+            print("⏹️ [MediaCell] Received coordinated stop command for \(attachment.mid)")
             shouldAutoPlay = false
         }
         // Note: Seek functionality not implemented in Phase 1
         // SimpleVideoPlayer handles seeking internally
         .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in
+            guard isVideoAttachment else { return }
+            
+            if shouldAutoPlay {
+                print("🛑 [MediaCell] Received stop all videos command for \(attachment.mid) - stopping playback")
+            }
             shouldAutoPlay = false
         }
-        .onChange(of: shouldAutoPlay) { oldValue, newValue in
-            // Notify SimpleVideoPlayer to start/stop playback
-            if newValue && isVideoAttachment {
-                NotificationCenter.default.post(
-                    name: .shouldPlayVideo,
-                    object: nil,
-                    userInfo: [
-                        "videoMid": attachment.mid,
-                        "fromMediaCell": true  // Distinguish from coordinator commands
-                    ]
-                )
-            } else if !newValue && isVideoAttachment {
-                NotificationCenter.default.post(
-                    name: .shouldPauseVideo,
-                    object: nil,
-                    userInfo: [
-                        "videoMid": attachment.mid,
-                        "fromMediaCell": true
-                    ]
-                )
-            }
-        }
+        // SimpleVideoPlayer reacts to shouldAutoPlay binding changes
+        // No need to post additional notifications - would create circular loop
         
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Update effectiveBaseUrl when app becomes active (author may have been resolved)
@@ -294,7 +308,7 @@ struct MediaCell: View, Equatable {
             MediaBrowserView(
                 tweet: parentTweet,
                 initialIndex: attachmentIndex,
-                sourceTweetId: sourceTweetId ?? parentTweet.mid  // Use retweet ID if provided, else original tweet ID
+                cellTweetId: cellTweetId ?? parentTweet.mid  // Use cell tweet ID if provided, else parent tweet ID
             )
         }
         .onChange(of: showFullScreen) { _, newValue in

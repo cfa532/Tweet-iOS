@@ -19,7 +19,7 @@ struct MediaGridView: View, Equatable {
     let attachments: [MimeiFileType]
     let isEmbedded: Bool // Flag to indicate this is an embedded tweet (prevents video loading)
     let maxImages: Int = 4
-    let sourceTweetId: String? // ID of the tweet user is viewing (retweet ID for retweets, nil = use parentTweet.mid)
+    let cellTweetId: String? // ID of the tweet user is viewing (retweet ID for retweets, nil = use parentTweet.mid)
     
     // Equatable conformance to help SwiftUI reuse views and prevent unnecessary recomposition
     static func == (lhs: MediaGridView, rhs: MediaGridView) -> Bool {
@@ -27,7 +27,7 @@ struct MediaGridView: View, Equatable {
                lhs.attachments.count == rhs.attachments.count &&
                lhs.attachments.map { $0.mid } == rhs.attachments.map { $0.mid } &&
                lhs.isEmbedded == rhs.isEmbedded &&
-               lhs.sourceTweetId == rhs.sourceTweetId
+               lhs.cellTweetId == rhs.cellTweetId
     }
     @State private var shouldLoadVideo: Bool
     @State private var videoLoadTimer: Timer?
@@ -41,11 +41,11 @@ struct MediaGridView: View, Equatable {
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
     private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 140) // Narrower width for embedded/quoted tweets
     
-    init(parentTweet: Tweet, attachments: [MimeiFileType], isEmbedded: Bool = false, sourceTweetId: String? = nil) {
+    init(parentTweet: Tweet, attachments: [MimeiFileType], isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachments = attachments
         self.isEmbedded = isEmbedded
-        self.sourceTweetId = sourceTweetId
+        self.cellTweetId = cellTweetId
         self._shouldLoadVideo = State(initialValue: true)
     }
     
@@ -76,7 +76,7 @@ struct MediaGridView: View, Equatable {
                         aspectRatio: Float(gridAspectRatio),
                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                     .frame(width: actualWidth, height: gridHeight, alignment: .center)
                     .clipped()
@@ -116,7 +116,7 @@ struct MediaGridView: View, Equatable {
                                 aspectRatio: Float(width0 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                             .frame(width: width0, height: gridHeight)
                             .clipped().contentShape(Rectangle())
@@ -128,7 +128,7 @@ struct MediaGridView: View, Equatable {
                                 aspectRatio: Float(width1 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                             .frame(width: width1, height: gridHeight)
                             .clipped().contentShape(Rectangle())
@@ -158,7 +158,7 @@ struct MediaGridView: View, Equatable {
                                 aspectRatio: Float(actualWidth / height0),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                             .frame(width: actualWidth, height: height0)
                             .clipped().contentShape(Rectangle())
@@ -170,7 +170,7 @@ struct MediaGridView: View, Equatable {
                                 aspectRatio: Float(actualWidth / height1),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                             .frame(width: actualWidth, height: height1)
                             .clipped().contentShape(Rectangle())
@@ -201,7 +201,7 @@ struct MediaGridView: View, Equatable {
                                 aspectRatio: Float(width0 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                             .frame(width: width0, height: gridHeight)
                             .clipped().contentShape(Rectangle())
@@ -213,7 +213,7 @@ struct MediaGridView: View, Equatable {
                                 aspectRatio: Float(width1 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                             .frame(width: width1, height: gridHeight)
                             .clipped().contentShape(Rectangle())
@@ -257,7 +257,7 @@ struct MediaGridView: View, Equatable {
                                     aspectRatio: Float(heroWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                 .frame(width: heroWidth, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -271,7 +271,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(sideWidth / height1),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: sideWidth, height: height1)
                                     .clipped().contentShape(Rectangle())
@@ -283,7 +283,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(sideWidth / height2),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: sideWidth, height: height2)
                                     .clipped().contentShape(Rectangle())
@@ -313,7 +313,7 @@ struct MediaGridView: View, Equatable {
                                     aspectRatio: Float(actualWidth / heroHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                 .frame(width: actualWidth, height: heroHeight)
                                 .clipped().contentShape(Rectangle())
@@ -327,7 +327,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(width1 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: width1, height: bottomHeight)
                                     .clipped().contentShape(Rectangle())
@@ -339,7 +339,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(width2 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: width2, height: bottomHeight)
                                     .clipped().contentShape(Rectangle())
@@ -377,7 +377,7 @@ struct MediaGridView: View, Equatable {
                                     aspectRatio: Float(leftWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                 .frame(width: leftWidth, height: gridHeight)
                                 .clipped().contentShape(Rectangle())
@@ -391,7 +391,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(rightWidth / height1),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: rightWidth, height: height1)
                                     .clipped().contentShape(Rectangle())
@@ -403,7 +403,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(rightWidth / height2),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: rightWidth, height: height2)
                                     .clipped().contentShape(Rectangle())
@@ -441,7 +441,7 @@ struct MediaGridView: View, Equatable {
                                     aspectRatio: Float(actualWidth / topHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                 .frame(width: actualWidth, height: topHeight)
                                 .clipped().contentShape(Rectangle())
@@ -455,7 +455,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(width1 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: width1, height: bottomHeight)
                                     .clipped().contentShape(Rectangle())
@@ -467,7 +467,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: Float(width2 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                     .frame(width: width2, height: bottomHeight)
                                     .clipped().contentShape(Rectangle())
@@ -491,7 +491,7 @@ struct MediaGridView: View, Equatable {
                                     aspectRatio: cellAspectRatio,
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                 .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -506,7 +506,7 @@ struct MediaGridView: View, Equatable {
                                         aspectRatio: cellAspectRatio,
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                         .frame(width: actualWidth/2 - 1, height: gridHeight/2 - 1)
                                     .clipped().contentShape(Rectangle())
@@ -526,7 +526,7 @@ struct MediaGridView: View, Equatable {
                                     
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                 .clipped().contentShape(Rectangle())
@@ -543,7 +543,7 @@ struct MediaGridView: View, Equatable {
                                             
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
-                        sourceTweetId: sourceTweetId
+                        cellTweetId: cellTweetId
                     )
                                                 .frame(width: actualWidth / 2 - 1, height: gridHeight / 2 - 1)
                                         .clipped().contentShape(Rectangle())

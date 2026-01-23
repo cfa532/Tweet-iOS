@@ -19,7 +19,7 @@ struct TweetItemBodyView: View {
     var enableTap: Bool = false
     var isVisible: Bool = true
     var isEmbedded: Bool = false // Flag to indicate this is an embedded tweet (prevents video loading)
-    var sourceTweetId: String? = nil // ID of tweet user is viewing (retweet ID for retweets)
+    var cellTweetId: String? = nil // ID of tweet user is viewing (retweet ID for retweets)
     var onTweetBodyTap: (() -> Void)? = nil // Callback to navigate to tweet detail
     @State private var showLoginSheet = false
     @State private var isTruncated = false
@@ -199,7 +199,7 @@ struct TweetItemBodyView: View {
                             parentTweet: tweet,
                             attachments: mediaAttachments,
                             isEmbedded: isEmbedded,
-                            sourceTweetId: sourceTweetId  // Pass the viewing context tweet ID
+                            cellTweetId: cellTweetId  // Pass the viewing context tweet ID
                         )
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .clipped()

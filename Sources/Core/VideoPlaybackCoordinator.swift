@@ -537,15 +537,15 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Returns true if the canonical list contains the current fullscreen item.
     /// This is used to distinguish "no next video" from "not a feed-backed fullscreen context".
-    func containsFullscreenItem(sourceTweetId: String, currentAttachmentIndex: Int, currentVideoMid: String?) -> Bool {
+    func containsFullscreenItem(cellTweetId: String, currentAttachmentIndex: Int, currentVideoMid: String?) -> Bool {
         let mid = currentVideoMid
         return allVideos.contains { v in
-            // Prefer matching by sourceTweetId+attachmentIndex; if mid is available, also require it.
-            if v.cellTweetId == sourceTweetId && v.attachmentIndex == currentAttachmentIndex {
+            // Prefer matching by cellTweetId+attachmentIndex; if mid is available, also require it.
+            if v.cellTweetId == cellTweetId && v.attachmentIndex == currentAttachmentIndex {
                 return mid.map { v.videoMid == $0 } ?? true
             }
-            // Fallback: some callers pass mediaTweetId as sourceTweetId; accept that too.
-            if v.mediaTweetId == sourceTweetId && v.attachmentIndex == currentAttachmentIndex {
+            // Fallback: some callers pass mediaTweetId as cellTweetId; accept that too.
+            if v.mediaTweetId == cellTweetId && v.attachmentIndex == currentAttachmentIndex {
                 return mid.map { v.videoMid == $0 } ?? true
             }
             // Last resort: if only mid is reliable, match by mid (+ attachmentIndex when provided).
@@ -557,11 +557,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Canonical "next video" lookup for fullscreen browsing.
-    /// Returns the tweet that owns the attachments (mediaTweet) + the attachment index + the next source tweet id (cell tweet id).
+    /// Returns the tweet that owns the attachments (mediaTweet) + the attachment index + the next cell tweet id.
     ///
-    /// IMPORTANT: `sourceTweetId` might be the feed cell id (retweet id) OR the media tweet id depending on call site,
-    /// so we match both, and also optionally match by `currentVideoMid` for extra resilience.
-    func findNextVideoForFullscreen(sourceTweetId: String, currentAttachmentIndex: Int, currentVideoMid: String?) -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
+    /// IMPORTANT: `cellTweetId` is the feed cell id (retweet id for retweets, quoting tweet id for quotes).
+    /// We match by cellTweetId, but also try mediaTweetId and videoMid for resilience.
+    func findNextVideoForFullscreen(cellTweetId: String, currentAttachmentIndex: Int, currentVideoMid: String?) -> (tweet: Tweet, videoIndex: Int, cellTweetId: String)? {
         // Use allVideos in its current order (approximately feed order)
         let feedOrderedVideos = allVideos
 
@@ -571,13 +571,13 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // 1) Exact match on (cellTweetId, attachmentIndex, mid?)
         startIndex = feedOrderedVideos.firstIndex(where: { v in
-            v.cellTweetId == sourceTweetId &&
+            v.cellTweetId == cellTweetId &&
             v.attachmentIndex == currentAttachmentIndex &&
             (mid.map { v.videoMid == $0 } ?? true)
         })
-        // 2) If caller passed mediaTweetId as sourceTweetId, accept that.
+        // 2) If caller passed mediaTweetId as cellTweetId, accept that.
         ?? feedOrderedVideos.firstIndex(where: { v in
-            v.mediaTweetId == sourceTweetId &&
+            v.mediaTweetId == cellTweetId &&
             v.attachmentIndex == currentAttachmentIndex &&
             (mid.map { v.videoMid == $0 } ?? true)
         })
@@ -585,9 +585,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         ?? (mid.flatMap { m in
             feedOrderedVideos.firstIndex(where: { $0.videoMid == m && $0.attachmentIndex == currentAttachmentIndex })
         })
-        // 4) Fallback to first video within the source cell/media tweet.
-        ?? feedOrderedVideos.firstIndex(where: { $0.cellTweetId == sourceTweetId })
-        ?? feedOrderedVideos.firstIndex(where: { $0.mediaTweetId == sourceTweetId })
+        // 4) Fallback to first video within the cell/media tweet.
+        ?? feedOrderedVideos.firstIndex(where: { $0.cellTweetId == cellTweetId })
+        ?? feedOrderedVideos.firstIndex(where: { $0.mediaTweetId == cellTweetId })
 
         guard let startIndex else { return nil }
 
@@ -611,7 +611,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             let attachment = attachments[candidate.attachmentIndex]
             guard attachment.type == .video || attachment.type == .hls_video else { continue }
 
-            return (tweet: mediaTweet, videoIndex: candidate.attachmentIndex, sourceTweetId: candidate.cellTweetId)
+            return (tweet: mediaTweet, videoIndex: candidate.attachmentIndex, cellTweetId: candidate.cellTweetId)
         }
 
         return nil
@@ -1092,7 +1092,12 @@ class VideoPlaybackCoordinator: ObservableObject {
 
             // PHASE 1: Use SharedVideoPlayerManager for coordinated playback
             // The coordinator identifies which video should play, SharedVideoPlayerManager coordinates the playback
-            SharedVideoPlayerManager.shared.playVideo(videoId: primary.videoMid)
+            // Pass full identifier (cellTweetId_videoMid_attachmentIndex) so manager can distinguish instances
+            SharedVideoPlayerManager.shared.playVideo(
+                videoId: primary.identifier,
+                videoMid: primary.videoMid,
+                cellTweetId: primary.cellTweetId
+            )
         }
     }
     

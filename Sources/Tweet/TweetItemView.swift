@@ -122,7 +122,7 @@ struct TweetItemView: View, Equatable {
             MediaBrowserView(
                 tweet: tweet,
                 initialIndex: selectedMediaIndex,
-                sourceTweetId: tweet.mid // Pass visible tweet ID for feed navigation
+                cellTweetId: tweet.mid // Pass visible tweet ID for feed navigation
             )
         }
         .task {
@@ -368,7 +368,7 @@ struct TweetItemView: View, Equatable {
                         TweetItemBodyView(
                             tweet: originalTweet,
                             isVisible: isVisible,
-                            sourceTweetId: tweet.mid,
+                            cellTweetId: tweet.mid,
                             onTweetBodyTap: {
                                 // Navigate to original tweet detail when body is tapped
                                 if let callback = onTap {
@@ -683,7 +683,7 @@ struct EmbeddedTweetView: View, Equatable {
                     enableTap: false,
                     isVisible: isVisible,
                     isEmbedded: isEmbedded,
-                    sourceTweetId: quotingTweetId,  // For embedded videos, use quoting tweet's ID
+                    cellTweetId: quotingTweetId,  // For embedded videos, use quoting tweet's ID
                     onTweetBodyTap: {
                         // Navigate to embedded tweet detail when body is tapped
                         if let callback = onTap {

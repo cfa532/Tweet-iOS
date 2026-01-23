@@ -13,11 +13,11 @@ import UIKit
 struct MediaBrowserView: View {
     let tweet: Tweet
     let initialIndex: Int
-    let sourceTweetId: String? // The tweet ID where user tapped (could be retweet)
+    let cellTweetId: String? // The visible cell's tweet ID (could be retweet or quoting tweet)
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @State private var currentTweet: Tweet // Allow changing tweet for auto-advance
-    @State private var currentSourceTweetId: String // Track position in visible feed
+    @State private var currentCellTweetId: String // Track position in visible feed
     @State private var showVideoPlayer = false
     @State private var play = false
     @State private var isVisible = true
@@ -54,15 +54,15 @@ struct MediaBrowserView: View {
             ?? HproseInstance.baseUrl
     }
 
-    init(tweet: Tweet, initialIndex: Int, sourceTweetId: String? = nil) {
+    init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil) {
         self.tweet = tweet
         self.initialIndex = initialIndex
-        self.sourceTweetId = sourceTweetId
+        self.cellTweetId = cellTweetId
         self._currentIndex = State(initialValue: initialIndex)
         self._currentTweet = State(initialValue: tweet)
-        self._currentSourceTweetId = State(initialValue: sourceTweetId ?? tweet.mid)
+        self._currentCellTweetId = State(initialValue: cellTweetId ?? tweet.mid)
         self._previousIndex = State(initialValue: initialIndex)
-        print("MediaBrowserView init - tweet: \(tweet.mid), sourceTweet: \(sourceTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
+        print("MediaBrowserView init - tweet: \(tweet.mid), cellTweet: \(cellTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 
     var body: some View {
@@ -81,7 +81,7 @@ struct MediaBrowserView: View {
                 transitionOffset: $transitionOffset,
                 suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
-                currentSourceTweetId: currentSourceTweetId,
+                currentCellTweetId: currentCellTweetId,
                 dismiss: { dismiss() },
                 startControlsTimer: startControlsTimer,
                 resetControlsTimer: resetControlsTimer,
@@ -159,7 +159,7 @@ struct MediaBrowserView: View {
                             url: url,
                             mid: attachment.mid,
                             tweetId: nextTweet.mid,
-                            sourceTweetId: nextSourceTweetId,
+                            cellTweetId: nextSourceTweetId,
                             videoIndex: videoIndex,
                             mediaType: attachment.type
                         )
@@ -173,7 +173,7 @@ struct MediaBrowserView: View {
                     self.currentIndex = videoIndex
                     self.previousIndex = videoIndex
                 }
-                self.currentSourceTweetId = nextSourceTweetId
+                self.currentCellTweetId = nextSourceTweetId
                 self.imageStates = [:]
                 
                 // Reset to bottom position for slide-in (30% for tight transition)
@@ -212,7 +212,7 @@ struct MediaBrowserView: View {
         @Binding var transitionOffset: CGFloat
         @Binding var suppressTabPagingAnimation: Bool
         let currentTweet: Tweet
-        let currentSourceTweetId: String
+        let currentCellTweetId: String
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
@@ -439,7 +439,7 @@ struct MediaBrowserView: View {
                 url: url,
                 mid: attachment.mid,
                 tweetId: currentTweet.mid,
-                sourceTweetId: currentSourceTweetId,
+                cellTweetId: currentCellTweetId,
                 videoIndex: index,
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
@@ -460,7 +460,7 @@ struct MediaBrowserView: View {
                         url: url,
                         mid: attachment.mid,
                         tweetId: currentTweet.mid,
-                        sourceTweetId: currentSourceTweetId,
+                        cellTweetId: currentCellTweetId,
                         videoIndex: index,
                         mediaType: attachment.type
                     )
@@ -479,7 +479,7 @@ struct MediaBrowserView: View {
                         url: url,
                         mid: attachment.mid,
                         tweetId: currentTweet.mid,
-                        sourceTweetId: currentSourceTweetId,
+                        cellTweetId: currentCellTweetId,
                         videoIndex: index,
                         mediaType: attachment.type
                     )
@@ -923,7 +923,7 @@ struct SingletonVideoPlayerView: View {
     let url: URL
     let mid: String
     let tweetId: String
-    let sourceTweetId: String
+    let cellTweetId: String
     let videoIndex: Int
     let mediaType: MediaType
     let aspectRatio: Float?
@@ -976,7 +976,7 @@ struct SingletonVideoPlayerView: View {
                                 url: url,
                                 mid: mid,
                                 tweetId: tweetId,
-                                sourceTweetId: sourceTweetId,
+                                cellTweetId: cellTweetId,
                                 videoIndex: videoIndex,
                                 mediaType: mediaType
                             )
