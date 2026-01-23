@@ -1090,17 +1090,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Record switch time to prevent immediate re-checking
             self.lastPrimarySwitchTime = Date()
 
-            // Send play command for primary video (topmost when scrolling down, bottommost when scrolling up)
-            NotificationCenter.default.post(
-                name: .shouldPlayVideo,
-                object: nil,
-                userInfo: [
-                    "tweetId": primary.cellTweetId,
-                    "videoMid": primary.videoMid,
-                    "videoIndex": primary.attachmentIndex,
-                    "isPrimary": true
-                ]
-            )
+            // PHASE 1: Use SharedVideoPlayerManager for coordinated playback
+            // The coordinator identifies which video should play, SharedVideoPlayerManager coordinates the playback
+            SharedVideoPlayerManager.shared.playVideo(videoId: primary.videoMid)
         }
     }
     

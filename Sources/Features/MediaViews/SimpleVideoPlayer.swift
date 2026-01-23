@@ -585,6 +585,9 @@ struct SimpleVideoPlayer: View {
                playerItem.status == .readyToPlay {
                 let duration = playerItem.duration
                 if duration.isValid && duration.seconds > 0 {
+                    // PHASE 1: Disable finished video detection for media cells to prevent immediate finishing
+                    // TODO: Re-enable this logic after Phase 1 when video state management is more robust
+                    /*
                     if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
                         // Video finished in mediaCell - restarting from beginning
                         isApplyingDetailRestore = true
@@ -593,7 +596,7 @@ struct SimpleVideoPlayer: View {
                             Task { @MainActor in
                                 self.isApplyingDetailRestore = false
                                 self.hasAppliedDetailRestore = true
-                                
+
                                 if finished {
                                     // Start playback from beginning
                                     if self.currentAutoPlay {
@@ -606,6 +609,9 @@ struct SimpleVideoPlayer: View {
                         }
                         return true
                     }
+                }
+            }
+            */
                 }
             }
         }

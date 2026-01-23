@@ -155,17 +155,10 @@ class SharedVideoPlayerManager: ObservableObject {
     // MARK: - Public API
 
     /// Request to play a specific video (coordinates to ensure only one plays)
-    func playVideo(
-        videoId: String,
-        url: URL,
-        in containerView: UIView,
-        aspectRatio: CGFloat = 16/9,
-        isMuted: Bool = true,
-        startTime: CMTime? = nil
-    ) {
-        print("🎬 [SHARED PLAYER] Request to play video: \(videoId)")
+    func playVideo(videoId: String) {
+        print("🎬 [SHARED PLAYER] Coordinating playback for video: \(videoId)")
 
-        // If already playing this video, just ensure it's visible
+        // If already playing this video, no action needed
         if currentlyPlayingVideoId == videoId {
             print("🎬 [SHARED PLAYER] Already playing this video")
             return
@@ -178,23 +171,12 @@ class SharedVideoPlayerManager: ObservableObject {
 
         // Update state
         currentlyPlayingVideoId = videoId
-        currentVideoURL = url
-
-        // Get or create video state
-        if videoStates[videoId] == nil {
-            videoStates[videoId] = VideoState(url: url)
-        }
 
         // Notify MediaCell to start playback for this video
         NotificationCenter.default.post(
             name: .shouldPlayVideo,
             object: nil,
-            userInfo: [
-                "videoMid": videoId,
-                "url": url,
-                "isMuted": isMuted,
-                "startTime": startTime as Any
-            ]
+            userInfo: ["videoMid": videoId]
         )
 
         // Track playback
