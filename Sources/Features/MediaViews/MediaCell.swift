@@ -218,7 +218,15 @@ struct MediaCell: View, Equatable {
         .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
             guard let videoMid = notification.userInfo?["videoMid"] as? String,
                   videoMid == attachment.mid else { return }
-            shouldAutoPlay = true
+
+            print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid)")
+            // PHASE 1: Only allow playback if SharedVideoPlayerManager approves
+            if SharedVideoPlayerManager.shared.currentlyPlayingVideoId == nil ||
+               SharedVideoPlayerManager.shared.currentlyPlayingVideoId == attachment.mid {
+                shouldAutoPlay = true
+            } else {
+                print("⏸️ [MediaCell] Blocking play for \(attachment.mid) - another video is playing")
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .shouldPauseVideo)) { notification in
             guard let videoMid = notification.userInfo?["videoMid"] as? String,
@@ -230,6 +238,8 @@ struct MediaCell: View, Equatable {
                   videoMid == attachment.mid else { return }
             shouldAutoPlay = false
         }
+        // Note: Seek functionality not implemented in Phase 1
+        // SimpleVideoPlayer handles seeking internally
         .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in
             shouldAutoPlay = false
         }
