@@ -73,6 +73,10 @@ class GlobalImageLoadManager: ObservableObject {
     // MARK: - Memory Management
     private var currentMemoryUsage: UInt64 = 0
     private var maxMemoryUsage: UInt64 = 0
+
+    // MARK: - Network Failure Tracking
+    private var consecutiveNetworkFailures: Int = 0
+    private let maxConsecutiveFailures = 5 // Trigger cleanup after 5 consecutive failures
     
     // MARK: - Statistics
     @Published var activeLoadCount: Int = 0
@@ -162,13 +166,26 @@ class GlobalImageLoadManager: ObservableObject {
         
         // Check memory pressure
         if isMemoryPressureHigh() {
-            print("DEBUG: [GlobalImageLoadManager] High memory pressure, cancelling \(scheduledRetries.count) scheduled retries")
+            print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(activeLoads.count) active loads, \(scheduledRetries.count) scheduled retries")
+
+            // Cancel ALL active network loads immediately to free memory
+            for (requestId, task) in activeLoads {
+                print("DEBUG: [GlobalImageLoadManager] Cancelling active load: \(requestId)")
+                task.cancel()
+            }
+            activeLoads.removeAll()
+
             // Cancel ALL scheduled retries immediately to free memory
             for workItem in scheduledRetries.values {
                 workItem.cancel()
             }
             scheduledRetries.removeAll()
-            
+
+            // Clear pending requests to prevent accumulation
+            let pendingCount = pendingRequests.count
+            pendingRequests.removeAll()
+            print("DEBUG: [GlobalImageLoadManager] Cleared \(pendingCount) pending requests due to memory pressure")
+
             // Release cache aggressively
             ImageCacheManager.shared.releasePartialCache(percentage: 50)
             
@@ -453,14 +470,30 @@ class GlobalImageLoadManager: ObservableObject {
             }
             
             if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment) {
+                // Reset network failure counter on successful load
+                consecutiveNetworkFailures = 0
                 return image
             }
-            
+
             print("Error: Failed to cache UIImage from data for \(request.url)")
             return nil
             
         } catch {
             print("Error loading image from network (\(request.url)): \(error.localizedDescription)")
+
+            // Track consecutive network failures
+            consecutiveNetworkFailures += 1
+            print("DEBUG: [GlobalImageLoadManager] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+
+            // Trigger emergency cleanup if too many consecutive failures
+            if consecutiveNetworkFailures >= maxConsecutiveFailures {
+                print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
+                Task { @MainActor in
+                    self.handleNetworkFailureCleanup()
+                }
+                consecutiveNetworkFailures = 0 // Reset counter after cleanup
+            }
+
             return nil
         }
     }
@@ -527,6 +560,8 @@ class GlobalImageLoadManager: ObservableObject {
                     
                     request.completion(optimizedImage)
                     if optimizedImage != nil {
+                        // Reset network failure counter on successful load
+                        self.consecutiveNetworkFailures = 0
                         self.completedRequests.insert(request.id)
                         self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                     } else {
@@ -555,6 +590,18 @@ class GlobalImageLoadManager: ObservableObject {
                         self.updateStatistics()
                         return
                     }
+
+                    // Track consecutive network failures
+                    self.consecutiveNetworkFailures += 1
+                    print("DEBUG: [GlobalImageLoadManager] Network failure count: \(self.consecutiveNetworkFailures)/\(self.maxConsecutiveFailures)")
+
+                    // Trigger emergency cleanup if too many consecutive failures
+                    if self.consecutiveNetworkFailures >= self.maxConsecutiveFailures {
+                        print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
+                        self.handleNetworkFailureCleanup()
+                        self.consecutiveNetworkFailures = 0 // Reset counter after cleanup
+                    }
+
                     self.handleLoadFailure(request)
                     self.activeLoads.removeValue(forKey: request.id)
                     self.updateStatistics()
@@ -754,6 +801,38 @@ class GlobalImageLoadManager: ObservableObject {
         pendingLoadCount = pendingRequests.count
         completedLoadCount = completedRequests.count
         retryCount = retryCounts.values.reduce(0, +)
+    }
+
+    /// Emergency cleanup during network failures
+    func handleNetworkFailureCleanup() {
+        print("DEBUG: [GlobalImageLoadManager] Network failure detected, performing emergency cleanup")
+
+        // Cancel all active loads
+        for (requestId, task) in activeLoads {
+            print("DEBUG: [GlobalImageLoadManager] Cancelling active load due to network failure: \(requestId)")
+            task.cancel()
+        }
+        activeLoads.removeAll()
+
+        // Cancel all scheduled retries
+        for workItem in scheduledRetries.values {
+            workItem.cancel()
+        }
+        scheduledRetries.removeAll()
+
+        // Clear most pending requests (keep only high priority ones)
+        let originalCount = pendingRequests.count
+        pendingRequests = pendingRequests.filter { $0.priority == .critical }
+        let removedCount = originalCount - pendingRequests.count
+        print("DEBUG: [GlobalImageLoadManager] Cleared \(removedCount) pending requests due to network failure")
+
+        // Clear retry counts for failed requests
+        retryCounts.removeAll()
+
+        // Release cache
+        ImageCacheManager.shared.releasePartialCache(percentage: 30)
+
+        updateStatistics()
     }
     
     // MARK: - Memory Monitoring
