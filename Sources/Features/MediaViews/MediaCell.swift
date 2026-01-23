@@ -26,7 +26,7 @@ class VideoVisibilityManager: ObservableObject {
 }
 
 // MARK: - MediaCell
-struct MediaCell: View, Equatable {
+struct MediaCell: View, Equatable, MediaCellDelegate {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
@@ -182,6 +182,9 @@ struct MediaCell: View, Equatable {
             
             // Setup foreground observer to reload resources if released during background
             setupForegroundObserver()
+
+            // Phase 3: Register as delegate for direct video control communication
+            VideoPlaybackCoordinator.shared.registerDelegate(self, forVideoMid: attachment.mid)
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
@@ -195,6 +198,9 @@ struct MediaCell: View, Equatable {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
             }
+
+            // Phase 3: Unregister delegate
+            VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: attachment.mid)
         }
         .onChange(of: isVisible) { _, newValue in
             // Update effectiveBaseUrl when becoming visible (author may have been resolved)
@@ -214,12 +220,13 @@ struct MediaCell: View, Equatable {
             }
         }
         
-        // Listen for coordinator play/pause commands
+        // Phase 3: Using delegate-based communication for pause/stop commands
+        // Keeping notification listener for play commands from SharedVideoPlayerManager
         .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
             // Extract notification data
             guard let videoMid = notification.userInfo?["videoMid"] as? String,
                   videoMid == attachment.mid else { return }
-            
+
             // If notification includes full videoId, validate it matches our instance
             if let videoId = notification.userInfo?["videoId"] as? String {
                 let ourVideoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
@@ -236,54 +243,23 @@ struct MediaCell: View, Equatable {
             }
 
             print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
-            
+
             // Always allow playback when we receive a direct command for this instance
             // The SharedVideoPlayerManager has already ensured only one video plays at a time
             shouldAutoPlay = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: .shouldPauseVideo)) { notification in
-            guard let videoMid = notification.userInfo?["videoMid"] as? String,
-                  videoMid == attachment.mid else { return }
-            
-            // Ignore duplicate pause notifications if already paused
-            guard shouldAutoPlay else {
-                print("⚠️ [MediaCell] Ignoring duplicate pause command for \(attachment.mid) - already paused")
-                return
-            }
-            
-            print("⏸️ [MediaCell] Received coordinated pause command for \(attachment.mid)")
-            shouldAutoPlay = false
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .shouldStopVideo)) { notification in
-            guard let videoMid = notification.userInfo?["videoMid"] as? String,
-                  videoMid == attachment.mid else { return }
-            
-            // Ignore duplicate stop notifications if already stopped
-            guard shouldAutoPlay else {
-                print("⚠️ [MediaCell] Ignoring duplicate stop command for \(attachment.mid) - already stopped")
-                return
-            }
-            
-            print("⏹️ [MediaCell] Received coordinated stop command for \(attachment.mid)")
-            shouldAutoPlay = false
-        }
-        // Note: Seek functionality not implemented in Phase 1
-        // SimpleVideoPlayer handles seeking internally
         .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in
             guard isVideoAttachment else { return }
-            
+
             if shouldAutoPlay {
                 print("🛑 [MediaCell] Received stop all videos command for \(attachment.mid) - stopping playback")
             }
             shouldAutoPlay = false
         }
-        // SimpleVideoPlayer reacts to shouldAutoPlay binding changes
-        // No need to post additional notifications - would create circular loop
-        
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
             // Update effectiveBaseUrl when app becomes active (author may have been resolved)
             updateEffectiveBaseUrl()
-            
+
             // Restore video state when app becomes active
             if isVideoAttachment {
                 // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
@@ -291,7 +267,7 @@ struct MediaCell: View, Equatable {
                 // Individual cells just track visibility for playback
             }
         }
-        
+
         // CRITICAL FIX: Monitor user updates to catch when author's baseUrl is resolved
         // This fixes the race condition where author.baseUrl is nil when cell loads,
         // but gets resolved shortly after by background fetchUser task
@@ -673,6 +649,75 @@ struct MediaCell: View, Equatable {
         // This will force SimpleVideoPlayer to reinitialize
         videoReloadTrigger.toggle()
         print("✅ [VIDEO RELOAD] Video reload initiated")
+    }
+}
+
+// MARK: - MediaCellDelegate Implementation (Phase 3)
+
+extension MediaCell {
+    func shouldPlayVideo(withMid mid: String) {
+        guard mid == attachment.mid else { return }
+
+        // Ignore duplicate notifications if already playing
+        guard !shouldAutoPlay else {
+            print("⚠️ [MediaCell] Ignoring duplicate play command for \(attachment.mid) - already set to play")
+            return
+        }
+
+        print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
+
+        // Always allow playback when we receive a direct command for this instance
+        shouldAutoPlay = true
+    }
+
+    func shouldPauseVideo(withMid mid: String) {
+        guard mid == attachment.mid else { return }
+
+        // Ignore duplicate pause notifications if already paused
+        guard shouldAutoPlay else {
+            print("⚠️ [MediaCell] Ignoring duplicate pause command for \(attachment.mid) - already paused")
+            return
+        }
+
+        print("⏸️ [MediaCell] Received coordinated pause command for \(attachment.mid)")
+        shouldAutoPlay = false
+    }
+
+    func shouldStopVideo(withMid mid: String) {
+        guard mid == attachment.mid else { return }
+
+        // Ignore duplicate stop notifications if already stopped
+        guard shouldAutoPlay else {
+            print("⚠️ [MediaCell] Ignoring duplicate stop command for \(attachment.mid) - already stopped")
+            return
+        }
+
+        print("⏹️ [MediaCell] Received coordinated stop command for \(attachment.mid)")
+        shouldAutoPlay = false
+    }
+
+    func shouldStopAllVideos() {
+        guard isVideoAttachment else { return }
+        print("🛑 [MediaCell] Received stop all videos command for \(attachment.mid) - stopping playback")
+        shouldAutoPlay = false
+    }
+
+    func updateVideoTimer(withMid mid: String, timeRemaining: String) {
+        // This is handled by VideoTimerOverlay, which has its own notification listener
+        // The delegate method is here for completeness but VideoTimerOverlay still uses notifications
+    }
+
+    func appDidBecomeActive() {
+        // Update effectiveBaseUrl when app becomes active (author may have been resolved)
+        updateEffectiveBaseUrl()
+    }
+
+    func userDidUpdate(userId: String) {
+        // Check if the updated user is this tweet's author
+        if userId == parentTweet.authorId {
+            // Update baseUrl in case it changed
+            updateEffectiveBaseUrl()
+        }
     }
 }
 

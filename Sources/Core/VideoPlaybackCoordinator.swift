@@ -20,6 +20,32 @@ extension Notification.Name {
     static let requestVideoTimerUpdate = Notification.Name("requestVideoTimerUpdate")
 }
 
+// MARK: - Delegate-Based Communication (Phase 3)
+
+/// Protocol for video control communication between VideoPlaybackCoordinator and MediaCell
+protocol MediaCellDelegate {
+    /// Called when a video should start/resume playing
+    func shouldPlayVideo(withMid mid: String)
+
+    /// Called when a video should pause
+    func shouldPauseVideo(withMid mid: String)
+
+    /// Called when a video should stop and reset
+    func shouldStopVideo(withMid mid: String)
+
+    /// Called when all videos should stop
+    func shouldStopAllVideos()
+
+    /// Called when video timer should update
+    func updateVideoTimer(withMid mid: String, timeRemaining: String)
+
+    /// Called when app becomes active (for base URL updates)
+    func appDidBecomeActive()
+
+    /// Called when user data is updated
+    func userDidUpdate(userId: String)
+}
+
 /// Video state during orchestration
 private enum VideoPlaybackPhase {
     case idle                    // No playback
@@ -133,6 +159,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     private nonisolated(unsafe) var activeAsyncTasks: Set<Task<Void, Never>> = []
     private let taskCleanupLock = NSLock()
     private let maxConcurrentTasks = 5  // Safety limit to prevent task accumulation
+
+    // MARK: - Delegate-Based Communication (Phase 3)
+
+    /// Registered MediaCell delegates for direct communication (keyed by videoMid)
+    private var mediaCellDelegates: [String: MediaCellDelegate] = [:]
 
     /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
     /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
@@ -462,7 +493,19 @@ class VideoPlaybackCoordinator: ObservableObject {
             cachedVisibilityRatios = cachedVisibilityRatios.filter { visibleVideoIds.contains($0.key) }
         }
     }
-    
+
+    // MARK: - Delegate Management (Phase 3)
+
+    /// Register a MediaCell delegate for video control
+    func registerDelegate(_ delegate: MediaCellDelegate, forVideoMid videoMid: String) {
+        mediaCellDelegates[videoMid] = delegate
+    }
+
+    /// Unregister a MediaCell delegate
+    func unregisterDelegate(forVideoMid videoMid: String) {
+        mediaCellDelegates.removeValue(forKey: videoMid)
+    }
+
     // MARK: - Public API
     
     /// Set table view reference for viewport calculations
@@ -1297,11 +1340,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                 self.visibleVideos.forEach { video in
                     if video.identifier != newPrimary.identifier {
                         // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
-                        NotificationCenter.default.post(
-                            name: .shouldPauseVideo,
-                            object: nil,
-                            userInfo: ["videoMid": video.videoMid]
-                        )
+                        // Phase 3: Use delegate instead of notification
+                        if let delegate = self.mediaCellDelegates[video.videoMid] {
+                            delegate.shouldPauseVideo(withMid: video.videoMid)
+                        }
                     }
                 }
 
@@ -1359,13 +1401,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             SharedVideoPlayerManager.shared.pauseCurrentVideo()
         } else {
             // For non-current videos, send direct notification (they're not managed by SharedVideoPlayerManager)
-            NotificationCenter.default.post(
-                name: .shouldPauseVideo,
-                object: nil,
-                userInfo: [
-                    "videoMid": video.videoMid
-                ]
-            )
+            // Phase 3: Use delegate instead of notification
+            if let delegate = mediaCellDelegates[video.videoMid] {
+                delegate.shouldPauseVideo(withMid: video.videoMid)
+            }
         }
     }
 
@@ -1470,13 +1509,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         // CRITICAL: Clear coordinatorWantsToPlay flag for finished video
         // This prevents it from auto-playing on next foreground recovery
         // PHASE 2: Pause finished video (not managed by SharedVideoPlayerManager anymore)
-        NotificationCenter.default.post(
-            name: .shouldPauseVideo,
-            object: nil,
-            userInfo: [
-                "videoMid": currentVideo.videoMid
-            ]
-        )
+        // Phase 3: Use delegate instead of notification
+        if let delegate = mediaCellDelegates[currentVideo.videoMid] {
+            delegate.shouldPauseVideo(withMid: currentVideo.videoMid)
+        }
 
         // Set new primary and start playing
         primaryVideoId = nextVideo.identifier
@@ -1538,13 +1574,10 @@ class VideoPlaybackCoordinator: ObservableObject {
                         // Send pause commands to all videos except the first one
                         // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
                         for (index, video) in visibleVideos.enumerated() where index > 0 {
-                            NotificationCenter.default.post(
-                                name: .shouldPauseVideo,
-                                object: nil,
-                                userInfo: [
-                                    "videoMid": video.videoMid
-                                ]
-                            )
+                            // Phase 3: Use delegate instead of notification
+                            if let delegate = mediaCellDelegates[video.videoMid] {
+                                delegate.shouldPauseVideo(withMid: video.videoMid)
+                            }
                         }
                         
                         let firstVideo = visibleVideos[0]
