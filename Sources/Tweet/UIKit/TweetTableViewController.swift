@@ -437,8 +437,8 @@ class TweetTableViewController: UITableViewController {
         }
         
         // CRITICAL: Update visibility after reload so coordinator knows pinned videos are visible
-        // Delay slightly to ensure cells have been created
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        // Use longer delay (300ms) to ensure cells are fully rendered
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.updateVisibleTweetsForVideoPlayback()
         }
     }
@@ -480,7 +480,9 @@ class TweetTableViewController: UITableViewController {
             videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
             
             // Trigger video detection after initial load
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            // CRITICAL: Use longer delay (300ms) to ensure all cells are fully rendered
+            // 100ms was too short, causing only first video to be detected on app launch
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.updateVisibleTweetsForVideoPlayback()
             }
             return

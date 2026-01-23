@@ -134,6 +134,9 @@ extension VideoPlayerLifecycleManager {
         let currentTime: CMTime = rawTime.seconds.isFinite ? rawTime : .zero
         savedPlaybackState = (wasPlaying: wasPlaying, time: currentTime)
         
+        // Get duration for end-check
+        let duration = player.currentItem?.duration ?? .invalid
+        
         // CRITICAL: Also save to persistent storage so it survives player recreation
         if let detailManager = self as? DetailVideoManager,
            let videoMid = detailManager.currentVideoMid {
@@ -141,7 +144,8 @@ extension VideoPlayerLifecycleManager {
                 videoMid: videoMid,
                 currentTime: currentTime,
                 wasPlaying: wasPlaying,
-                context: .detailView
+                context: .detailView,
+                duration: duration
             )
         } else if let fullscreenManager = self as? FullScreenVideoManager,
                   let videoMid = fullscreenManager.currentVideoMid {
@@ -149,7 +153,8 @@ extension VideoPlayerLifecycleManager {
                 videoMid: videoMid,
                 currentTime: currentTime,
                 wasPlaying: wasPlaying,
-                context: .fullScreen
+                context: .fullScreen,
+                duration: duration
             )
         }
         
@@ -1028,9 +1033,35 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
+                
+                // CRITICAL FIX: Validate that video actually finished
+                // Check that current time is near the end of duration
+                guard let player = self.singletonPlayer,
+                      let item = player.currentItem else {
+                    print("⚠️ [FullScreenVideoManager] Video finished notification but no player/item")
+                    return
+                }
+                
+                let currentTime = player.currentTime()
+                let duration = item.duration
+                
+                // Validate duration is valid
+                guard duration.isValid, duration.seconds > 0 else {
+                    print("⚠️ [FullScreenVideoManager] Video finished notification but duration is invalid (\(duration.seconds)s)")
+                    return
+                }
+                
+                // Check if we're actually at the end (within 0.5 seconds of duration)
+                let timeUntilEnd = duration.seconds - currentTime.seconds
+                guard timeUntilEnd < 0.5 else {
+                    print("⚠️ [FullScreenVideoManager] Ignoring premature finish notification - current: \(currentTime.seconds)s, duration: \(duration.seconds)s, remaining: \(timeUntilEnd)s")
+                    return
+                }
+                
+                print("✅ [FullScreenVideoManager] Video legitimately finished - current: \(currentTime.seconds)s, duration: \(duration.seconds)s")
                 self.isPlaying = false
                 
                 // Trigger auto-advance after delay
@@ -1237,13 +1268,15 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
            let videoMid = currentVideoMid {
             let wasPlaying = player.rate > 0
             let currentTime = player.currentTime()
+            let duration = player.currentItem?.duration ?? .invalid
             
             // Save to fullScreen context
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
                 wasPlaying: wasPlaying,
-                context: .fullScreen
+                context: .fullScreen,
+                duration: duration
             )
             
             // ALSO save to mediaCell context so MediaCell can resume from this position
@@ -1251,7 +1284,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 videoMid: videoMid,
                 currentTime: currentTime,
                 wasPlaying: wasPlaying,
-                context: .mediaCell
+                context: .mediaCell,
+                duration: duration
             )
         }
         
@@ -1325,11 +1359,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             if let videoMid = currentVideoMid {
                 let wasPlaying = player.rate > 0
                 let currentTime = player.currentTime()
+                let duration = player.currentItem?.duration ?? .invalid
                 PersistentVideoStateManager.shared.saveState(
                     videoMid: videoMid,
                     currentTime: currentTime,
                     wasPlaying: wasPlaying,
-                    context: .fullScreen
+                    context: .fullScreen,
+                    duration: duration
                 )
             }
             
@@ -1763,12 +1799,14 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
            let videoMid = currentVideoMid {
             let wasPlaying = player.rate > 0
             let currentTime = player.currentTime()
+            let duration = player.currentItem?.duration ?? .invalid
             
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
                 wasPlaying: wasPlaying,
-                context: .detailView
+                context: .detailView,
+                duration: duration
             )
             print("💾 [DETAIL VIDEO MANAGER] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
         }
@@ -1839,14 +1877,37 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     print("DEBUG: [DETAIL VIDEO MANAGER] No current player when video finished")
                     return 
                 }
+                
+                // CRITICAL FIX: Validate that video actually finished
+                // Check that current time is near the end of duration
+                let currentTime = player.currentTime()
+                guard let item = player.currentItem else {
+                    print("⚠️ [DETAIL VIDEO MANAGER] No player item when video finished")
+                    return
+                }
+                
+                let duration = item.duration
                 let currentMid = self.currentVideoMid
-                print("DEBUG: [DETAIL VIDEO MANAGER] Video completion notification received for \(currentMid ?? "unknown")")
+                
+                // Validate duration is valid
+                guard duration.isValid, duration.seconds > 0 else {
+                    print("⚠️ [DETAIL VIDEO MANAGER] Video finished notification but duration is invalid (\(duration.seconds)s) for \(currentMid ?? "unknown")")
+                    return
+                }
+                
+                // Check if we're actually at the end (within 0.5 seconds of duration)
+                let timeUntilEnd = duration.seconds - currentTime.seconds
+                guard timeUntilEnd < 0.5 else {
+                    print("⚠️ [DETAIL VIDEO MANAGER] Ignoring premature finish notification for \(currentMid ?? "unknown") - current: \(currentTime.seconds)s, duration: \(duration.seconds)s, remaining: \(timeUntilEnd)s")
+                    return
+                }
+                
+                print("✅ [DETAIL VIDEO MANAGER] Video legitimately finished for \(currentMid ?? "unknown") - current: \(currentTime.seconds)s, duration: \(duration.seconds)s")
                 print("DEBUG: [DETAIL VIDEO MANAGER] Notification object: \(notification.object ?? "nil")")
                 print("DEBUG: [DETAIL VIDEO MANAGER] Player current item: \(player.currentItem?.description ?? "nil")")
                 
                 // Just pause - no automatic rewind
                 // Will rewind when user tries to play
-                // ✅ PERFORMANCE FIX: Already on @MainActor, no need for nested Task
                 print("DEBUG: [DETAIL VIDEO MANAGER] Video finished for \(currentMid ?? "unknown") - paused, ready to replay")
                 self.isPlaying = false
             }
@@ -1904,11 +1965,13 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             if let videoMid = currentVideoMid {
                 let wasPlaying = player.rate > 0
                 let currentTime = player.currentTime()
+                let duration = player.currentItem?.duration ?? .invalid
                 PersistentVideoStateManager.shared.saveState(
                     videoMid: videoMid,
                     currentTime: currentTime,
                     wasPlaying: wasPlaying,
-                    context: .detailView
+                    context: .detailView,
+                    duration: duration
                 )
             }
             

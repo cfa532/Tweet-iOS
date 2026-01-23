@@ -1084,8 +1084,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             self.currentlyPlayingVideoIds = [primary.identifier]
 
             // Initialize visibility ratio cache for new primary video to prevent immediate re-switching
-            // Set to 1.0 (fully visible) to prevent glitch where video stops shortly after becoming primary
-            self.cachedVisibilityRatios[primary.identifier] = 1.0
+            // Use 0.7 (70%) instead of 1.0 to be more realistic and prevent false threshold crossing
+            // This prevents the check from thinking visibility "dropped" from 1.0 to actual measured value
+            self.cachedVisibilityRatios[primary.identifier] = 0.7
 
             // Record switch time to prevent immediate re-checking
             self.lastPrimarySwitchTime = Date()
@@ -1260,22 +1261,26 @@ class VideoPlaybackCoordinator: ObservableObject {
         let visibilityRatio = uiState.visibilityRatio
         
         // PERF FIX: Only proceed if visibility ratio changed significantly or crossed threshold
-        let previousRatio = cachedVisibilityRatios[primaryId] ?? 1.0
+        let previousRatio = cachedVisibilityRatios[primaryId] ?? 0.7  // Use realistic default, not 1.0
         let ratioChange = abs(visibilityRatio - previousRatio)
 
         // Update cache
         cachedVisibilityRatios[primaryId] = visibilityRatio
         
-        // Only check threshold if ratio changed significantly or crossed the 50% threshold
-        let crossedThreshold = (previousRatio > 0.5 && visibilityRatio <= 0.5) || (previousRatio <= 0.5 && visibilityRatio > 0.5)
+        // Only check threshold if ratio changed significantly or crossed the 30% threshold (hysteresis)
+        // Changed from 50% to 30% to match the new stopping threshold
+        let crossedThreshold = (previousRatio > 0.30 && visibilityRatio <= 0.30) || (previousRatio <= 0.30 && visibilityRatio > 0.30)
         
         guard crossedThreshold || ratioChange >= visibilityRatioThreshold else {
             // No significant change, skip expensive operations
             return
         }
         
-        // If video is less than 50% visible, switch to appropriate video based on scroll direction
-        if visibilityRatio < 0.5 {
+        // CRITICAL FIX: Add hysteresis to prevent rapid switching
+        // Only switch away from primary if visibility drops below 30% (not 50%)
+        // This prevents videos from stopping when they're still quite visible (e.g., 45% visible)
+        // The 50% threshold is used for SELECTING primary, but 30% for KEEPING primary
+        if visibilityRatio < 0.30 {
             // Re-identify primary video based on current scroll direction
             // This handles both scrolling down (switch to next) and scrolling up (switch to previous)
             guard let newPrimary = await identifyPrimaryVideoAsync(), newPrimary.identifier != primaryId else {
@@ -1311,8 +1316,8 @@ class VideoPlaybackCoordinator: ObservableObject {
                     self.currentlyPlayingVideoIds = [newPrimary.identifier]
 
                     // Initialize visibility ratio cache for new primary video to prevent immediate re-switching
-                    // Set to 1.0 (fully visible) to prevent glitch where video stops shortly after becoming primary
-                    self.cachedVisibilityRatios[newPrimary.identifier] = 1.0
+                    // Use 0.7 (70%) instead of 1.0 to be more realistic and prevent false threshold crossing
+                    self.cachedVisibilityRatios[newPrimary.identifier] = 0.7
 
                     // Record switch time to prevent immediate re-checking
                     self.lastPrimarySwitchTime = Date()
@@ -1397,6 +1402,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Play next visible video after primary finishes
     private func playNextVisibleVideo() {
         guard let currentPrimary = primaryVideoId else {
+            print("⚠️ [VIDEO ADVANCE] Cannot advance - no current primary video")
             return
         }
 
@@ -1404,9 +1410,12 @@ class VideoPlaybackCoordinator: ObservableObject {
         // But we need to ensure we're advancing to the next video in feed order (by Y position)
         // Find current primary in visible videos list (sorted by position)
         guard let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentPrimary }) else {
+            print("⚠️ [VIDEO ADVANCE] Current primary not in visible videos - stopping all")
             stopAllVideos()
             return
         }
+
+        print("📹 [VIDEO ADVANCE] Current video finished at index \(currentIndex)/\(visibleVideos.count), scrolling \(scrollDirection ? "down" : "up")")
 
         // Find next video based on scroll direction
         // Scrolling down: next video (index + 1)
@@ -1416,6 +1425,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling DOWN: advance to next video
             targetIndex = currentIndex + 1
             guard targetIndex < visibleVideos.count else {
+                print("⚠️ [VIDEO ADVANCE] No next video (reached end of list) - stopping all")
                 stopAllVideos()
                 return
             }
@@ -1423,6 +1433,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling UP: go back to previous video
             targetIndex = currentIndex - 1
             guard targetIndex >= 0 else {
+                print("⚠️ [VIDEO ADVANCE] No previous video (at start of list) - stopping all")
                 stopAllVideos()
                 return
             }
@@ -1434,9 +1445,12 @@ class VideoPlaybackCoordinator: ObservableObject {
         let step = scrollDirection ? 1 : -1
         var candidateIndex = targetIndex
         var nextVideo: VideoPlaybackInfo?
+        print("🔍 [VIDEO ADVANCE] Searching for next visible video starting at index \(targetIndex)")
         while candidateIndex >= 0 && candidateIndex < visibleVideos.count {
             let candidate = visibleVideos[candidateIndex]
-            if isVideoCellVisibleEnough(candidate, minVisibilityRatio: 0.5) {
+            let isVisible = isVideoCellVisibleEnough(candidate, minVisibilityRatio: 0.5)
+            print("🔍 [VIDEO ADVANCE] Checking candidate at index \(candidateIndex): \(candidate.videoMid.prefix(10))... - visible enough: \(isVisible)")
+            if isVisible {
                 nextVideo = candidate
                 break
             }
@@ -1444,9 +1458,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         guard let nextVideo else {
+            print("⚠️ [VIDEO ADVANCE] No sufficiently visible next video found - stopping all")
             stopAllVideos()
             return
         }
+        print("✅ [VIDEO ADVANCE] Found next video: \(nextVideo.videoMid.prefix(10))... at index \(candidateIndex)")
         let currentVideo = visibleVideos[currentIndex]
         
 

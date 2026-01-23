@@ -1114,7 +1114,8 @@ struct SimpleVideoPlayer: View {
             
             // PERFORMANCE: Add small delay for MediaCell to let scroll settle
             // Detail/fullscreen modes start immediately (user is focused on them)
-            if mode == .mediaCell {
+            // CRITICAL: Skip delay if coordinator already wants this video to play (edge case at beginning)
+            if mode == .mediaCell && !coordinatorWantsToPlay {
                 Task {
                     try? await Task.sleep(nanoseconds: 150_000_000) // 150ms delay
                     guard self.player == nil, self.shouldLoadVideo, self.isVisible else { return }
@@ -1823,6 +1824,13 @@ struct SimpleVideoPlayer: View {
         // If player not ready, wait for it
         guard let player = player, loadingState == .loaded else {
             print("⏸️ [COORDINATOR] Play command received but player not ready (loaded:\(loadingState == .loaded), hasPlayer:\(player != nil)) - waiting")
+            
+            // CRITICAL: If player is nil and we should load it, trigger setup immediately
+            // This handles the edge case where coordinator play command arrives during the 150ms onAppear delay
+            if player == nil && shouldLoadVideo && isVisible && !loadingState.isLoading {
+                print("🚀 [COORDINATOR] Triggering immediate player setup for \(mid)")
+                setupPlayer()
+            }
             
             // CRITICAL: Prevent concurrent waiting tasks
             guard !isWaitingForPlayerReady else {
@@ -4736,12 +4744,39 @@ struct SimpleVideoPlayer: View {
         }
         isHandlingFinishEvent = true
         
+        // CRITICAL FIX: Validate that video actually finished
+        // Check that current time is near the end of duration
+        guard let player = player, let item = player.currentItem else {
+            print("⚠️ [SimpleVideoPlayer] Video finished notification but no player/item for \(mid)")
+            isHandlingFinishEvent = false
+            return
+        }
+        
+        let currentTime = player.currentTime()
+        let duration = item.duration
+        
+        // Validate duration is valid
+        guard duration.isValid, duration.seconds > 0 else {
+            print("⚠️ [SimpleVideoPlayer] Video finished notification but duration is invalid (\(duration.seconds)s) for \(mid)")
+            isHandlingFinishEvent = false
+            return
+        }
+        
+        // Check if we're actually at the end (within 0.5 seconds of duration)
+        let timeUntilEnd = duration.seconds - currentTime.seconds
+        guard timeUntilEnd < 0.5 else {
+            print("⚠️ [SimpleVideoPlayer] Ignoring premature finish notification for \(mid) - current: \(currentTime.seconds)s, duration: \(duration.seconds)s, remaining: \(timeUntilEnd)s")
+            isHandlingFinishEvent = false
+            return
+        }
+        
+        print("✅ [SimpleVideoPlayer] Video legitimately finished for \(mid) - current: \(currentTime.seconds)s, duration: \(duration.seconds)s")
         print("🎬 [VIDEO FINISHED] Video finished playing for \(mid), mode: \(mode)")
-        resetProgressiveBufferTarget(for: player?.currentItem)
+        resetProgressiveBufferTarget(for: player.currentItem)
         
         // CRITICAL: Immediately pause to prevent flicker when next video starts
         // This ensures smooth transition between videos
-        player?.pause()
+        player.pause()
         loadingState = .loaded
         isHoldingRecoveryCover = false
         // Mark finished immediately to prevent any auto-restart logic from firing.
@@ -4753,7 +4788,7 @@ struct SimpleVideoPlayer: View {
         // CRITICAL: Capture last frame to prevent black screen after video finishes
         // AVPlayer doesn't always reliably hold the last frame
         if mode == .mediaCell {
-            player?.isMuted = MuteState.shared.isMuted
+            player.isMuted = MuteState.shared.isMuted
             VideoStateCache.shared.clearCachedState(for: mid)
             // Capture last frame to show instead of black screen
             captureLastFrameIfPossible(reason: "videoFinished")
