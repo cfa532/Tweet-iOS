@@ -39,7 +39,7 @@ class SharedDisplayLinkManager {
     private var displayLink: CADisplayLink?
 
     /// Registered observers for display link updates
-    private var observers: NSHashTable<AnyObject> = NSHashTable.weakObjects()
+    private var observers: [SharedDisplayLinkObserver] = []
 
     /// Is the display link currently running
     private(set) var isRunning = false
@@ -81,7 +81,7 @@ class SharedDisplayLinkManager {
 
     /// Add an observer to receive display link updates
     func addObserver(_ observer: SharedDisplayLinkObserver) {
-        observers.add(observer)
+        observers.append(observer)
         print("⏱️ [DISPLAY LINK] Added observer, total: \(observers.count)")
 
         // Start display link if this is the first observer
@@ -92,7 +92,7 @@ class SharedDisplayLinkManager {
 
     /// Remove an observer
     func removeObserver(_ observer: SharedDisplayLinkObserver) {
-        observers.remove(observer)
+        observers.removeAll { $0 as AnyObject === observer as AnyObject }
         print("⏱️ [DISPLAY LINK] Removed observer, total: \(observers.count)")
 
         // Stop display link if no observers remain
@@ -110,8 +110,7 @@ class SharedDisplayLinkManager {
 
     @objc private func displayLinkFired(_ link: CADisplayLink) {
         // Notify all observers
-        let allObservers = observers.allObjects
-        for case let observer as SharedDisplayLinkObserver in allObservers {
+        for observer in observers {
             observer.displayLinkDidFire(link)
         }
     }
@@ -119,7 +118,7 @@ class SharedDisplayLinkManager {
 
 /// Protocol for objects that want to observe display link updates
 @MainActor
-protocol SharedDisplayLinkObserver: AnyObject {
+protocol SharedDisplayLinkObserver {
     func displayLinkDidFire(_ link: CADisplayLink)
 }
 

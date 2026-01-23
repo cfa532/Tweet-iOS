@@ -719,13 +719,12 @@ struct TimeRemainingDisplay: View {
 }
 
 // MARK: - VideoTimerOverlay
-struct VideoTimerOverlay: View {
+struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
     let videoMid: String
     @State private var timeRemaining: String = "0:00"
-    @State private var updateTimer: Timer?
     @State private var isVisible: Bool = true
     @State private var hideTimer: Timer?
-    
+
     var body: some View {
         Group {
             if isVisible {
@@ -735,12 +734,15 @@ struct VideoTimerOverlay: View {
         }
         .onAppear {
             isVisible = true
-            startTimer()
+            // PHASE 2: Use centralized display link instead of individual timer
+            SharedDisplayLinkManager.shared.addObserver(self)
             startHideTimer()
+            // Request immediate update
+            requestUpdate()
         }
         .onDisappear {
-            updateTimer?.invalidate()
-            updateTimer = nil
+            // PHASE 2: Remove from centralized display link
+            SharedDisplayLinkManager.shared.removeObserver(self)
             hideTimer?.invalidate()
             hideTimer = nil
         }
@@ -753,28 +755,13 @@ struct VideoTimerOverlay: View {
             timeRemaining = time
         }
     }
-    
-    private func startTimer() {
-        // CRITICAL: Clean up any existing timer first to prevent accumulation
-        updateTimer?.invalidate()
-        
-        // Request immediate update
-        requestUpdate()
 
-        // Setup repeating timer for updates (use .common mode to fire during scroll)
-        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in onDisappear
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [videoMid] _ in
-            // Request update from SimpleVideoPlayer
-            NotificationCenter.default.post(
-                name: .requestVideoTimerUpdate,
-                object: nil,
-                userInfo: ["videoMid": videoMid]
-            )
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        updateTimer = timer
+    // PHASE 2: Centralized timer callback - called by SharedDisplayLinkManager
+    func displayLinkDidFire(_ link: CADisplayLink) {
+        // Request update from SimpleVideoPlayer at 30fps (every display link frame)
+        requestUpdate()
     }
-    
+
     private func startHideTimer() {
         // Cancel any existing hide timer
         hideTimer?.invalidate()
@@ -789,7 +776,7 @@ struct VideoTimerOverlay: View {
         RunLoop.main.add(timer, forMode: .common)
         hideTimer = timer
     }
-    
+
     private func requestUpdate() {
         NotificationCenter.default.post(
             name: .requestVideoTimerUpdate,
