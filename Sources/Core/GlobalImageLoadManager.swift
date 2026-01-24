@@ -186,8 +186,8 @@ class GlobalImageLoadManager: ObservableObject {
             pendingRequests.removeAll()
             print("DEBUG: [GlobalImageLoadManager] Cleared \(pendingCount) pending requests due to memory pressure")
 
-            // Release cache aggressively
-            ImageCacheManager.shared.releasePartialCache(percentage: 50)
+            // Release cache moderately (was 50%, too aggressive - causes thrashing)
+            ImageCacheManager.shared.releasePartialCache(percentage: 20)
             
             if request.priority.rawValue < ImageLoadingPriority.high.rawValue {
                 // Defer low priority requests during memory pressure
@@ -932,8 +932,8 @@ class GlobalImageLoadManager: ObservableObject {
         // Force garbage collection
         updateStatistics()
         
-        // Aggressively trim cached images - 70% on memory warning
-        ImageCacheManager.shared.releasePartialCache(percentage: 70)
+        // Aggressively trim cached images on memory warning (was 70%, reduced to 40%)
+        ImageCacheManager.shared.releasePartialCache(percentage: 40)
         
         print("✅ [GlobalImageLoadManager] Cleanup complete")
     }
