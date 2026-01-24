@@ -3,7 +3,7 @@ import SwiftUI
 import BackgroundTasks
 import UserNotifications
 import AVFoundation
-import ffmpegkit
+// import ffmpegkit  // Temporarily commented out - CocoaPods dependency issue
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     static var orientationLock = UIInterfaceOrientationMask.all
@@ -25,7 +25,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
         // AV_LOG_ERROR = 16 - only show fatal errors, suppress INFO/WARNING/DEBUG
-        FFmpegKitConfig.setLogLevel(16)
+        // FFmpegKitConfig.setLogLevel(16)  // Temporarily commented out - CocoaPods dependency issue
         
         // Lock app to portrait orientation by default
         AppDelegate.lockOrientation(.portrait)

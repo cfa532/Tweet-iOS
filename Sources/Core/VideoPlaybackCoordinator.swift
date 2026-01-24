@@ -506,6 +506,53 @@ class VideoPlaybackCoordinator: ObservableObject {
         mediaCellDelegates.removeValue(forKey: videoMid)
     }
 
+    /// Called by MediaCell when it becomes visible and wants to play video
+    func mediaCellBecameVisible(videoMid: String, cellTweetId: String) {
+        print("📱 [COORDINATOR] MediaCell became visible: \(videoMid) in cell \(cellTweetId)")
+
+        // Check if this video should become the primary video
+        Task {
+            await checkIfShouldBecomePrimary(videoMid: videoMid, cellTweetId: cellTweetId)
+        }
+    }
+
+    /// Check if a video should become the primary video
+    private func checkIfShouldBecomePrimary(videoMid: String, cellTweetId: String) async {
+        // Find the video info for this mid
+        guard let videoInfo = allVideos.first(where: { $0.videoMid == videoMid }) else {
+            print("⚠️ [COORDINATOR] No video info found for mid: \(videoMid)")
+            return
+        }
+
+        // Check if this video is more visible than current primary
+        let visibilityRatios = await calculateCellVisibilityAsync()
+        let videoVisibility = visibilityRatios[videoInfo.cellTweetId] ?? 0
+
+        if let currentPrimaryId = primaryVideoId,
+           let currentPrimaryInfo = allVideos.first(where: { $0.identifier == currentPrimaryId }) {
+
+            let currentVisibility = visibilityRatios[currentPrimaryInfo.cellTweetId] ?? 0
+
+            // Only switch if this video is significantly more visible (at least 20% more)
+            if videoVisibility > currentVisibility + 0.2 {
+                print("🔄 [COORDINATOR] Switching to more visible video: \(videoMid) (\(videoVisibility)) vs current (\(currentVisibility))")
+                SharedVideoPlayerManager.shared.playVideo(
+                    videoId: videoInfo.identifier,
+                    videoMid: videoInfo.videoMid,
+                    cellTweetId: videoInfo.cellTweetId
+                )
+            }
+        } else if videoVisibility >= 0.5 {
+            // No current primary, and this video is sufficiently visible
+            print("▶️ [COORDINATOR] Starting primary video: \(videoMid) with visibility \(videoVisibility)")
+            SharedVideoPlayerManager.shared.playVideo(
+                videoId: videoInfo.identifier,
+                videoMid: videoInfo.videoMid,
+                cellTweetId: videoInfo.cellTweetId
+            )
+        }
+    }
+
     // MARK: - Public API
     
     /// Set table view reference for viewport calculations
