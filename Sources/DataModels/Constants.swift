@@ -15,8 +15,8 @@ enum Constants {
     static let LOCAL_HOST = "http://127.0.0.1"
     
     // Cache Configuration - RESTORED to original limits for better performance
-    static let MAX_ASSET_CACHE_SIZE = 40 // Restored from 25 - original limit
-    static let MAX_PLAYER_CACHE_SIZE = 30 // Restored from 20 - original limit
+    static let MAX_ASSET_CACHE_SIZE = 40
+    static let MAX_PLAYER_CACHE_SIZE = 5 // number of players to cache in memory
     static let MAX_CONCURRENT_PLAYER_CREATIONS = 4 // Research-backed: iPhone supports 4 connections/host by default, matches iOS network best practices
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 300 // 5 minutes - reasonable balance of memory vs performance
     
