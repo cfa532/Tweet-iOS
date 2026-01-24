@@ -624,6 +624,14 @@ class ImageCacheManager: @unchecked Sendable {
         
         // Create new request task
         let task = Task<UIImage?, Never> {
+            var tempURL: URL?
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
+                if let tempURL = tempURL {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+            }
+            
             do {
                 guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[thumbnail]") else {
                     return nil
@@ -634,17 +642,17 @@ class ImageCacheManager: @unchecked Sendable {
                 request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
-                let (tempURL, response) = try await URLSession.shared.download(for: request)
+                let downloadResult = try await URLSession.shared.download(for: request)
+                tempURL = downloadResult.0  // Store for cleanup in defer
                 
-                guard let httpResponse = response as? HTTPURLResponse,
+                guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
                       (200...299).contains(httpResponse.statusCode) else {
                     print("Error: Invalid response for image at \(url)")
                     return nil
                 }
                 
-                let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
+                let data = try Data(contentsOf: downloadResult.0, options: .mappedIfSafe)
                 self.cacheImageData(data, for: attachment)
-                try? FileManager.default.removeItem(at: tempURL)
                 
                 return self.getCompressedImage(for: attachment)
             } catch {
@@ -705,6 +713,14 @@ class ImageCacheManager: @unchecked Sendable {
         
         // Create new request task
         let task = Task<UIImage?, Never> {
+            var tempURL: URL?
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
+                if let tempURL = tempURL {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+            }
+            
             do {
                 guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[original]") else {
                     return nil
@@ -715,19 +731,19 @@ class ImageCacheManager: @unchecked Sendable {
                 request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
-                let (tempURL, response) = try await URLSession.shared.download(for: request)
+                let downloadResult = try await URLSession.shared.download(for: request)
+                tempURL = downloadResult.0  // Store for cleanup in defer
                 
-                guard let httpResponse = response as? HTTPURLResponse,
+                guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
                       (200...299).contains(httpResponse.statusCode) else {
                     print("Error: Invalid response for original image at \(url)")
                     return nil
                 }
                 
-                let image = UIImage(contentsOfFile: tempURL.path)
+                let image = UIImage(contentsOfFile: downloadResult.0.path)
                 if image == nil {
-                    print("Error loading original image from disk (nil) at \(tempURL)")
+                    print("Error loading original image from disk (nil) at \(downloadResult.0)")
                 }
-                try? FileManager.default.removeItem(at: tempURL)
                 
                 // Replace compressed cache if requested
                 if replaceCompressedCache, let originalImage = image {
@@ -826,6 +842,14 @@ class ImageCacheManager: @unchecked Sendable {
     
     private func startAvatarLoad(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
         let task = Task<UIImage?, Never> {
+            var tempURL: URL?
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
+                if let tempURL = tempURL {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+            }
+            
             do {
                 guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[avatar]") else {
                     return nil
@@ -836,17 +860,17 @@ class ImageCacheManager: @unchecked Sendable {
                 request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
                 request.cachePolicy = .returnCacheDataElseLoad
                 
-                let (tempURL, response) = try await URLSession.shared.download(for: request)
+                let downloadResult = try await URLSession.shared.download(for: request)
+                tempURL = downloadResult.0  // Store for cleanup in defer
                 
-                guard let httpResponse = response as? HTTPURLResponse,
+                guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
                       (200...299).contains(httpResponse.statusCode) else {
                     print("DEBUG: [ImageCacheManager] Invalid response for avatar at \(url)")
                     return nil
                 }
                 
-                let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
+                let data = try Data(contentsOf: downloadResult.0, options: .mappedIfSafe)
                 self.cacheImageData(data, for: attachment)
-                try? FileManager.default.removeItem(at: tempURL)
                 
                 return self.getCompressedImage(for: attachment)
             } catch {

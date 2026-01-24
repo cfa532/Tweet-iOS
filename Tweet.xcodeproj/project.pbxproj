@@ -144,6 +144,7 @@
 		46E8A7D52DE9F15100A30FBA /* CommentsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */; };
 		46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */; };
 		46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */; };
+		46F629202F24A40E00FD0815 /* TWITTER_PERFORMANCE_ARCHITECTURE 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 46F6291F2F24A40D00FD0815 /* TWITTER_PERFORMANCE_ARCHITECTURE 2.md */; };
 		4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */; };
 		52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */; };
 		7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */; };
@@ -300,6 +301,7 @@
 		46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsViewModel.swift; sourceTree = "<group>"; };
 		46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleVideoPlayer.swift; sourceTree = "<group>"; };
 		46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleAudioPlayer.swift; sourceTree = "<group>"; };
+		46F6291F2F24A40D00FD0815 /* TWITTER_PERFORMANCE_ARCHITECTURE 2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "TWITTER_PERFORMANCE_ARCHITECTURE 2.md"; sourceTree = "<group>"; };
 		5515A99E9BD93216D2C4BCA4 /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
 		68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalImageLoadManager.swift; sourceTree = "<group>"; };
 		77454EFF645F6F03E20DC055 /* DocumentAttachmentsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DocumentAttachmentsView.swift; sourceTree = "<group>"; };
@@ -432,6 +434,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A0A /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				46F6291F2F24A40D00FD0815 /* TWITTER_PERFORMANCE_ARCHITECTURE 2.md */,
 				465553C22E55EDA500702AFF /* Legal */,
 				468CF21D2E39C99200D49038 /* Chat */,
 				468CF21F2E39C99200D49038 /* Search */,
@@ -752,6 +755,7 @@
 				46B7958C2F21B2360060DCB3 /* VIDEO_PLAYER_ARCHITECTURE.md in Resources */,
 				46349FAF2F2393DF00CBDE7D /* PHASE_2_IMPLEMENTATION_SUMMARY.md in Resources */,
 				46B795922F21B8DD0060DCB3 /* SCROLL_SMOOTHNESS_OPTIMIZATION.md in Resources */,
+				46F629202F24A40E00FD0815 /* TWITTER_PERFORMANCE_ARCHITECTURE 2.md in Resources */,
 				46B795842F21B02B0060DCB3 /* NAVIGATION_HANG_FIX.md in Resources */,
 				46B795942F21EB650060DCB3 /* BUG_FIXES_WHITE_SPACE.md in Resources */,
 				460680F62E1660C700D9D15A /* Localizable.strings in Resources */,

@@ -528,8 +528,11 @@ class SharedAssetCache: ObservableObject {
         
         do {
             let asset = try await task.value
+            // ✅ CRITICAL MEMORY FIX: Remove completed task to prevent memory leak
+            loadingTasks.removeValue(forKey: cacheKey)
             return asset
         } catch {
+            // ✅ CRITICAL MEMORY FIX: Remove failed task to prevent memory leak
             loadingTasks.removeValue(forKey: cacheKey)
 
             // Only notify failure if not cancelled (cancellation is normal cleanup)
@@ -1441,8 +1444,13 @@ class SharedAssetCache: ObservableObject {
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
+        preloadTasks.removeValue(forKey: cacheKey)
         
         let task = Task {
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Remove completed preload task
+                preloadTasks.removeValue(forKey: cacheKey)
+            }
             do {
                 _ = try await getOrCreatePlayer(for: url)
             } catch {
@@ -1461,8 +1469,13 @@ class SharedAssetCache: ObservableObject {
         
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
+        preloadTasks.removeValue(forKey: cacheKey)
         
         let task = Task {
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Remove completed preload task
+                preloadTasks.removeValue(forKey: cacheKey)
+            }
             do {
                 _ = try await getAsset(for: url, tweetId: tweetId)
             } catch {
