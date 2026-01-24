@@ -139,18 +139,10 @@ class SharedAssetCache: ObservableObject {
         let expiredKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > cacheExpirationInterval }.map { $0.key }
         
         for key in expiredKeys {
-            // PERFORMANCE FIX: Pause players before removing
+            // CRITICAL: Properly release player using releasePlayer() method
+            // This does complete cleanup: stops buffering, cancels loading, removes observers
             if let player = playerCache[key] {
-                // Check if player is paused with content before removing
-                let isPausedWithContent = player.rate == 0.0 && player.currentItem != nil
-                
-                player.pause()
-                
-                // Only remove the item if it wasn't already paused with content
-                // This prevents black screens on finished videos that are still visible
-                if !isPausedWithContent {
-                    player.replaceCurrentItem(with: nil)
-                }
+                releasePlayer(player)
             }
             
             assetCache.removeValue(forKey: key)
@@ -1680,15 +1672,15 @@ class SharedAssetCache: ObservableObject {
             }
         }
 
-        // BALANCED CLEANUP: Remove players not accessed in last 5 minutes
-        // Matches cache expiration for consistent behavior
+        // AGGRESSIVE CLEANUP: Remove players not accessed in last 60 seconds
+        // This ensures off-screen videos are quickly cleaned up
         let now = Date()
-        let inactiveThreshold: TimeInterval = 300 // 5 minutes
+        let inactiveThreshold: TimeInterval = 60 // 60 seconds (was 5 minutes - too long!)
         let inactiveKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > inactiveThreshold }.map { $0.key }
 
         if !inactiveKeys.isEmpty {
             let memoryBeforeInactive = getMemoryUsageString()
-            print("🗑️ [PLAYER CACHE] Removing \(inactiveKeys.count) inactive players (>5min old, memory: \(memoryBeforeInactive))")
+            print("🗑️ [PLAYER CACHE] Removing \(inactiveKeys.count) inactive players (>60s old, memory: \(memoryBeforeInactive))")
             for key in inactiveKeys {
                 if let player = playerCache[key] {
                     // CRITICAL: Properly release player to prevent memory leaks
