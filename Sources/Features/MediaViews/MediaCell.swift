@@ -134,7 +134,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                         // Audio autoplay controlled by visibility
                         SimpleAudioPlayer(url: url, autoPlay: isVisible)
                             .environmentObject(MuteState.shared)
-                            .frame(width: width, height: height, alignment: .center)
+                            .frame(width: width, height: height, alignment: Alignment.center)
                             .onTapGesture {
                                 if !isEmbedded {
                                     handleTap()
@@ -152,11 +152,11 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                     default:
                         // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
                         Color.clear
-                            .frame(width: width, height: height, alignment: .center)
+                            .frame(width: width, height: height, alignment: Alignment.center)
                     }
                 } else {
                     Color.clear
-                        .frame(width: width, height: height, alignment: .center)
+                        .frame(width: width, height: height, alignment: Alignment.center)
                 }
             }
         }
@@ -219,7 +219,16 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 }
             }
         }
-        
+        .onChange(of: shouldAutoPlay) { _, newValue in
+            if newValue && isVideoAttachment {
+                // MediaCell became visible and wants to play
+                VideoPlaybackCoordinator.shared.mediaCellBecameVisible(
+                    videoMid: attachment.mid,
+                    cellTweetId: cellTweetId ?? parentTweet.mid
+                )
+            }
+        }
+
         // Phase 3: Using delegate-based communication for pause/stop commands
         // Keeping notification listener for play commands from SharedVideoPlayerManager
         .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
@@ -449,7 +458,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             Image(uiImage: displayImage)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: width, height: height, alignment: .center)
+                .frame(width: width, height: height, alignment: Alignment.center)
                 .clipped()
         } else if isLoading {
             // Loading - show placeholder with spinner
@@ -458,11 +467,11 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle())
             }
-            .frame(width: width, height: height, alignment: .center)
+            .frame(width: width, height: height, alignment: Alignment.center)
         } else {
             // No image and not loading - just show placeholder
             Color.gray.opacity(0.2)
-                .frame(width: width, height: height, alignment: .center)
+                .frame(width: width, height: height, alignment: Alignment.center)
         }
     }
     
@@ -481,34 +490,31 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         // PERFORMANCE: Fixed dimensions eliminate recursive size calculations
         ZStack(alignment: .center) {
             Color.black // Background color
-            
-            SimpleVideoPlayer(
-                url: url,
-                mid: attachment.mid,
-                parentTweetId: parentTweet.mid,
-                isVisible: isVisible,
-                mediaType: attachment.type,
-                authorId: parentTweet.authorId,
-                autoPlay: shouldAutoPlay,
-                onVideoFinished: onVideoFinished,
-                cellAspectRatio: CGFloat(aspectRatio),
-                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                showNativeControls: false,
-                isMuted: muteState.isMuted,
-                onVideoTap: isEmbedded ? nil : {
-                    // Save current playback position before opening fullscreen
-                    saveVideoPositionForFullscreen()
-                    isOpeningFullScreen = true
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-                        showFullScreen = true
-                    }
-                },
-                disableAutoRestart: true,
-                shouldLoadVideo: shouldLoadVideo,
-                mode: isEmbedded ? .embeddedDetail : .mediaCell
+
+            // Phase 1: Coordinated Multi-Player Architecture
+            // Use VideoPlayerContainerView with SharedVideoPlayerManager coordination
+            VideoPlayerContainerRepresentable(
+                videoId: attachment.mid,
+                delegate: SharedVideoPlayerManager.shared
             )
-            .frame(width: width, height: height, alignment: .center)
+            .onAppear {
+                // Mark container as ready when SwiftUI view appears
+                // The UIView will handle the actual registration
+                print("🎬 [MediaCell] Video container appeared for: \(attachment.mid)")
+            }
+            .onDisappear {
+                print("🎬 [MediaCell] Video container disappeared for: \(attachment.mid)")
+            }
+            .onTapGesture {
+                // Handle video tap for fullscreen (Phase 1: simplified, no position saving needed)
+                saveVideoPositionForFullscreen()
+                isOpeningFullScreen = true
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                    showFullScreen = true
+                }
+            }
+            .frame(width: width, height: height, alignment: Alignment.center)
             .id("video_\(attachment.mid)_\(videoReloadTrigger)")
         }
         .frame(width: width, height: height, alignment: .center)
@@ -520,7 +526,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 if isEmbedded {
                     // Embedded videos in detail views should have gestures
                     Color.clear
-                        .frame(width: width, height: height, alignment: .center)
+                        .frame(width: width, height: height, alignment: Alignment.center)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             // Save current playback position before opening fullscreen
@@ -538,7 +544,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                     // Regular feed videos should NOT have gestures to avoid blocking scrolling
                     // Use Color.clear without contentShape to avoid intercepting scroll gestures
                     Color.clear
-                        .frame(width: width, height: height, alignment: .center)
+                        .frame(width: width, height: height, alignment: Alignment.center)
                         .allowsHitTesting(false)
                 }
             }
@@ -553,7 +559,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             .scaleEffect(1.5)
                     }
-                    .frame(width: width, height: height, alignment: .center)
+                    .frame(width: width, height: height, alignment: Alignment.center)
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
                 }
@@ -645,10 +651,12 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             }
         }
         
-        // Force reload by toggling the reload trigger
-        // This will force SimpleVideoPlayer to reinitialize
+        // Phase 1: Force reload by stopping and restarting through SharedVideoPlayerManager
+        SharedVideoPlayerManager.shared.stopCurrentVideo()
+
+        // Toggle reload trigger to force SwiftUI view update
         videoReloadTrigger.toggle()
-        print("✅ [VIDEO RELOAD] Video reload initiated")
+        print("✅ [VIDEO RELOAD] Video reload initiated via SharedVideoPlayerManager")
     }
 }
 
@@ -764,7 +772,7 @@ struct TimeRemainingDisplay: View {
 }
 
 // MARK: - VideoTimerOverlay
-struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
+struct VideoTimerOverlay: View {
     let videoMid: String
     @State private var timeRemaining: String = "0:00"
     @State private var isVisible: Bool = true
@@ -780,14 +788,16 @@ struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
         .onAppear {
             isVisible = true
             // PHASE 2: Use centralized display link instead of individual timer
-            SharedDisplayLinkManager.shared.addObserver(self)
+            SharedDisplayLinkManager.shared.addObserver {
+                self.displayLinkDidFire(CADisplayLink())
+            }
             startHideTimer()
             // Request immediate update
             requestUpdate()
         }
         .onDisappear {
             // PHASE 2: Remove from centralized display link
-            SharedDisplayLinkManager.shared.removeObserver(self)
+            SharedDisplayLinkManager.shared.removeAllObservers()
             hideTimer?.invalidate()
             hideTimer = nil
         }

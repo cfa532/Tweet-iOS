@@ -2,161 +2,48 @@
 //  SharedVideoPlayerManager.swift
 //  Tweet
 //
-//  Shared video player coordinator for Twitter-style video playback
-//  Ensures only one video plays at a time across the entire app
+//  Created by Assistant on 2026-01-23.
+//  Phase 1: Coordinated Multi-Player Architecture
+//  Singleton manager for shared AVPlayer instances with container delegation
 //
 
-import Foundation
+import AVFoundation
+import UIKit
 import SwiftUI
-import Combine
-import CoreMedia
-import QuartzCore
 
-/// Delegate protocol for video player lifecycle events
+// MARK: - SharedVideoPlayerManager
+
+/// Singleton manager for coordinated video playback across multiple MediaCell instances
+/// Manages a pool of AVPlayer instances and assigns them to VideoPlayerContainerView instances
 @MainActor
-protocol SharedVideoPlayerDelegate: AnyObject {
-    func videoPlayerDidStartPlaying(videoId: String)
-    func videoPlayerDidPause(videoId: String)
-    func videoPlayerDidFinish(videoId: String)
-    func videoPlayerDidUpdateTime(videoId: String, currentTime: CMTime, duration: CMTime)
-    func videoPlayerDidFail(videoId: String, error: Error)
-
-    /// The video ID this delegate is interested in
-    var interestedVideoId: String { get }
-}
-
-// MARK: - Shared Display Link Manager
-
-/// Twitter-style shared display link for video timer updates
-/// ONE display link for entire app, eliminating timer accumulation
-@MainActor
-class SharedDisplayLinkManager {
-    static let shared = SharedDisplayLinkManager()
-
-    // MARK: - Properties
-
-    /// The single shared display link
-    private var displayLink: CADisplayLink?
-
-    /// Registered observers for display link updates
-    private var observers: [SharedDisplayLinkObserver] = []
-
-    /// Is the display link currently running
-    private(set) var isRunning = false
-
-    /// Update interval (default: 30fps, can throttle to 15fps or 10fps)
-    var preferredFramesPerSecond: Int = 30 {
-        didSet {
-            if isRunning {
-                stop()
-                start()
-            }
-        }
-    }
-
-    private init() {
-        setupDisplayLink()
-    }
-
-    // MARK: - Public API
-
-    /// Start the display link
-    func start() {
-        guard !isRunning, let displayLink = displayLink else { return }
-
-        displayLink.preferredFramesPerSecond = preferredFramesPerSecond
-        displayLink.add(to: .main, forMode: .common)
-        isRunning = true
-        print("⏱️ [DISPLAY LINK] Started (targeting \(preferredFramesPerSecond)fps)")
-    }
-
-    /// Stop the display link
-    func stop() {
-        guard isRunning, let displayLink = displayLink else { return }
-
-        displayLink.remove(from: .main, forMode: .common)
-        isRunning = false
-        print("⏱️ [DISPLAY LINK] Stopped")
-    }
-
-    /// Add an observer to receive display link updates
-    func addObserver(_ observer: SharedDisplayLinkObserver) {
-        observers.append(observer)
-        print("⏱️ [DISPLAY LINK] Added observer, total: \(observers.count)")
-
-        // Start display link if this is the first observer
-        if observers.count == 1 {
-            start()
-        }
-    }
-
-    /// Remove an observer
-    func removeObserver(_ observer: SharedDisplayLinkObserver) {
-        observers.removeAll { $0 as AnyObject === observer as AnyObject }
-        print("⏱️ [DISPLAY LINK] Removed observer, total: \(observers.count)")
-
-        // Stop display link if no observers remain
-        if observers.count == 0 {
-            stop()
-        }
-    }
-
-    // MARK: - Private Methods
-
-    private func setupDisplayLink() {
-        displayLink = CADisplayLink(target: self, selector: #selector(displayLinkFired))
-        displayLink?.preferredFramesPerSecond = preferredFramesPerSecond
-    }
-
-    @objc private func displayLinkFired(_ link: CADisplayLink) {
-        // Notify all observers
-        for observer in observers {
-            observer.displayLinkDidFire(link)
-        }
-    }
-}
-
-/// Protocol for objects that want to observe display link updates
-@MainActor
-protocol SharedDisplayLinkObserver {
-    func displayLinkDidFire(_ link: CADisplayLink)
-}
-
-// MARK: - Shared Video Player Manager
-
-/// Shared video player coordinator for Twitter-style video playback
-/// Ensures only one video plays at a time while leveraging SimpleVideoPlayer instances
-/// 
-/// Video Identification:
-/// Videos are identified by a composite key: `cellTweetId + videoMid + attachmentIndex`
-/// - cellTweetId: The ID of the visible cell (retweet ID for retweets, quoting tweet ID for quoted tweets)
-/// - videoMid: The attachment's mid (unique file identifier)
-/// - attachmentIndex: Index in the attachments array
-///
-/// This allows the same video file to appear in multiple tweets (retweets, quotes) and be treated as separate instances.
-@MainActor
-class SharedVideoPlayerManager: ObservableObject {
+class SharedVideoPlayerManager {
+    // MARK: - Singleton
     static let shared = SharedVideoPlayerManager()
 
     // MARK: - Properties
 
-    /// Currently playing video identifier (sourceTweetId_videoMid_attachmentIndex)
-    @Published private(set) var currentlyPlayingVideoId: String?
+    /// Currently playing video ID
+    private(set) var currentlyPlayingVideoId: String?
 
-    /// Current video mid (for backward compatibility checks)
-    @Published private(set) var currentVideoMid: String?
+    /// Current video mid
+    private(set) var currentVideoMid: String?
 
-    /// Current video URL (for debugging)
-    private var currentVideoURL: URL?
+    /// Current video URL
+    private(set) var currentVideoURL: URL?
 
-    /// Delegates registered for video events
+    /// Active players keyed by video ID
+    private var activePlayers: [String: AVPlayer] = [:]
+
+    /// Registered video containers keyed by video ID
+    private var videoContainers: [String: AnyObject] = [:]
+
+    /// Delegates for video events
     private var delegates: NSHashTable<AnyObject> = NSHashTable.weakObjects()
 
-    /// Playback state cache (for resuming playback)
-    private var videoStates: [String: VideoState] = [:]
-
-    /// Debug: Track playback history
+    /// Playback history for analytics
     private var playbackHistory: [String] = []
+
+    // MARK: - Initialization
 
     private init() {
         print("🎬 [SHARED PLAYER] Initialized - Coordinating single video playback")
@@ -164,13 +51,14 @@ class SharedVideoPlayerManager: ObservableObject {
 
     // MARK: - Public API
 
-    /// Request to play a specific video instance (coordinates to ensure only one plays)
+    /// Play a video with the specified parameters
     /// - Parameters:
-    ///   - videoId: Full identifier (cellTweetId_videoMid_attachmentIndex)
-    ///   - videoMid: The attachment's mid (for notification routing)
-    ///   - cellTweetId: The visible cell's tweet ID (retweet ID for retweets, quoting tweet ID for quotes)
-    func playVideo(videoId: String, videoMid: String, cellTweetId: String) {
-        // If already playing this video instance, no action needed (prevent duplicate notifications)
+    ///   - videoId: The video identifier
+    ///   - videoMid: The video media ID (IPFS hash)
+    ///   - cellTweetId: The cell tweet ID
+    ///   - videoURL: Optional video URL
+    func playVideo(videoId: String, videoMid: String, cellTweetId: String, videoURL: URL? = nil) {
+        // If already playing this video instance, no action needed
         if currentlyPlayingVideoId == videoId {
             print("🎬 [SHARED PLAYER] Already coordinating playback for \(videoId) - ignoring duplicate request")
             return
@@ -183,9 +71,10 @@ class SharedVideoPlayerManager: ObservableObject {
             pauseCurrentVideo()
         }
 
-        // Update state BEFORE posting notification to prevent race conditions
+        // Update state
         currentlyPlayingVideoId = videoId
         currentVideoMid = videoMid
+        currentVideoURL = videoURL
 
         // Track playback
         playbackHistory.append(videoId)
@@ -193,177 +82,331 @@ class SharedVideoPlayerManager: ObservableObject {
             playbackHistory.removeFirst(playbackHistory.count - 100)
         }
 
-        // Notify MediaCell to start playback for this video instance
-        NotificationCenter.default.post(
-            name: .shouldPlayVideo,
-            object: nil,
-            userInfo: [
-                "videoId": videoId,           // Full identifier
-                "videoMid": videoMid,         // Attachment mid (for routing)
-                "cellTweetId": cellTweetId    // Cell tweet ID
-            ]
-        )
+        // Create or get player and assign to container
+        Task {
+            do {
+                let player = try await getOrCreatePlayer(for: videoId, videoMid: videoMid, videoURL: videoURL)
 
-        print("🎬 [SHARED PLAYER] Started coordinated playback for: \(videoId)")
+                // Assign player to container if available
+                if let container = videoContainers[videoId] as? VideoPlayerContainerProtocol {
+                    container.assignPlayer(player, for: videoId)
+
+                    // Notify container delegate
+                    if let containerDelegate = videoContainers[videoId] as? VideoPlayerContainerDelegate {
+                        containerDelegate.videoPlayerContainerDidAssignPlayer(videoId: videoId)
+                    }
+
+                    // Start playback
+                    player.play()
+                    print("🎬 [SHARED PLAYER] Started coordinated playback for: \(videoId)")
+                } else {
+                    print("⚠️ [SHARED PLAYER] No container registered for video: \(videoId)")
+                }
+            } catch {
+                print("❌ [SHARED PLAYER] Failed to create player for \(videoId): \(error)")
+                // Reset state on failure
+                currentlyPlayingVideoId = nil
+                currentVideoMid = nil
+            }
+        }
     }
 
     /// Pause the currently playing video
     func pauseCurrentVideo() {
-        guard let videoId = currentlyPlayingVideoId,
-              let videoMid = currentVideoMid else { return }
+        guard let currentId = currentlyPlayingVideoId else { return }
 
-        print("⏸️ [SHARED PLAYER] Pausing video: \(videoId)")
+        print("⏸️ [SHARED PLAYER] Pausing current video: \(currentId)")
 
-        // Notify MediaCell to pause this video
-        NotificationCenter.default.post(
-            name: .shouldPauseVideo,
-            object: nil,
-            userInfo: [
-                "videoId": videoId,
-                "videoMid": videoMid
-            ]
-        )
-
-        // Update state
-        saveCurrentVideoState()
+        // Pause the player
+        if let player = activePlayers[currentId] {
+            player.pause()
+        }
 
         // Notify delegates
-        notifyDelegates(for: videoMid) { delegate in
-            delegate.videoPlayerDidPause(videoId: videoMid)
+        for delegate in delegates.allObjects {
+            if let sharedDelegate = delegate as? SharedVideoPlayerDelegate {
+                sharedDelegate.videoPlayerDidPause(videoId: currentId)
+            }
         }
-    }
 
-    /// Stop the currently playing video
-    func stopCurrentVideo() {
-        guard let videoId = currentlyPlayingVideoId,
-              let videoMid = currentVideoMid else { return }
-
-        print("⏹️ [SHARED PLAYER] Stopping video: \(videoId)")
-
-        // Notify MediaCell to stop this video
-        NotificationCenter.default.post(
-            name: .shouldStopVideo,
-            object: nil,
-            userInfo: [
-                "videoId": videoId,
-                "videoMid": videoMid
-            ]
-        )
-
-        // Clean up state
-        saveCurrentVideoState()
+        // Clear current state
         currentlyPlayingVideoId = nil
         currentVideoMid = nil
         currentVideoURL = nil
     }
 
-    /// Seek to specific time in current video
-    func seekToTime(_ time: CMTime, completion: ((Bool) -> Void)? = nil) {
-        guard let videoId = currentlyPlayingVideoId else {
-            completion?(false)
-            return
+    /// Stop all videos and reset state
+    func stopCurrentVideo() {
+        guard let currentId = currentlyPlayingVideoId else { return }
+
+        print("🛑 [SHARED PLAYER] Stopping current video: \(currentId)")
+
+        // Stop the player
+        if let player = activePlayers[currentId] {
+            player.pause()
+            player.seek(to: .zero)
         }
 
-        print("⏩ [SHARED PLAYER] Seeking to \(time.seconds)s in video: \(videoId)")
+        // Remove from containers
+        if let container = videoContainers[currentId] as? VideoPlayerContainerProtocol {
+            container.removePlayer()
 
-        // Notify MediaCell to seek this video
-        NotificationCenter.default.post(
-            name: .shouldSeekVideo,
-            object: nil,
-            userInfo: [
-                "videoMid": videoId,
-                "seekTime": time
-            ]
-        )
-
-        completion?(true)
-    }
-
-    /// Get current playback time
-    func getCurrentTime() -> CMTime {
-        // This would need to be implemented by querying the SimpleVideoPlayer
-        // For now, return saved time from state
-        guard let videoId = currentlyPlayingVideoId,
-              let state = videoStates[videoId] else {
-            return .zero
+            // Notify container delegate
+            if let containerDelegate = videoContainers[currentId] as? VideoPlayerContainerDelegate {
+                containerDelegate.videoPlayerContainerDidRemovePlayer(videoId: currentId)
+            }
         }
-        return state.lastPlaybackTime
-    }
 
-    /// Get current video duration
-    func getDuration() -> CMTime {
-        guard let videoId = currentlyPlayingVideoId,
-              let state = videoStates[videoId] else {
-            return .zero
+        // Notify delegates
+        for delegate in delegates.allObjects {
+            if let sharedDelegate = delegate as? SharedVideoPlayerDelegate {
+                sharedDelegate.videoPlayerDidStop(videoId: currentId)
+            }
         }
-        return state.duration
+
+        // Clear current state
+        currentlyPlayingVideoId = nil
+        currentVideoMid = nil
+        currentVideoURL = nil
     }
 
-    /// Check if video is currently playing
-    func isPlaying() -> Bool {
-        return currentlyPlayingVideoId != nil
+    /// Register a video container for a specific video ID
+    /// - Parameters:
+    ///   - container: The container to register
+    ///   - videoId: The video ID
+    func registerVideoContainer(_ container: AnyObject, for videoId: String) {
+        videoContainers[videoId] = container
+        print("🎬 [SHARED PLAYER] Registered video container for: \(videoId)")
     }
 
-    /// Get saved state for a video
-    func getVideoState(for videoId: String) -> VideoState? {
-        return videoStates[videoId]
+    /// Unregister a video container for a specific video ID
+    /// - Parameter videoId: The video ID
+    func unregisterVideoContainer(for videoId: String) {
+        videoContainers.removeValue(forKey: videoId)
+        print("🎬 [SHARED PLAYER] Unregistered video container for: \(videoId)")
     }
 
-    // MARK: - Delegate Management
-
+    /// Add a delegate for video events
+    /// - Parameter delegate: The delegate to add
     func addDelegate(_ delegate: SharedVideoPlayerDelegate) {
-        delegates.add(delegate as AnyObject)
+        delegates.add(delegate)
     }
 
+    /// Remove a delegate
+    /// - Parameter delegate: The delegate to remove
     func removeDelegate(_ delegate: SharedVideoPlayerDelegate) {
-        delegates.remove(delegate as AnyObject)
+        delegates.remove(delegate)
     }
 
-    private func notifyDelegates(for videoId: String, action: (SharedVideoPlayerDelegate) -> Void) {
-        let allDelegates = delegates.allObjects
-        let interestedDelegates = allDelegates.filter { ($0 as? SharedVideoPlayerDelegate)?.interestedVideoId == videoId }
-        for case let delegate as SharedVideoPlayerDelegate in interestedDelegates {
-            action(delegate)
+    // MARK: - Private Methods
+
+    /// Get or create an AVPlayer for the specified video
+    /// - Parameters:
+    ///   - videoId: The video identifier
+    ///   - videoMid: The video media ID (IPFS hash)
+    ///   - videoURL: Optional video URL
+    /// - Returns: An AVPlayer ready for playback
+    private func getOrCreatePlayer(for videoId: String, videoMid: String, videoURL: URL?) async throws -> AVPlayer {
+        // Check if we already have a player for this video
+        if let existingPlayer = activePlayers[videoId] {
+            print("🎬 [SHARED PLAYER] Reusing existing player for: \(videoId)")
+            return existingPlayer
+        }
+
+        print("🎬 [SHARED PLAYER] Creating new player for: \(videoId)")
+
+        // Use videoMid directly as mediaID to get asset from SharedAssetCache
+        let asset = try await SharedAssetCache.shared.getAsset(forMediaID: videoMid, videoURL: videoURL)
+
+        // Create player item with the cached asset
+        let playerItem = AVPlayerItem(asset: asset)
+
+        // Configure for aggressive buffering (Twitter-style playback)
+        playerItem.preferredForwardBufferDuration = 5.0
+        playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+
+        // Create player
+        let player = AVPlayer(playerItem: playerItem)
+
+        // Minimize stalling for smooth playback
+        player.automaticallyWaitsToMinimizeStalling = false
+
+        // Store player
+        activePlayers[videoId] = player
+
+        // Clean up old players if we have too many
+        if activePlayers.count > 5 {
+            let oldestKeys = activePlayers.keys.prefix(activePlayers.count - 5)
+            for key in oldestKeys {
+                activePlayers.removeValue(forKey: key)
+            }
+        }
+
+        return player
+    }
+}
+
+// MARK: - SharedVideoPlayerDelegate Protocol
+
+/// Protocol for receiving video player events
+@MainActor
+protocol SharedVideoPlayerDelegate: AnyObject {
+    func videoPlayerDidStart(videoId: String)
+    func videoPlayerDidPause(videoId: String)
+    func videoPlayerDidStop(videoId: String)
+    func videoPlayerDidFail(videoId: String, error: Error)
+}
+
+// MARK: - VideoPlayerContainerDelegate Protocol
+
+/// Protocol for VideoPlayerContainerView to receive events
+@MainActor
+protocol VideoPlayerContainerDelegate: AnyObject {
+    func videoPlayerContainerDidAssignPlayer(videoId: String)
+    func videoPlayerContainerDidRemovePlayer(videoId: String)
+    func videoPlayerContainerPlayerReady(videoId: String)
+    func videoPlayerContainerPlayerDidStart(videoId: String)
+    func videoPlayerContainerPlayerDidPause(videoId: String)
+    func videoPlayerContainerPlayerFailed(videoId: String, error: Error)
+    func videoPlayerContainerPlayerItemFailed(videoId: String, error: Error)
+}
+
+// MARK: - SharedDisplayLinkManager
+
+/// Singleton manager for CADisplayLink updates with observer pattern
+@MainActor
+class SharedDisplayLinkManager {
+    // MARK: - Singleton
+    static let shared = SharedDisplayLinkManager()
+
+    // MARK: - Properties
+
+    /// Display link for 30fps updates
+    private var displayLink: CADisplayLink?
+
+    /// Registered observer closures
+    private var observers: [() -> Void] = []
+
+    /// Whether the display link is currently running
+    private var isRunning = false
+
+    // MARK: - Initialization
+
+    private init() {
+        setupDisplayLink()
+    }
+
+    deinit {
+        displayLink?.invalidate()
+    }
+
+    // MARK: - Public API
+
+    /// Add an observer closure to receive display link updates
+    /// - Parameter observer: The closure to call on each display link update
+    func addObserver(_ observer: @escaping () -> Void) {
+        observers.append(observer)
+        updateDisplayLinkState()
+        print("⏱️ [DISPLAY LINK] Added observer, total: \(observers.count)")
+    }
+
+    /// Remove all observers
+    func removeAllObservers() {
+        observers.removeAll()
+        updateDisplayLinkState()
+        print("⏱️ [DISPLAY LINK] Removed all observers")
+    }
+
+    // MARK: - Private Methods
+
+    private func setupDisplayLink() {
+        displayLink = CADisplayLink(target: self, selector: #selector(displayLinkFired(_:)))
+        displayLink?.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 30)
+        displayLink?.isPaused = true
+    }
+
+    private func updateDisplayLinkState() {
+        let shouldRun = observers.count > 0
+
+        if shouldRun && !isRunning {
+            // Start the display link
+            displayLink?.isPaused = false
+            isRunning = true
+            print("⏱️ [DISPLAY LINK] Started (targeting 30fps)")
+        } else if !shouldRun && isRunning {
+            // Stop the display link
+            displayLink?.isPaused = true
+            isRunning = false
+            print("⏱️ [DISPLAY LINK] Stopped")
         }
     }
 
-    // MARK: - State Management
-
-    private func saveCurrentVideoState() {
-        guard let videoId = currentlyPlayingVideoId else { return }
-
-        // For now, we don't have direct access to playback time from SimpleVideoPlayer
-        // This would need to be implemented by having SimpleVideoPlayer report time updates
-        // For the Phase 1 implementation, we'll rely on the existing VideoStateCache
-        print("💾 [SHARED PLAYER] State saving requested for \(videoId) (implementation needed)")
-    }
-
-    // MARK: - Debug
-
-    func debugInfo() -> String {
-        return """
-        🎬 Shared Video Player Coordinator Debug Info:
-        - Currently playing: \(currentlyPlayingVideoId ?? "none")
-        - Tracked states: \(videoStates.count)
-        - Recent playbacks: \(playbackHistory.suffix(5).joined(separator: ", "))
-        - Delegates: \(delegates.count)
-        """
+    @objc private func displayLinkFired(_ link: CADisplayLink) {
+        // Call all observer closures
+        for observer in observers {
+            observer()
+        }
     }
 }
 
-// MARK: - Supporting Types
 
-/// Video playback state
-struct VideoState {
-    let url: URL
-    var lastPlaybackTime: CMTime = .zero
-    var duration: CMTime = .zero
-    var wasPlaying: Bool = false
-}
+// MARK: - VideoPlayerContainerDelegate Implementation
 
-// MARK: - Notification Extensions
+extension SharedVideoPlayerManager: VideoPlayerContainerDelegate {
+    func videoPlayerContainerDidAssignPlayer(videoId: String) {
+        print("🎬 [SHARED PLAYER] Container assigned player for: \(videoId)")
+    }
 
-extension Notification.Name {
-    static let shouldSeekVideo = Notification.Name("shouldSeekVideo")
-    // Note: requestVideoSeek removed - SimpleVideoPlayer doesn't support external seek commands
+    func videoPlayerContainerDidRemovePlayer(videoId: String) {
+        print("🎬 [SHARED PLAYER] Container removed player for: \(videoId)")
+    }
+
+    func videoPlayerContainerPlayerReady(videoId: String) {
+        print("🎬 [SHARED PLAYER] Container player ready for: \(videoId)")
+        // Player is ready to play
+    }
+
+    func videoPlayerContainerPlayerDidStart(videoId: String) {
+        print("▶️ [SHARED PLAYER] Container player started for: \(videoId)")
+        // Notify other delegates
+        for delegate in delegates.allObjects {
+            if let sharedDelegate = delegate as? SharedVideoPlayerDelegate {
+                sharedDelegate.videoPlayerDidStart(videoId: videoId)
+            }
+        }
+    }
+
+    func videoPlayerContainerPlayerDidPause(videoId: String) {
+        print("⏸️ [SHARED PLAYER] Container player paused for: \(videoId)")
+        // Notify other delegates
+        for delegate in delegates.allObjects {
+            if let sharedDelegate = delegate as? SharedVideoPlayerDelegate {
+                sharedDelegate.videoPlayerDidPause(videoId: videoId)
+            }
+        }
+    }
+
+    func videoPlayerContainerPlayerFailed(videoId: String, error: Error) {
+        print("❌ [SHARED PLAYER] Container player failed for: \(videoId): \(error)")
+        // Clean up on failure
+        activePlayers.removeValue(forKey: videoId)
+        if currentlyPlayingVideoId == videoId {
+            currentlyPlayingVideoId = nil
+            currentVideoMid = nil
+            currentVideoURL = nil
+        }
+
+        // Notify other delegates
+        for delegate in delegates.allObjects {
+            if let sharedDelegate = delegate as? SharedVideoPlayerDelegate {
+                sharedDelegate.videoPlayerDidFail(videoId: videoId, error: error)
+            }
+        }
+    }
+
+    func videoPlayerContainerPlayerItemFailed(videoId: String, error: Error) {
+        print("❌ [SHARED PLAYER] Container player item failed for: \(videoId): \(error)")
+        // Handle player item failure
+        videoPlayerContainerPlayerFailed(videoId: videoId, error: error)
+    }
 }

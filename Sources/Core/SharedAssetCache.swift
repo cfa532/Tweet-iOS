@@ -400,6 +400,143 @@ class SharedAssetCache: ObservableObject {
         return nil
     }
     
+    /// Get cached asset by mediaID directly
+    @MainActor func getAsset(forMediaID mediaID: String, videoURL: URL? = nil, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVAsset {
+        let cacheKey = mediaID
+
+        // Track mediaID for tweet if provided
+        if let tweetId = tweetId {
+            trackMediaID(mediaID, for: tweetId)
+        }
+
+        // Check if we have a cached asset
+        if let cachedAsset = assetCache[cacheKey] {
+            cacheTimestamps[cacheKey] = Date() // Update access time
+            return cachedAsset
+        }
+
+        // Check if there's already a loading task
+        if let existingTask = loadingTasks[cacheKey] {
+            do {
+                let asset = try await existingTask.value
+                cacheTimestamps[cacheKey] = Date() // Update access time
+                return asset
+            } catch {
+                loadingTasks.removeValue(forKey: cacheKey)
+                // Fall through to create new task
+            }
+        }
+
+        // Need to create the asset - use videoURL if provided, otherwise construct IPFS URL
+        let assetURL: URL
+        if let videoURL = videoURL {
+            assetURL = videoURL
+        } else {
+            // Construct IPFS URL from mediaID
+            assetURL = URL(string: "https://ipfs.io/ipfs/\(mediaID)")!
+        }
+
+        // Notify VideoLoadingManager that a load is starting
+        VideoLoadingManager.shared.videoLoadStarted()
+
+        // Create new loading task
+        let task = Task<AVAsset, Error> {
+            // Check cancellation before starting
+            try Task.checkCancellation()
+
+            // Determine if this is HLS based on MediaType
+            let isHLSVideo: Bool
+            if let mediaType = mediaType {
+                isHLSVideo = (mediaType == .hls_video)
+            } else {
+                // Fallback: check URL if MediaType not provided
+                isHLSVideo = assetURL.absoluteString.hasSuffix(".m3u8")
+            }
+
+            let asset: AVAsset
+            if isHLSVideo {
+                // Check cancellation before HLS resolution
+                try Task.checkCancellation()
+
+                // Resolve HLS URL (master.m3u8 or playlist.m3u8)
+                let resolvedURL = await resolveHLSURL(assetURL)
+
+                // Check cancellation after async operation
+                try Task.checkCancellation()
+
+                // For HLS videos, use CachingPlayerItem which handles LocalHTTPServer
+                LocalHTTPServer.shared.start()
+
+                let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
+                asset = cachingPlayerItem.asset
+
+                // Check cancellation before storing
+                try Task.checkCancellation()
+
+                // Store caching player item to prevent deallocation
+                await MainActor.run {
+                    // Check cancellation on main actor
+                    guard !Task.isCancelled else { return }
+                    self.cachingPlayerItems[mediaID] = cachingPlayerItem
+                }
+            } else {
+                // Check cancellation before progressive video setup
+                try Task.checkCancellation()
+
+                // For progressive videos, use LocalHTTPServer for IP-independent caching
+                LocalHTTPServer.shared.start()
+
+                // Remove query parameters for cleaner URL
+                var components = URLComponents(url: assetURL, resolvingAgainstBaseURL: false)
+                components?.query = nil
+                let cleanURL = components?.url ?? assetURL
+
+                // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
+                let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
+
+                // Check cancellation before creating asset
+                try Task.checkCancellation()
+
+                asset = AVURLAsset(url: localURL)
+            }
+
+            // Check cancellation before caching
+            try Task.checkCancellation()
+
+            // Cache the asset
+            await MainActor.run {
+                // Check cancellation on main actor - don't cache if cancelled
+                guard !Task.isCancelled else {
+                    // Clean up task tracking if cancelled
+                    self.loadingTasks.removeValue(forKey: cacheKey)
+                    return
+                }
+
+                self.assetCache[cacheKey] = asset
+                self.cacheTimestamps[cacheKey] = Date()
+                self.loadingTasks.removeValue(forKey: cacheKey)
+
+                // Clean up old assets if cache is too large
+                self.manageCacheSize()
+            }
+
+            return asset
+        }
+
+        // Store the task
+        loadingTasks[cacheKey] = task
+
+        // Return the result
+        do {
+            let asset = try await task.value
+            return asset
+        } catch {
+            // Clean up failed task
+            loadingTasks.removeValue(forKey: cacheKey)
+            throw error
+        }
+    }
+
     /// Get cached asset or create new one
     @MainActor func getAsset(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVAsset {
         guard let mediaID = extractMediaID(from: url) else {

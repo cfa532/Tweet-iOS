@@ -48,6 +48,8 @@
 		46349FB32F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FB22F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md */; };
 		46349FB52F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FB42F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md */; };
 		46349FB72F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md in Resources */ = {isa = PBXBuildFile; fileRef = 46349FB62F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md */; };
+		46349FBA2F23CC1000CBDE7D /* VideoPlayerProtocols.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46349FB92F23CC1000CBDE7D /* VideoPlayerProtocols.swift */; };
+		46349FBB2F23CC1000CBDE7D /* VideoPlayerContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46349FB82F23CC1000CBDE7D /* VideoPlayerContainerView.swift */; };
 		4642A1D92DD5E93900A20E19 /* MimeiFileType.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */; };
 		4642A1DB2DD61FBC00A20E19 /* PreferenceHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */; };
 		4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4642A1DC2DD62CCB00A20E19 /* Gadget.swift */; };
@@ -202,6 +204,8 @@
 		46349FB22F23946300CBDE7D /* PHASE_2_TESTING_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_TESTING_GUIDE.md; sourceTree = "<group>"; };
 		46349FB42F2394A000CBDE7D /* PHASE_2_COMPLETE_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_COMPLETE_SUMMARY.md; sourceTree = "<group>"; };
 		46349FB62F2394C400CBDE7D /* PHASE_2_QUICK_REFERENCE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PHASE_2_QUICK_REFERENCE.md; sourceTree = "<group>"; };
+		46349FB82F23CC1000CBDE7D /* VideoPlayerContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerContainerView.swift; sourceTree = "<group>"; };
+		46349FB92F23CC1000CBDE7D /* VideoPlayerProtocols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerProtocols.swift; sourceTree = "<group>"; };
 		4642A1D82DD5E93800A20E19 /* MimeiFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiFileType.swift; sourceTree = "<group>"; };
 		4642A1DA2DD61FBC00A20E19 /* PreferenceHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHelper.swift; sourceTree = "<group>"; };
 		4642A1DC2DD62CCB00A20E19 /* Gadget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Gadget.swift; sourceTree = "<group>"; };
@@ -591,6 +595,8 @@
 		469A994E2DEBF89B00954049 /* MediaViews */ = {
 			isa = PBXGroup;
 			children = (
+				46349FB82F23CC1000CBDE7D /* VideoPlayerContainerView.swift */,
+				46349FB92F23CC1000CBDE7D /* VideoPlayerProtocols.swift */,
 				46349FAC2F23491E00CBDE7D /* SharedVideoPlayerManager.swift */,
 				9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */,
 				F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */,
@@ -803,13 +809,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Tweet/Pods-Tweet-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -970,6 +972,8 @@
 				3E4D4013E11E9E4BED23680D /* PDFPreviewView.swift in Sources */,
 				B3FB362ED05AE5169A33DE6D /* DocumentPicker.swift in Sources */,
 				9432536CBF9DB1A3ADCD2067 /* DocumentAttachmentsView.swift in Sources */,
+				46349FBA2F23CC1000CBDE7D /* VideoPlayerProtocols.swift in Sources */,
+				46349FBB2F23CC1000CBDE7D /* VideoPlayerContainerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
