@@ -25,6 +25,11 @@ class ImageCacheManager: @unchecked Sendable {
     private var permanentImageIDs: Set<String> = []
     private let permanentImageIDsQueue = DispatchQueue(label: "com.tweet.permanentImageIDs")
     
+    // Avatar cache key tracking (for memory protection)
+    private var avatarCacheKeys: Set<String> = []
+    private var memoryCachedKeys: Set<String> = []
+    private let cacheKeysQueue = DispatchQueue(label: "com.tweet.cacheKeys", attributes: .concurrent)
+    
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
     private let requestsQueue = DispatchQueue(label: "com.zz.imagecache.requests", attributes: .concurrent)
@@ -130,6 +135,16 @@ class ImageCacheManager: @unchecked Sendable {
         let pixelHeight = Int(image.size.height * image.scale)
         let cost = max(1, pixelWidth * pixelHeight * 4)
         cache.setObject(image, forKey: key as NSString, cost: cost)
+        
+        // Track this key for selective memory cache release
+        cacheKeysQueue.async(flags: .barrier) {
+            self.memoryCachedKeys.insert(key)
+            
+            // Mark as avatar if key contains "avatar_"
+            if key.contains("avatar_") {
+                self.avatarCacheKeys.insert(key)
+            }
+        }
     }
     
     // MARK: - Permanent Image Management
@@ -288,8 +303,15 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     func clearAvatarCache(for userId: String) {
-        // NSCache doesn't have allKeys, so we'll just clear the disk cache
-        // The memory cache will be cleared when the app receives memory warnings
+        // Clear memory cache for this user's avatar
+        cacheKeysQueue.async(flags: .barrier) {
+            let keysToRemove = self.avatarCacheKeys.filter { $0.contains(userId) }
+            for key in keysToRemove {
+                self.cache.removeObject(forKey: key as NSString)
+                self.memoryCachedKeys.remove(key)
+                self.avatarCacheKeys.remove(key)
+            }
+        }
         
         // Clear disk cache for avatar files
         do {
@@ -306,8 +328,14 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     func clearAllAvatarCache() {
-        // NSCache doesn't have allKeys, so we'll just clear the disk cache
-        // The memory cache will be cleared when the app receives memory warnings
+        // Clear memory cache for all avatars
+        cacheKeysQueue.async(flags: .barrier) {
+            for key in self.avatarCacheKeys {
+                self.cache.removeObject(forKey: key as NSString)
+                self.memoryCachedKeys.remove(key)
+            }
+            self.avatarCacheKeys.removeAll()
+        }
         
         // Clear disk cache for all avatar files
         do {
@@ -328,8 +356,23 @@ class ImageCacheManager: @unchecked Sendable {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
         print("DEBUG: [ImageCacheManager] Releasing \(percentageToRemove)% of image cache")
         
-        // Clear memory cache completely (NSCache doesn't support partial clearing)
-        cache.removeAllObjects()
+        // Selectively clear memory cache (protect avatars)
+        cacheKeysQueue.sync {
+            let nonAvatarKeys = memoryCachedKeys.subtracting(avatarCacheKeys)
+            let countToRemove = max(0, (nonAvatarKeys.count * percentageToRemove) / 100)
+            
+            if countToRemove > 0 {
+                // Remove percentage of non-avatar images from memory
+                let keysToRemove = Array(nonAvatarKeys.prefix(countToRemove))
+                for key in keysToRemove {
+                    cache.removeObject(forKey: key as NSString)
+                    memoryCachedKeys.remove(key)
+                }
+                print("DEBUG: [ImageCacheManager] Released \(keysToRemove.count) images from memory (avatars protected: \(avatarCacheKeys.count))")
+            } else {
+                print("DEBUG: [ImageCacheManager] No non-avatar images to release from memory")
+            }
+        }
         
         // Remove percentage of disk cache files (oldest first), but preserve avatars
         do {
@@ -355,7 +398,7 @@ class ImageCacheManager: @unchecked Sendable {
                 try? fileManager.removeItem(at: fileURL)
             }
 
-            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from cache (avatars protected)")
+            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from disk (avatars protected)")
         } catch {
             print("Error releasing partial image cache: \(error)")
         }
