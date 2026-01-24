@@ -223,7 +223,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     // Network failure tracking for emergency cleanup
     private var consecutiveNetworkFailures: Int = 0
-    private let maxConsecutiveFailures = 5 // Trigger cleanup after 5 consecutive failures
+    private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
     private var connectionPool: URLSession {
         connectionPoolLock.lock()
         defer { connectionPoolLock.unlock() }

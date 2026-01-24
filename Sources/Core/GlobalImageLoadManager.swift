@@ -76,7 +76,7 @@ class GlobalImageLoadManager: ObservableObject {
 
     // MARK: - Network Failure Tracking
     private var consecutiveNetworkFailures: Int = 0
-    private let maxConsecutiveFailures = 5 // Trigger cleanup after 5 consecutive failures
+    private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
     
     // MARK: - Statistics
     @Published var activeLoadCount: Int = 0

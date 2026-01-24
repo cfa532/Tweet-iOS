@@ -85,7 +85,7 @@ class SharedAssetCache: ObservableObject {
 
     // MARK: - Network Failure Tracking
     private var consecutiveNetworkFailures: Int = 0
-    private let maxConsecutiveFailures = 5 // Trigger cleanup after 5 consecutive failures
+    private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
 
     // MARK: - Disk Cache Status Cache (to avoid repeated disk I/O)
     private var diskCacheStatus: [String: (exists: Bool, timestamp: Date)] = [:] // mediaID -> (cache exists, check timestamp)
