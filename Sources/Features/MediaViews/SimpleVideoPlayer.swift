@@ -923,6 +923,21 @@ struct SimpleVideoPlayer: View {
                     if oldState.isLoading && !newState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive && currentAutoPlay && isVisible {
                         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
                     }
+
+                    // AUTOPLAY FIX: For mediaCell videos, check if coordinator wants to play when loading completes
+                    // CRITICAL: Check for ANY transition TO .loaded (not just FROM .loading)
+                    // Videos loaded from cache can go .idle → .loaded directly, skipping .loading state
+                    if !oldState.isLoaded && newState.isLoaded && mode == .mediaCell && coordinatorWantsToPlay && isVisible && shouldLoadVideo {
+                        if let player = player, player.rate == 0 && playbackState != .playing {
+                            print("▶️ [AUTOPLAY FIX] Video \(mid) became ready while coordinator wants to play - starting playback (state: \(oldState) → \(newState))")
+                            player.volume = 0
+                            player.play()
+                            UIView.animate(withDuration: 0.3) {
+                                player.volume = 1.0
+                            }
+                            playbackState = .playing
+                        }
+                    }
                 }
                 .onChange(of: playbackState) { oldState, newState in
                     if newState == .playing && oldState != .playing {
