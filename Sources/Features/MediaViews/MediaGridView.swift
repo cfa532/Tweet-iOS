@@ -567,6 +567,10 @@ struct MediaGridView: View, Equatable {
         .aspectRatio(gridAspectRatio, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8)) // Add rounded corners to media grid
         .contentShape(Rectangle())
+        .onTapGesture {
+            // Empty tap gesture to prevent taps from propagating to parent tweet
+            // MediaCell handles its own taps for fullscreen video/image
+        }
         .id("mediagrid_\(parentTweet.mid)") // Stable identity to prevent unnecessary recomposition
         .overlay(alignment: .bottomTrailing) {
             // Show mute button only when there's exactly one video attachment

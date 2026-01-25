@@ -40,7 +40,7 @@ class VideoLoadingManager: ObservableObject {
     private var isProcessingCancellations = false
     
     // MARK: - Configuration
-    private let preloadCount = 1 // MEMORY FIX: Reduced from 3 to 1 - only preload next 1 video (visible + 1 ahead = max 2-5 videos for grid with 4 visible)
+    private let preloadCount = 2 // MEMORY FIX: Preload next 2 videos (4 visible + 2 ahead = max 6 videos for grid layout)
     private let bufferDistance = 1 // Keep 1 tweet behind as buffer
     private let cancellationBatchSize = 10 // Process cancellations in batches
     

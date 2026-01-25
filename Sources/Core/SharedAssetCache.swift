@@ -111,7 +111,7 @@ class SharedAssetCache: ObservableObject {
     private func startBackgroundCleanup() {
         // BALANCED CLEANUP: 10s interval - frequent enough to prevent memory buildup but not disruptive
         // MEMORY LEAK FIX: Use [weak self] to prevent timer from keeping SharedAssetCache alive forever
-        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor in
                 self.performCleanup()
@@ -632,6 +632,28 @@ class SharedAssetCache: ObservableObject {
         print("🗑️ [IMMEDIATE RELEASE] Releasing player and video data for \(mediaID)")
         let memoryBefore = getMemoryUsageString()
 
+        // 0. CRITICAL: Cancel any active loading/downloading tasks FIRST
+        // This stops ongoing segment downloads that consume memory
+        if let loadingTask = loadingTasks[mediaID] {
+            loadingTask.cancel()
+            loadingTasks.removeValue(forKey: mediaID)
+            print("🚫 [IMMEDIATE RELEASE] Canceled active loading task for \(mediaID)")
+        }
+
+        if let preloadTask = preloadTasks[mediaID] {
+            preloadTask.cancel()
+            preloadTasks.removeValue(forKey: mediaID)
+            print("🚫 [IMMEDIATE RELEASE] Canceled preload task for \(mediaID)")
+        }
+
+        // Stop buffering on CachingPlayerItem if it exists
+        if let cachingPlayerItem = cachingPlayerItems[mediaID] {
+            cachingPlayerItem.preferredForwardBufferDuration = 0.0
+            cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            cachingPlayerItem.asset.cancelLoading()
+            print("🚫 [IMMEDIATE RELEASE] Stopped buffering for \(mediaID)")
+        }
+
         // 1. Release the player properly (stops playback, clears buffers, replaces item with nil)
         if let player = playerCache[mediaID] {
             releasePlayer(player)
@@ -645,22 +667,11 @@ class SharedAssetCache: ObservableObject {
         resourceLoaderDelegates.removeValue(forKey: mediaID)
         cleanupTweetMappings(for: mediaID)
 
-        // 3. CRITICAL: Delete disk cache immediately (video segments, playlists)
-        Task.detached(priority: .utility) {
-            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            let mediaDir = cacheDir.appendingPathComponent(mediaID)
-
-            // Delete the entire media directory (includes all HLS segments and playlists)
-            do {
-                try FileManager.default.removeItem(at: mediaDir)
-                await MainActor.run {
-                    let memoryAfter = self.getMemoryUsageString()
-                    print("✅ [IMMEDIATE RELEASE] Released player and disk cache for \(mediaID) (memory: \(memoryBefore) → \(memoryAfter))")
-                }
-            } catch {
-                // Ignore errors (directory might not exist)
-            }
-        }
+        // 3. KEEP DISK CACHE - only release memory
+        // Disk cache allows fast reload when scrolling back
+        // Periodic cleanup will remove old disk cache based on time expiration
+        let memoryAfter = getMemoryUsageString()
+        print("✅ [IMMEDIATE RELEASE] Released player from memory for \(mediaID) (memory: \(memoryBefore) → \(memoryAfter), disk cache preserved)")
     }
 
     func removeInvalidPlayer(for mediaID: String, force: Bool = false) {
@@ -1733,34 +1744,9 @@ class SharedAssetCache: ObservableObject {
             }
         }
 
-        // AGGRESSIVE CLEANUP: Remove players not accessed in last 60 seconds
-        // This ensures off-screen videos are quickly cleaned up
-        let now = Date()
-        let inactiveThreshold: TimeInterval = 60 // 60 seconds (was 5 minutes - too long!)
-        // CRITICAL: Never remove visible videos - only remove inactive NON-VISIBLE players
-        let inactiveKeys = cacheTimestamps
-            .filter { !visibleVideoMids.contains($0.key) && now.timeIntervalSince($0.value) > inactiveThreshold }
-            .map { $0.key }
-
-        if !inactiveKeys.isEmpty {
-            let memoryBeforeInactive = getMemoryUsageString()
-            print("🗑️ [PLAYER CACHE] Removing \(inactiveKeys.count) inactive players (>60s old, memory: \(memoryBeforeInactive))")
-            for key in inactiveKeys {
-                if let player = playerCache[key] {
-                    // CRITICAL: Properly release player to prevent memory leaks
-                    releasePlayer(player)
-                }
-                playerCache.removeValue(forKey: key)
-                cacheTimestamps.removeValue(forKey: key)
-                cachingPlayerItems.removeValue(forKey: key)
-                resourceLoaderDelegates.removeValue(forKey: key)
-                // PERFORMANCE FIX: Clean up tweet URL mappings
-                cleanupTweetMappings(for: key)
-            }
-
-            let memoryAfterInactive = getMemoryUsageString()
-            print("✅ [PLAYER CACHE] Removed \(inactiveKeys.count) inactive players (memory: \(memoryBeforeInactive) → \(memoryAfterInactive))")
-        }
+        // REMOVED: Time-based inactive cleanup (was 15s threshold)
+        // Reason: Too aggressive during scrolling - causes videos to reload when scrolling back
+        // Cache size is already managed by LRU eviction above (MAX_PLAYER_CACHE_SIZE = 6)
     }
     
     /// Update access time for a player to prevent premature cleanup (called when video becomes visible)
