@@ -993,11 +993,16 @@ struct SimpleVideoPlayer: View {
     
     private var gestureModifiers: AnyViewModifier {
         AnyViewModifier { content in
-            // Only apply gestures in fullscreen/browser modes to avoid interfering with scrolling in feed
+            // Apply tap gesture for all modes when onVideoTap callback is provided
+            // Apply long press only in fullscreen/browser modes to avoid interfering with scrolling in feed
             if mode == .mediaBrowser || mode == .tweetDetail {
                 content
                     .onTapGesture { handleTap() }
                     .onLongPressGesture(minimumDuration: 0.5) { handleLongPress() } onPressingChanged: { pressing in handlePressingChanged(pressing: pressing) }
+            } else if onVideoTap != nil {
+                // For feed videos with tap callback, enable tap to fullscreen
+                content
+                    .onTapGesture { handleTap() }
             } else {
                 content
             }
