@@ -210,19 +210,20 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             // Phase 3: Unregister delegate
             VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: attachment.mid)
 
-            // MEMORY FIX: Immediately release video player and data when cell goes out of sight
-            // This prevents memory accumulation during fast scrolling
+            // MEMORY FIX: Mark video as not visible when cell disappears
+            // Cleanup is handled by background timer (every 10s) to preserve preloading
             if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
                 let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
 
-                // 1. Mark as not visible (allows cleanup)
+                // Mark as not visible (allows cleanup after grace period)
                 SharedAssetCache.shared.markAsNotVisible(mediaID)
                 VideoStateCache.shared.markAsNotVisible(attachment.mid)
 
-                // 2. Immediately release player and video data (don't wait for 30-60s timer)
-                SharedAssetCache.shared.releasePlayerImmediately(for: mediaID)
+                // Cancel active loading tasks to stop wasting bandwidth/memory
+                // But DON'T release the player yet - it might be in preload window
+                SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet.mid)
 
-                print("🗑️ [MediaCell] Immediately released video player for \(attachment.mid) (mediaID: \(mediaID))")
+                print("🔄 [MediaCell] Marked not visible, stopped loading for \(attachment.mid) (mediaID: \(mediaID))")
             }
         }
         .onChange(of: isVisible) { _, newValue in
