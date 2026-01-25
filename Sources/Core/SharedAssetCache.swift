@@ -619,7 +619,50 @@ class SharedAssetCache: ObservableObject {
     func markAsNotVisible(_ mediaID: String) {
         visibleVideoMids.remove(mediaID)
     }
-    
+
+    /// MEMORY FIX: Immediately release player and all video data when video goes out of sight
+    /// This is called when MediaCell disappears to free memory immediately (not wait for 30-60s timer)
+    @MainActor func releasePlayerImmediately(for mediaID: String) {
+        // Don't release visible videos (safety check)
+        guard !visibleVideoMids.contains(mediaID) else {
+            print("⚠️ [IMMEDIATE RELEASE] Refusing to release visible video \(mediaID)")
+            return
+        }
+
+        print("🗑️ [IMMEDIATE RELEASE] Releasing player and video data for \(mediaID)")
+        let memoryBefore = getMemoryUsageString()
+
+        // 1. Release the player properly (stops playback, clears buffers, replaces item with nil)
+        if let player = playerCache[mediaID] {
+            releasePlayer(player)
+        }
+
+        // 2. Remove from all caches
+        playerCache.removeValue(forKey: mediaID)
+        assetCache.removeValue(forKey: mediaID)
+        cacheTimestamps.removeValue(forKey: mediaID)
+        cachingPlayerItems.removeValue(forKey: mediaID)
+        resourceLoaderDelegates.removeValue(forKey: mediaID)
+        cleanupTweetMappings(for: mediaID)
+
+        // 3. CRITICAL: Delete disk cache immediately (video segments, playlists)
+        Task.detached(priority: .utility) {
+            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            let mediaDir = cacheDir.appendingPathComponent(mediaID)
+
+            // Delete the entire media directory (includes all HLS segments and playlists)
+            do {
+                try FileManager.default.removeItem(at: mediaDir)
+                await MainActor.run {
+                    let memoryAfter = self.getMemoryUsageString()
+                    print("✅ [IMMEDIATE RELEASE] Released player and disk cache for \(mediaID) (memory: \(memoryBefore) → \(memoryAfter))")
+                }
+            } catch {
+                // Ignore errors (directory might not exist)
+            }
+        }
+    }
+
     func removeInvalidPlayer(for mediaID: String, force: Bool = false) {
         // CRITICAL: Never remove players for visible videos (unless forced for error recovery)
         if !force && visibleVideoMids.contains(mediaID) {
@@ -1628,10 +1671,12 @@ class SharedAssetCache: ObservableObject {
             ageThreshold = 60  // Normal: 60 seconds during moderate memory
         }
 
-        // Find players that haven't been accessed within the threshold
-        let oldKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > ageThreshold }.map { $0.key }
+        // CRITICAL: Find players that haven't been accessed within the threshold, but NEVER evict visible videos
+        let oldKeys = cacheTimestamps
+            .filter { !visibleVideoMids.contains($0.key) && now.timeIntervalSince($0.value) > ageThreshold }
+            .map { $0.key }
 
-        print("📊 [MEMORY] Using age threshold: \(Int(ageThreshold))s (memory: \(memoryUsage)MB)")
+        print("📊 [MEMORY] Using age threshold: \(Int(ageThreshold))s (memory: \(memoryUsage)MB, visible videos: \(visibleVideoMids.count))")
 
         if !oldKeys.isEmpty {
             print("🗑️ [MEMORY] Found \(oldKeys.count) old players to remove")
@@ -1662,8 +1707,11 @@ class SharedAssetCache: ObservableObject {
             let memoryBefore = getMemoryUsageString()
             print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - evicting oldest (memory: \(memoryBefore))")
 
-            // Remove least recently used players
-            let sortedKeys = cacheTimestamps.sorted { $0.value < $1.value }.map { $0.key }
+            // CRITICAL: Never evict visible videos - only remove least recently used NON-VISIBLE players
+            let sortedKeys = cacheTimestamps
+                .filter { !visibleVideoMids.contains($0.key) } // Skip visible videos
+                .sorted { $0.value < $1.value }
+                .map { $0.key }
             let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)
 
             for key in keysToRemove {
@@ -1689,7 +1737,10 @@ class SharedAssetCache: ObservableObject {
         // This ensures off-screen videos are quickly cleaned up
         let now = Date()
         let inactiveThreshold: TimeInterval = 60 // 60 seconds (was 5 minutes - too long!)
-        let inactiveKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > inactiveThreshold }.map { $0.key }
+        // CRITICAL: Never remove visible videos - only remove inactive NON-VISIBLE players
+        let inactiveKeys = cacheTimestamps
+            .filter { !visibleVideoMids.contains($0.key) && now.timeIntervalSince($0.value) > inactiveThreshold }
+            .map { $0.key }
 
         if !inactiveKeys.isEmpty {
             let memoryBeforeInactive = getMemoryUsageString()

@@ -165,21 +165,29 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             // Set visibility to true immediately when cell appears
             // onAppear fires when any portion of the view becomes visible
             isVisible = true
-            
+
             // Update effectiveBaseUrl in case author's baseUrl has been resolved since init
             updateEffectiveBaseUrl()
-            
+
+            // MEMORY FIX: Mark video as visible to prevent eviction
+            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
+                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+                SharedAssetCache.shared.markAsVisible(mediaID)
+                VideoStateCache.shared.markAsVisible(attachment.mid)
+                print("👁️ [MediaCell] Marked video as visible: \(attachment.mid) (mediaID: \(mediaID))")
+            }
+
             // For embedded videos, viewport visibility is checked via GeometryReader in videoPlayerViewContent
             // No need to enable autoplay here - it will be enabled when the video enters the viewport
-            
+
             // Load image if not already loaded - ONLY for image attachments
             if attachment.type == .image && image == nil {
                 loadImage()
             }
-            
+
             // Grid-level debouncing handles video preloading
             // Individual cells just track visibility for playback
-            
+
             // Setup foreground observer to reload resources if released during background
             setupForegroundObserver()
 
@@ -189,10 +197,10 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         .onDisappear {
             // Set visibility to false immediately when cell disappears
             isVisible = false
-            
+
             // Cancel any pending image loads to prevent memory leaks
             GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
-            
+
             // Clean up foreground observer
             if let observer = foregroundObserver {
                 NotificationCenter.default.removeObserver(observer)
@@ -201,6 +209,21 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             // Phase 3: Unregister delegate
             VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: attachment.mid)
+
+            // MEMORY FIX: Immediately release video player and data when cell goes out of sight
+            // This prevents memory accumulation during fast scrolling
+            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
+                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+
+                // 1. Mark as not visible (allows cleanup)
+                SharedAssetCache.shared.markAsNotVisible(mediaID)
+                VideoStateCache.shared.markAsNotVisible(attachment.mid)
+
+                // 2. Immediately release player and video data (don't wait for 30-60s timer)
+                SharedAssetCache.shared.releasePlayerImmediately(for: mediaID)
+
+                print("🗑️ [MediaCell] Immediately released video player for \(attachment.mid) (mediaID: \(mediaID))")
+            }
         }
         .onChange(of: isVisible) { _, newValue in
             // Update effectiveBaseUrl when becoming visible (author may have been resolved)
