@@ -758,6 +758,22 @@ struct ZoomableView<Content: View>: View {
 
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {
+    /// Calculate precise height for MediaGrid given attachments and whether it's embedded
+    /// This allows height pre-calculation without rendering
+    static func calculateHeight(for attachments: [MimeiFileType], isEmbedded: Bool) -> CGFloat {
+        guard !attachments.isEmpty else { return 0 }
+
+        let screenWidth = UIScreen.main.bounds.width
+        let gridWidth = isEmbedded
+            ? max(10, screenWidth - 140)  // Embedded width
+            : max(10, screenWidth - 32 - 32)  // Regular width
+
+        let gridAspectRatio = aspectRatio(for: attachments)
+        let gridHeight = max(10, gridWidth / gridAspectRatio)
+
+        return gridHeight
+    }
+
     /// Get aspect ratio for an attachment, detecting from cached image if nil
     /// STABILITY: Once aspect ratio is determined, it's cached to prevent layout shifts
     static func getAspectRatio(for attachment: MimeiFileType) -> Float {
