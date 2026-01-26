@@ -104,7 +104,10 @@ class TweetTableViewController: UITableViewController {
     
     // Counter for periodic cache cleanup during scrolling
     private var scrollUpdateCount: Int = 0
-    
+
+    // Track scroll direction for height caching strategy
+    private var isScrollingBackward: Bool = false
+
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -782,35 +785,23 @@ class TweetTableViewController: UITableViewController {
         }
 
         // Set up callback to update table view when cell height changes AFTER initial render
-        cell.onHeightChanged = { [weak self, weak tableView, weak tweet] in
+        cell.onHeightChanged = { [weak self, weak tableView] in
             guard let self = self,
-                  let tableView = tableView,
-                  let tweet = tweet else { return }
+                  let tableView = tableView else { return }
 
             // Defer update to next run loop to avoid recursion during layout
-            DispatchQueue.main.async { [weak self, weak tableView, weak tweet] in
+            DispatchQueue.main.async { [weak self, weak tableView] in
                 guard let self = self,
-                      let tableView = tableView,
-                      let tweet = tweet else { return }
+                      let tableView = tableView else { return }
 
                 // Only trigger if cell is still visible
                 guard let visiblePaths = tableView.indexPathsForVisibleRows,
                       visiblePaths.contains(indexPath) else { return }
 
-                // Clear cached height so table will query automaticDimension
-                tweet.cachedHeight = nil
-
-                // Trigger recalculation
+                // Trigger recalculation (don't touch cached height during first render)
                 UIView.performWithoutAnimation {
                     tableView.beginUpdates()
                     tableView.endUpdates()
-                }
-
-                // Cache new height after layout completes
-                DispatchQueue.main.async { [weak tweet] in
-                    if let cell = tableView.cellForRow(at: indexPath) {
-                        tweet?.cachedHeight = cell.frame.height
-                    }
                 }
             }
         }
@@ -853,8 +844,9 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Use cached height for smooth backward scrolling
-        if let cachedHeight = tweet.cachedHeight {
+        // Only use cached height when scrolling backward (upward) for smooth scrolling
+        // When scrolling forward, always measure naturally to avoid wrong heights
+        if isScrollingBackward, let cachedHeight = tweet.cachedHeight {
             return cachedHeight
         }
         return UITableView.automaticDimension
@@ -884,11 +876,16 @@ class TweetTableViewController: UITableViewController {
     // MARK: - UIScrollViewDelegate
     
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // Track scroll direction for height caching strategy and toolbar hiding
+        let currentOffset = scrollView.contentOffset.y
+        isScrollingBackward = currentOffset < lastContentOffset
+        let delta = currentOffset - lastContentOffset
+
         // Throttle video visibility updates to avoid expensive calculations on every scroll frame
         // Use time-based throttling: execute immediately on first call, then throttle subsequent calls
         let now = Date()
         let shouldUpdate: Bool
-        
+
         if let lastUpdate = lastVideoVisibilityUpdate {
             // Check if enough time has passed since last update
             shouldUpdate = now.timeIntervalSince(lastUpdate) >= videoVisibilityThrottleInterval
@@ -896,11 +893,11 @@ class TweetTableViewController: UITableViewController {
             // First update - execute immediately
             shouldUpdate = true
         }
-        
+
         if shouldUpdate {
             lastVideoVisibilityUpdate = now
             updateVisibleTweetsForVideoPlayback()
-            
+
             // MEMORY FIX: Periodically clean up SwiftUI view cache during long scroll sessions
             // This prevents cache from growing unbounded during extended scrolling
             // The cache has its own LRU eviction, but this provides an extra safety net
@@ -910,13 +907,13 @@ class TweetTableViewController: UITableViewController {
                 print("🧹 [MEMORY] Periodic cache cleanup during scroll")
             }
         }
-        
+
         // Detect bottom pull-to-load gesture (always check, even before initial layout)
         let contentHeight = scrollView.contentSize.height
         let scrollViewHeight = scrollView.frame.size.height
         let contentInsetBottom = scrollView.contentInset.bottom
         let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight + contentInsetBottom
-        
+
         // Only allow pull-to-load if we have at least a few tweets
         if tweets.count >= 4 && bottomOffset > bottomPullThreshold && !isLoadingMore && !isBottomPullActive {
             // User pulled down past threshold
@@ -927,14 +924,13 @@ class TweetTableViewController: UITableViewController {
             // User released or scrolled back up
             isBottomPullActive = false
         }
-        
+
         // Don't trigger toolbar hiding until initial layout is complete
         // This prevents incorrect hiding when view first loads
-        guard hasCompletedInitialLayout else { return }
-        
-        // Track scroll offset and delta for toolbar hiding
-        let currentOffset = scrollView.contentOffset.y
-        let delta = currentOffset - lastScrollOffset
+        guard hasCompletedInitialLayout else {
+            lastContentOffset = currentOffset
+            return
+        }
 
         // Time-based throttling: don't send callbacks too frequently
         let shouldThrottleByTime = lastScrollCallbackTime.map { now.timeIntervalSince($0) < scrollCallbackThrottleInterval } ?? false
@@ -944,12 +940,15 @@ class TweetTableViewController: UITableViewController {
         let headerThreshold: CGFloat = 30
         let shouldThrottleByDistance = abs(delta) < headerThreshold
 
-        guard !shouldThrottleByTime && !shouldThrottleByDistance else { return }
+        guard !shouldThrottleByTime && !shouldThrottleByDistance else {
+            lastContentOffset = currentOffset
+            return
+        }
 
         // Call the onScroll callback with accumulated delta
         onScroll?(currentOffset, delta)
 
-        lastScrollOffset = currentOffset
+        lastContentOffset = currentOffset
         lastScrollCallbackTime = now
     }
     
