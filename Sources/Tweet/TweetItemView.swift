@@ -14,23 +14,7 @@ struct TweetItemView: View, Equatable {
     var hideActions: Bool = false
     var backgroundColor: Color = Color(.systemBackground)
     var quotingTweetId: String? = nil // For embedded tweets: ID of the tweet that quotes this tweet
-    @State private var originalTweet: Tweet? {
-        didSet {
-            // CRITICAL: When original tweet first loads (nil -> value), clear cached height and notify
-            // This only happens once per retweet/embedded tweet when original tweet loads
-            // Skip notification if this is the initial cache load (suppressInitialNotification flag)
-            if originalTweet != nil && oldValue == nil && !suppressInitialNotification {
-                tweet.cachedHeight = nil
-                // Notify table view to recache height if cell is currently visible
-                NotificationCenter.default.post(
-                    name: .tweetHeightNeedsRecalculation,
-                    object: nil,
-                    userInfo: ["tweetId": tweet.mid]
-                )
-            }
-            suppressInitialNotification = false // Reset flag after first load
-        }
-    }
+    @State private var originalTweet: Tweet?
     @State private var isVisible = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     var onRemove: ((String) -> Void)? = nil
@@ -38,7 +22,6 @@ struct TweetItemView: View, Equatable {
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
     @State private var hasRegisteredRetweetRelationship = false
-    @State private var suppressInitialNotification = false
     
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
@@ -173,8 +156,6 @@ struct TweetItemView: View, Equatable {
             if let originalTweetId = tweet.originalTweetId,
                originalTweet == nil,
                let cachedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-                // Suppress notification for initial cache load to prevent premature height recalculation
-                suppressInitialNotification = true
                 originalTweet = cachedTweet
                 hasLoadedOriginalTweet = true
                 

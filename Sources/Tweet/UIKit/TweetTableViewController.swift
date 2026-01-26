@@ -94,8 +94,6 @@ class TweetTableViewController: UITableViewController {
     
     // Notification observer for scroll to top
     private var scrollToTopObserver: NSObjectProtocol?
-    // Notification observer for tweet height changes
-    private var tweetHeightObserver: NSObjectProtocol?
     
     // Scroll position preservation
     private var savedScrollPosition: CGFloat?
@@ -113,7 +111,6 @@ class TweetTableViewController: UITableViewController {
         setupTableView()
         setupRefreshControl()
         setupScrollToTopObserver()
-        setupTweetHeightObserver()
         setupMemoryWarningObserver()
         
         // Pass table view reference to video coordinator for viewport calculations
@@ -125,11 +122,7 @@ class TweetTableViewController: UITableViewController {
         if let observer = scrollToTopObserver {
             NotificationCenter.default.removeObserver(observer)
         }
-        
-        if let observer = tweetHeightObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        
+
         if let observer = memoryWarningObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -157,16 +150,6 @@ class TweetTableViewController: UITableViewController {
         }
     }
     
-    private func setupTweetHeightObserver() {
-        tweetHeightObserver = NotificationCenter.default.addObserver(
-            forName: .tweetHeightNeedsRecalculation,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            self?.handleTweetHeightChange(notification)
-        }
-    }
-    
     // MEMORY FIX: Respond to memory warnings by aggressively clearing caches
     private var memoryWarningObserver: NSObjectProtocol?
     
@@ -188,41 +171,6 @@ class TweetTableViewController: UITableViewController {
             if let visibleIndexPaths = self?.tableView.indexPathsForVisibleRows {
                 self?.tableView.reloadRows(at: visibleIndexPaths, with: .none)
             }
-        }
-    }
-    
-    private func handleTweetHeightChange(_ notification: Notification) {
-        guard let tweetId = notification.userInfo?["tweetId"] as? String else { return }
-        
-        // Find the index path for this tweet
-        var rowIndex: Int?
-        if let pinnedIndex = pinnedTweets.firstIndex(where: { $0.mid == tweetId }) {
-            rowIndex = pinnedIndex
-        } else if let regularIndex = tweets.firstIndex(where: { $0.mid == tweetId }) {
-            rowIndex = pinnedTweets.count + regularIndex
-        }
-        
-        guard let row = rowIndex else { return }
-        let indexPath = IndexPath(row: row, section: 0)
-        
-        // Check if cell is currently visible
-        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
-              visibleIndexPaths.contains(indexPath) else {
-            // Cell not visible - willDisplay will cache it when it becomes visible
-            return
-        }
-        
-        let tweet = row < pinnedTweets.count ? pinnedTweets[row] : tweets[row - pinnedTweets.count]
-        
-        // Trigger height recalculation, then cache the new height
-        tableView.beginUpdates()
-        tableView.endUpdates()
-        
-        // After layout updates, recache the height
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self,
-                  let cell = self.tableView.cellForRow(at: indexPath) else { return }
-            tweet.cachedHeight = cell.frame.height
         }
     }
     
@@ -409,18 +357,7 @@ class TweetTableViewController: UITableViewController {
         print("🔵 [PINNED UPDATE] updatePinnedTweets called with \(tweets.count) tweets: \(tweets.map { $0.mid })")
         let oldCount = pinnedTweets.count
         self.pinnedTweets = tweets
-        
-        // CRITICAL: Pre-calculate heights for pinned tweets
-        let leadingPad = self.leadingPadding
-        let trailingPad = self.trailingPadding
-        Task.detached(priority: .userInitiated) {
-            TweetHeightCalculator.shared.precalculateHeights(
-                for: tweets,
-                leadingPadding: leadingPad,
-                trailingPadding: trailingPad
-            )
-        }
-        
+
         // CRITICAL: Rebuild video list when pinned tweets change
         // This ensures pinned tweet videos are registered with the coordinator
         print("🔵 [PINNED UPDATE] Rebuilding video list with \(self.tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
@@ -447,30 +384,11 @@ class TweetTableViewController: UITableViewController {
         let oldCount = tweets.count
         let oldTweets = tweets
         tweets = newTweets
-        
-        // CRITICAL: Pre-calculate heights for all new tweets to eliminate scroll jumps
-        // This ensures heights are known before cells are rendered, preventing jumps during fast scrolling
-        let leadingPad = self.leadingPadding
-        let trailingPad = self.trailingPadding
-        Task.detached(priority: .userInitiated) {
-            TweetHeightCalculator.shared.precalculateHeights(
-                for: newTweets,
-                leadingPadding: leadingPad,
-                trailingPadding: trailingPad
-            )
-        }
 
         // Cleanup old tweet instances to prevent memory growth
         Task.detached(priority: .background) {
             let activeTweetIds = Set(newTweets.map { $0.mid })
             Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
-            
-            // Also clear height calculator cache for removed tweets
-            let oldTweetIds = Set(oldTweets.map { $0.mid })
-            let removedTweetIds = oldTweetIds.subtracting(activeTweetIds)
-            if !removedTweetIds.isEmpty {
-                TweetHeightCalculator.shared.clearCache(for: Array(removedTweetIds))
-            }
         }
         
         
@@ -844,7 +762,7 @@ class TweetTableViewController: UITableViewController {
         ) as? TweetTableViewCell else {
             return UITableViewCell()
         }
-        
+
         // First N rows are pinned tweets, rest are regular tweets
         let tweet: Tweet
         if indexPath.row < pinnedTweets.count {
@@ -852,7 +770,7 @@ class TweetTableViewController: UITableViewController {
         } else {
             tweet = tweets[indexPath.row - pinnedTweets.count]
         }
-        
+
         if let rowView = rowViewBuilder {
             cell.configure(
                 with: tweet,
@@ -862,17 +780,50 @@ class TweetTableViewController: UITableViewController {
                 trailingPadding: trailingPadding
             )
         }
-        
+
+        // Set up callback to update table view when cell height changes AFTER initial render
+        cell.onHeightChanged = { [weak self, weak tableView, weak tweet] in
+            guard let self = self,
+                  let tableView = tableView,
+                  let tweet = tweet else { return }
+
+            // Defer update to next run loop to avoid recursion during layout
+            DispatchQueue.main.async { [weak self, weak tableView, weak tweet] in
+                guard let self = self,
+                      let tableView = tableView,
+                      let tweet = tweet else { return }
+
+                // Only trigger if cell is still visible
+                guard let visiblePaths = tableView.indexPathsForVisibleRows,
+                      visiblePaths.contains(indexPath) else { return }
+
+                // Clear cached height so table will query automaticDimension
+                tweet.cachedHeight = nil
+
+                // Trigger recalculation
+                UIView.performWithoutAnimation {
+                    tableView.beginUpdates()
+                    tableView.endUpdates()
+                }
+
+                // Cache new height after layout completes
+                DispatchQueue.main.async { [weak tweet] in
+                    if let cell = tableView.cellForRow(at: indexPath) {
+                        tweet?.cachedHeight = cell.frame.height
+                    }
+                }
+            }
+        }
+
         return cell
     }
     
     // MARK: - UITableViewDelegate
-    
+
     override func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
         let totalRows = pinnedTweets.count + tweets.count
         guard indexPath.row < totalRows else { return 250 }
-        
-        // Determine which tweet this row represents
+
         let tweet: Tweet
         if indexPath.row < pinnedTweets.count {
             tweet = pinnedTweets[indexPath.row]
@@ -881,21 +832,18 @@ class TweetTableViewController: UITableViewController {
             guard regularIndex < tweets.count else { return 250 }
             tweet = tweets[regularIndex]
         }
-        
-        // Use tweet's cached height if available (best estimate!)
+
+        // Use cached height if available for better scroll estimation
         if let cachedHeight = tweet.cachedHeight {
             return cachedHeight
         }
-        
-        // First time: fallback estimate
         return 250
     }
-    
+
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
         let totalRows = pinnedTweets.count + tweets.count
         guard indexPath.row < totalRows else { return UITableView.automaticDimension }
-        
-        // Determine which tweet this row represents
+
         let tweet: Tweet
         if indexPath.row < pinnedTweets.count {
             tweet = pinnedTweets[indexPath.row]
@@ -904,22 +852,18 @@ class TweetTableViewController: UITableViewController {
             guard regularIndex < tweets.count else { return UITableView.automaticDimension }
             tweet = tweets[regularIndex]
         }
-        
-        // CRITICAL: If we have cached height, use it as FIXED height
-        // This prevents re-measurement and eliminates scroll jumps when scrolling UP
+
+        // Use cached height for smooth backward scrolling
         if let cachedHeight = tweet.cachedHeight {
             return cachedHeight
         }
-        
-        // First time rendering: let auto-layout measure
         return UITableView.automaticDimension
     }
-    
-    override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+
+    override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
         let totalRows = pinnedTweets.count + tweets.count
         guard indexPath.row < totalRows else { return }
-        
-        // Get the tweet
+
         let tweet: Tweet
         if indexPath.row < pinnedTweets.count {
             tweet = pinnedTweets[indexPath.row]
@@ -928,17 +872,15 @@ class TweetTableViewController: UITableViewController {
             guard regularIndex < tweets.count else { return }
             tweet = tweets[regularIndex]
         }
-        
-        // Cache the rendered height on the tweet object itself
-        // This will be used as FIXED height when scrolling back
-        tweet.cachedHeight = cell.frame.height
+
+        // Cache the final rendered height when cell leaves screen
+        // By this point, SwiftUI has fully laid out and we have the true height
+        let finalHeight = cell.frame.height
+        if finalHeight > 0 {
+            tweet.cachedHeight = finalHeight
+        }
     }
-    
-    override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Heights are cached on tweet objects - nothing to do here
-    }
-    
-    
+
     // MARK: - UIScrollViewDelegate
     
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {

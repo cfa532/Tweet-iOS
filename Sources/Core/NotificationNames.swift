@@ -34,10 +34,7 @@ extension Notification.Name {
     
     /// Posted when a tweet's privacy status is successfully updated (for toast notification)
     static let tweetPrivacyUpdated = Notification.Name("TweetPrivacyUpdated")
-    
-    /// Posted when a retweet's original tweet loads and height needs recalculation
-    static let tweetHeightNeedsRecalculation = Notification.Name("TweetHeightNeedsRecalculation")
-    
+
     /// Posted when a new comment is added
     static let newCommentAdded = Notification.Name("newCommentAdded")
     static let commentDeleted = Notification.Name("commentDeleted")

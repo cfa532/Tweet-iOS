@@ -78,13 +78,28 @@ class TweetTableViewCell: UITableViewCell {
     private var hostingController: UIHostingController<AnyView>?
     private var currentTweetId: String?
     private var lastViewKey: String?
-    
+
     // MEMORY FIX: Track constraints so we can remove them during reuse
     private var activeConstraints: [NSLayoutConstraint] = []
+
+    // Height change tracking
+    private var lastNotifiedHeight: CGFloat = 0
+    var onHeightChanged: (() -> Void)?
 
     /// Publicly accessible tweet ID for video orchestration
     var tweetId: String? {
         return currentTweetId
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        // Notify immediately when height changes (table view will throttle updates)
+        let currentHeight = bounds.height
+        if currentHeight > 0 && abs(currentHeight - lastNotifiedHeight) > 1 {
+            lastNotifiedHeight = currentHeight
+            onHeightChanged?()
+        }
     }
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -197,11 +212,11 @@ class TweetTableViewCell: UITableViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        
+
         // MEMORY FIX: Deactivate constraints to prevent accumulation
         NSLayoutConstraint.deactivate(activeConstraints)
         activeConstraints.removeAll()
-        
+
         // MEMORY FIX: Remove hosting controller from parent to prevent leak
         // The controller will be reused or replaced in configure()
         if let hostingController = hostingController {
@@ -209,7 +224,11 @@ class TweetTableViewCell: UITableViewCell {
             hostingController.view.removeFromSuperview()
             hostingController.removeFromParent()
         }
-        
+
+        // Clear height tracking
+        lastNotifiedHeight = 0
+        onHeightChanged = nil
+
         // Clear references
         hostingController = nil
         currentTweetId = nil
