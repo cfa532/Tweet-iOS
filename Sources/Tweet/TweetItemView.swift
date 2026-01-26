@@ -574,7 +574,7 @@ struct TweetItemView: View, Equatable {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top, 16)
+        .padding(.top, 8)
         .padding(.bottom)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
