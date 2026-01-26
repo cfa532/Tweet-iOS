@@ -785,17 +785,28 @@ class TweetTableViewController: UITableViewController {
         }
 
         // Set up callback to update table view when cell height changes AFTER initial render
+        // Capture tweet ID instead of indexPath to avoid race conditions during cell reuse
+        let tweetId = tweet.mid
         cell.onHeightChanged = { [weak self, weak tableView] in
             guard let self = self,
                   let tableView = tableView else { return }
 
             // Defer update to next run loop to avoid recursion during layout
-            DispatchQueue.main.async { [weak self, weak tableView] in
+            DispatchQueue.main.async { [weak self, weak tableView, tweetId] in
                 guard let self = self,
                       let tableView = tableView else { return }
 
-                // Only trigger if cell is still visible
-                guard let visiblePaths = tableView.indexPathsForVisibleRows,
+                // Find the current index path for this tweet (cell may have moved/been reused)
+                var targetIndexPath: IndexPath?
+                if let pinnedIndex = self.pinnedTweets.firstIndex(where: { $0.mid == tweetId }) {
+                    targetIndexPath = IndexPath(row: pinnedIndex, section: 0)
+                } else if let regularIndex = self.tweets.firstIndex(where: { $0.mid == tweetId }) {
+                    targetIndexPath = IndexPath(row: self.pinnedTweets.count + regularIndex, section: 0)
+                }
+
+                // Only trigger if this tweet is still visible
+                guard let indexPath = targetIndexPath,
+                      let visiblePaths = tableView.indexPathsForVisibleRows,
                       visiblePaths.contains(indexPath) else { return }
 
                 // Trigger recalculation (don't touch cached height during first render)
@@ -824,8 +835,10 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Use cached height if available for better scroll estimation
-        if let cachedHeight = tweet.cachedHeight {
+        // CRITICAL: Estimation must match heightForRowAt behavior
+        // Only use cached height when scrolling backward, otherwise estimate conservatively
+        // This prevents content size miscalculations and scroll jumps
+        if isScrollingBackward, let cachedHeight = tweet.cachedHeight {
             return cachedHeight
         }
         return 250
