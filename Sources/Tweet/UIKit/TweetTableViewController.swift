@@ -821,116 +821,50 @@ class TweetTableViewController: UITableViewController {
 
     override func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
         let totalRows = pinnedTweets.count + tweets.count
-        guard indexPath.row < totalRows else { return 250 }
+        guard indexPath.row < totalRows else { return 200 }
 
         let tweet: Tweet
         if indexPath.row < pinnedTweets.count {
             tweet = pinnedTweets[indexPath.row]
         } else {
             let regularIndex = indexPath.row - pinnedTweets.count
-            guard regularIndex < tweets.count else { return 250 }
+            guard regularIndex < tweets.count else { return 200 }
             tweet = tweets[regularIndex]
         }
 
-        // Use cached height if available for better estimation
-        if let cachedHeight = tweet.cachedHeight {
-            return cachedHeight
+        // Provide better estimates based on tweet content for smoother scrolling
+        var estimate: CGFloat = 100  // Base: header + actions + padding
+
+        // Add estimate for text (rough: 20pt per 100 characters)
+        if let content = tweet.content, !content.isEmpty {
+            estimate += min(CGFloat(content.count) / 5, 300)  // Cap at 300pt
         }
 
-        // Reasonable default estimate (will be replaced with actual after render)
-        return 250
+        // Add precise MediaGrid height (we can calculate this exactly!)
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            estimate += MediaGridViewModel.calculateHeight(for: attachments, isEmbedded: false)
+        }
+
+        // Add estimate for embedded tweet
+        if tweet.originalTweetId != nil {
+            estimate += 150
+        }
+
+        return estimate
     }
 
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        let totalRows = pinnedTweets.count + tweets.count
-        guard indexPath.row < totalRows else {
-            return UITableView.automaticDimension
-        }
-
-        let tweet: Tweet
-        if indexPath.row < pinnedTweets.count {
-            tweet = pinnedTweets[indexPath.row]
-        } else {
-            let regularIndex = indexPath.row - pinnedTweets.count
-            guard regularIndex < tweets.count else {
-                return UITableView.automaticDimension
-            }
-            tweet = tweets[regularIndex]
-        }
-
-        // Use cached height if available (prevents shifting on scroll back)
-        if let cachedHeight = tweet.cachedHeight {
-            return cachedHeight
-        }
-
-        // First render: let SwiftUI measure itself accurately
+        // Always use automaticDimension - let UITableView handle height caching
+        // This ensures heights are accurate and stable after SwiftUI completes layout
         return UITableView.automaticDimension
     }
 
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Cache height after first render - but ONLY if embedded tweets are loaded
-        let totalRows = pinnedTweets.count + tweets.count
-        guard indexPath.row < totalRows else { return }
-
-        let tweet: Tweet
-        if indexPath.row < pinnedTweets.count {
-            tweet = pinnedTweets[indexPath.row]
-        } else {
-            let regularIndex = indexPath.row - pinnedTweets.count
-            guard regularIndex < tweets.count else { return }
-            tweet = tweets[regularIndex]
-        }
-
-        // Don't cache if already cached
-        guard tweet.cachedHeight == nil else { return }
-
-        // Check if this tweet has an embedded tweet that needs to load first
-        if let originalTweetId = tweet.originalTweetId {
-            // Tweet has embedded/quoted tweet - check if it's loaded
-            if let embeddedTweet = Tweet.getInstance(for: originalTweetId),
-               embeddedTweet.author != nil {
-                // Embedded tweet is loaded - safe to cache height
-                tweet.cachedHeight = cell.bounds.height
-                print("DEBUG: [willDisplay] Cached height \(cell.bounds.height) for tweet \(indexPath.row) WITH embedded tweet")
-            } else {
-                // Embedded tweet not loaded yet - DON'T cache, let it render again after load
-                print("DEBUG: [willDisplay] Skipping cache for tweet \(indexPath.row) - embedded tweet not loaded yet")
-            }
-        } else {
-            // Regular tweet without embedded content - cache immediately
-            tweet.cachedHeight = cell.bounds.height
-            print("DEBUG: [willDisplay] Cached height \(cell.bounds.height) for tweet \(indexPath.row)")
-        }
+        // No manual caching needed - UITableView handles this automatically with automaticDimension
     }
 
     override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Try caching height here as well (backup for timing issues)
-        let totalRows = pinnedTweets.count + tweets.count
-        guard indexPath.row < totalRows else { return }
-
-        let tweet: Tweet
-        if indexPath.row < pinnedTweets.count {
-            tweet = pinnedTweets[indexPath.row]
-        } else {
-            let regularIndex = indexPath.row - pinnedTweets.count
-            guard regularIndex < tweets.count else { return }
-            tweet = tweets[regularIndex]
-        }
-
-        // If height wasn't cached yet and cell has valid height, cache it now
-        if tweet.cachedHeight == nil && cell.bounds.height > 0 {
-            // Check embedded tweet is loaded before caching
-            if let originalTweetId = tweet.originalTweetId {
-                if let embeddedTweet = Tweet.getInstance(for: originalTweetId),
-                   embeddedTweet.author != nil {
-                    tweet.cachedHeight = cell.bounds.height
-                    print("DEBUG: [didEndDisplaying] Cached height \(cell.bounds.height) for tweet \(indexPath.row) WITH embedded tweet")
-                }
-            } else {
-                tweet.cachedHeight = cell.bounds.height
-                print("DEBUG: [didEndDisplaying] Cached height \(cell.bounds.height) for tweet \(indexPath.row)")
-            }
-        }
+        // No manual caching needed - UITableView handles this automatically with automaticDimension
     }
 
     // MARK: - UIScrollViewDelegate
