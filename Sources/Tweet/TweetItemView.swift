@@ -22,10 +22,22 @@ struct TweetItemView: View, Equatable {
     @State private var selectedMediaIndex = 0
     @State private var hasLoadedOriginalTweet = false
     @State private var hasRegisteredRetweetRelationship = false
-    
+
     // Check if this is a retweet or quoted tweet
     private var isRetweetOrQuotedTweet: Bool {
         return tweet.originalTweetId != nil && tweet.originalAuthorId != nil
+    }
+
+    // Get embedded tweet - either from @State or from singleton cache (pre-loaded by TableViewController)
+    private var embeddedTweet: Tweet? {
+        if let cached = originalTweet {
+            return cached
+        }
+        // Check if it was pre-loaded into singleton cache by TweetTableViewController
+        if let originalTweetId = tweet.originalTweetId {
+            return Tweet.getInstance(for: originalTweetId)
+        }
+        return nil
     }
     
     @ViewBuilder
@@ -69,13 +81,13 @@ struct TweetItemView: View, Equatable {
         VStack(spacing: 0) {
             Group {
                 // Hide retweets/quoted tweets if their original tweets failed to load
-                if isRetweetOrQuotedTweet && originalTweet == nil && hasLoadedOriginalTweet {
+                if isRetweetOrQuotedTweet && embeddedTweet == nil && hasLoadedOriginalTweet {
                     // This is a retweet/quoted tweet but original tweet failed to load - don't show it
                     EmptyView()
                 } else if onTap == nil {
                     // Use NavigationLink when no onTap callback is provided
                     // For retweets with no content, navigate to the original tweet
-                    let navigationValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
+                    let navigationValue = (embeddedTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? embeddedTweet! : tweet
                     NavigationLink(value: navigationValue) {
                         tweetContent
                             .contentShape(Rectangle())
@@ -87,7 +99,7 @@ struct TweetItemView: View, Equatable {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             // For retweets with no content, pass the original tweet to the callback
-                            let callbackValue = (originalTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? originalTweet! : tweet
+                            let callbackValue = (embeddedTweet != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)) ? embeddedTweet! : tweet
                             onTap?(callbackValue)
                         }
                 }
@@ -301,7 +313,7 @@ struct TweetItemView: View, Equatable {
     
     private var tweetContent: some View {
         HStack(alignment: .top, spacing: 4) {
-            if let originalTweet = originalTweet {
+            if let originalTweet = embeddedTweet {
                 // This is a retweet
                 if tweet.content?.isEmpty ?? true, ((tweet.attachments?.isEmpty) == nil) {
                     // Use Group to force re-evaluation when originalTweet.author changes (@Published)
@@ -562,7 +574,7 @@ struct TweetItemView: View, Equatable {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top)
+        .padding(.top, 16)
         .padding(.bottom)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
