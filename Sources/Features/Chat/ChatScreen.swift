@@ -192,7 +192,8 @@ struct ChatScreen: View {
                     }
                     
                     // Show "No more messages" indicator at the top when reached the beginning
-                    if !hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
+                    // Only show if there are enough messages to fill roughly one screen
+                    if !hasMoreMessages && messages.count > 10 && isLoadMoreEnabled {
                         HStack {
                             Spacer()
                             VStack(spacing: 4) {
