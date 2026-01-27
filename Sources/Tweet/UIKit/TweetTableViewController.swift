@@ -108,6 +108,9 @@ class TweetTableViewController: UITableViewController {
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
 
+    // Store Combine observers for tweet updates (for height caching)
+    private var tweetUpdateObservers: [String: AnyCancellable] = [:]
+
     override func viewDidLoad() {
         super.viewDidLoad()
         
@@ -892,19 +895,115 @@ class TweetTableViewController: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        // ALWAYS use automaticDimension - height caching disabled
-        // We can't reliably detect when media finishes loading, so caching causes overlaps
+        let totalRows = pinnedTweets.count + tweets.count
+        guard indexPath.row < totalRows else {
+            return UITableView.automaticDimension
+        }
+
+        let tweet: Tweet
+        if indexPath.row < pinnedTweets.count {
+            tweet = pinnedTweets[indexPath.row]
+        } else {
+            let regularIndex = indexPath.row - pinnedTweets.count
+            guard regularIndex < tweets.count else {
+                return UITableView.automaticDimension
+            }
+            tweet = tweets[regularIndex]
+        }
+
+        // Use cached height if available (content is immutable, height never changes)
+        if let cachedHeight = tweet.cachedHeight {
+            return cachedHeight
+        }
+
+        // First render: let SwiftUI measure
         return UITableView.automaticDimension
     }
 
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Height caching happens in didEndDisplaying to ensure content is fully loaded
-        // Caching here is too early - media may still be rendering
+        let totalRows = pinnedTweets.count + tweets.count
+        guard indexPath.row < totalRows else { return }
+
+        let tweet: Tweet
+        if indexPath.row < pinnedTweets.count {
+            tweet = pinnedTweets[indexPath.row]
+        } else {
+            let regularIndex = indexPath.row - pinnedTweets.count
+            guard regularIndex < tweets.count else { return }
+            tweet = tweets[regularIndex]
+        }
+
+        // Skip if already cached
+        guard tweet.cachedHeight == nil else { return }
+
+        // Observe tweet updates to cache height AFTER server data loads
+        // This ensures we cache the final height, not intermediate states
+        let cancellable = tweet.objectWillChange.sink { [weak self, weak cell] _ in
+            guard let self = self, let cell = cell else { return }
+
+            // Wait for SwiftUI to re-render after the change
+            DispatchQueue.main.async {
+                // Only cache if content is ready
+                guard self.isReadyForCaching(tweet: tweet, cell: cell) else {
+                    return
+                }
+
+                // Cache the height once (content is immutable after server load)
+                if cell.frame.height > 0 && tweet.cachedHeight == nil {
+                    tweet.cachedHeight = cell.frame.height
+                    print("DEBUG: [willDisplay] ✅ Cached height \(cell.frame.height)pt after update for tweet \(tweet.mid)")
+                }
+            }
+        }
+
+        // Store cancellable to keep observation alive
+        // Using tweet.mid as key
+        tweetUpdateObservers[tweet.mid] = cancellable
+    }
+
+    /// Validates that tweet content is fully loaded before caching height
+    private func isReadyForCaching(tweet: Tweet, cell: UITableViewCell) -> Bool {
+        // Must have valid height
+        guard cell.frame.height > 0 else {
+            print("DEBUG: [isReadyForCaching] ❌ Invalid height for tweet \(tweet.mid)")
+            return false
+        }
+
+        // Author must be loaded
+        guard tweet.author?.username != nil else {
+            print("DEBUG: [isReadyForCaching] ❌ Author not loaded for tweet \(tweet.mid)")
+            return false
+        }
+
+        // If retweet/quote, embedded tweet must be loaded
+        if let originalTweetId = tweet.originalTweetId {
+            guard let embeddedTweet = Tweet.getInstance(for: originalTweetId),
+                  embeddedTweet.author?.username != nil else {
+                print("DEBUG: [isReadyForCaching] ❌ Embedded tweet not loaded for tweet \(tweet.mid)")
+                return false
+            }
+        }
+
+        print("DEBUG: [isReadyForCaching] ✅ Ready to cache for tweet \(tweet.mid)")
+        return true
     }
 
     override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Height caching disabled - causes overlaps when media loads asynchronously
-        // UITableView.automaticDimension handles dynamic heights correctly
+        // Clean up tweet update observers to prevent memory leaks
+        let totalRows = pinnedTweets.count + tweets.count
+        guard indexPath.row < totalRows else { return }
+
+        let tweet: Tweet
+        if indexPath.row < pinnedTweets.count {
+            tweet = pinnedTweets[indexPath.row]
+        } else {
+            let regularIndex = indexPath.row - pinnedTweets.count
+            guard regularIndex < tweets.count else { return }
+            tweet = tweets[regularIndex]
+        }
+
+        // Remove observer for this tweet
+        tweetUpdateObservers.removeValue(forKey: tweet.mid)
     }
 
     // MARK: - UIScrollViewDelegate
