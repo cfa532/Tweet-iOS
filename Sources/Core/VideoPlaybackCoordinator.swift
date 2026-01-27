@@ -289,12 +289,17 @@ class VideoPlaybackCoordinator: ObservableObject {
                 self.cellCache[tweetId] = cell
             }
 
+            // Use safeAreaInsets (not adjustedContentInset) to get actual visible area
+            // adjustedContentInset includes custom contentInset which would be wrong
+            let topInset = tableView.safeAreaInsets.top
+            let bottomInset = tableView.safeAreaInsets.bottom
+
             return (
                 visibleRect: CGRect(
                     x: 0,
-                    y: tableView.contentOffset.y,
+                    y: tableView.contentOffset.y + topInset,
                     width: tableView.bounds.width,
-                    height: tableView.bounds.height
+                    height: tableView.bounds.height - topInset - bottomInset
                 ),
                 cellFrames: tableView.visibleCells.compactMap { cell -> (tweetId: String, frame: CGRect)? in
                     guard let tweetCell = cell as? TweetTableViewCell,
@@ -1280,11 +1285,15 @@ class VideoPlaybackCoordinator: ObservableObject {
                 self.lastCacheClearTime = now
             }
 
+            // Use safeAreaInsets (not adjustedContentInset) to get actual visible area
+            let topInset = tableView.safeAreaInsets.top
+            let bottomInset = tableView.safeAreaInsets.bottom
+
             let visibleRect = CGRect(
                 x: 0,
-                y: tableView.contentOffset.y,
+                y: tableView.contentOffset.y + topInset,
                 width: tableView.bounds.width,
-                height: tableView.bounds.height
+                height: tableView.bounds.height - topInset - bottomInset
             )
 
             let cellFrame = tableView.convert(cell.frame, to: tableView)
@@ -1323,7 +1332,18 @@ class VideoPlaybackCoordinator: ObservableObject {
         if visibilityRatio < 0.30 {
             // Re-identify primary video based on current scroll direction
             // This handles both scrolling down (switch to next) and scrolling up (switch to previous)
-            guard let newPrimary = await identifyPrimaryVideoAsync(), newPrimary.identifier != primaryId else {
+            let newPrimary = await identifyPrimaryVideoAsync()
+
+            // If no suitable new primary found, or the new primary is the same as current (but current is < 50% visible),
+            // stop all playback - don't keep playing a mostly-off-screen video
+            guard let newPrimary = newPrimary else {
+                stopAllVideos()
+                return
+            }
+
+            // If the "best" video is still the current one but it's < 50% visible, stop playback
+            if newPrimary.identifier == primaryId {
+                stopAllVideos()
                 return
             }
 
@@ -1425,11 +1445,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             cell = found
         }
 
+        // Use safeAreaInsets (not adjustedContentInset) to get actual visible area
+        let topInset = tableView.safeAreaInsets.top
+        let bottomInset = tableView.safeAreaInsets.bottom
+
         let visibleRect = CGRect(
             x: 0,
-            y: tableView.contentOffset.y,
+            y: tableView.contentOffset.y + topInset,
             width: tableView.bounds.width,
-            height: tableView.bounds.height
+            height: tableView.bounds.height - topInset - bottomInset
         )
         let cellFrame = cell.frame // already in tableView's coordinate space
         let intersection = cellFrame.intersection(visibleRect)
