@@ -943,15 +943,21 @@ class TweetTableViewController: UITableViewController {
 
             // Wait for SwiftUI to re-render after the change
             DispatchQueue.main.async {
+                // Skip if already cached - check first to avoid unnecessary logging
+                guard tweet.cachedHeight == nil else { return }
+
                 // Only cache if content is ready
                 guard self.isReadyForCaching(tweet: tweet, cell: cell) else {
                     return
                 }
 
-                // Cache the height once (content is immutable after server load)
-                if cell.frame.height > 0 && tweet.cachedHeight == nil {
+                // Cache the height (content is immutable after server load)
+                if cell.frame.height > 0 {
                     tweet.cachedHeight = cell.frame.height
                     print("DEBUG: [willDisplay] ✅ Cached height \(cell.frame.height)pt after update for tweet \(tweet.mid)")
+
+                    // Remove observer now that height is cached
+                    self.tweetUpdateObservers.removeValue(forKey: tweet.mid)
                 }
             }
         }
