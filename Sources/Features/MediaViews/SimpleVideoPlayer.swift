@@ -396,6 +396,7 @@ struct SimpleVideoPlayer: View {
     @State private var retryAttempts: Int = 0 // Track retry attempts separately
     @State private var isLongPressing = false
     @State private var coordinatorWantsToPlay: Bool = false // Track if coordinator commanded playback
+    @State private var isStoppedByCoordinator: Bool = false // Track if video was stopped by coordinator (show last frame as placeholder)
     @State private var isPlayerDetached = false  // Track background state
     @State private var hasRecoveredThisCycle = false  // Prevent double recovery (background + screen lock)
     @State private var didEnterBackground = false  // Track if we actually went to background (vs just screen lock)
@@ -1156,20 +1157,24 @@ struct SimpleVideoPlayer: View {
             VideoStateCache.shared.markAsNotVisible(mid)
             SharedAssetCache.shared.markAsNotVisible(mid)
         }
-        
+
+        // Reset coordinator stop flag when video disappears
+        // This ensures clean state when the video scrolls back into view
+        isStoppedByCoordinator = false
+
         // Cancel recovery timeout task (cleanup)
         recoveryTimeoutTask?.cancel()
         recoveryTimeoutTask = nil
-        
+
         // CRITICAL FIX: Cancel any pending setup tasks to prevent memory leaks
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
-        
+
         // CRITICAL FIX: Cancel any pending waiting task to prevent memory leaks during fast scrolling
         waitingForPlayerTask?.cancel()
         waitingForPlayerTask = nil
         isWaitingForPlayerReady = false
-        
+
         // CRITICAL FIX: Cancel recovery cover and timer tasks to prevent memory leaks
         recoveryCoverTask?.cancel()
         recoveryCoverTask = nil
@@ -1736,34 +1741,41 @@ struct SimpleVideoPlayer: View {
         // Stop command from VideoPlaybackCoordinator
         // Embedded videos in detail views should NOT listen to coordinator (they autoplay independently)
         guard mode == .mediaCell || (mode == .embeddedDetail && !DetailVideoManager.shared.isDetailViewActive()) else { return }
-        
+
         // If notification has a specific videoMid, only stop if it matches this video
         if let videoMid = notification?.userInfo?["videoMid"] as? String {
             guard videoMid == mid else { return }
         }
         // Otherwise, stop all videos (shouldStopAllVideos notification)
-        
+
         coordinatorWantsToPlay = false
-        
+
         // CRITICAL: Cancel any pending waiting task to prevent memory leaks
         waitingForPlayerTask?.cancel()
         waitingForPlayerTask = nil
         isWaitingForPlayerReady = false
-        
+
         // PERFORMANCE FIX: Save position before pausing (Twitter-style)
         // CRITICAL: Capture wasPlaying state BEFORE pausing
         if let player = player {
             let wasPlaying = (player.rate > 0) || (playbackState == .playing)
-            
+
             // Only save if this is the first stop (not a duplicate)
             // Prevents overwriting wasPlaying: true with wasPlaying: false
             if wasPlaying || player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorStop")
             }
-            
+
+            // CRITICAL: Capture last frame BEFORE pausing to show as placeholder
+            // This prevents black screen when video is stopped but still visible on screen
+            captureLastFrameIfPossible(reason: "coordinatorStop")
+
             player.pause()
         }
-        
+
+        // Mark that video was stopped by coordinator (show last frame as placeholder)
+        isStoppedByCoordinator = true
+
         // CRITICAL: Don't change playbackState to .paused if it was .playing
         // This preserves the "was playing" state for background recovery
         // Multiple coordinator stop commands can arrive in quick succession,
@@ -1782,7 +1794,7 @@ struct SimpleVideoPlayer: View {
         guard videoMid == mid else { return }
 
         coordinatorWantsToPlay = false
-        
+
         // CRITICAL: Cancel any pending waiting task to prevent memory leaks
         waitingForPlayerTask?.cancel()
         waitingForPlayerTask = nil
@@ -1790,20 +1802,27 @@ struct SimpleVideoPlayer: View {
         if let player = player {
             // CRITICAL: Capture wasPlaying state BEFORE pausing
             let wasPlaying = (player.rate > 0) || (playbackState == .playing)
-            
+
             // PERFORMANCE FIX: Save position before pausing (Twitter-style)
             // Only save if this is the first pause (not a duplicate)
             if wasPlaying || player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: wasPlaying, reason: "coordinatorPause")
             }
-            
+
+            // CRITICAL: Capture last frame BEFORE pausing to show as placeholder
+            // This prevents black screen when video is paused but still visible on screen
+            captureLastFrameIfPossible(reason: "coordinatorPause")
+
             UIView.animate(withDuration: 0.2, animations: {
                 player.volume = 0
             }, completion: { _ in
                 player.pause()
             })
         }
-        
+
+        // Mark that video was stopped by coordinator (show last frame as placeholder)
+        isStoppedByCoordinator = true
+
         // CRITICAL: Don't change playbackState to .paused if it was .playing
         // This preserves the "was playing" state for background recovery
         if playbackState != .playing {
@@ -1817,14 +1836,18 @@ struct SimpleVideoPlayer: View {
         guard mode == .mediaCell || (mode == .embeddedDetail && !DetailVideoManager.shared.isDetailViewActive()) else { return }
         guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
         guard videoMid == mid else { return }
-        
+
         let isSurvey = notification.userInfo?["isSurvey"] as? Bool ?? false
         let isPrimary = notification.userInfo?["isPrimary"] as? Bool ?? false
-        
+
         // CRITICAL: Reset finish flag when starting playback
         // This allows video to finish again if it plays multiple times (e.g. survey -> primary)
         isHandlingFinishEvent = false
-        
+
+        // Reset stopped-by-coordinator flag when play command is received
+        // This removes the last frame placeholder and shows the actual video
+        isStoppedByCoordinator = false
+
         // Set flag to play when ready (will be checked after seek completes if seeking)
         coordinatorWantsToPlay = true
         
@@ -3147,24 +3170,25 @@ struct SimpleVideoPlayer: View {
                         )
                 }
                 
-                // MediaCell UX: last-frame placeholder used ONLY for background recovery cover.
+                // MediaCell UX: last-frame placeholder used for background recovery and coordinator stop.
                 if mode == .mediaCell, let frame = cachedLastFrame {
                     let item = player.currentItem
                     let bufferedAhead = item.map { bufferedTimeAhead(for: $0, player: player) } ?? 0
                     let hasBufferedData = !(item?.loadedTimeRanges.isEmpty ?? true)
                     let readyForFirstFrame = (item?.status == .readyToPlay) && hasBufferedData && bufferedAhead >= firstFrameMinimumBuffer
-                    
+
                     let waitingForData = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                     let bufferEmpty = item?.isPlaybackBufferEmpty ?? false
                     let isFinished = (playbackState == .finished)
-                    
+
                     // Show the cached frame when:
                     // 1. Holding recovery cover (background recovery)
                     // 2. Player explicitly detached (app lifecycle)
                     // 3. Video is being initialized (prevents black flicker when scrolling back)
                     // 4. Video is finished (AVPlayer may show black instead of last frame)
+                    // 5. Video was stopped by coordinator (prevents black screen when scrolled past but still visible)
                     let isInitializing = loadingState.isLoading && player.rate == 0
-                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isInitializing || isFinished
+                    let shouldShowPlaceholder = isHoldingRecoveryCover || isPlayerDetached || isInitializing || isFinished || isStoppedByCoordinator
                     
                     if shouldShowPlaceholder {
                         // IMPORTANT: This overlay must be tap-through so taps still reach the video layer
@@ -3177,8 +3201,9 @@ struct SimpleVideoPlayer: View {
                                 .overlay(Color.black.opacity(0.08))
                             
                             // Spinner over the cover frame during recovery/buffering.
-                            // IMPORTANT: Never show spinner when the video is finished.
-                            if !isFinished && (loadingState.isLoading || waitingForData || bufferEmpty || !readyForFirstFrame) {
+                            // IMPORTANT: Never show spinner when the video is finished or stopped by coordinator.
+                            // When stopped by coordinator, we just show the static last frame - no loading needed.
+                            if !isFinished && !isStoppedByCoordinator && (loadingState.isLoading || waitingForData || bufferEmpty || !readyForFirstFrame) {
                                 ProgressView()
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(1.1)
