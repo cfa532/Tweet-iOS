@@ -7,6 +7,10 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     private let saveFilePath: String
     private weak var owner: CachingPlayerItem?
 
+    // Track active URLSession tasks for proper cleanup on deallocation
+    private var activeTasks: [Int: URLSessionDataTask] = [:]
+    private let taskLock = NSLock()
+
     public init(url: URL, mediaID: String?, saveFilePath: String, owner: CachingPlayerItem) {
         self.url = url
         self.mediaID = mediaID
@@ -147,27 +151,31 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         
         // If not cached, download and serve
         print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Downloading playlist from \(actualPlaylistURL.absoluteString)")
-        
+
         let session = URLSession.shared
-        let task = session.dataTask(with: actualPlaylistURL) { [self] data, response, error in
+        var taskId: Int = 0
+        let task = session.dataTask(with: actualPlaylistURL) { [weak self] data, response, error in
+            defer { self?.removeTask(identifier: taskId) }
+            guard let self = self else { return }
+
             if let error = error {
                 print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Download error: \(error.localizedDescription)")
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
+
             guard let data = data else {
                 print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: No data received")
                 let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
+
             print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Successfully downloaded playlist, size: \(data.count) bytes")
-            
+
             // Modify the playlist to use custom scheme URLs for segments and sub-playlists
             let modifiedPlaylistData = self.modifyPlaylistForCustomScheme(data, baseURL: actualPlaylistURL)
-            
+
             // Cache the modified playlist
             do {
                 try modifiedPlaylistData.write(to: URL(fileURLWithPath: cachePath))
@@ -175,7 +183,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             } catch {
                 print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Failed to cache playlist: \(error.localizedDescription)")
             }
-            
+
             // Parse segments and start downloading them (only for sub-playlists that contain actual segments)
             let playlistString = String(data: data, encoding: .utf8) ?? ""
             let segments = self.parsePlaylistSegments(playlistString)
@@ -186,30 +194,32 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 print("DEBUG: [CachingPlayerItem] handlePlaylistRequest: Using baseURL for segment downloads: \(baseURL.absoluteString)")
                 self.downloadHLSSegments(segments, baseURL: baseURL)
             }
-            
+
             // Serve playlist directly (no redirect!)
             print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving playlist DIRECTLY (no redirect!)")
-            
+
             // Provide ContentInformationRequest for metadata
             if let contentRequest = loadingRequest.contentInformationRequest {
                 contentRequest.contentType = "application/vnd.apple.mpegurl"
                 contentRequest.contentLength = Int64(modifiedPlaylistData.count)
                 contentRequest.isByteRangeAccessSupported = true
             }
-            
+
             // Serve the modified playlist data directly
             if let dataRequest = loadingRequest.dataRequest {
                 dataRequest.respond(with: modifiedPlaylistData)
                 print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Served \(modifiedPlaylistData.count) bytes instantly (no redirect!)")
             }
-            
+
             loadingRequest.finishLoading()
         }
-        
+
+        taskId = task.taskIdentifier
+        trackTask(task)
         task.resume()
         return true
     }
-    
+
     private func handleSegmentRequest(_ loadingRequest: AVAssetResourceLoadingRequest, url: URL) -> Bool {
         guard let requestURL = loadingRequest.request.url else {
             print("DEBUG: [CachingPlayerItem] handleSegmentRequest: No request URL")
@@ -276,28 +286,32 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         
         // If not cached, download and serve
         print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Downloading segment from \(url.absoluteString)")
-        
+
         // Create a custom URLSession with longer timeout to prevent cancellations
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60.0  // 60 seconds
         config.timeoutIntervalForResource = 300.0  // 5 minutes
         let session = URLSession(configuration: config)
-        let task = session.dataTask(with: url) { [self] data, response, error in
+        var taskId: Int = 0
+        let task = session.dataTask(with: url) { [weak self] data, response, error in
+            defer { self?.removeTask(identifier: taskId) }
+            guard let self = self else { return }
+
             if let error = error {
                 print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Download error: \(error.localizedDescription)")
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
+
             guard let data = data else {
                 print("DEBUG: [CachingPlayerItem] handleSegmentRequest: No data received")
                 let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
+
             print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Successfully downloaded segment, size: \(data.count) bytes")
-            
+
             // Cache the segment
             do {
                 try data.write(to: URL(fileURLWithPath: cachePath))
@@ -305,7 +319,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             } catch {
                 print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Failed to cache segment: \(error.localizedDescription)")
             }
-            
+
             // Redirect to LocalHTTPServer to serve the downloaded segment
             guard let mediaID = self.mediaID,
                   let localURL = LocalHTTPServer.shared.getLocalURL(for: mediaID) else {
@@ -314,20 +328,22 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
+
             // Construct the full URL with the filename
             let filename = url.lastPathComponent
             let fullURL = localURL.appendingPathComponent(filename)
-            
+
             let response = HTTPURLResponse(url: requestURL, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: [
                 "Location": fullURL.absoluteString
             ])
             loadingRequest.response = response
             loadingRequest.finishLoading()
-            
+
             print("DEBUG: [CachingPlayerItem] handleSegmentRequest: Redirected to LocalHTTPServer for downloaded segment: \(localURL.absoluteString)")
         }
-        
+
+        taskId = task.taskIdentifier
+        trackTask(task)
         task.resume()
         return true
     }
@@ -541,25 +557,29 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         config.timeoutIntervalForRequest = 60.0  // 60 seconds
         config.timeoutIntervalForResource = 300.0  // 5 minutes
         let session = URLSession(configuration: config)
-        let task = session.dataTask(with: playlistURL) { [self] data, response, error in
+        var taskId: Int = 0
+        let task = session.dataTask(with: playlistURL) { [weak self] data, response, error in
+            defer { self?.removeTask(identifier: taskId) }
+            guard let self = self else { return }
+
             if let error = error {
                 print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Download error: \(error.localizedDescription)")
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
+
             guard let data = data else {
                 print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: No data received")
                 let error = NSError(domain: "CachingPlayerItem", code: -1, userInfo: [NSLocalizedDescriptionKey: "No data received"])
                 loadingRequest.finishLoading(with: error)
                 return
             }
-            
+
             print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Successfully downloaded playlist, size: \(data.count) bytes")
-            
+
             // Modify the playlist to use custom scheme URLs for segments and sub-playlists
             let modifiedPlaylistData = self.modifyPlaylistForCustomScheme(data, baseURL: playlistURL)
-            
+
             // Cache the modified playlist to the specific cache path
             do {
                 try modifiedPlaylistData.write(to: URL(fileURLWithPath: cachePath))
@@ -567,7 +587,7 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             } catch {
                 print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Failed to cache playlist: \(error.localizedDescription)")
             }
-            
+
             // Parse segments and start downloading them (only for master playlists)
             let playlistString = String(data: data, encoding: .utf8) ?? ""
             let segments = self.parsePlaylistSegments(playlistString)
@@ -576,10 +596,10 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
                 let baseURL = playlistURL.deletingLastPathComponent()
                 self.downloadHLSSegments(segments, baseURL: baseURL)
             }
-            
+
             // Serve the modified playlist directly
             print("DEBUG: [CachingPlayerItem] startHLSPlaylistDownload: Serving modified playlist directly")
-            
+
             // Create minimal response that AVPlayer expects for HLS playlists
             let response = HTTPURLResponse(url: loadingRequest.request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
                 "Content-Type": "application/vnd.apple.mpegurl",
@@ -587,14 +607,18 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
             ])
             loadingRequest.response = response
             loadingRequest.dataRequest?.respond(with: modifiedPlaylistData)
-                loadingRequest.finishLoading()
-            
+            loadingRequest.finishLoading()
+
             // Notify owner about download completion
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
                 self.owner?.delegate?.playerItem?(self.owner!, didFinishDownloadingFileAt: cachePath)
             }
         }
-        
+
+        taskId = task.taskIdentifier
+
+        trackTask(task)
         task.resume()
     }
     
@@ -799,13 +823,34 @@ public class ResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
         return modifiedData
     }
     
-    // MARK: - Methods expected by CachingPlayerItem
-    
-    func invalidateAndCancelSession(shouldResetData: Bool = false) {
-        // This method is expected by CachingPlayerItem but not used in our implementation
-        print("DEBUG: [CachingPlayerItem] invalidateAndCancelSession called with shouldResetData: \(shouldResetData)")
+    // MARK: - Task Tracking for Memory Management
+
+    private func trackTask(_ task: URLSessionDataTask) {
+        taskLock.lock()
+        activeTasks[task.taskIdentifier] = task
+        taskLock.unlock()
     }
-    
+
+    private func removeTask(identifier: Int) {
+        taskLock.lock()
+        activeTasks.removeValue(forKey: identifier)
+        taskLock.unlock()
+    }
+
+    // MARK: - Methods expected by CachingPlayerItem
+
+    func invalidateAndCancelSession(shouldResetData: Bool = false) {
+        taskLock.lock()
+        let tasksToCancel = Array(activeTasks.values)
+        activeTasks.removeAll()
+        taskLock.unlock()
+
+        for task in tasksToCancel {
+            task.cancel()
+        }
+        print("DEBUG: [CachingPlayerItem] invalidateAndCancelSession: Cancelled \(tasksToCancel.count) active tasks")
+    }
+
     func startFileDownload(with url: URL) {
         // This method is expected by CachingPlayerItem but not used in our implementation
         print("DEBUG: [CachingPlayerItem] startFileDownload called with URL: \(url.absoluteString)")
