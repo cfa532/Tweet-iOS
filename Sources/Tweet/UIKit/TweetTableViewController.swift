@@ -108,8 +108,12 @@ class TweetTableViewController: UITableViewController {
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
 
-    // Store Combine observers for tweet updates (for height caching)
-    private var tweetUpdateObservers: [String: AnyCancellable] = [:]
+    // Height cache timers - cache height after server data loads and SwiftUI renders
+    private var heightCacheTimers: [String: Timer] = [:]
+    private let heightCacheDelay: TimeInterval = 0.2  // Wait 200ms after data loads for SwiftUI to render
+
+    // Combine observers to detect when tweet data is fully loaded
+    private var tweetDataObservers: [String: AnyCancellable] = [:]
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -936,35 +940,49 @@ class TweetTableViewController: UITableViewController {
         // Skip if already cached
         guard tweet.cachedHeight == nil else { return }
 
-        // Observe tweet updates to cache height AFTER server data loads
-        // This ensures we cache the final height, not intermediate states
-        let cancellable = tweet.objectWillChange.sink { [weak self, weak cell] _ in
-            guard let self = self, let cell = cell else { return }
-
-            // Wait for SwiftUI to re-render after the change
-            DispatchQueue.main.async {
-                // Skip if already cached - check first to avoid unnecessary logging
-                guard tweet.cachedHeight == nil else { return }
-
-                // Only cache if content is ready
-                guard self.isReadyForCaching(tweet: tweet, cell: cell) else {
+        // Check if data is already fully loaded
+        if isReadyForCaching(tweet: tweet, cell: cell) {
+            // Data is ready, schedule height cache after SwiftUI finishes rendering
+            scheduleHeightCache(for: tweet, cell: cell)
+        } else {
+            // Data not ready yet - observe for when server data loads
+            let cancellable = tweet.objectWillChange.sink { [weak self, weak cell] _ in
+                guard let self = self, let cell = cell else { return }
+                guard tweet.cachedHeight == nil else {
+                    // Already cached, clean up observer
+                    self.tweetDataObservers.removeValue(forKey: tweet.mid)
                     return
                 }
 
-                // Cache the height (content is immutable after server load)
-                if cell.frame.height > 0 {
-                    tweet.cachedHeight = cell.frame.height
-                    print("DEBUG: [willDisplay] ✅ Cached height \(cell.frame.height)pt after update for tweet \(tweet.mid)")
-
-                    // Remove observer now that height is cached
-                    self.tweetUpdateObservers.removeValue(forKey: tweet.mid)
+                // Check if data is now ready
+                if self.isReadyForCaching(tweet: tweet, cell: cell) {
+                    // Data loaded! Schedule height cache
+                    self.scheduleHeightCache(for: tweet, cell: cell)
+                    // Remove observer - we only need to cache once
+                    self.tweetDataObservers.removeValue(forKey: tweet.mid)
                 }
             }
+            tweetDataObservers[tweet.mid] = cancellable
         }
+    }
 
-        // Store cancellable to keep observation alive
-        // Using tweet.mid as key
-        tweetUpdateObservers[tweet.mid] = cancellable
+    /// Schedules height caching after a delay to allow SwiftUI to finish rendering
+    private func scheduleHeightCache(for tweet: Tweet, cell: UITableViewCell) {
+        // Cancel any existing timer
+        heightCacheTimers[tweet.mid]?.invalidate()
+
+        // Wait for SwiftUI to finish rendering with the loaded data
+        heightCacheTimers[tweet.mid] = Timer.scheduledTimer(withTimeInterval: heightCacheDelay, repeats: false) { [weak self, weak cell] _ in
+            guard let self = self, let cell = cell else { return }
+            guard tweet.cachedHeight == nil else { return }
+
+            if cell.frame.height > 0 {
+                tweet.cachedHeight = cell.frame.height
+                print("DEBUG: [heightCache] ✅ Cached height \(cell.frame.height)pt for tweet \(tweet.mid)")
+            }
+
+            self.heightCacheTimers.removeValue(forKey: tweet.mid)
+        }
     }
 
     /// Validates that tweet content is fully loaded before caching height
@@ -995,7 +1013,7 @@ class TweetTableViewController: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-        // Clean up tweet update observers to prevent memory leaks
+        // Clean up resources to prevent memory leaks
         let totalRows = pinnedTweets.count + tweets.count
         guard indexPath.row < totalRows else { return }
 
@@ -1008,8 +1026,12 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Remove observer for this tweet
-        tweetUpdateObservers.removeValue(forKey: tweet.mid)
+        // Cancel and remove any pending height cache timer
+        heightCacheTimers[tweet.mid]?.invalidate()
+        heightCacheTimers.removeValue(forKey: tweet.mid)
+
+        // Remove data observer
+        tweetDataObservers.removeValue(forKey: tweet.mid)
     }
 
     // MARK: - UIScrollViewDelegate

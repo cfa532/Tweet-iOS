@@ -22,9 +22,6 @@ struct TweetItemBodyView: View {
     var cellTweetId: String? = nil // ID of tweet user is viewing (retweet ID for retweets)
     var onTweetBodyTap: (() -> Void)? = nil // Callback to navigate to tweet detail
     @State private var showLoginSheet = false
-    @State private var isTruncated = false
-    @State private var truncationTask: Task<Void, Never>? = nil
-    @State private var hasCheckedTruncation = false // Track if we've already checked
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // Cache screen dimensions to avoid repeated UIScreen.main calls
@@ -33,65 +30,6 @@ struct TweetItemBodyView: View {
         return max(10, screenWidth - 32)
     }()
     
-    // MARK: - Optimized Truncation Detection with Caching
-    
-    /// Fast heuristic check before expensive calculation
-    /// Estimates if text might be truncated based on character count
-    private func quickTruncationEstimate(text: String, maxLines: Int) -> Bool? {
-        // Rough estimate: ~40 characters per line for typical font sizes
-        let estimatedCharsPerLine = 40
-        let estimatedMaxChars = estimatedCharsPerLine * maxLines
-        
-        // If text is much shorter, definitely not truncated
-        if text.count < estimatedMaxChars / 2 {
-            return false
-        }
-        
-        // If text is much longer, probably truncated
-        if text.count > estimatedMaxChars * 2 {
-            return true
-        }
-        
-        // Unclear - need precise calculation
-        return nil
-    }
-    
-    /// Calculate if text will be truncated at given line limit
-    /// OPTIMIZED: Uses fast heuristic first, caches result
-    private func checkTextTruncation(text: String, maxLines: Int) async -> Bool {
-        // Try quick estimate first
-        if let estimate = quickTruncationEstimate(text: text, maxLines: maxLines) {
-            return estimate
-        }
-        
-        // Fall back to precise calculation only if needed
-        // Use the same width as the text view (screen width - padding)
-        let availableWidth = UIScreen.main.bounds.width - 32 // Match frame padding
-        
-        // Use UIFont that matches SwiftUI's .body font
-        let font = UIFont.preferredFont(forTextStyle: .body)
-        
-        // Calculate the size for limited lines first (cheaper)
-        let lineHeight = font.lineHeight
-        let maxHeight = lineHeight * CGFloat(maxLines)
-        
-        // Create NSAttributedString with the font
-        let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        let attributedString = NSAttributedString(string: text, attributes: attributes)
-        
-        // OPTIMIZATION: Use smaller constraint size for faster calculation
-        let constraintSize = CGSize(width: availableWidth, height: maxHeight * 1.5)
-        
-        let boundingRect = attributedString.boundingRect(
-            with: constraintSize,
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        )
-        
-        // If the full text height exceeds the max height, it's truncated
-        return boundingRect.height > maxHeight
-    }
-
     /// Caption text for a single-video media grid: prefers tweet title, falls back to video file name (without extension)
     private func singleVideoCaption(for attachments: [MimeiFileType]) -> String? {
         guard attachments.count == 1 else { return nil }
@@ -148,43 +86,6 @@ struct TweetItemBodyView: View {
                             onTweetBodyTap?()
                         }
                     }
-                    .task(id: content) {
-                        // OPTIMIZATION: Only check truncation once per content
-                        guard !hasCheckedTruncation else { return }
-                        
-                        // Cancel previous task if content changed
-                        truncationTask?.cancel()
-                        
-                        // Calculate truncation off main thread with low priority
-                        truncationTask = Task.detached(priority: .low) {
-                            let truncated = await checkTextTruncation(text: content, maxLines: 7)
-                            
-                            // Check if task was cancelled
-                            guard !Task.isCancelled else { return }
-                            
-                            // Update UI on main thread
-                            await MainActor.run {
-                                isTruncated = truncated
-                                hasCheckedTruncation = true
-                            }
-                        }
-                    }
-                    .onDisappear {
-                        // Reset check flag when view disappears to allow recalculation if needed
-                        hasCheckedTruncation = false
-                        truncationTask?.cancel()
-                    }
-                
-                if isTruncated && onTweetBodyTap != nil {
-                    Button(action: { 
-                        // Navigate to detail view
-                        onTweetBodyTap?()
-                    }) {
-                        Text(LocalizedStringKey("More..."))
-                            .font(.body)
-                            .foregroundColor(.blue)
-                    }
-                }
             }
             // Separate media and documents
             if let attachments = tweet.attachments, !attachments.isEmpty {
