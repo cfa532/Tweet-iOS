@@ -259,15 +259,8 @@ struct TweetItemView: View, Equatable {
                     )
                     hasRegisteredRetweetRelationship = true
                 }
-                
-                // ✅ FIX: Always update originalTweet state to trigger view refresh
-                // Even if it's the same singleton instance, explicitly setting the state
-                // ensures SwiftUI detects the update and refreshes the view
+
                 await MainActor.run {
-                    // Force view update by clearing and then setting (ensures SwiftUI detects change)
-                    let previousTweet = originalTweet
-                    originalTweet = nil  // Clear first to force view update
-                    originalTweet = t    // Then set to new value
                     hasLoadedOriginalTweet = true
 
                     // Keep coordinator's canonical list updated (quoted vs pure retweet).
@@ -286,9 +279,17 @@ struct TweetItemView: View, Equatable {
                         )
                     }
 
-                    // If it's the same instance, trigger objectWillChange to notify observers
-                    if previousTweet === t {
-                        t.objectWillChange.send()
+                    // CRITICAL: Only update originalTweet state if it wasn't already loaded
+                    // If embeddedTweet computed property already found the tweet via singleton cache,
+                    // don't trigger a re-render by setting originalTweet state
+                    // This prevents late layout shifts after server fetch completes
+                    if originalTweet == nil {
+                        // Was not in cache initially, update state to show fetched tweet
+                        originalTweet = t
+                        print("DEBUG: [TweetItemView] Updated originalTweet state after server fetch")
+                    } else {
+                        // Already rendered from cache, don't trigger re-layout
+                        print("DEBUG: [TweetItemView] Skipping state update - already rendered from cache")
                     }
                 }
             } else {
@@ -574,7 +575,7 @@ struct TweetItemView: View, Equatable {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top, 8)
+        .padding(.top)
         .padding(.bottom)
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
