@@ -94,7 +94,12 @@ class TweetTableViewController: UITableViewController {
     
     // Notification observer for scroll to top
     private var scrollToTopObserver: NSObjectProtocol?
-    
+
+    // Foreground/background observer to prevent white space issue
+    private var foregroundObserver: NSObjectProtocol?
+    private var backgroundObserver: NSObjectProtocol?
+    private var scrollPositionBeforeBackground: CGFloat?
+
     // Scroll position preservation
     private var savedScrollPosition: CGFloat?
     private var isScrollingToTop: Bool = false
@@ -110,12 +115,13 @@ class TweetTableViewController: UITableViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        
+
         setupTableView()
         setupRefreshControl()
         setupScrollToTopObserver()
         setupMemoryWarningObserver()
-        
+        setupForegroundBackgroundObservers()
+
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
     }
@@ -127,6 +133,14 @@ class TweetTableViewController: UITableViewController {
         }
 
         if let observer = memoryWarningObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = backgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         
@@ -176,7 +190,43 @@ class TweetTableViewController: UITableViewController {
             }
         }
     }
-    
+
+    // MARK: - Foreground/Background Observers
+    /// Setup observers to save scroll position before backgrounding and restore after foreground
+    /// This prevents the white space issue caused by safe area inset recalculation
+    private func setupForegroundBackgroundObservers() {
+        // Save scroll position when app goes to background
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            // Save the current scroll position before backgrounding
+            self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
+            print("📍 [SCROLL] Saved scroll position before background: \(self.scrollPositionBeforeBackground ?? 0)")
+        }
+
+        // Restore scroll position when app returns to foreground
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            guard let savedPosition = self.scrollPositionBeforeBackground else { return }
+
+            print("📍 [SCROLL] Restoring scroll position after foreground: \(savedPosition)")
+
+            // Restore the scroll position after a brief delay to let layout settle
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self = self else { return }
+                self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
+                self.scrollPositionBeforeBackground = nil
+            }
+        }
+    }
+
     func scrollToTop() {
         // Clear saved scroll position when scrolling to top (both instance and persistent)
         savedScrollPosition = nil
