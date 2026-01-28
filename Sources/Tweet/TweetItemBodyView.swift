@@ -73,7 +73,7 @@ struct TweetItemBodyView: View {
                 // Without truncationMode, SwiftUI/CoreText uses _NSOptimalLineBreaker which has O(n²)
                 // complexity and causes 20-30ms hangs during text layout. Explicit truncation is 10x+ faster.
                 Text(content)
-                    .font(.body)
+                    .font(.system(size: 16))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .lineLimit(7)
                     .truncationMode(.tail)
