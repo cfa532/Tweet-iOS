@@ -101,6 +101,9 @@ class TweetTableViewController: UITableViewController {
     private var backgroundObserver: NSObjectProtocol?
     private var scrollPositionBeforeBackground: CGFloat?
 
+    // Observer for feed view appearance (to restart video playback after navigation)
+    private var feedViewDidAppearObserver: NSObjectProtocol?
+
     // Scroll position preservation
     private var savedScrollPosition: CGFloat?
     private var isScrollingToTop: Bool = false
@@ -122,6 +125,7 @@ class TweetTableViewController: UITableViewController {
         setupScrollToTopObserver()
         setupMemoryWarningObserver()
         setupForegroundBackgroundObservers()
+        setupFeedViewDidAppearObserver()
 
         // Pass table view reference to video coordinator for viewport calculations
         videoCoordinator.setTableView(tableView)
@@ -148,6 +152,10 @@ class TweetTableViewController: UITableViewController {
             NotificationCenter.default.removeObserver(observer)
         }
 
+        if let observer = feedViewDidAppearObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
         // Clean up timers
         noMoreTweetsMessageTimer?.invalidate()
         loadingTimeoutTimer?.invalidate()
@@ -155,10 +163,10 @@ class TweetTableViewController: UITableViewController {
         // MEMORY FIX: Clear view cache to free memory
         SwiftUIViewCache.shared.clearCache()
 
-        // MEMORY FIX: Stop all videos and clear coordinator caches
-        // Post a notification instead of calling the method directly to avoid
-        // capturing self or requiring @MainActor in deinit
-        NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
+        // NOTE: Removed .shouldStopAllVideos notification from deinit
+        // This was causing issues when navigating back from profile - it would stop
+        // the main feed's videos. The video coordinator already handles stopping
+        // videos when they become invisible via updateVisibleTweets.
     }
     
     private func setupScrollToTopObserver() {
@@ -170,7 +178,39 @@ class TweetTableViewController: UITableViewController {
             self?.scrollToTop()
         }
     }
-    
+
+    /// Setup observer for feed view appearance to restart video playback after navigation
+    private func setupFeedViewDidAppearObserver() {
+        feedViewDidAppearObserver = NotificationCenter.default.addObserver(
+            forName: .feedViewDidAppear,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            // Only restart if this is the main feed (not profile's tweet list)
+            guard self.feedIdentifier == "mainFeed" else { return }
+            print("📺 [VIDEO RESTART] Main feed view appeared - restarting video playback")
+
+            // Reset coordinator state to force fresh playback evaluation
+            self.videoCoordinator.stopAllVideos()
+
+            // Reset cached visible tweet IDs so updateVisibleTweetsForVideoPlayback will call coordinator
+            self.lastVisibleTweetIds = []
+
+            // CRITICAL: Rebuild video list with main feed's tweets
+            // Profile view overwrites the coordinator's allVideos list, so we must rebuild it
+            // Use completion handler to update visible tweets AFTER video list is rebuilt
+            print("📺 [VIDEO RESTART] Rebuilding video list with \(self.tweets.count) tweets and \(self.pinnedTweets.count) pinned tweets")
+            self.videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: self.pinnedTweets) { [weak self] in
+                guard let self = self else { return }
+                // Now allVideos contains main feed's videos
+                // Update visibleTweetIds with main feed's visible tweets
+                print("📺 [VIDEO RESTART] Video list rebuilt, updating visible tweets")
+                self.updateVisibleTweetsForVideoPlayback()
+            }
+        }
+    }
+
     // MEMORY FIX: Respond to memory warnings by aggressively clearing caches
     private var memoryWarningObserver: NSObjectProtocol?
     
@@ -394,24 +434,27 @@ class TweetTableViewController: UITableViewController {
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        
-        // Only adjust once, and only if at the initial bad position (around 0)
-        // Don't interfere with header-adjustment or user scrolling
-        guard !hasAdjustedInitialPosition else { return }
-        hasAdjustedInitialPosition = true
-        
-        let topInset = tableView.adjustedContentInset.top
-        let currentOffset = tableView.contentOffset.y
-        
-        // Only adjust if offset is close to 0 (the bad initial position)
-        // and topInset is set (nav bar is present)
-        // Ignore if already properly positioned or if user has scrolled
-        // Also ignore if we just restored a saved position (check both instance and persistent)
-        let hasSavedPosition = savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
-        if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 && !hasSavedPosition {
-            tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
-            lastScrollOffset = -topInset
+
+        // Initial position adjustment - only run once on first appearance
+        if !hasAdjustedInitialPosition {
+            hasAdjustedInitialPosition = true
+
+            let topInset = tableView.adjustedContentInset.top
+            let currentOffset = tableView.contentOffset.y
+
+            // Only adjust if offset is close to 0 (the bad initial position)
+            // and topInset is set (nav bar is present)
+            // Ignore if already properly positioned or if user has scrolled
+            // Also ignore if we just restored a saved position (check both instance and persistent)
+            let hasSavedPosition = savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+            if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 && !hasSavedPosition {
+                tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
+                lastScrollOffset = -topInset
+            }
         }
+
+        // NOTE: Video playback restart is handled by .feedViewDidAppear notification
+        // (see setupFeedViewDidAppearObserver) which properly rebuilds the video list
     }
     
     override func viewWillDisappear(_ animated: Bool) {

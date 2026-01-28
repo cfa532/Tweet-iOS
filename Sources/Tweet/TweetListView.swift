@@ -247,6 +247,12 @@ struct TweetListView<RowView: View>: View {
             setupForegroundObserver()
             // Set up notification observers
             setupNotificationObservers()
+
+            // Notify that feed view appeared (for restarting video playback after navigation)
+            // Delay slightly to ensure layout is complete
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NotificationCenter.default.post(name: .feedViewDidAppear, object: nil)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CacheCleared"))) { _ in
             // Refresh tweets when cache is cleared

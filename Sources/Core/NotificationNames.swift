@@ -102,6 +102,8 @@ extension Notification.Name {
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
+    /// Posted when the main feed view appears (for restarting video playback after navigation)
+    static let feedViewDidAppear = Notification.Name("FeedViewDidAppear")
     /// Posted when app content is covered/uncovered by an overlay (sheet/fullScreenCover/login/share).
     /// userInfo: ["isCovered": Bool, "activeCount": Int, "source": String?]
     static let overlayCoverageChanged = Notification.Name("OverlayCoverageChanged")

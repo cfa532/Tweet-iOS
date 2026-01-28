@@ -674,11 +674,11 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Build video list from tweets (including pinned tweets)
     /// Now runs asynchronously to avoid blocking UI
-    func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = []) {
+    func buildVideoList(from tweets: [Tweet], pinnedTweets: [Tweet] = [], completion: (() -> Void)? = nil) {
         // Run expensive operation in background
         Task.detached(priority: .userInitiated) {
             let videos = await self.buildVideoListAsync(tweets: tweets, pinnedTweets: pinnedTweets)
-            
+
             // Update state on main actor
             await MainActor.run {
                 self.allVideos = videos
@@ -692,6 +692,10 @@ class VideoPlaybackCoordinator: ObservableObject {
 
                 // Store tweet list for embedded tweet lookup
                 self.currentTweets = pinnedTweets + tweets
+
+                // Call completion handler BEFORE auto-playback check
+                // This allows caller to update visibleTweetIds first
+                completion?()
 
                 // Trigger playback update after video list is rebuilt if in idle phase and videos are visible
                 if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
@@ -1087,6 +1091,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
         phase = .idle
+        // Clear previous visible video IDs so next updateVisibleTweets sees a change
+        previousVisibleVideoIds.removeAll()
 
         // PHASE 2: Use SharedVideoPlayerManager to stop all videos
         SharedVideoPlayerManager.shared.stopCurrentVideo()
