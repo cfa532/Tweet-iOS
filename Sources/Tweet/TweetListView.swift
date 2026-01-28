@@ -494,43 +494,51 @@ struct TweetListView<RowView: View>: View {
     
     /// Automatically load remaining new tweets after initial load
     /// Continues loading pages until no more tweets or reasonable limit reached
+    ///
+    /// Uses the same pagination algorithm as updateTweetsWithServerData:
+    /// - If validCount > 0: keep loading (Rule 1)
+    /// - If validCount == 0 AND responseSize < pageSize: stop (Rule 2)
+    /// - If validCount == 0 AND responseSize >= pageSize: keep trying (Rule 3)
     private func autoLoadRemainingNewTweets() async {
         let maxAutoLoadPages: UInt = 2  // Load up to 2 additional pages (20 tweets total with pageSize=10)
         var pagesLoaded: UInt = 0
-        
+
         // Check if there are more tweets to load
         let shouldContinue = await MainActor.run { hasMoreTweets }
         guard shouldContinue else { return }
-        
-        
+
+
         while pagesLoaded < maxAutoLoadPages {
             let currentHasMore = await MainActor.run { hasMoreTweets }
             guard currentHasMore else {
                 print("📥 [AUTO-LOAD] No more tweets to load (completed)")
                 break
             }
-            
+
             let nextPage = await MainActor.run { currentPage + 1 }
-            
+
             do {
                 let tweets = try await tweetFetcher(nextPage, pageSize, false)
                 let validTweets = tweets.compactMap { $0 }
-                
+
                 await MainActor.run {
                     if !validTweets.isEmpty {
-                        // Merge new tweets into existing list
+                        // Rule 1: Got valid tweets - assume more might exist
                         self.tweets.mergeTweets(validTweets)
                         self.currentPage = nextPage
-                        
-                        // Update hasMoreTweets based on whether we got a full page
-                        self.hasMoreTweets = tweets.count >= self.pageSize
-                        
+                        self.hasMoreTweets = true
+
                         // Update video manager with debouncing (will batch multiple updates)
                         self.updateVideoLoadingManager(delay: 0.2)
                     } else {
-                        // No valid tweets - stop loading
-                        self.hasMoreTweets = false
-                        print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) - stopping")
+                        // Rule 2 & 3: No valid tweets - check if partial or full page
+                        self.currentPage = nextPage
+                        self.hasMoreTweets = tweets.count >= self.pageSize
+                        if !self.hasMoreTweets {
+                            print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) and partial page - stopping")
+                        } else {
+                            print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) but got full page - continuing")
+                        }
                     }
                 }
                 
@@ -559,6 +567,12 @@ struct TweetListView<RowView: View>: View {
         }
     }
 
+    /// Refresh tweets from server (pull-to-refresh)
+    ///
+    /// Uses the same pagination algorithm as updateTweetsWithServerData:
+    /// - If validCount > 0: keep loading (Rule 1)
+    /// - If validCount == 0 AND responseSize < pageSize: stop (Rule 2)
+    /// - If validCount == 0 AND responseSize >= pageSize: keep trying (Rule 3)
     func refreshTweets() async {
         guard !isLoading else {
             return
@@ -572,41 +586,39 @@ struct TweetListView<RowView: View>: View {
         // await MainActor.run {
         //     tweets.removeAll()
         // }
-        
+
         do {
             // Always load fresh data from server for refresh
             let freshTweets = try await tweetFetcher(0, pageSize, false)
             let validTweets = freshTweets.compactMap { $0 }
             let hasValidTweet = !validTweets.isEmpty
-            
+
             if validTweets.isEmpty {
             }
-            
+
             await MainActor.run {
                 // Update tweets with server data - MERGE on refresh to keep existing content
                 if hasValidTweet {
-                    // On refresh, merge new tweets with existing ones (will sort by timestamp)
-                    // This prevents screen from going blank during refresh
+                    // Rule 1: Got valid tweets on page 0 - assume more might exist
                     tweets.mergeTweets(validTweets)
                     currentPage = 0
-                    hasMoreTweets = freshTweets.count >= pageSize
-                    
+                    hasMoreTweets = true
+
                     // Update VideoLoadingManager with debouncing
                     updateVideoLoadingManager(delay: 0.2)
-                    } else {
-                        // Only clear if server returned no valid tweets AND we have no cached tweets
-                        if tweets.isEmpty {
-                            tweets = []
-                            hasMoreTweets = false
+                } else {
+                    // Rule 2 & 3: No valid tweets - check if partial or full page
+                    hasMoreTweets = freshTweets.count >= pageSize
 
-                            // Update VideoLoadingManager with empty list
-                            updateVideoLoadingManager()
-                        } else {
-                        // Keep cached tweets if server returned no valid tweets
-                        hasMoreTweets = false
+                    // Only clear if server returned no valid tweets AND we have no cached tweets
+                    if tweets.isEmpty {
+                        tweets = []
+                        // Update VideoLoadingManager with empty list
+                        updateVideoLoadingManager()
                     }
+                    // Keep cached tweets if server returned no valid tweets
                 }
-                
+
                 isLoading = false
                 initialLoadComplete = true
             }
@@ -754,6 +766,32 @@ struct TweetListView<RowView: View>: View {
     }
     
     // Helper function to update tweets with server data
+    //
+    // PAGINATION ALGORITHM (matching Android implementation):
+    // ======================================================
+    // This function is used by ALL tweet lists: main feed, bookmarks, favorites, user profiles
+    //
+    // Server Response Format:
+    // - Server returns [Tweet?] array where each element can be a valid Tweet or nil
+    // - Nil entries represent deleted tweets, failed conversions, or private tweets
+    // - The array count (including nils) indicates the server's response size
+    //
+    // Pagination Rules (CRITICAL - DO NOT CHANGE WITHOUT TESTING ANDROID PARITY):
+    // 1. If validCount > 0 (got any valid tweets):
+    //    → hasMoreTweets = true (keep loading regardless of page size)
+    //    → This handles cases where valid tweets are sparse across pages
+    //
+    // 2. If validCount == 0 AND responseSize < pageSize (partial page with no valid tweets):
+    //    → hasMoreTweets = false (server depleted, stop loading)
+    //
+    // 3. If validCount == 0 AND responseSize >= pageSize (full page but all nils):
+    //    → hasMoreTweets = true (keep trying, valid tweets might be on next page)
+    //
+    // Why this matters:
+    // - Bookmarks/favorites may have deleted tweets causing many nils
+    // - Main feed filters private tweets resulting in nils
+    // - Stopping too early would miss valid tweets on subsequent pages
+    //
     private func updateTweetsWithServerData(
         validServerTweets: [Tweet],
         tweetsFromServer: [Tweet?],
@@ -761,27 +799,23 @@ struct TweetListView<RowView: View>: View {
         pageSize: UInt
     ) {
         let hasValidTweet = !validServerTweets.isEmpty
-        
-        // Update tweets with server data
+
+        // BRANCH 1: Got valid tweets - always continue loading
         if hasValidTweet {
             if page == 0 && tweets.isEmpty {
                 tweets = validServerTweets
             } else {
                 tweets.mergeTweets(validServerTweets)
             }
-            
+
             // Update VideoLoadingManager with debouncing
             updateVideoLoadingManager(delay: 0.2)
 
             currentPage = page
 
-            // Set hasMoreTweets based on whether we got a full page
-            // If we got a full page, there might be more tweets
-            if tweetsFromServer.count >= pageSize {
-                hasMoreTweets = true
-            } else {
-                hasMoreTweets = false
-            }
+            // Rule 1: If we got ANY valid tweets, assume there might be more
+            // This prevents stopping early when valid tweets are sparse across pages
+            hasMoreTweets = true
 
             // Mark initial load as complete for page 0 only if we got valid tweets
             if page == 0 {
@@ -797,9 +831,11 @@ struct TweetListView<RowView: View>: View {
                     }
                 }
             }
+
+        // BRANCH 2: No valid tweets AND partial page - server depleted
         } else if tweetsFromServer.count < pageSize {
+            // Rule 2: Partial page with no valid tweets means server has no more items
             hasMoreTweets = false
-            // Server returned fewer than pageSize tweets (or empty), so no more pages
             if page == 0 {
                 if tweets.isEmpty {
                     // Update VideoLoadingManager with empty list (no debouncing needed for empty)
@@ -811,8 +847,11 @@ struct TweetListView<RowView: View>: View {
                     initialLoadComplete = true
                 }
             }
+
+        // BRANCH 3: No valid tweets BUT full page - keep trying next page
         } else {
-            // All tweets are nil but we got a full page, continue to next page
+            // Rule 3: Full page of nils means valid tweets might be on next page
+            // Example: Page has 10 deleted bookmarks (all nils) - continue to next page
             currentPage = page
             hasMoreTweets = true
         }
