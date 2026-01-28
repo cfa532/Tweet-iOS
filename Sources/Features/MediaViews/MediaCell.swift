@@ -426,7 +426,6 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         // CRITICAL PERFORMANCE FIX: Disk I/O MUST happen on background thread
         // The getCompressedImage() call does synchronous File I/O which blocks the main thread
         // causing the 227ms hang in -[CALayer _display]
-        print("DEBUG: [MediaCell] Checking disk cache asynchronously for \(attachment.mid)")
         isLoading = true
         
         // Capture necessary data before entering detached task
@@ -440,7 +439,6 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             
             await MainActor.run {
                 if let cachedImage = cachedImage {
-                    print("DEBUG: [MediaCell] Found image in disk cache for \(attachmentCopy.mid)")
                     self.image = cachedImage
                     self.isLoading = false
                 } else {

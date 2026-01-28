@@ -8,6 +8,7 @@
 import UIKit
 import SwiftUI
 import Combine
+import Darwin
 
 /// Persistent storage for scroll positions across view controller deallocation
 @MainActor
@@ -127,6 +128,9 @@ class TweetTableViewController: UITableViewController {
     }
     
     deinit {
+        // End any active background task
+        endBackgroundTask()
+
         // Remove notification observers
         if let observer = scrollToTopObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -143,14 +147,14 @@ class TweetTableViewController: UITableViewController {
         if let observer = backgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
-        
+
         // Clean up timers
         noMoreTweetsMessageTimer?.invalidate()
         loadingTimeoutTimer?.invalidate()
-        
+
         // MEMORY FIX: Clear view cache to free memory
         SwiftUIViewCache.shared.clearCache()
-        
+
         // MEMORY FIX: Stop all videos and clear coordinator caches
         // Post a notification instead of calling the method directly to avoid
         // capturing self or requiring @MainActor in deinit
@@ -191,6 +195,9 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
+    // Background task identifier for memory cleanup
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
     // MARK: - Foreground/Background Observers
     /// Setup observers to save scroll position before backgrounding and restore after foreground
     /// This prevents the white space issue caused by safe area inset recalculation
@@ -198,17 +205,52 @@ class TweetTableViewController: UITableViewController {
     private func setupForegroundBackgroundObservers() {
         // Save scroll position and release video players when app goes to background
         backgroundObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
+            forName: UIApplication.didEnterBackgroundNotification,  // Changed from willResignActive
             object: nil,
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+
+            // Request background time from iOS to complete cleanup
+            self.backgroundTask = UIApplication.shared.beginBackgroundTask { [weak self] in
+                // Cleanup callback - iOS is about to force-terminate background task
+                print("⚠️ [BACKGROUND] Background task time expired - iOS forcing cleanup")
+                self?.endBackgroundTask()
+            }
+
+            // Log memory before cleanup
+            let memoryBefore = self.getMemoryUsage()
+            print("🌙 [BACKGROUND] App entering background - starting aggressive memory cleanup")
+            print("📊 [MEMORY] Before cleanup: \(memoryBefore)MB")
+
             // Save the current scroll position before backgrounding
             self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
-            print("📍 [SCROLL] Saved scroll position before background: \(self.scrollPositionBeforeBackground ?? 0)")
+            print("📍 [SCROLL] Saved scroll position: \(self.scrollPositionBeforeBackground ?? 0)")
 
-            // Release all video players to free memory
+            // AGGRESSIVE MEMORY CLEANUP
+            // 1. Release all video players to free memory
             self.videoCoordinator.releaseAllPlayersForBackground()
+
+            // 2. Clear SwiftUI view cache
+            SwiftUIViewCache.shared.clearCache()
+
+            // 3. Force table view to release non-visible cells
+            self.tableView.reloadData()
+
+            // 4. Clear any cached images if you have an image cache
+            // URLCache.shared.removeAllCachedResponses()  // Uncomment if using URL caching
+
+            // Log memory after cleanup and end background task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self = self else { return }
+                let memoryAfter = self.getMemoryUsage()
+                let memoryFreed = memoryBefore - memoryAfter
+                print("✅ [BACKGROUND] Cleanup complete")
+                print("📊 [MEMORY] After cleanup: \(memoryAfter)MB (freed: \(memoryFreed)MB)")
+
+                // End background task when done
+                self.endBackgroundTask()
+            }
         }
 
         // Restore scroll position and video players when app returns to foreground
@@ -218,9 +260,19 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+
+            print("☀️ [FOREGROUND] App returning to foreground")
+
+            // Cancel background task if still active
+            self.endBackgroundTask()
+
+            // Log current memory
+            let memoryNow = self.getMemoryUsage()
+            print("📊 [MEMORY] Current: \(memoryNow)MB")
+
             guard let savedPosition = self.scrollPositionBeforeBackground else { return }
 
-            print("📍 [SCROLL] Restoring scroll position after foreground: \(savedPosition)")
+            print("📍 [SCROLL] Restoring scroll position: \(savedPosition)")
 
             // Restore the scroll position after a brief delay to let layout settle
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
@@ -232,6 +284,30 @@ class TweetTableViewController: UITableViewController {
                 self.restoreVideoPlayersAfterForeground()
             }
         }
+    }
+
+    /// End the background task and invalidate the identifier
+    private func endBackgroundTask() {
+        if backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTask)
+            backgroundTask = .invalid
+        }
+    }
+
+    /// Get current memory usage in MB
+    private func getMemoryUsage() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+
+        if kerr == KERN_SUCCESS {
+            return Double(info.resident_size) / (1024 * 1024) // Convert to MB
+        }
+        return 0
     }
 
     /// Restore visible video players and preload additional videos after returning from background
@@ -519,6 +595,7 @@ class TweetTableViewController: UITableViewController {
             for i in 0..<oldCount {
                 if oldTweets[i].mid != newTweets[i].mid {
                     sameOrder = false
+                    print("🔄 [UPDATE CHECK] Order changed at index \(i): \(oldTweets[i].mid) -> \(newTweets[i].mid)")
                     break
                 }
             }
@@ -527,9 +604,11 @@ class TweetTableViewController: UITableViewController {
                 // OPTIMIZATION: Same tweets in same order - only hit counts changed
                 // Tweet.getInstance() already updated the @Published count properties
                 // SwiftUI will automatically re-render action buttons, no need to reload cells
-                print("🔄 [UPDATE OPTIMIZATION] Only hit counts changed - skipping table reload")
+                print("✅ [UPDATE OPTIMIZATION] Only hit counts changed - skipping table reload (count: \(oldCount))")
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
+            } else {
+                print("⚠️ [UPDATE] Same count but different order - will use smart update")
             }
         }
         
