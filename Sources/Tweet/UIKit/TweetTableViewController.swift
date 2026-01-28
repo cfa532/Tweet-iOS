@@ -83,7 +83,7 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: Date?
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.2 // 200ms - responsive video updates
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms - faster video starts
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     
     // Cached main content rect to avoid recalculating on every visibility check
@@ -194,8 +194,9 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Foreground/Background Observers
     /// Setup observers to save scroll position before backgrounding and restore after foreground
     /// This prevents the white space issue caused by safe area inset recalculation
+    /// Also handles video player memory management (release on background, restore on foreground)
     private func setupForegroundBackgroundObservers() {
-        // Save scroll position when app goes to background
+        // Save scroll position and release video players when app goes to background
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
             object: nil,
@@ -205,9 +206,12 @@ class TweetTableViewController: UITableViewController {
             // Save the current scroll position before backgrounding
             self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
             print("📍 [SCROLL] Saved scroll position before background: \(self.scrollPositionBeforeBackground ?? 0)")
+
+            // Release all video players to free memory
+            self.videoCoordinator.releaseAllPlayersForBackground()
         }
 
-        // Restore scroll position when app returns to foreground
+        // Restore scroll position and video players when app returns to foreground
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
@@ -223,8 +227,34 @@ class TweetTableViewController: UITableViewController {
                 guard let self = self else { return }
                 self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
                 self.scrollPositionBeforeBackground = nil
+
+                // Restore visible video players and preload 2 more in scroll direction
+                self.restoreVideoPlayersAfterForeground()
             }
         }
+    }
+
+    /// Restore visible video players and preload additional videos after returning from background
+    private func restoreVideoPlayersAfterForeground() {
+        // Get currently visible tweet IDs
+        let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
+        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
+            let totalRows = pinnedTweets.count + tweets.count
+            guard indexPath.row < totalRows else { return nil }
+
+            if indexPath.row < pinnedTweets.count {
+                return pinnedTweets[indexPath.row].mid
+            } else {
+                let regularIndex = indexPath.row - pinnedTweets.count
+                guard regularIndex < tweets.count else { return nil }
+                return tweets[regularIndex].mid
+            }
+        })
+
+        print("☀️ [VIDEO RESTORE] Restoring \(visibleTweetIds.count) visible videos with 2 preload")
+
+        // Restore visible videos and preload 2 more in scroll direction
+        videoCoordinator.restoreVisibleAndPreload(visibleTweetIds: visibleTweetIds, preloadCount: 2)
     }
 
     func scrollToTop() {

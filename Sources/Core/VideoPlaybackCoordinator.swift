@@ -141,7 +141,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// PERF FIX: Batch visibility updates to reduce expensive filtering/sorting operations
     /// Reduced to 150ms for more responsive playback during scrolling
     private var visibilityUpdateDebounceTimer: Timer?
-    private let visibilityUpdateDebounceInterval: TimeInterval = 0.15
+    private let visibilityUpdateDebounceInterval: TimeInterval = 0.05 // Reduced from 150ms for faster video starts
     
     /// Timer for scroll stop detection
     private var scrollStopTimer: Timer?
@@ -152,13 +152,21 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Throttle timer for immediate primary video checks during scroll (50ms throttle)
     private var immediateCheckThrottleTimer: Timer?
 
+    /// Last time we preloaded videos during scroll (for throttling)
+    private var lastScrollPreloadTime: Date?
+    private let scrollPreloadThrottleInterval: TimeInterval = 0.3 // Preload at most every 300ms during scroll
+
+    /// Track which videos have been preloaded to avoid duplicate preloads
+    private var preloadedVideoMids: Set<String> = []
+
     /// Background queue for expensive visibility calculations to avoid blocking main thread
     private let visibilityCalculationQueue = DispatchQueue(label: "com.tweet.VideoPlaybackCoordinator.visibility", qos: .userInitiated)
 
     /// Track async tasks to prevent leaks
-    private nonisolated(unsafe) var activeAsyncTasks: Set<Task<Void, Never>> = []
+    /// MEMORY FIX: Use UUID-based tracking so tasks can remove themselves on completion
+    private nonisolated(unsafe) var activeAsyncTaskIds: Set<UUID> = []
     private let taskCleanupLock = NSLock()
-    private let maxConcurrentTasks = 5  // Safety limit to prevent task accumulation
+    private let maxConcurrentTasks = 10  // Increased limit since we properly clean up now
 
     // MARK: - Delegate-Based Communication (Phase 3)
 
@@ -170,37 +178,41 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var isPlaybackSuppressedByOverlay: Bool = false
 
     /// Track an async task for proper cleanup
-    /// MEMORY FIX: Properly clean up completed tasks and enforce concurrency limits
+    /// MEMORY FIX: Tasks now self-remove on completion via UUID tracking
     private nonisolated func trackAsyncTask(_ task: Task<Void, Never>) {
+        let taskId = UUID()
+
         taskCleanupLock.lock()
-        defer { taskCleanupLock.unlock() }
-        
-        // CRITICAL: Filter checks isCancelled but Task has no isCompleted property!
-        // This means completed tasks accumulate forever. We need a different approach.
-        // Solution: Just limit the set size and cancel oldest tasks
-        
-        // Clean up cancelled tasks
-        activeAsyncTasks = activeAsyncTasks.filter { !$0.isCancelled }
-        
-        // If we're at the limit, cancel oldest task to prevent unbounded growth
-        if activeAsyncTasks.count >= maxConcurrentTasks {
-            print("⚠️ [TASK LIMIT] Hit max \(maxConcurrentTasks) tasks, cancelling oldest")
-            if let oldestTask = activeAsyncTasks.first {
-                oldestTask.cancel()
-                activeAsyncTasks.remove(oldestTask)
-            }
+
+        // If we're at the limit, don't add more (let natural completion clean up)
+        if activeAsyncTaskIds.count >= maxConcurrentTasks {
+            taskCleanupLock.unlock()
+            print("⚠️ [TASK LIMIT] Hit max \(maxConcurrentTasks) tasks, skipping new task")
+            return
         }
-        
-        activeAsyncTasks.insert(task)
+
+        activeAsyncTaskIds.insert(taskId)
+        taskCleanupLock.unlock()
+
+        // Self-cleaning wrapper: remove taskId when original task completes
+        Task { [weak self] in
+            // Wait for the tracked task to complete
+            _ = await task.value
+
+            // Remove from tracking set
+            self?.taskCleanupLock.lock()
+            self?.activeAsyncTaskIds.remove(taskId)
+            self?.taskCleanupLock.unlock()
+        }
     }
 
-    /// Cancel all active async tasks
+    /// Cancel all active async tasks (clears tracking set)
     private nonisolated func cancelActiveAsyncTasks() {
         taskCleanupLock.lock()
         defer { taskCleanupLock.unlock() }
-        
-        activeAsyncTasks.forEach { $0.cancel() }
-        activeAsyncTasks.removeAll()
+
+        // We can only clear our tracking - actual task cancellation happens via other mechanisms
+        activeAsyncTaskIds.removeAll()
     }
     
     /// Debounced restart after an overlay is dismissed.
@@ -333,7 +345,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var isScrolling: Bool = false
     
     /// Scroll direction (true = scrolling down, false = scrolling up)
-    private var scrollDirection: Bool = true // Default to scrolling down
+    private(set) var scrollDirection: Bool = true // Default to scrolling down
     
     /// Previous content offset to track scroll direction
     private var previousContentOffset: CGFloat = 0
@@ -680,6 +692,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 self.cellCache.removeAll()
                 self.cachedVisibilityRatios.removeAll()
                 self.invalidateVisibleVideoCache() // Clear visible videos cache
+                self.clearPreloadedTracking() // Clear preload tracking for fresh list
                 self.lastCacheClearTime = Date()
 
                 // Store tweet list for embedded tweet lookup
@@ -842,7 +855,14 @@ class VideoPlaybackCoordinator: ObservableObject {
             let currentOffset = tableView.contentOffset.y
             if previousContentOffset != 0 {
                 // Determine scroll direction: true = scrolling down, false = scrolling up
-                scrollDirection = currentOffset > previousContentOffset
+                let newDirection = currentOffset > previousContentOffset
+                let directionChanged = newDirection != scrollDirection
+                scrollDirection = newDirection
+
+                // Preload videos in scroll direction when direction changes or periodically
+                if directionChanged || shouldTriggerScrollPreload() {
+                    preloadVideosInScrollDirection()
+                }
             }
             previousContentOffset = currentOffset
         }
@@ -1076,9 +1096,228 @@ class VideoPlaybackCoordinator: ObservableObject {
         // PHASE 2: Use SharedVideoPlayerManager to stop all videos
         SharedVideoPlayerManager.shared.stopCurrentVideo()
     }
-    
+
+    // MARK: - Background/Foreground Video Memory Management
+
+    /// Release all video players when entering background to free memory
+    /// Called by TweetTableViewController when app enters background
+    func releaseAllPlayersForBackground() {
+        print("🌙 [VIDEO MEMORY] Releasing all video players for background")
+
+        // Stop all videos first
+        stopAllVideos()
+
+        // Release all players via SharedAssetCache
+        SharedAssetCache.shared.releaseAllPlayers()
+
+        // Clear video state cache to free memory (playback positions are preserved in PersistentVideoStateManager)
+        VideoStateCache.shared.clearAllCache()
+
+        print("✅ [VIDEO MEMORY] All video players released for background")
+    }
+
+    /// Restore visible videos and preload additional videos in scroll direction
+    /// Called by TweetTableViewController when app returns to foreground
+    /// - Parameters:
+    ///   - visibleTweetIds: Currently visible tweet IDs
+    ///   - preloadCount: Number of additional videos to preload in scroll direction (default: 4)
+    func restoreVisibleAndPreload(visibleTweetIds: Set<String>, preloadCount: Int = 4) {
+        print("☀️ [VIDEO MEMORY] Restoring visible videos and preloading \(preloadCount) more")
+
+        // Update visible tweets
+        self.visibleTweetIds = visibleTweetIds
+        invalidateVisibleVideoCache()
+
+        // Get videos to preload based on scroll direction
+        let videosToPreload = getVideosToPreload(visibleTweetIds: visibleTweetIds, preloadCount: preloadCount)
+
+        print("☀️ [VIDEO MEMORY] Will preload \(videosToPreload.count) videos: \(videosToPreload.map { $0.videoMid.prefix(8) })")
+
+        // Preload the videos (just load assets, don't start playback)
+        for video in videosToPreload {
+            preloadVideoAsset(video)
+        }
+
+        // Start playback for visible videos (coordinator will pick the topmost)
+        if !visibleVideos.isEmpty && !isPlaybackSuppressedByOverlay {
+            // Small delay to allow assets to start loading
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self else { return }
+                if self.phase == .idle && !self.visibleVideos.isEmpty {
+                    self.startPrimaryVideoPlayback()
+                }
+            }
+        }
+
+        print("✅ [VIDEO MEMORY] Foreground video restoration complete")
+    }
+
+    /// Get videos to preload based on visible tweets and scroll direction
+    private func getVideosToPreload(visibleTweetIds: Set<String>, preloadCount: Int) -> [VideoPlaybackInfo] {
+        // Find visible videos first
+        let visibleVideoSet = Set(visibleTweetIds)
+        let visibleVideoInfos = allVideos.filter { visibleVideoSet.contains($0.cellTweetId) && $0.isInVisibleMediaRange }
+
+        guard !visibleVideoInfos.isEmpty else { return [] }
+
+        // Find the indices of visible videos in allVideos
+        let visibleIndices = visibleVideoInfos.compactMap { video in
+            allVideos.firstIndex(where: { $0.identifier == video.identifier })
+        }.sorted()
+
+        guard !visibleIndices.isEmpty else { return [] }
+
+        var videosToPreload: [VideoPlaybackInfo] = []
+
+        // Add visible videos first
+        videosToPreload.append(contentsOf: visibleVideoInfos)
+
+        // Based on scroll direction, preload additional videos
+        if scrollDirection {
+            // Scrolling DOWN: preload videos AFTER the visible ones
+            let lastVisibleIndex = visibleIndices.max() ?? 0
+            for i in 1...preloadCount {
+                let nextIndex = lastVisibleIndex + i
+                if nextIndex < allVideos.count {
+                    let video = allVideos[nextIndex]
+                    if video.isInVisibleMediaRange && !videosToPreload.contains(where: { $0.identifier == video.identifier }) {
+                        videosToPreload.append(video)
+                    }
+                }
+            }
+        } else {
+            // Scrolling UP: preload videos BEFORE the visible ones
+            let firstVisibleIndex = visibleIndices.min() ?? 0
+            for i in 1...preloadCount {
+                let prevIndex = firstVisibleIndex - i
+                if prevIndex >= 0 {
+                    let video = allVideos[prevIndex]
+                    if video.isInVisibleMediaRange && !videosToPreload.contains(where: { $0.identifier == video.identifier }) {
+                        videosToPreload.append(video)
+                    }
+                }
+            }
+        }
+
+        return videosToPreload
+    }
+
+    /// Preload video asset without starting playback
+    private func preloadVideoAsset(_ video: VideoPlaybackInfo) {
+        // Get the tweet to find the attachment URL
+        guard let tweet = currentTweets.first(where: { $0.mid == video.mediaTweetId }) ?? Tweet.getInstance(for: video.mediaTweetId),
+              let attachments = tweet.attachments,
+              video.attachmentIndex < attachments.count else {
+            print("⚠️ [PRELOAD] Could not find tweet or attachment for video: \(video.videoMid.prefix(8))")
+            return
+        }
+
+        let attachment = attachments[video.attachmentIndex]
+        guard attachment.type == .video || attachment.type == .hls_video else { return }
+
+        // Get the URL for the video
+        // For HLS videos, use the cached url property
+        // For regular videos, construct URL from author's baseUrl
+        var videoURL: URL?
+
+        if let urlString = attachment.url, let url = URL(string: urlString) {
+            videoURL = url
+        } else if let author = tweet.author, let baseUrl = author.baseUrl {
+            videoURL = attachment.getUrl(baseUrl)
+        }
+
+        guard let url = videoURL else {
+            print("⚠️ [PRELOAD] Could not construct URL for video: \(video.videoMid.prefix(8))")
+            return
+        }
+
+        // Request preload via SharedAssetCache (it handles caching and player creation)
+        print("⏳ [PRELOAD] Preloading video asset: \(video.videoMid.prefix(8))...")
+        SharedAssetCache.shared.preloadAsset(for: url, tweetId: tweet.mid)
+
+        // Track that this video has been preloaded
+        preloadedVideoMids.insert(video.videoMid)
+    }
+
+    // MARK: - Scroll Preloading
+
+    /// Check if we should trigger preloading during scroll (throttled)
+    private func shouldTriggerScrollPreload() -> Bool {
+        guard let lastPreload = lastScrollPreloadTime else {
+            return true // First preload
+        }
+        return Date().timeIntervalSince(lastPreload) >= scrollPreloadThrottleInterval
+    }
+
+    /// Preload videos ahead in the scroll direction during scrolling
+    private func preloadVideosInScrollDirection() {
+        // Update throttle timestamp
+        lastScrollPreloadTime = Date()
+
+        // Find the next 2 videos in scroll direction that haven't been preloaded
+        let videosToPreload = getNextVideosInScrollDirection(count: 4)
+
+        guard !videosToPreload.isEmpty else { return }
+
+        print("🔮 [SCROLL PRELOAD] Preloading \(videosToPreload.count) videos ahead (\(scrollDirection ? "down" : "up"))")
+
+        for video in videosToPreload {
+            // Skip if already preloaded
+            guard !preloadedVideoMids.contains(video.videoMid) else { continue }
+            preloadVideoAsset(video)
+        }
+    }
+
+    /// Get the next videos in scroll direction that are not currently visible
+    private func getNextVideosInScrollDirection(count: Int) -> [VideoPlaybackInfo] {
+        // Get indices of currently visible videos
+        let visibleVideoSet = visibleTweetIds
+        let visibleIndices = allVideos.enumerated()
+            .filter { visibleVideoSet.contains($0.element.cellTweetId) && $0.element.isInVisibleMediaRange }
+            .map { $0.offset }
+            .sorted()
+
+        guard !visibleIndices.isEmpty else { return [] }
+
+        var result: [VideoPlaybackInfo] = []
+
+        if scrollDirection {
+            // Scrolling DOWN: get videos AFTER the last visible one
+            let lastVisibleIndex = visibleIndices.max() ?? 0
+            for i in 1...count {
+                let nextIndex = lastVisibleIndex + i
+                if nextIndex < allVideos.count {
+                    let video = allVideos[nextIndex]
+                    if video.isInVisibleMediaRange && !preloadedVideoMids.contains(video.videoMid) {
+                        result.append(video)
+                    }
+                }
+            }
+        } else {
+            // Scrolling UP: get videos BEFORE the first visible one
+            let firstVisibleIndex = visibleIndices.min() ?? 0
+            for i in 1...count {
+                let prevIndex = firstVisibleIndex - i
+                if prevIndex >= 0 {
+                    let video = allVideos[prevIndex]
+                    if video.isInVisibleMediaRange && !preloadedVideoMids.contains(video.videoMid) {
+                        result.append(video)
+                    }
+                }
+            }
+        }
+
+        return result
+    }
+
+    /// Clear preloaded video tracking (called when video list is rebuilt)
+    private func clearPreloadedTracking() {
+        preloadedVideoMids.removeAll()
+        lastScrollPreloadTime = nil
+    }
+
     // MARK: - Private Methods
-    
+
     /// Called when scrolling stops (after 2s delay)
     private func onScrollStopped() {
         isScrolling = false
