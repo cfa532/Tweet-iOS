@@ -476,11 +476,17 @@ struct TweetActionButtonsView: View {
                 ) {
                     // Show spinner immediately when button is tapped (synchronous on main thread)
                     isPreparingShare = true
-                    
+
                     // CRITICAL FIX: Register overlay BEFORE presenting sheet to ensure proper timing
                     // This ensures videos know they're covered before willResignActiveNotification fires
                     OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
-                    
+
+                    // If in TweetDetailView, pause the video explicitly
+                    if isInDetailView {
+                        DetailVideoManager.shared.pausePlayer()
+                        print("DEBUG: [SHARE] Paused detail view video before share sheet")
+                    }
+
                     Task {
                         // Ensure overlay is cleaned up if sheet never presents (error handling)
                         var sheetPresented = false
@@ -565,11 +571,11 @@ struct TweetActionButtonsView: View {
             isPreparingShare = false
             print("DEBUG: [SHARE] Sheet dismissed, state cleared")
             onShareVisibilityChange?(false)
-            
+
             // CRITICAL: Always end the overlay, even if it was never registered properly
             // This prevents the coordinator from getting stuck in "covered" state
             OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
-            
+
             // CRITICAL FIX: Force reload of visible videos after dismissing share sheet
             // This handles the case where app returned from background while share sheet was active:
             // 1. Background recovery posted .reloadVisibleVideosOnly
@@ -577,12 +583,15 @@ struct TweetActionButtonsView: View {
             // 3. Now that share sheet is dismissed, MediaCell is visible but has nil player (stuck spinner)
             // Solution: Post reload notification again after overlay ends (same as MediaBrowserView)
             Task { @MainActor in
-                // Small delay to ensure overlay state is fully updated
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                
+                // CRITICAL: Increased delay from 0.1s to 0.3s to ensure overlay state propagates
+                // The .overlayCoverageChanged notification must be fully processed by SimpleVideoPlayer
+                // before .reloadVisibleVideosOnly arrives, otherwise isActuallyVisible will be false
+                // and the reload will be skipped, leaving the video stuck with black screen + spinner
+                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
+
                 // Double-check that overlay was properly cleaned up
                 OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
-                
+
                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                 print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
             }

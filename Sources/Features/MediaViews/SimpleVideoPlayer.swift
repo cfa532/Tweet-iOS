@@ -2789,10 +2789,25 @@ struct SimpleVideoPlayer: View {
     @MainActor
     private func handleReloadVisibleVideosOnly() {
         guard mode == .mediaCell else { return }
-        guard isVisible, isActuallyVisible else { 
-            // Skipping - not visible
+
+        // CRITICAL FAILSAFE: Check if player is broken BEFORE checking overlay visibility
+        // This prevents videos from getting stuck with black screen + spinner after share sheet
+        // dismissal when overlay state hasn't updated yet due to timing/race conditions
+        let playerMissing = (player == nil)
+        let itemMissing = (player?.currentItem == nil)
+        let timeInvalid = !(player?.currentTime().seconds.isFinite ?? true)
+        let broken = itemMissing || timeInvalid || isPlayerBroken()
+        let hasStuckLoading = loadingState.isLoading && (playerMissing || broken)
+
+        // FAILSAFE: If player is broken/missing and we should be loading video, force recovery
+        // even if overlay state says we're covered (timing race condition from share sheet dismiss)
+        if isVisible && shouldLoadVideo && (playerMissing || broken || hasStuckLoading) {
+            print("🔧 [FOREGROUND RECOVERY FAILSAFE] MediaCell \(mid) has broken player (playerMissing:\(playerMissing), broken:\(broken), stuckLoading:\(hasStuckLoading)) - forcing recovery despite overlay state (isActuallyVisible:\(isActuallyVisible))")
+            // Fall through to recovery logic below
+        } else if !isVisible || !isActuallyVisible {
+            // Normal case: not visible or covered by overlay, skip recovery
             print("⏭️ [FOREGROUND RECOVERY] MediaCell \(mid) skipped (isVisible:\(isVisible), isActuallyVisible:\(isActuallyVisible))")
-            return 
+            return
         }
 
         // Ensure we don't get stuck showing the explicit "Video paused" overlay.
@@ -2802,15 +2817,11 @@ struct SimpleVideoPlayer: View {
         // CRITICAL FIX: After short background, AppDelegate clears all players via
         // clearVideoPlayersForBackgroundRecovery(), which sets currentItem to nil.
         // Videos may be stuck in loading state or have no player. We need to recreate them.
-        let playerMissing = (player == nil)
-        let itemMissing = (player?.currentItem == nil)
-        let timeInvalid = !(player?.currentTime().seconds.isFinite ?? true)
-        let broken = itemMissing || timeInvalid || isPlayerBroken()
-        
+
         // For videos that should be loaded but don't have a player, or have a broken player, recreate
         // Also reset stuck loading states - after background recovery, loading state might be stuck
+        // Note: playerMissing, itemMissing, timeInvalid, broken, and hasStuckLoading are computed above
         let needsRecreation = (playerMissing && shouldLoadVideo) || broken
-        let hasStuckLoading = loadingState.isLoading && (playerMissing || broken)
         
         // Checking visible video state
 
@@ -2874,20 +2885,33 @@ struct SimpleVideoPlayer: View {
                     }
                 }
                 
-                // CRITICAL: Check if coordinator commanded playback while loading
-                // This handles the case where play command arrives before player is ready
-                if self.mode == .mediaCell && self.coordinatorWantsToPlay && self.loadingState.isLoaded && player.rate == 0 {
-                    print("▶️ [FOREGROUND RECOVERY] Playing video as coordinator requested (delayed)")
-                    player.isMuted = MuteState.shared.isMuted
-                    player.play()
-                    self.playbackState = .playing
-                } else if self.currentAutoPlay && self.loadingState.isLoaded {
-                    // Fallback: If video should be playing, ensure it starts
-                    let noOverlaysActive = !self.isCoveredByOverlay
-                    let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+                // CRITICAL: Check if video was playing before share sheet/overlay
+                // After share sheet dismissal, video should resume if it was playing before
+                let wasPlayingBeforeOverlay = VideoStateCache.shared.getCachedPlaybackInfo(for: self.mid)?.wasPlaying ?? false
 
-                    if noOverlaysActive && noDetailViewActive {
-                        self.checkPlaybackConditions(autoPlay: true, isVisible: true)
+                // CRITICAL: For MediaCell videos, don't bypass the coordinator
+                // The VideoPlaybackCoordinator manages all MediaCell playback and needs to track state
+                // If we directly call play(), coordinator state gets out of sync
+                if self.mode == .mediaCell {
+                    // If video was playing before overlay, ensure autoplay is enabled
+                    // The coordinator will handle resuming playback through normal visibility evaluation
+                    if wasPlayingBeforeOverlay || self.coordinatorWantsToPlay {
+                        print("🔄 [FOREGROUND RECOVERY] Video was playing before overlay - letting coordinator resume")
+
+                        // Clear the stopped-by-coordinator flag so placeholder is hidden
+                        VideoStateCache.shared.clearStoppedByCoordinator(self.mid)
+
+                        // Let the normal playback conditions check handle starting the video
+                        // This ensures coordinator tracking is maintained
+                        self.checkPlaybackConditions(autoPlay: wasPlayingBeforeOverlay, isVisible: true)
+                    } else if self.currentAutoPlay && self.loadingState.isLoaded {
+                        // Fallback: If video should be playing, ensure it starts
+                        let noOverlaysActive = !self.isCoveredByOverlay
+                        let noDetailViewActive = !DetailVideoManager.shared.isDetailViewActive()
+
+                        if noOverlaysActive && noDetailViewActive {
+                            self.checkPlaybackConditions(autoPlay: true, isVisible: true)
+                        }
                     }
                 }
 
