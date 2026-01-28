@@ -579,30 +579,63 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    /// Get cached player if available
+    /// Check if a player is in a healthy, usable state
+    /// Returns true only if player is fully functional and ready to play
+    private func isPlayerHealthy(_ player: AVPlayer, for mediaID: String) -> Bool {
+        // Check 1: Player must have a current item
+        guard let playerItem = player.currentItem else {
+            print("⚠️ [PLAYER HEALTH] Player \(mediaID.prefix(8)) has no current item")
+            return false
+        }
+
+        // Check 2: Player item must not be in failed state
+        if playerItem.status == .failed {
+            print("⚠️ [PLAYER HEALTH] Player \(mediaID.prefix(8)) item status is .failed (error: \(playerItem.error?.localizedDescription ?? "unknown"))")
+            return false
+        }
+
+        // Check 3: Player itself must not have an error
+        if player.error != nil {
+            print("⚠️ [PLAYER HEALTH] Player \(mediaID.prefix(8)) has error: \(player.error!.localizedDescription)")
+            return false
+        }
+
+        // Check 4: Player item error check (catches asset loading failures)
+        if let itemError = playerItem.error {
+            print("⚠️ [PLAYER HEALTH] Player \(mediaID.prefix(8)) item has error: \(itemError.localizedDescription)")
+            return false
+        }
+
+        // All checks passed - player is healthy
+        return true
+    }
+
+    /// Get cached player if available and healthy
+    /// If player exists but is unhealthy, it will be removed and nil returned
     func getCachedPlayer(for mediaID: String) -> AVPlayer? {
         if let player = playerCache[mediaID] {
-            // Validate player before returning it
-            guard let playerItem = player.currentItem else {
+            // CRITICAL: Perform comprehensive health check before returning player
+            // This catches broken players that occur after backgrounding
+            if !isPlayerHealthy(player, for: mediaID) {
+                print("🔄 [PLAYER HEALTH] Removing unhealthy player \(mediaID.prefix(8)) - will recreate on next request")
                 removeInvalidPlayer(for: mediaID)
                 return nil
             }
-            
-            if playerItem.status == .failed {
-                removeInvalidPlayer(for: mediaID)
-                return nil
-            }
-            
-            // Check if player has buffered data in memory
+
+            // Player is healthy - check if it needs buffer reload
+            let playerItem = player.currentItem!
             let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-            
+
             // If no buffered data, force preroll to reload from disk cache
             if !hasBufferedData && playerItem.status == .readyToPlay {
                 playerItem.preferredForwardBufferDuration = 15.0  // Balanced prefetch
                 player.preroll(atRate: 1.0) { success in
+                    if !success {
+                        print("⚠️ [PLAYER HEALTH] Preroll failed for \(mediaID.prefix(8))")
+                    }
                 }
             }
-            
+
             cacheTimestamps[mediaID] = Date() // Update access time
             return player
         }
@@ -1639,6 +1672,34 @@ class SharedAssetCache: ObservableObject {
         // No need to manually access playerLayer property (causes crash)
     }
     
+    /// Validate all cached players and remove any that are unhealthy
+    /// Useful to call after returning from background to clean up broken players
+    /// Returns the number of unhealthy players removed
+    @MainActor func validateAndCleanupPlayers() -> Int {
+        print("🔍 [PLAYER HEALTH] Validating \(playerCache.count) cached players")
+
+        var removedCount = 0
+        let mediaIDsToCheck = Array(playerCache.keys)
+
+        for mediaID in mediaIDsToCheck {
+            guard let player = playerCache[mediaID] else { continue }
+
+            if !isPlayerHealthy(player, for: mediaID) {
+                print("🗑️ [PLAYER HEALTH] Removing unhealthy player: \(mediaID.prefix(8))")
+                removeInvalidPlayer(for: mediaID)
+                removedCount += 1
+            }
+        }
+
+        if removedCount > 0 {
+            print("✅ [PLAYER HEALTH] Removed \(removedCount) unhealthy players, \(playerCache.count) healthy players remain")
+        } else {
+            print("✅ [PLAYER HEALTH] All \(playerCache.count) cached players are healthy")
+        }
+
+        return removedCount
+    }
+
     /// PUBLIC: Aggressively release all players to free memory
     /// Call this when navigating away from video pages
     func releaseAllPlayers() {

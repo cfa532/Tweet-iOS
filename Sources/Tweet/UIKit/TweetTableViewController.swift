@@ -229,7 +229,9 @@ class TweetTableViewController: UITableViewController {
 
             // AGGRESSIVE MEMORY CLEANUP
             // 1. Release all video players to free memory
-            self.videoCoordinator.releaseAllPlayersForBackground()
+            Task { @MainActor in
+                self.videoCoordinator.releaseAllPlayersForBackground()
+            }
 
             // 2. Clear SwiftUI view cache
             SwiftUIViewCache.shared.clearCache()
@@ -310,9 +312,17 @@ class TweetTableViewController: UITableViewController {
         return 0
     }
 
-    /// Restore visible video players and preload additional videos after returning from background
+    /// Restore visible video players after returning from background
+    /// With health checks in place, we simply validate cached players and update visibility
+    /// Broken players will be auto-detected and recreated on-demand
     private func restoreVideoPlayersAfterForeground() {
-        // Get currently visible tweet IDs
+        print("☀️ [VIDEO RESTORE] Restoring video playback")
+
+        // Step 1: Validate all cached players and remove any that are broken
+        // This proactively cleans up players that were invalidated during backgrounding
+        videoCoordinator.validatePlayersAfterBackground()
+
+        // Step 2: Get currently visible tweet IDs
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
         let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
             let totalRows = pinnedTweets.count + tweets.count
@@ -327,10 +337,13 @@ class TweetTableViewController: UITableViewController {
             }
         })
 
-        print("☀️ [VIDEO RESTORE] Restoring \(visibleTweetIds.count) visible videos with 2 preload")
+        print("☀️ [VIDEO RESTORE] Updating visibility for \(visibleTweetIds.count) visible tweets")
 
-        // Restore visible videos and preload 2 more in scroll direction
-        videoCoordinator.restoreVisibleAndPreload(visibleTweetIds: visibleTweetIds, preloadCount: 2)
+        // Step 3: Update visible tweets to trigger playback
+        // Any players that were removed in step 1 will be automatically recreated when needed
+        videoCoordinator.updateVisibleTweets(visibleTweetIds)
+
+        print("✅ [VIDEO RESTORE] Video restoration complete - healthy players retained, broken ones will be recreated")
     }
 
     func scrollToTop() {

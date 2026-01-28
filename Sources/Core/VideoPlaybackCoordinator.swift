@@ -164,8 +164,9 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Track async tasks to prevent leaks
     /// MEMORY FIX: Use UUID-based tracking so tasks can remove themselves on completion
+    /// Since this class is @MainActor, all access is serialized on the main actor
+    /// Uses nonisolated(unsafe) for deinit access - safe because deinit runs once
     private nonisolated(unsafe) var activeAsyncTaskIds: Set<UUID> = []
-    private let taskCleanupLock = NSLock()
     private let maxConcurrentTasks = 10  // Increased limit since we properly clean up now
 
     // MARK: - Delegate-Based Communication (Phase 3)
@@ -179,39 +180,33 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Track an async task for proper cleanup
     /// MEMORY FIX: Tasks now self-remove on completion via UUID tracking
-    private nonisolated func trackAsyncTask(_ task: Task<Void, Never>) {
+    /// Runs on MainActor to avoid lock requirements
+    private func trackAsyncTask(_ task: Task<Void, Never>) {
         let taskId = UUID()
-
-        taskCleanupLock.lock()
 
         // If we're at the limit, don't add more (let natural completion clean up)
         if activeAsyncTaskIds.count >= maxConcurrentTasks {
-            taskCleanupLock.unlock()
             print("⚠️ [TASK LIMIT] Hit max \(maxConcurrentTasks) tasks, skipping new task")
             return
         }
 
         activeAsyncTaskIds.insert(taskId)
-        taskCleanupLock.unlock()
 
         // Self-cleaning wrapper: remove taskId when original task completes
-        Task { [weak self] in
+        Task { @MainActor [weak self] in
             // Wait for the tracked task to complete
             _ = await task.value
 
-            // Remove from tracking set
-            self?.taskCleanupLock.lock()
+            // Remove from tracking set (on MainActor, so no lock needed)
             self?.activeAsyncTaskIds.remove(taskId)
-            self?.taskCleanupLock.unlock()
         }
     }
 
     /// Cancel all active async tasks (clears tracking set)
+    /// Nonisolated to allow calling from deinit
     private nonisolated func cancelActiveAsyncTasks() {
-        taskCleanupLock.lock()
-        defer { taskCleanupLock.unlock() }
-
         // We can only clear our tracking - actual task cancellation happens via other mechanisms
+        // Safe to access nonisolated(unsafe) var directly since deinit runs once
         activeAsyncTaskIds.removeAll()
     }
     
@@ -1116,40 +1111,19 @@ class VideoPlaybackCoordinator: ObservableObject {
         print("✅ [VIDEO MEMORY] All video players released for background")
     }
 
-    /// Restore visible videos and preload additional videos in scroll direction
-    /// Called by TweetTableViewController when app returns to foreground
-    /// - Parameters:
-    ///   - visibleTweetIds: Currently visible tweet IDs
-    ///   - preloadCount: Number of additional videos to preload in scroll direction (default: 4)
-    func restoreVisibleAndPreload(visibleTweetIds: Set<String>, preloadCount: Int = 4) {
-        print("☀️ [VIDEO MEMORY] Restoring visible videos and preloading \(preloadCount) more")
+    /// Validate cached players after returning from background
+    /// Health checks will automatically detect and remove broken players
+    @MainActor func validatePlayersAfterBackground() {
+        print("🔍 [VIDEO MEMORY] Validating cached players after background")
 
-        // Update visible tweets
-        self.visibleTweetIds = visibleTweetIds
-        invalidateVisibleVideoCache()
+        // Validate all cached players and remove unhealthy ones
+        let removedCount = SharedAssetCache.shared.validateAndCleanupPlayers()
 
-        // Get videos to preload based on scroll direction
-        let videosToPreload = getVideosToPreload(visibleTweetIds: visibleTweetIds, preloadCount: preloadCount)
-
-        print("☀️ [VIDEO MEMORY] Will preload \(videosToPreload.count) videos: \(videosToPreload.map { $0.videoMid.prefix(8) })")
-
-        // Preload the videos (just load assets, don't start playback)
-        for video in videosToPreload {
-            preloadVideoAsset(video)
+        if removedCount > 0 {
+            print("✅ [VIDEO MEMORY] Removed \(removedCount) broken players - fresh players will be created as needed")
+        } else {
+            print("✅ [VIDEO MEMORY] All cached players are healthy")
         }
-
-        // Start playback for visible videos (coordinator will pick the topmost)
-        if !visibleVideos.isEmpty && !isPlaybackSuppressedByOverlay {
-            // Small delay to allow assets to start loading
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                guard let self = self else { return }
-                if self.phase == .idle && !self.visibleVideos.isEmpty {
-                    self.startPrimaryVideoPlayback()
-                }
-            }
-        }
-
-        print("✅ [VIDEO MEMORY] Foreground video restoration complete")
     }
 
     /// Get videos to preload based on visible tweets and scroll direction
