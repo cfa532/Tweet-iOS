@@ -439,23 +439,47 @@ class TweetTableViewController: UITableViewController {
     func updatePinnedTweets(_ tweets: [Tweet]) {
         print("🔵 [PINNED UPDATE] updatePinnedTweets called with \(tweets.count) tweets: \(tweets.map { $0.mid })")
         let oldCount = pinnedTweets.count
+        let oldPinnedTweets = pinnedTweets
         self.pinnedTweets = tweets
 
         // CRITICAL: Rebuild video list when pinned tweets change
         // This ensures pinned tweet videos are registered with the coordinator
         print("🔵 [PINNED UPDATE] Rebuilding video list with \(self.tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
         videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: pinnedTweets)
-        
+
+        // Check if same tweets in same order - only counts may have changed
+        if oldCount == tweets.count && oldCount > 0 {
+            var sameOrder = true
+            for i in 0..<oldCount {
+                if oldPinnedTweets[i].mid != tweets[i].mid {
+                    sameOrder = false
+                    break
+                }
+            }
+
+            if sameOrder {
+                // OPTIMIZATION: Same pinned tweets in same order - only hit counts changed
+                // SwiftUI will automatically re-render action buttons via @Published properties
+                print("🔄 [PINNED UPDATE OPTIMIZATION] Only hit counts changed - skipping reload")
+
+                // Still update visibility for video coordinator
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    self?.updateVisibleTweetsForVideoPlayback()
+                }
+                return
+            }
+        }
+
         // Reload table to reflect new pinned tweets
         if oldCount != tweets.count {
             // Number of rows changed, do a full reload
             tableView.reloadData()
         } else if oldCount > 0 {
-            // Same number, just update the content
+            // Different tweets in same positions, update the content
             let indexPaths = (0..<oldCount).map { IndexPath(row: $0, section: 0) }
             tableView.reloadRows(at: indexPaths, with: .none)
         }
-        
+
         // CRITICAL: Update visibility after reload so coordinator knows pinned videos are visible
         // Use longer delay (300ms) to ensure cells are fully rendered
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -489,16 +513,21 @@ class TweetTableViewController: UITableViewController {
             return
         }
         
-        // No change - use early exit to avoid allocations
+        // Check if same tweets in same order - only counts may have changed
         if oldCount == newTweets.count {
-            var hasChange = false
+            var sameOrder = true
             for i in 0..<oldCount {
                 if oldTweets[i].mid != newTweets[i].mid {
-                    hasChange = true
+                    sameOrder = false
                     break
                 }
             }
-            if !hasChange {
+
+            if sameOrder {
+                // OPTIMIZATION: Same tweets in same order - only hit counts changed
+                // Tweet.getInstance() already updated the @Published count properties
+                // SwiftUI will automatically re-render action buttons, no need to reload cells
+                print("🔄 [UPDATE OPTIMIZATION] Only hit counts changed - skipping table reload")
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
             }
