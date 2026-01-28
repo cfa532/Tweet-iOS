@@ -189,24 +189,26 @@ class TweetTableViewController: UITableViewController {
             guard let self = self else { return }
             // Only restart if this is the main feed (not profile's tweet list)
             guard self.feedIdentifier == "mainFeed" else { return }
-            print("📺 [VIDEO RESTART] Main feed view appeared - restarting video playback")
 
-            // Reset coordinator state to force fresh playback evaluation
-            self.videoCoordinator.stopAllVideos()
+            Task { @MainActor in
+                print("📺 [VIDEO RESTART] Main feed view appeared - rebuilding video list")
 
-            // Reset cached visible tweet IDs so updateVisibleTweetsForVideoPlayback will call coordinator
-            self.lastVisibleTweetIds = []
+                // Reset cached visible tweet IDs so updateVisibleTweetsForVideoPlayback will call coordinator
+                self.lastVisibleTweetIds = []
 
-            // CRITICAL: Rebuild video list with main feed's tweets
-            // Profile view overwrites the coordinator's allVideos list, so we must rebuild it
-            // Use completion handler to update visible tweets AFTER video list is rebuilt
-            print("📺 [VIDEO RESTART] Rebuilding video list with \(self.tweets.count) tweets and \(self.pinnedTweets.count) pinned tweets")
-            self.videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: self.pinnedTweets) { [weak self] in
-                guard let self = self else { return }
-                // Now allVideos contains main feed's videos
-                // Update visibleTweetIds with main feed's visible tweets
-                print("📺 [VIDEO RESTART] Video list rebuilt, updating visible tweets")
-                self.updateVisibleTweetsForVideoPlayback()
+                // CRITICAL: Rebuild video list with main feed's tweets
+                // Profile view overwrites the coordinator's allVideos list, so we must rebuild it
+                // Use completion handler to update visible tweets AFTER video list is rebuilt
+                // NOTE: Don't call stopAllVideos() here - it causes flickering. Let the visibility
+                // tracking in updateVisibleTweetsForVideoPlayback handle stopping/starting videos.
+                print("📺 [VIDEO RESTART] Rebuilding video list with \(self.tweets.count) tweets and \(self.pinnedTweets.count) pinned tweets")
+                self.videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: self.pinnedTweets) { [weak self] in
+                    guard let self = self else { return }
+                    // Now allVideos contains main feed's videos
+                    // Update visibleTweetIds with main feed's visible tweets
+                    print("📺 [VIDEO RESTART] Video list rebuilt, updating visible tweets")
+                    self.updateVisibleTweetsForVideoPlayback()
+                }
             }
         }
     }

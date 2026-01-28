@@ -61,6 +61,7 @@ struct TweetListView<RowView: View>: View {
     @State private var foregroundObserver: NSObjectProtocol?
     @State private var notificationObservers: [NSObjectProtocol] = []
     @State private var videoManagerUpdateTask: Task<Void, Never>? = nil
+    @State private var hasAppearedOnce: Bool = false  // Track if view has appeared before (to detect navigation return)
     @State private var lastCleanupTime: Date = Date()
     private let cleanupInterval: TimeInterval = 10.0  // Cleanup every 10 seconds max
     
@@ -248,10 +249,17 @@ struct TweetListView<RowView: View>: View {
             // Set up notification observers
             setupNotificationObservers()
 
-            // Notify that feed view appeared (for restarting video playback after navigation)
-            // Delay slightly to ensure layout is complete
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                NotificationCenter.default.post(name: .feedViewDidAppear, object: nil)
+            // Only notify feedViewDidAppear when RETURNING from navigation, not on initial load
+            // This prevents unnecessary video stop/restart cycles that cause flickering
+            if hasAppearedOnce {
+                // Returning from navigation - notify to restart video playback
+                // Delay slightly to ensure layout is complete
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationCenter.default.post(name: .feedViewDidAppear, object: nil)
+                }
+            } else {
+                // First appearance - just mark as appeared, video will start via normal flow
+                hasAppearedOnce = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CacheCleared"))) { _ in
