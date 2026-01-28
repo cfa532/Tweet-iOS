@@ -653,6 +653,37 @@ extension Array where Element == Tweet {
     mutating func mergeTweets(_ newTweets: [Tweet]) {
         mergeTweetsInternal(newTweets)
     }
+
+    /// Append new tweets preserving the input order (for bookmarks/favorites where order matters)
+    /// Updates existing tweets in place, appends new ones at the end in input order
+    mutating func appendTweetsPreservingOrder(_ newTweets: [Tweet]) {
+        guard !newTweets.isEmpty else { return }
+
+        // Build index map for O(1) lookups
+        var indexMap: [String: Int] = [:]
+        for (index, tweet) in self.enumerated() {
+            indexMap[tweet.mid] = index
+        }
+
+        var processedIds = Set<String>()
+        var tweetsToAppend: [Tweet] = []
+
+        for newTweet in newTweets {
+            guard processedIds.insert(newTweet.mid).inserted else { continue }
+
+            if let existingIndex = indexMap[newTweet.mid] {
+                // Tweet exists - update its properties in place
+                let existingTweet = self[existingIndex]
+                try? existingTweet.update(from: newTweet)
+            } else {
+                // New tweet - collect for appending (preserving input order)
+                tweetsToAppend.append(newTweet)
+            }
+        }
+
+        // Append new tweets at the end in the order they appeared in input
+        self.append(contentsOf: tweetsToAppend)
+    }
 }
 
 extension Tweet: Equatable {

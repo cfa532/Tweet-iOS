@@ -391,6 +391,7 @@ struct TweetListDestinationView: View {
                     return fetchedTweets
                 }
             },
+            preserveOrder: isTargetAppUser,  // Preserve server order (bookmark/favorite time) for appUser's lists
             rowView: { tweet in
                 TweetItemView(
                     tweet: tweet,

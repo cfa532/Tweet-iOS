@@ -35,6 +35,7 @@ struct TweetListView<RowView: View>: View {
     let trailingPadding: CGFloat  // Trailing padding for cells
     let pinnedTweets: [Tweet]  // Pinned tweets for video coordination
     let feedIdentifier: String  // Unique identifier for persistent scroll position
+    let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
     private let pageSize: UInt = 10  // Manual load-more only
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -150,6 +151,7 @@ struct TweetListView<RowView: View>: View {
         trailingPadding: CGFloat = 8,  // Default 8pt trailing padding
         pinnedTweets: [Tweet] = [],  // Pinned tweets for video coordination
         feedIdentifier: String = "mainFeed",  // Default to main feed
+        preserveOrder: Bool = false,  // If true, preserve server order (for bookmarks/favorites)
         header: (() -> AnyView)? = nil,
         onRefreshExtra: (() async -> Void)? = nil,  // Extra refresh callback
         rowView: @escaping (Tweet) -> RowView
@@ -163,6 +165,7 @@ struct TweetListView<RowView: View>: View {
         self.trailingPadding = trailingPadding
         self.pinnedTweets = pinnedTweets
         self.feedIdentifier = feedIdentifier
+        self.preserveOrder = preserveOrder
         self.header = header
         self.onRefreshExtra = onRefreshExtra
         // Default: listen for newTweetCreated and insert at top
@@ -387,14 +390,19 @@ struct TweetListView<RowView: View>: View {
             
             await MainActor.run {
                 if !validTweets.isEmpty {
-                    // Merge new tweets into existing list (will sort by timestamp)
-                    tweets.mergeTweets(validTweets)
+                    // For preserveOrder lists (bookmarks/favorites), append in server order
+                    // For other lists, merge with timestamp sorting
+                    if preserveOrder {
+                        tweets.appendTweetsPreservingOrder(validTweets)
+                    } else {
+                        tweets.mergeTweets(validTweets)
+                    }
                     currentPage = 0
                     hasMoreTweets = freshTweets.count >= pageSize
-                    
+
                     // Update video manager with debouncing
                     updateVideoLoadingManager(delay: 0.2)
-                    
+
                     print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
                 } else {
                     print("📱 [FOREGROUND] No new tweets found")
@@ -522,8 +530,13 @@ struct TweetListView<RowView: View>: View {
 
                 await MainActor.run {
                     if !validTweets.isEmpty {
-                        // Merge new tweets into existing list
-                        self.tweets.mergeTweets(validTweets)
+                        // For preserveOrder lists (bookmarks/favorites), append in server order
+                        // For other lists, merge with timestamp sorting
+                        if self.preserveOrder {
+                            self.tweets.appendTweetsPreservingOrder(validTweets)
+                        } else {
+                            self.tweets.mergeTweets(validTweets)
+                        }
                         self.currentPage = nextPage
 
                         // Check response size to determine if more items exist
@@ -601,8 +614,13 @@ struct TweetListView<RowView: View>: View {
             await MainActor.run {
                 // Update tweets with server data - MERGE on refresh to keep existing content
                 if hasValidTweet {
-                    // On refresh, merge new tweets with existing ones (will sort by timestamp)
-                    tweets.mergeTweets(validTweets)
+                    // For preserveOrder lists (bookmarks/favorites), replace entirely on refresh to get fresh order
+                    // For other lists, merge with timestamp sorting
+                    if preserveOrder {
+                        tweets = validTweets
+                    } else {
+                        tweets.mergeTweets(validTweets)
+                    }
                     currentPage = 0
 
                     // Check response size to determine if more items exist
@@ -685,8 +703,14 @@ struct TweetListView<RowView: View>: View {
                 // If we got cached tweets, show them immediately
                 if !tweetsFromCache.isEmpty {
                     await MainActor.run {
-                        tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
-                        
+                        // For preserveOrder lists (bookmarks/favorites), append in server order
+                        // For other lists, merge with timestamp sorting
+                        if preserveOrder {
+                            tweets.appendTweetsPreservingOrder(tweetsFromCache.compactMap { $0 })
+                        } else {
+                            tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
+                        }
+
                         // Set hasMoreTweets based on cache - if we got a full page, there might be more
                         // This is optimistic - server update will correct it if needed
                         if tweetsFromCache.count >= pageSize {
@@ -815,10 +839,20 @@ struct TweetListView<RowView: View>: View {
 
         // BRANCH 1: Got valid tweets - check response size
         if hasValidTweet {
-            if page == 0 && tweets.isEmpty {
+            // For preserveOrder lists (bookmarks/favorites), page 0 should always REPLACE
+            // to ensure correct server order (sorted by bookmark/favorite time)
+            if page == 0 && preserveOrder {
+                tweets = validServerTweets
+            } else if page == 0 && tweets.isEmpty {
                 tweets = validServerTweets
             } else {
-                tweets.mergeTweets(validServerTweets)
+                // For preserveOrder lists (bookmarks/favorites), append in server order
+                // For other lists, merge with timestamp sorting
+                if preserveOrder {
+                    tweets.appendTweetsPreservingOrder(validServerTweets)
+                } else {
+                    tweets.mergeTweets(validServerTweets)
+                }
             }
 
             // Update VideoLoadingManager with debouncing
