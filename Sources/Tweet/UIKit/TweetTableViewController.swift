@@ -1089,50 +1089,57 @@ class TweetTableViewController: UITableViewController {
         // Top padding (20pt from TweetItemView)
         estimate += 20
 
-        // Header: author name + timestamp (~22pt)
-        estimate += 22
+        // Header: author name + timestamp + spacing (~24pt)
+        estimate += 24
 
-        // Text content estimate (more accurate)
+        // Text content estimate (improved accuracy)
         if let content = tweet.content, !content.isEmpty {
-            // Rough estimate: ~18pt per line, ~40 chars per line
-            let estimatedLines = max(1, CGFloat(content.count) / 40)
-            estimate += estimatedLines * 18 + 8  // +8 for spacing
+            // Font: .system(size: 16) with lineLimit(7)
+            // Actual line height with 16pt font: ~20pt (font size + line spacing)
+            // Screen width - padding: ~358pt (390pt - 32pt)
+            // Chars per line: ~42 for 16pt font
+            let estimatedLines = min(7, max(1, ceil(CGFloat(content.count) / 42.0)))
+            estimate += estimatedLines * 20 + 2  // +2 for bottom padding
         }
 
         // MediaGrid: PRECISE calculation (no estimation!)
         if let attachments = tweet.attachments, !attachments.isEmpty {
             let mediaHeight = MediaGridViewModel.calculateHeight(for: attachments, isEmbedded: false)
-            estimate += mediaHeight + 8  // +8 for spacing
+            estimate += mediaHeight + 4  // +4 for top padding
         }
 
         // Embedded tweet estimate (check if it's loaded for better accuracy)
         if let originalTweetId = tweet.originalTweetId {
             if let embeddedTweet = Tweet.getInstance(for: originalTweetId),
                embeddedTweet.author != nil {
-                // Embedded tweet is loaded - calculate its height
-                var embeddedHeight: CGFloat = 50  // Embedded header + padding
+                // Embedded tweet is loaded - calculate its height more accurately
+                var embeddedHeight: CGFloat = 60  // Border + header + padding
 
                 if let embeddedContent = embeddedTweet.content, !embeddedContent.isEmpty {
-                    let estimatedLines = max(1, CGFloat(embeddedContent.count) / 35)
-                    embeddedHeight += estimatedLines * 16
+                    // Embedded text is smaller font (~14-15pt), ~18pt line height
+                    let estimatedLines = max(1, ceil(CGFloat(embeddedContent.count) / 40.0))
+                    embeddedHeight += estimatedLines * 18
                 }
 
                 if let embeddedAttachments = embeddedTweet.attachments, !embeddedAttachments.isEmpty {
                     embeddedHeight += MediaGridViewModel.calculateHeight(for: embeddedAttachments, isEmbedded: true)
                 }
 
-                estimate += embeddedHeight + 16
+                estimate += embeddedHeight + 8  // +8 for spacing around embedded tweet
             } else {
-                // Not loaded yet - use rough estimate
-                estimate += 150
+                // Not loaded yet - use conservative estimate
+                estimate += 160
             }
         }
 
-        // Actions row (44pt)
-        estimate += 44
+        // Actions row (44pt for buttons + spacing)
+        estimate += 52
 
-        // Bottom padding (~16pt from TweetItemView)
+        // Bottom padding (16pt from TweetItemView)
         estimate += 16
+
+        // Add 1pt separator
+        estimate += 1
 
         return estimate
     }
