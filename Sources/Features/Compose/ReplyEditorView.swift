@@ -87,6 +87,11 @@ struct ReplyEditorView: View {
             if newValue {
                 print("DEBUG: [ReplyEditorView] Setting isExpanded = true")
                 isExpanded = true
+            } else if isExpanded {
+                // CRITICAL: Also collapse when parent signals to close
+                // This handles cases where state gets out of sync
+                print("DEBUG: [ReplyEditorView] Setting isExpanded = false from parent signal")
+                isExpanded = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notification in
@@ -202,14 +207,17 @@ struct ReplyEditorView: View {
                             .fontWeight(.bold)
                         Spacer()
                         
-                        // Close button
+                        // Close button - with larger tap area for better usability
                         Button(action: {
                             handleCloseAttempt()
                         }) {
                             Image(systemName: "xmark")
                                 .foregroundColor(.secondary)
                                 .font(.system(size: 16))
+                                .frame(width: 32, height: 32)
+                                .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                     
                     // Handle
@@ -370,15 +378,24 @@ struct ReplyEditorView: View {
     }
     
     private func clearAndClose() {
+        // First dismiss keyboard to avoid layout issues during collapse
+        isTextFieldFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+
+        // Clear content
         replyText = ""
         selectedImages.removeAll()
         selectedItems.removeAll()
         selectedVideos.removeAll()
-        isExpanded = false
         showExitConfirmation = false
-        isTextFieldFocused = false
         error = nil
+
+        // Notify parent FIRST to update shouldShowExpandedReply
+        // This ensures the onChange handler will also trigger isExpanded = false
         onExpandedClose?()
+
+        // Then collapse locally (belt and suspenders - onChange should also handle this)
+        isExpanded = false
         // Don't call onClose() here - we want to keep the collapsed view visible
     }
     

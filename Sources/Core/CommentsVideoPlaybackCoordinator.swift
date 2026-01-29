@@ -216,7 +216,7 @@ struct CommentVideoVisibilityTracker: ViewModifier {
                         .onAppear {
                             updateVisibility(geometry: geometry)
                         }
-                        .onChange(of: geometry.frame(in: .named(scrollCoordinateSpace))) { _ in
+                        .onChange(of: geometry.frame(in: .named(scrollCoordinateSpace))) { _, _ in
                             updateVisibility(geometry: geometry)
                         }
                 }

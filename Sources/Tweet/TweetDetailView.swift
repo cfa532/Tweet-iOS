@@ -1004,7 +1004,7 @@ struct CommentVideoTrackingWrapper: View {
                             .onAppear {
                                 updateVisibility(geometry: geometry, videoInfo: video)
                             }
-                            .onChange(of: geometry.frame(in: .named(scrollCoordinateSpace))) { _ in
+                            .onChange(of: geometry.frame(in: .named(scrollCoordinateSpace))) { _, _ in
                                 updateVisibility(geometry: geometry, videoInfo: video)
                             }
                     }
