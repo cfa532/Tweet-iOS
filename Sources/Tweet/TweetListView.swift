@@ -694,26 +694,26 @@ struct TweetListView<RowView: View>: View {
     
     private func loadSinglePage(page: UInt, completion: @escaping (Bool) -> Void) {
         let pageSize = self.pageSize
-        
+
         Task {
             // Record loading start time
             let startTime = Date()
-            
+
             await MainActor.run {
                 // Capture the last visible tweet before loading
                 if let lastTweet = tweets.last {
                     lastVisibleTweetIdBeforeLoad = lastTweet.mid
                 }
-                
+
                 isLoadingMore = true
                 loadingStartTime = startTime
             }
-            
+
             // Step 1: Try to load from cache first for instant UX (best-effort, don't fail on cache errors)
             var tweetsFromCache: [Tweet?] = []
             do {
                 tweetsFromCache = try await tweetFetcher(page, pageSize, true)
-                
+
                 // If we got cached tweets, show them immediately
                 if !tweetsFromCache.isEmpty {
                     await MainActor.run {
@@ -730,7 +730,7 @@ struct TweetListView<RowView: View>: View {
                         if tweetsFromCache.count >= pageSize {
                             hasMoreTweets = true
                         }
-                        
+
                         // Update VideoLoadingManager with debouncing
                         updateVideoLoadingManager(delay: 0.2)
                     }
@@ -740,40 +740,41 @@ struct TweetListView<RowView: View>: View {
                 // Cache fetch failed - not critical, we'll try server next
                 print("⚠️ [PAGINATION] Cache fetch failed for page \(page): \(error), will try server")
             }
-            
-            // Calculate elapsed time
-            let elapsedTime = Date().timeIntervalSince(startTime)
-            let remainingTime = max(0, minimumLoadingDuration - elapsedTime)
-            
-            // Wait for minimum duration if needed
-            if remainingTime > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
-            }
-            
-            await MainActor.run {
-                // Clear loading state after minimum duration
-                isLoadingMore = false
-                loadingStartTime = nil
-                
-                // Restore scroll position to keep the last visible tweet above bottom bar
-                // Only restore scroll position after startup phase to avoid unwanted scrolling during app launch
-                if let lastTweetId = lastVisibleTweetIdBeforeLoad, !videoLoadingManager.isInStartupPhase {
-                    // Use a slight delay to ensure layout is complete
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
+
+            // CRITICAL: Let UI render cached tweets BEFORE continuing with server fetch
+            // By spawning the rest in a separate Task, cached tweets render immediately
+            // (Same pattern as performInitialLoad - SwiftUI batches updates within same Task)
+            let capturedLastTweetId = lastVisibleTweetIdBeforeLoad
+            let tweetCountBeforeServer = tweets.count
+
+            Task {
+                // Step 2: Load from server to get fresh data (always try, even if cache failed)
+                // Keep isLoadingMore = true until server responds so spinner stays visible
+                await loadFromServer(page: page, pageSize: pageSize, completion: completion)
+
+                // Now that server has responded, clear loading state
+                await MainActor.run {
+                    isLoadingMore = false
+                    loadingStartTime = nil
+
+                    // Only restore scroll position if:
+                    // 1. New tweets were actually loaded (count increased)
+                    // 2. Not at end of list (hasMoreTweets is still true)
+                    // 3. Not during startup phase
+                    let newTweetsLoaded = tweets.count > tweetCountBeforeServer
+                    if let lastTweetId = capturedLastTweetId,
+                       newTweetsLoaded,
+                       hasMoreTweets,
+                       !videoLoadingManager.isInStartupPhase {
+                        // Use a slight delay to ensure layout is complete
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
+                            }
                         }
                     }
                     lastVisibleTweetIdBeforeLoad = nil
-                } else if let _ = lastVisibleTweetIdBeforeLoad, videoLoadingManager.isInStartupPhase {
-                    // During startup phase, just clear the captured tweet without scrolling
-                    lastVisibleTweetIdBeforeLoad = nil
                 }
-            }
-            
-            // Step 2: Load from server to get fresh data (always try, even if cache failed)
-            Task {
-                await loadFromServer(page: page, pageSize: pageSize, completion: completion)
             }
         }
     }
