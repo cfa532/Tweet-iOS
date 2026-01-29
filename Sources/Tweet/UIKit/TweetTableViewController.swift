@@ -269,23 +269,15 @@ class TweetTableViewController: UITableViewController {
             self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
             print("📍 [SCROLL] Saved scroll position: \(self.scrollPositionBeforeBackground ?? 0)")
 
-            // AGGRESSIVE MEMORY CLEANUP
-            // 1. Release all video players to free memory
-            Task { @MainActor in
-                self.videoCoordinator.releaseAllPlayersForBackground()
-            }
+            // MEMORY CLEANUP - Video players are now released by AppDelegate
+            // DON'T clear SwiftUI view cache or reload table - this causes gray placeholders
+            // in app switcher preview. Keep current view state for smooth background snapshot.
 
-            // 2. Clear SwiftUI view cache
-            SwiftUIViewCache.shared.clearCache()
+            // Video player cleanup (now handled by AppDelegate.handleAppDidEnterBackground)
+            // SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery() is called there
 
-            // 3. Force table view to release non-visible cells
-            self.tableView.reloadData()
-
-            // 4. Clear any cached images if you have an image cache
-            // URLCache.shared.removeAllCachedResponses()  // Uncomment if using URL caching
-
-            // Log memory after cleanup and end background task
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            // End background task after a short delay to allow cleanup to complete
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self = self else { return }
                 let memoryAfter = self.getMemoryUsage()
                 let memoryFreed = memoryBefore - memoryAfter

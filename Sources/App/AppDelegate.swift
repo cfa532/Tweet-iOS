@@ -337,7 +337,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     @objc private func handleAppDidEnterBackground() {
         print("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
-        
+
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
 
@@ -345,10 +345,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] 🚀 Performing IMMEDIATE background message check on app background")
         performImmediateBackgroundCheck()
 
-        // DON'T stop LocalHTTPServer - iOS keeps network listeners alive for short backgrounds
-        // Only stop for long backgrounds (>5 min) to avoid race conditions and port changes
-        
-        // Background handling is now done by SimpleVideoPlayer's notification observers
+        // CRITICAL: Release all video players IMMEDIATELY when entering background
+        // This prevents iOS from terminating the app due to high memory usage
+        // Note: Last frame images are already captured in willResignActive (before this),
+        // and stored in VideoLastFrameCache - they will be shown as placeholders
+        print("🧹 [AppDelegate] Releasing all video players to reduce memory footprint")
+        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+
+        // Stop LocalHTTPServer to release network resources
+        // iOS may terminate apps that hold onto NWListener in background
+        // Server will be restarted on foreground in handleAppWillEnterForeground
+        print("🔌 [AppDelegate] Stopping LocalHTTPServer")
+        LocalHTTPServer.shared.stop()
     }
     
     /// Handle app returning to foreground from background state
