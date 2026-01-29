@@ -1887,10 +1887,23 @@ struct SimpleVideoPlayer: View {
         // If player not ready, wait for it
         guard let player = player, loadingState == .loaded else {
             print("⏸️ [COORDINATOR] Play command received but player not ready (loaded:\(loadingState == .loaded), hasPlayer:\(player != nil)) - waiting")
-            
-            // CRITICAL: If player is nil and we should load it, trigger setup immediately
-            // This handles the edge case where coordinator play command arrives during the 150ms onAppear delay
-            if player == nil && shouldLoadVideo && isVisible && !loadingState.isLoading {
+
+            // CRITICAL: Check if player exists but is broken (currentItem is nil after background release)
+            // This happens when releaseAllPlayersForBackground() called replaceCurrentItem(with: nil)
+            let isPlayerBrokenForRecovery = player != nil && player?.currentItem == nil
+
+            // CRITICAL: If player is nil OR broken, and we should load it, trigger setup immediately
+            // This handles both: coordinator play command during 150ms onAppear delay AND background recovery
+            if (player == nil || isPlayerBrokenForRecovery) && shouldLoadVideo && isVisible && !loadingState.isLoading {
+                if isPlayerBrokenForRecovery {
+                    print("🔧 [COORDINATOR] Player exists but broken (no currentItem) for \(mid) - forcing recreation")
+                    // Clean up the broken player
+                    self.player?.pause()
+                    self.player = nil
+                    loadingState = .idle
+                    playbackState = .notStarted
+                    SharedAssetCache.shared.removeInvalidPlayer(for: playerCacheKey, force: true)
+                }
                 print("🚀 [COORDINATOR] Triggering immediate player setup for \(mid)")
                 setupPlayer()
             }
@@ -1902,17 +1915,35 @@ struct SimpleVideoPlayer: View {
             }
             
             isWaitingForPlayerReady = true
-            
+
             // CRITICAL: Wait for player to be ready, then play (max 3 seconds)
             // Store task so it can be cancelled if video goes off-screen or receives stop command
             waitingForPlayerTask = Task { @MainActor in
-                defer { 
+                defer {
                     self.isWaitingForPlayerReady = false
                     self.waitingForPlayerTask = nil
                 }
-                
+
                 var attempts = 0
+                var didTriggerRecreation = false
                 while (self.player == nil || self.loadingState != .loaded) && attempts < 30 {
+                    // CRITICAL: Check if player is broken (exists but no currentItem) after background
+                    // If so, trigger recreation once and continue waiting
+                    if !didTriggerRecreation,
+                       let existingPlayer = self.player,
+                       existingPlayer.currentItem == nil,
+                       self.shouldLoadVideo,
+                       self.isVisible {
+                        print("🔧 [COORDINATOR WAIT] Player exists but broken (no currentItem) for \(self.mid) - recreating")
+                        didTriggerRecreation = true
+                        existingPlayer.pause()
+                        self.player = nil
+                        self.loadingState = .idle
+                        self.playbackState = .notStarted
+                        SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey, force: true)
+                        self.setupPlayer()
+                    }
+
                     do {
                         try await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                     } catch {
@@ -1921,14 +1952,14 @@ struct SimpleVideoPlayer: View {
                     }
                     attempts += 1
                 }
-                
+
                 // Double-check coordinator still wants this video to play
                 guard self.coordinatorWantsToPlay else {
                     print("⏸️ [COORDINATOR] Coordinator no longer wants \(self.mid) to play")
                     return
                 }
-                
-                if self.loadingState == .loaded, let player = self.player {
+
+                if self.loadingState == .loaded, let player = self.player, player.currentItem != nil {
                     print("▶️ [VIDEO STARTED] Video \(self.mid) started playing after waiting for player")
                     player.volume = 0
                     player.play()
@@ -1936,17 +1967,23 @@ struct SimpleVideoPlayer: View {
                         player.volume = 1.0
                     }
                     self.playbackState = .playing
-                    
+
                     if self.isHoldingRecoveryCover {
                         self.isHoldingRecoveryCover = false
                     }
                 } else {
-                    print("⚠️ [COORDINATOR] Timeout waiting for \(self.mid) (loaded:\(self.loadingState == .loaded))")
+                    print("⚠️ [COORDINATOR] Timeout waiting for \(self.mid) (loaded:\(self.loadingState == .loaded), hasCurrentItem:\(self.player?.currentItem != nil))")
+                    // CRITICAL: Release recovery cover on timeout to prevent stuck spinner
+                    // The 10-second recoveryTimeoutTask will handle full player recreation if needed
+                    if self.isHoldingRecoveryCover {
+                        print("🔓 [COORDINATOR] Releasing recovery cover after timeout for \(self.mid)")
+                        self.isHoldingRecoveryCover = false
+                    }
                 }
             }
             return
         }
-        
+
         // Check if video is already playing
         let isCurrentlyPlaying = player.rate > 0 && playbackState == .playing
         

@@ -935,7 +935,8 @@ struct SingletonVideoPlayerView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
+                // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
+                if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
                     // Show player
                     SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -967,10 +968,15 @@ struct SingletonVideoPlayerView: View {
                 }
             }
             .onAppear {
-                    // If player is nil or doesn't match current video, reload it
-                    if manager.singletonPlayer == nil || manager.currentVideoMid != mid {
+                    // If player is nil, broken (no currentItem), or doesn't match current video, reload it
+                    // CRITICAL: After background release, singletonPlayer may exist but currentItem is nil
+                    let isPlayerBroken = manager.singletonPlayer != nil && manager.singletonPlayer?.currentItem == nil
+                    if manager.singletonPlayer == nil || isPlayerBroken || manager.currentVideoMid != mid {
                         if !hasAttemptedReload {
                             hasAttemptedReload = true
+                            if isPlayerBroken {
+                                print("🔧 [FULLSCREEN] Player exists but broken (no currentItem) - reloading video \(mid)")
+                            }
                             // Reload the video
                             manager.loadVideo(
                                 url: url,
