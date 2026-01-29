@@ -1655,9 +1655,26 @@ struct SimpleVideoPlayer: View {
                 )
                 resetProgressiveBufferTarget(for: player.currentItem)
             }
-            
-            // NOTE: Pausing is handled in handleOnDisappear() to avoid conflicts
-            // Do NOT pause here - let onDisappear handle it when the view actually disappears
+
+            // For tweetDetail mode, pause when scrolled out of view
+            // (onDisappear doesn't fire when just scrolling, only when view is removed)
+            if mode == .tweetDetail, let player = player {
+                if player.rate > 0 {
+                    // Save state before pausing for potential resume
+                    PersistentVideoStateManager.shared.saveState(
+                        videoMid: mid,
+                        currentTime: player.currentTime(),
+                        wasPlaying: true,
+                        context: .detailView
+                    )
+                    player.pause()
+                    playbackState = .paused
+                    print("⏸️ [SimpleVideoPlayer] Paused tweetDetail video \(mid) - scrolled out of view")
+                }
+            }
+
+            // NOTE: For mediaCell, pausing is handled in handleOnDisappear() to avoid conflicts
+            // Do NOT pause mediaCell here - let onDisappear handle it when the view actually disappears
         }
     }
     

@@ -23,6 +23,7 @@ struct CommentVideoInfo: Equatable, Hashable {
 
 /// Coordinates video playback for comments in TweetDetailView
 /// Only one video plays at a time - the topmost visible video
+/// Comment videos only play when the main tweet's video attachment is scrolled out of view
 @MainActor
 class CommentsVideoPlaybackCoordinator: ObservableObject {
 
@@ -47,6 +48,10 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     /// Track if coordinator is active
     private var isActive: Bool = false
 
+    /// Track if the main tweet's video attachment is visible
+    /// When true, comment videos should NOT autoplay
+    private var isMainTweetVideoVisible: Bool = false
+
     // MARK: - Lifecycle
 
     init() {
@@ -61,9 +66,12 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     // MARK: - Public API
 
     /// Activate the coordinator (call when TweetDetailView appears)
-    func activate() {
+    /// - Parameter hasMainVideo: Whether the main tweet has a video attachment
+    func activate(hasMainVideo: Bool = false) {
         isActive = true
-        print("📹 [CommentsVideoCoordinator] Activated")
+        // If main tweet has video, assume it's visible initially (view starts at top)
+        isMainTweetVideoVisible = hasMainVideo
+        print("📹 [CommentsVideoCoordinator] Activated, hasMainVideo: \(hasMainVideo)")
     }
 
     /// Deactivate the coordinator (call when TweetDetailView disappears)
@@ -73,6 +81,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         // This avoids any potential interference with feed videos when returning to the tweet list
         currentlyPlayingVideoId = nil
         visibleCommentVideos.removeAll()
+        isMainTweetVideoVisible = false
         visibilityDebounceTimer?.invalidate()
         visibilityDebounceTimer = nil
         print("📹 [CommentsVideoCoordinator] Deactivated")
@@ -114,6 +123,27 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         scheduleVisibilityUpdate()
     }
 
+    /// Report the visibility of the main tweet's video attachment
+    /// When the main tweet video is visible, comment videos should NOT autoplay
+    /// - Parameter isVisible: Whether the main tweet video is visible on screen
+    func reportMainTweetVideoVisibility(isVisible: Bool) {
+        guard isActive else { return }
+
+        let wasVisible = isMainTweetVideoVisible
+        isMainTweetVideoVisible = isVisible
+
+        // If main tweet video just became hidden, trigger update to start comment video
+        if wasVisible && !isVisible {
+            print("📹 [CommentsVideoCoordinator] Main tweet video scrolled out - enabling comment autoplay")
+            scheduleVisibilityUpdate()
+        }
+        // If main tweet video just became visible, stop any playing comment video
+        else if !wasVisible && isVisible {
+            print("📹 [CommentsVideoCoordinator] Main tweet video visible - pausing comment videos")
+            stopCurrentVideo()
+        }
+    }
+
     // MARK: - Private Methods
 
     private func scheduleVisibilityUpdate() {
@@ -127,6 +157,12 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     private func processVisibilityUpdate() {
         guard isActive else { return }
+
+        // Don't start comment videos while main tweet video is visible
+        if isMainTweetVideoVisible {
+            stopCurrentVideo()
+            return
+        }
 
         // Find the topmost visible video with sufficient visibility
         let eligibleVideos = visibleCommentVideos.values

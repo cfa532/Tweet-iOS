@@ -317,6 +317,15 @@ struct TweetDetailView: View {
     // Comments video playback coordinator
     @StateObject private var commentsVideoCoordinator = CommentsVideoPlaybackCoordinator()
 
+    // Track if the main tweet's media section is visible (for video pause/resume)
+    @State private var isMainMediaVisible = true
+
+    // Track if the main tweet has video attachments
+    private var hasVideoAttachment: Bool {
+        guard let attachments = displayTweet.attachments else { return false }
+        return attachments.contains { $0.type == .video || $0.type == .hls_video }
+    }
+
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
@@ -386,6 +395,22 @@ struct TweetDetailView: View {
                             // Main tweet section with deeper background
                             VStack(spacing: 0) {
                                 mediaSection
+                                    .background(
+                                        // Track main tweet video visibility for comment autoplay coordination
+                                        Group {
+                                            if hasVideoAttachment {
+                                                GeometryReader { geometry in
+                                                    Color.clear
+                                                        .onAppear {
+                                                            updateMainVideoVisibility(geometry: geometry)
+                                                        }
+                                                        .onChange(of: geometry.frame(in: .named("commentsScroll"))) { _, _ in
+                                                            updateMainVideoVisibility(geometry: geometry)
+                                                        }
+                                                }
+                                            }
+                                        }
+                                    )
                                 tweetHeader
                                 documentsSection
                                 tweetContent
@@ -501,7 +526,8 @@ struct TweetDetailView: View {
             DetailVideoManager.shared.activateForDetail()
 
             // Activate comments video playback coordinator
-            commentsVideoCoordinator.activate()
+            // Pass hasVideoAttachment so coordinator knows to suppress comment videos initially
+            commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
 
             // Detail view playback position is persisted independently (not seeded from feed positions).
         }
@@ -567,7 +593,7 @@ struct TweetDetailView: View {
                                 parentTweet: displayTweet,
                                 attachmentIndex: attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? index,
                                 aspectRatio: Float(aspectRatio(for: attachment, at: index)),
-                                shouldLoadVideo: index == selectedMediaIndex, // Only load current video
+                                shouldLoadVideo: index == selectedMediaIndex && isMainMediaVisible, // Only play when selected AND visible
                                 showMuteButton: false
                             )
                             .tag(index)
@@ -908,7 +934,30 @@ struct TweetDetailView: View {
     
     @State private var scrollUpdateTask: Task<Void, Never>?
     @State private var lastStateChangeTime: Date = Date()
-    
+
+    /// Update main tweet video visibility for comment autoplay coordination
+    private func updateMainVideoVisibility(geometry: GeometryProxy) {
+        let frame = geometry.frame(in: .named("commentsScroll"))
+        let screenBounds = UIScreen.main.bounds
+
+        // Calculate how much of the video section is visible
+        let visibleTop = max(frame.minY, 0)
+        let visibleBottom = min(frame.maxY, screenBounds.height)
+        let visibleHeight = max(0, visibleBottom - visibleTop)
+        let totalHeight = frame.height
+
+        // Consider video visible if at least 30% is on screen
+        let visibilityRatio = totalHeight > 0 ? visibleHeight / totalHeight : 0
+        let isVisible = visibilityRatio >= 0.30
+
+        // Update state to control main video playback
+        if isMainMediaVisible != isVisible {
+            isMainMediaVisible = isVisible
+        }
+
+        commentsVideoCoordinator.reportMainTweetVideoVisibility(isVisible: isVisible)
+    }
+
     private func handleScroll(offset: CGFloat) {
         // Cancel any existing update task
         scrollUpdateTask?.cancel()
