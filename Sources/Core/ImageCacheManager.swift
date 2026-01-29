@@ -403,7 +403,18 @@ class ImageCacheManager: @unchecked Sendable {
             print("Error releasing partial image cache: \(error)")
         }
     }
-    
+
+    /// Clear memory cache only (keep disk cache intact)
+    /// Use this for background cleanup - images will reload from disk when needed
+    func clearMemoryCache() {
+        cache.removeAllObjects()
+        cacheKeysQueue.async(flags: .barrier) {
+            self.memoryCachedKeys.removeAll()
+            // Keep avatarCacheKeys - they'll be re-added when loaded from disk
+        }
+        print("🧹 [ImageCacheManager] Cleared memory cache (disk cache preserved)")
+    }
+
     private func getCacheKey(for attachment: MimeiFileType) -> String? {
         // ALWAYS use mid as the cache key (stable identifier)
         // If mid is somehow empty, this is a programming error that should be fixed at the source

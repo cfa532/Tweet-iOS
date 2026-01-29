@@ -341,22 +341,38 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
 
+        // CRITICAL: Save main feed scroll position to survive app termination
+        ScrollPositionManager.shared.savePersistentScrollPositionNow()
+
         // Perform immediate background message check when entering background
         print("[AppDelegate] 🚀 Performing IMMEDIATE background message check on app background")
         performImmediateBackgroundCheck()
 
-        // CRITICAL: Release all video players IMMEDIATELY when entering background
-        // This prevents iOS from terminating the app due to high memory usage
-        // Note: Last frame images are already captured in willResignActive (before this),
-        // and stored in VideoLastFrameCache - they will be shown as placeholders
-        print("🧹 [AppDelegate] Releasing all video players to reduce memory footprint")
+        // CRITICAL: Aggressive memory cleanup to prevent iOS termination
+        // Note: iOS takes the app snapshot BEFORE didEnterBackground, so clearing
+        // caches here won't affect the app switcher preview
+
+        // 1. Release all video players (already captured last frames in willResignActive)
+        print("🧹 [AppDelegate] Releasing all video players")
         SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
 
-        // Stop LocalHTTPServer to release network resources
-        // iOS may terminate apps that hold onto NWListener in background
-        // Server will be restarted on foreground in handleAppWillEnterForeground
+        // 2. Clear video last frame cache (snapshot already taken)
+        print("🧹 [AppDelegate] Clearing video frame cache")
+        VideoLastFrameCache.shared.clearAll()
+
+        // 3. Clear video state cache
+        print("🧹 [AppDelegate] Clearing video state cache")
+        VideoStateCache.shared.clearAllCache()
+
+        // 4. Clear image memory cache (keep disk cache for fast reload)
+        print("🧹 [AppDelegate] Clearing image memory cache")
+        ImageCacheManager.shared.clearMemoryCache()
+
+        // 5. Stop LocalHTTPServer to release network resources
         print("🔌 [AppDelegate] Stopping LocalHTTPServer")
         LocalHTTPServer.shared.stop()
+
+        print("✅ [AppDelegate] Background cleanup complete - memory footprint minimized")
     }
     
     /// Handle app returning to foreground from background state

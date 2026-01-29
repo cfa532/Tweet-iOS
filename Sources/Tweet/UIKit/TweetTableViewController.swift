@@ -15,19 +15,57 @@ import Darwin
 class ScrollPositionManager {
     static let shared = ScrollPositionManager()
     private var scrollPositions: [String: CGFloat] = [:]
-    
-    private init() {}
-    
+
+    // UserDefaults key for persistent scroll position (survives app restart)
+    private let persistentScrollPositionKey = "mainFeedScrollPosition"
+
+    private init() {
+        // Load persistent scroll position on init
+        loadPersistentScrollPosition()
+    }
+
     func saveScrollPosition(_ position: CGFloat, for identifier: String) {
         scrollPositions[identifier] = position
+
+        // Persist main feed position to UserDefaults for app restart survival
+        if identifier == "mainFeed" {
+            persistScrollPosition(position)
+        }
     }
-    
+
     func getScrollPosition(for identifier: String) -> CGFloat? {
         return scrollPositions[identifier]
     }
-    
+
     func clearScrollPosition(for identifier: String) {
         scrollPositions.removeValue(forKey: identifier)
+
+        // Clear persistent position for main feed
+        if identifier == "mainFeed" {
+            UserDefaults.standard.removeObject(forKey: persistentScrollPositionKey)
+        }
+    }
+
+    // MARK: - Persistent Storage (survives app restart)
+
+    private func persistScrollPosition(_ position: CGFloat) {
+        UserDefaults.standard.set(position, forKey: persistentScrollPositionKey)
+    }
+
+    private func loadPersistentScrollPosition() {
+        let position = UserDefaults.standard.double(forKey: persistentScrollPositionKey)
+        if position > 0 {
+            scrollPositions["mainFeed"] = CGFloat(position)
+            print("📍 [SCROLL] Loaded persistent scroll position: \(position)")
+        }
+    }
+
+    /// Save current scroll position immediately (call before app termination)
+    func savePersistentScrollPositionNow() {
+        if let position = scrollPositions["mainFeed"], position > 0 {
+            persistScrollPosition(position)
+            print("📍 [SCROLL] Persisted scroll position for app restart: \(position)")
+        }
     }
 }
 
