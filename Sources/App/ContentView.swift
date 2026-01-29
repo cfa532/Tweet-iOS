@@ -82,11 +82,15 @@ struct ContentView: View {
                     } else if !navigationPath.isEmpty {
                         navigationPath.removeLast(navigationPath.count)
                         selectedTab = 0
+                    } else {
+                        // Already on home tab at root - scroll to top
+                        NotificationCenter.default.post(name: .scrollToTop, object: nil)
                     }
                 }) {
-                    Image(systemName: "house")
+                    let isHomeActive = navigationPath.isEmpty && selectedTab == 0
+                    Image(systemName: isHomeActive ? "house.fill" : "house")
                         .font(.system(size: 24))
-                        .foregroundColor(navigationPath.isEmpty && selectedTab == 0 ? .blue : .gray)
+                        .foregroundColor(isHomeActive ? .blue : .gray)
                 }
                 .frame(maxWidth: .infinity)
                 
