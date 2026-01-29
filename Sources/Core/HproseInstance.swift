@@ -633,16 +633,28 @@ final class HproseInstance: ObservableObject {
                     let comment = try await MainActor.run {
                         return try Tweet.from(dict: dict)
                     }
-                    // Try to fetch user, fall back to skeleton if fetch fails
-                    if let author = try? await fetchUser(comment.authorId) {
+
+                    // Check if there's cached author data (expired or not)
+                    let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
+
+                    // If we have cached data with username and baseUrl, use it regardless of expiration
+                    if cachedAuthor.username != nil && cachedAuthor.baseUrl != nil {
                         await MainActor.run {
-                            comment.author = author
+                            comment.author = cachedAuthor
                         }
+                        print("DEBUG: [fetchComments] Using cached author for \(comment.authorId), skipping network fetch")
                     } else {
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            comment.author = User.getInstance(mid: comment.authorId)
-                            print("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
+                        // Only fetch from network if there's no cached data
+                        if let author = try? await fetchUser(comment.authorId) {
+                            await MainActor.run {
+                                comment.author = author
+                            }
+                        } else {
+                            // Server fetch failed - use skeleton to indicate error
+                            await MainActor.run {
+                                comment.author = User.getInstance(mid: comment.authorId)
+                                print("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
+                            }
                         }
                     }
                     commentsWithAuthors.append(comment)
