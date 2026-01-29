@@ -113,6 +113,7 @@
 		46B95F4C2E0EF77500D81590 /* ImageCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */; };
 		46B95F4E2E0F98CE00D81590 /* ThemeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */; };
 		46B95F502E1269F500D81590 /* IdentifiablePhotosPickerItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */; };
+		46D9079A2F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */; };
 		46DEEPLINK2E00000000000001 /* DeeplinkManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */; };
 		46E5B3022DD9FC3B00AEF31F /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B34E2DDC9F1B00AEF31F /* ProfileView.swift */; };
 		46E5B32B2DDA038E00AEF31F /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E5B32A2DDA038E00AEF31F /* AppConfig.swift */; };
@@ -264,6 +265,7 @@
 		46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCacheManager.swift; sourceTree = "<group>"; };
 		46B95F4D2E0F98CE00D81590 /* ThemeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeManager.swift; sourceTree = "<group>"; };
 		46B95F4F2E1269F500D81590 /* IdentifiablePhotosPickerItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentifiablePhotosPickerItem.swift; sourceTree = "<group>"; };
+		46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsVideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
 		46DEEPLINK2E00000000000000 /* DeeplinkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeeplinkManager.swift; sourceTree = "<group>"; };
 		46E5B32A2DDA038E00AEF31F /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		46E5B3312DDA1AF500AEF31F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Tweet/Assets.xcassets; sourceTree = SOURCE_ROOT; };
@@ -388,6 +390,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */,
 				A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */,
 				46A73E3B2F04C76D001310E5 /* NodePool.swift */,
 				AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */,
@@ -837,6 +840,7 @@
 				4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */,
 				46B03D972E4C44E2000E08DF /* DebounceButtonWrapper.swift in Sources */,
 				7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */,
+				46D9079A2F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift in Sources */,
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */,

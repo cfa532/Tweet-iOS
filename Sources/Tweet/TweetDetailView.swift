@@ -309,11 +309,14 @@ struct TweetDetailView: View {
     @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
-    
+
     // Scroll detection state for top navigation bar
     @State private var isTopNavigationVisible = true
     @State private var previousScrollOffset: CGFloat = 0
-    
+
+    // Comments video playback coordinator
+    @StateObject private var commentsVideoCoordinator = CommentsVideoPlaybackCoordinator()
+
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
@@ -398,7 +401,7 @@ struct TweetDetailView: View {
                             setupInitialData()
                         }
                     }
-                    .coordinateSpace(name: "scroll")
+                    .coordinateSpace(name: "commentsScroll")
                     .refreshable {
                         await refreshTweetAndComments()
                     }
@@ -486,7 +489,7 @@ struct TweetDetailView: View {
             }
         }
         .onAppear {
-            
+
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
@@ -496,7 +499,10 @@ struct TweetDetailView: View {
 
             // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
             DetailVideoManager.shared.activateForDetail()
-            
+
+            // Activate comments video playback coordinator
+            commentsVideoCoordinator.activate()
+
             // Detail view playback position is persisted independently (not seeded from feed positions).
         }
         .onChange(of: originalTweet) { _, _ in
@@ -512,6 +518,9 @@ struct TweetDetailView: View {
 
             // Deactivate manager - this handles session end and lifecycle teardown
             DetailVideoManager.shared.deactivate()
+
+            // Deactivate comments video playback coordinator
+            commentsVideoCoordinator.deactivate()
             
             // Reset top navigation visibility when view disappears
             withAnimation(.easeInOut(duration: 0.3)) {
@@ -681,7 +690,7 @@ struct TweetDetailView: View {
     }
     
     private var commentsListView: some View {
-        CommentListView<CommentItemView>(
+        CommentListView<CommentVideoTrackingWrapper>(
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
@@ -718,12 +727,11 @@ struct TweetDetailView: View {
             ],
             isEmbedded: true, // Embedded in TweetDetailView's ScrollView, avoid nested scrolling
             rowView: { comment in
-                CommentItemView(
+                CommentVideoTrackingWrapper(
                     parentTweet: displayTweet,
                     comment: comment,
-                    isInProfile: false,
-                    onAvatarTap: nil, // NavigationLink will be handled inside CommentItemView
-                    linkToComment: true // Enable NavigationLink wrapping
+                    coordinator: commentsVideoCoordinator,
+                    scrollCoordinateSpace: "commentsScroll"
                 )
             }
         )
@@ -955,6 +963,84 @@ struct TweetDetailView: View {
         }
         
         previousScrollOffset = offset
+    }
+}
+
+// MARK: - Comment Video Tracking Wrapper
+
+/// Wrapper view that tracks video visibility for comments and coordinates autoplay
+@available(iOS 16.0, *)
+struct CommentVideoTrackingWrapper: View {
+    let parentTweet: Tweet
+    @ObservedObject var comment: Tweet
+    let coordinator: CommentsVideoPlaybackCoordinator
+    let scrollCoordinateSpace: String
+
+    /// Returns the first video attachment in the comment, if any
+    private var videoAttachment: (index: Int, attachment: MimeiFileType)? {
+        guard let attachments = comment.attachments else { return nil }
+        for (index, attachment) in attachments.enumerated() {
+            if attachment.type == .video || attachment.type == .hls_video {
+                return (index, attachment)
+            }
+        }
+        return nil
+    }
+
+    var body: some View {
+        CommentItemView(
+            parentTweet: parentTweet,
+            comment: comment,
+            isInProfile: false,
+            onAvatarTap: nil,
+            linkToComment: true
+        )
+        .background(
+            // Only track visibility if the comment has video attachments
+            Group {
+                if let video = videoAttachment {
+                    GeometryReader { geometry in
+                        Color.clear
+                            .onAppear {
+                                updateVisibility(geometry: geometry, videoInfo: video)
+                            }
+                            .onChange(of: geometry.frame(in: .named(scrollCoordinateSpace))) { _ in
+                                updateVisibility(geometry: geometry, videoInfo: video)
+                            }
+                    }
+                }
+            }
+        )
+        .onDisappear {
+            if videoAttachment != nil {
+                coordinator.reportVideoNotVisible(commentId: comment.mid)
+            }
+        }
+    }
+
+    private func updateVisibility(geometry: GeometryProxy, videoInfo: (index: Int, attachment: MimeiFileType)) {
+        let frame = geometry.frame(in: .named(scrollCoordinateSpace))
+        let screenBounds = UIScreen.main.bounds
+
+        // Calculate how much of the comment is visible
+        let visibleTop = max(frame.minY, 0)
+        let visibleBottom = min(frame.maxY, screenBounds.height)
+        let visibleHeight = max(0, visibleBottom - visibleTop)
+        let totalHeight = frame.height
+
+        let visibilityRatio = totalHeight > 0 ? visibleHeight / totalHeight : 0
+
+        if visibilityRatio > 0 {
+            coordinator.reportVideoVisible(
+                commentId: comment.mid,
+                videoMid: videoInfo.attachment.mid,
+                attachmentIndex: videoInfo.index,
+                visibilityRatio: visibilityRatio,
+                yPosition: frame.minY
+            )
+        } else {
+            coordinator.reportVideoNotVisible(commentId: comment.mid)
+        }
     }
 }
 

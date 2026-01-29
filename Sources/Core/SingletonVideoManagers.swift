@@ -1513,14 +1513,19 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         // CRITICAL: Always call endDetailViewSession() to decrement count
         // Only teardown lifecycle observers when count reaches 0
         endDetailViewSession()
-        
+
         guard isActive && activeDetailViewCount == 0 else {
             print("📱 [DetailVideoManager] Session ended - count now \(activeDetailViewCount)")
             return
         }
         isActive = false
         teardownAppLifecycleNotifications()
-        print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed")
+
+        // CRITICAL: Clear the current video player so isDetailViewActive() returns false
+        // This allows feed videos to resume playback when returning from detail view
+        clearCurrentVideo()
+
+        print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed, player cleared")
     }
     
     private func teardownAppLifecycleNotifications() {
