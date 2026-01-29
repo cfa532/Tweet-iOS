@@ -162,6 +162,7 @@
 // MARK: - Tweet Detail
 "Tweet" = "ツイート";
 "Comments" = "コメント";
+"No comment yet" = "まだコメントはありません";
 
 // MARK: - Loading States
 "Loading tweets..." = "ツイートを読み込み中...";

@@ -177,6 +177,7 @@
 // MARK: - Tweet Detail
 "Tweet" = "Tweet";
 "Comments" = "Comments";
+"No comment yet" = "No comment yet";
 
 // MARK: - Loading States
 "Loading tweets..." = "Loading tweets...";

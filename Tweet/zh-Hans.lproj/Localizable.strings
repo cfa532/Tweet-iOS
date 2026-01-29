@@ -165,6 +165,7 @@
 // MARK: - Tweet Detail
 "Tweet" = "推文";
 "Comments" = "评论";
+"No comment yet" = "暂无评论";
 
 // MARK: - Loading States
 "Loading tweets..." = "正在加载推文...";
