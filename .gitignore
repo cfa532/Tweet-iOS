@@ -18,3 +18,4 @@ build/Logs/Build/LogStoreManifest.plist
 /DerivedData
 .DS_Store
 build_test.log
+.DS_Store
