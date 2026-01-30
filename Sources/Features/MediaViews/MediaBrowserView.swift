@@ -990,8 +990,17 @@ struct SingletonVideoPlayerView: View {
                     }
                 }
                 .onChange(of: manager.currentVideoMid) { _, newMid in
-                    // Reset reload flag when video changes
-                    if newMid == mid {
+                    // Reset reload flag when video changes OR when player is cleared (nil)
+                    // This allows retry when loading fails and clears state
+                    if newMid == mid || newMid == nil {
+                        hasAttemptedReload = false
+                    }
+                }
+                .onChange(of: manager.singletonPlayer?.currentItem) { _, newItem in
+                    // CRITICAL: Reset reload flag when player item is cleared
+                    // This handles the case where loadVideo fails and clears the player
+                    // Allowing the view to retry loading
+                    if newItem == nil && manager.currentVideoMid == nil {
                         hasAttemptedReload = false
                     }
                 }

@@ -308,8 +308,22 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 }
             }
         )
+
+        // CRITICAL: Listen for reloadVisibleVideosOnly to recover from long background
+        // AppDelegate posts this after infrastructure restart completes
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .reloadVisibleVideosOnly,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleReloadVisibleVideosOnly()
+                }
+            }
+        )
     }
-    
+
     // MARK: - VideoPlayerLifecycleManager Protocol
     var savedPlaybackState: (wasPlaying: Bool, time: CMTime)?
     var hasRecoveredThisCycle = false
@@ -1463,9 +1477,48 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             } else if !self.isPlaying {
             }
         }
-        
+
     }
-    
+
+    /// Handle reload notification from AppDelegate after long background / infrastructure restart
+    /// CRITICAL: This is needed because recoverFromBackground() may have cleared the player
+    /// or the player may have become broken during the background period.
+    /// AppDelegate posts .reloadVisibleVideosOnly AFTER infrastructure is fully ready.
+    private func handleReloadVisibleVideosOnly() {
+        guard isActive else {
+            // Not active, skip recovery
+            return
+        }
+
+        // Check if player needs recreation
+        let playerMissing = (singletonPlayer == nil)
+        let itemMissing = (singletonPlayer?.currentItem == nil)
+        let playerBroken = isPlayerBroken()
+
+        guard playerMissing || itemMissing || playerBroken else {
+            // Player is healthy, nothing to do
+            print("✅ [FullScreenVideoManager] handleReloadVisibleVideosOnly - player healthy")
+            return
+        }
+
+        print("🔄 [FullScreenVideoManager] handleReloadVisibleVideosOnly - player needs reload (playerMissing:\(playerMissing), itemMissing:\(itemMissing), playerBroken:\(playerBroken))")
+
+        // Check if we have saved video info to reload
+        guard let videoMid = currentVideoMid else {
+            print("⚠️ [FullScreenVideoManager] handleReloadVisibleVideosOnly - no video info to reload")
+            return
+        }
+
+        // Get the video URL from SharedAssetCache or reconstruct it
+        // We need to reload the video - the view's onAppear should handle this
+        // Clear state to trigger reload in SingletonVideoPlayerView
+        clearBrokenPlayer()
+
+        // Post notification so the fullscreen view knows to reload
+        // SingletonVideoPlayerView checks player state in onAppear and will call loadVideo
+        print("🔔 [FullScreenVideoManager] Cleared broken player - view should reload video \(videoMid)")
+    }
+
     // No "search function" anymore; the coordinator is canonical.
 }
 

@@ -2952,13 +2952,38 @@ struct SimpleVideoPlayer: View {
                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                     attempts += 1
                 }
-                
+
                 // Check if player is ready and should be playing
+                guard self.isVisible, self.shouldLoadVideo else {
+                    return
+                }
+
+                // CRITICAL FIX: If player is still not ready after timeout, force retry
+                // This handles the case where infrastructure wasn't ready during initial attempt
+                let playerStillLoading = self.player == nil || self.loadingState.isLoading
+                let playerItemMissing = self.player?.currentItem == nil
+                let playerItemNotReady = self.player?.currentItem?.status != .readyToPlay
+
+                if playerStillLoading || playerItemMissing || playerItemNotReady {
+                    print("⚠️ [FOREGROUND RECOVERY TIMEOUT] Video \(self.mid) still not ready after 3s - forcing retry (loading:\(playerStillLoading), itemMissing:\(playerItemMissing), notReady:\(playerItemNotReady))")
+
+                    // Clear stuck state and retry
+                    self.setupPlayerTask?.cancel()
+                    self.setupPlayerTask = nil
+                    SharedAssetCache.shared.removeInvalidPlayer(for: self.playerCacheKey, force: true)
+                    self.player?.pause()
+                    self.player = nil
+                    self.loadingState = .idle
+                    self.playbackState = .notStarted
+                    self.retryAttempts = 0  // Reset retry counter for fresh attempt
+
+                    // Retry setup
+                    self.setupPlayer()
+                    return
+                }
+
                 guard let player = self.player,
-                      let playerItem = player.currentItem,
-                      playerItem.status == .readyToPlay,
-                      self.isVisible,
-                      self.shouldLoadVideo else {
+                      let playerItem = player.currentItem else {
                     return
                 }
                 
