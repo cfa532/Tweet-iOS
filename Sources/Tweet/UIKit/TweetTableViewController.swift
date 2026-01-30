@@ -1157,8 +1157,13 @@ class TweetTableViewController: UITableViewController {
 
                 estimate += embeddedHeight + 8  // +8 for spacing around embedded tweet
             } else {
-                // Not loaded yet - use conservative estimate
-                estimate += 160
+                // CRITICAL: Not loaded yet - estimate PLACEHOLDER height, not final height!
+                // TweetItemView shows a 60pt fixed placeholder when embedded tweet isn't loaded
+                // (see TweetItemView.swift line 512: .frame(height: 60))
+                // Estimating the final loaded height (160-280pt) causes jumps when placeholder renders
+                let placeholderHeight: CGFloat = 60
+                let topPadding: CGFloat = (tweet.content?.isEmpty ?? true) ? 0 : 8
+                estimate += placeholderHeight + topPadding
             }
         }
 
@@ -1213,9 +1218,21 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Cache height if not already cached and cell has valid height
+        // Cache height ONLY if:
+        // 1. Not already cached
+        // 2. Cell has valid height
+        // 3. If tweet has embedded tweet, it must be fully loaded (to prevent caching placeholder height)
         if tweet.cachedHeight == nil && cell.frame.height > 0 {
-            tweet.cachedHeight = cell.frame.height
+            // Check if embedded tweet is required and loaded
+            let needsEmbeddedTweet = tweet.originalTweetId != nil
+            let embeddedTweetLoaded = !needsEmbeddedTweet ||
+                                     (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
+
+            // Only cache if embedded tweet doesn't exist OR is fully loaded
+            if embeddedTweetLoaded {
+                tweet.cachedHeight = cell.frame.height
+            }
+            // If embedded tweet not loaded, don't cache - we'll cache later when it loads
         }
     }
 
@@ -1563,59 +1580,55 @@ class TweetTableViewController: UITableViewController {
 // MARK: - Prefetching (Performance Optimization)
 extension TweetTableViewController: UITableViewDataSourcePrefetching {
     func tableView(_ tableView: UITableView, prefetchRowsAt indexPaths: [IndexPath]) {
-        // PERFORMANCE: Only prefetch a limited number of cells ahead (max 3)
-        // This prepares cells before they're visible, eliminating the 330ms freeze
+        // PERFORMANCE: Prefetch limited cells ahead (max 3) to prevent height jumps
+        // Synchronous execution ensures embedded tweets are loaded before cells display
         let limitedPrefetch = Array(indexPaths.prefix(3))
 
-        // Prefetch on background thread to avoid blocking scroll
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
+        // CRITICAL: Prefetch synchronously on main thread to ensure embedded tweets are loaded
+        // BEFORE cells are displayed. This prevents height jumps from late-loading embedded tweets.
+        // The cache fetch is fast (in-memory), so this won't block scrolling.
+        for indexPath in limitedPrefetch {
+            let totalRows = self.pinnedTweets.count + self.tweets.count
+            guard indexPath.row < totalRows else { continue }
 
-            for indexPath in limitedPrefetch {
-                let totalRows = self.pinnedTweets.count + self.tweets.count
-                guard indexPath.row < totalRows else { continue }
+            let tweet: Tweet
+            if indexPath.row < self.pinnedTweets.count {
+                tweet = self.pinnedTweets[indexPath.row]
+            } else {
+                let regularIndex = indexPath.row - self.pinnedTweets.count
+                guard regularIndex < self.tweets.count else { continue }
+                tweet = self.tweets[regularIndex]
+            }
 
-                let tweet: Tweet
-                if indexPath.row < self.pinnedTweets.count {
-                    tweet = self.pinnedTweets[indexPath.row]
-                } else {
-                    let regularIndex = indexPath.row - self.pinnedTweets.count
-                    guard regularIndex < self.tweets.count else { continue }
-                    tweet = self.tweets[regularIndex]
-                }
-
-                // Prefetch embedded tweet data if present
-                if let originalTweetId = tweet.originalTweetId {
-                    // Load from cache in background
-                    if let cachedEmbeddedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-                        // Warm up the singleton on main thread
-                        DispatchQueue.main.async {
-                            _ = Tweet.getInstance(
-                                mid: cachedEmbeddedTweet.mid,
-                                authorId: cachedEmbeddedTweet.authorId,
-                                content: cachedEmbeddedTweet.content,
-                                timestamp: cachedEmbeddedTweet.timestamp,
-                                title: cachedEmbeddedTweet.title,
-                                originalTweetId: cachedEmbeddedTweet.originalTweetId,
-                                originalAuthorId: cachedEmbeddedTweet.originalAuthorId,
-                                author: cachedEmbeddedTweet.author,
-                                favorites: cachedEmbeddedTweet.favorites,
-                                favoriteCount: cachedEmbeddedTweet.favoriteCount ?? 0,
-                                bookmarkCount: cachedEmbeddedTweet.bookmarkCount ?? 0,
-                                retweetCount: cachedEmbeddedTweet.retweetCount ?? 0,
-                                commentCount: cachedEmbeddedTweet.commentCount ?? 0,
-                                attachments: cachedEmbeddedTweet.attachments,
-                                isPrivate: cachedEmbeddedTweet.isPrivate,
-                                downloadable: cachedEmbeddedTweet.downloadable
-                            )
-                        }
-                    }
+            // Prefetch embedded tweet data if present
+            // SYNCHRONOUS load ensures it's available before cell is displayed
+            if let originalTweetId = tweet.originalTweetId {
+                if let cachedEmbeddedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
+                    // Warm up the singleton immediately (already on main thread)
+                    _ = Tweet.getInstance(
+                        mid: cachedEmbeddedTweet.mid,
+                        authorId: cachedEmbeddedTweet.authorId,
+                        content: cachedEmbeddedTweet.content,
+                        timestamp: cachedEmbeddedTweet.timestamp,
+                        title: cachedEmbeddedTweet.title,
+                        originalTweetId: cachedEmbeddedTweet.originalTweetId,
+                        originalAuthorId: cachedEmbeddedTweet.originalAuthorId,
+                        author: cachedEmbeddedTweet.author,
+                        favorites: cachedEmbeddedTweet.favorites,
+                        favoriteCount: cachedEmbeddedTweet.favoriteCount ?? 0,
+                        bookmarkCount: cachedEmbeddedTweet.bookmarkCount ?? 0,
+                        retweetCount: cachedEmbeddedTweet.retweetCount ?? 0,
+                        commentCount: cachedEmbeddedTweet.commentCount ?? 0,
+                        attachments: cachedEmbeddedTweet.attachments,
+                        isPrivate: cachedEmbeddedTweet.isPrivate,
+                        downloadable: cachedEmbeddedTweet.downloadable
+                    )
                 }
             }
         }
     }
 
     func tableView(_ tableView: UITableView, cancelPrefetchingForRowsAt indexPaths: [IndexPath]) {
-        // No action needed - prefetch is lightweight background work
+        // No action needed - prefetch is lightweight synchronous work
     }
 }
