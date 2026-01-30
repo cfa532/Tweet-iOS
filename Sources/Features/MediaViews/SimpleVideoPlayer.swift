@@ -1162,8 +1162,21 @@ struct SimpleVideoPlayer: View {
             // Detail/fullscreen modes start immediately (user is focused on them)
             // CRITICAL: Skip delay if coordinator already wants this video to play (edge case at beginning)
             if mode == .mediaCell && !coordinatorWantsToPlay {
-                Task {
+                // Cancel any existing delayed setup task
+                setupPlayerTask?.cancel()
+
+                // Capture the current video ID to detect cell reuse
+                let capturedMid = self.mid
+
+                setupPlayerTask = Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 150_000_000) // 150ms delay
+
+                    // CRITICAL: Check if cell was recycled with different video during delay
+                    guard !Task.isCancelled else { return }
+                    guard self.mid == capturedMid else {
+                        print("⚠️ [SimpleVideoPlayer] Skipping setup - cell recycled (was: \(capturedMid), now: \(self.mid))")
+                        return
+                    }
                     guard self.player == nil, self.shouldLoadVideo, self.isVisible else { return }
                     setupPlayer()
                 }
@@ -3273,8 +3286,20 @@ struct SimpleVideoPlayer: View {
                             }
                     } else {
                         // MediaCell: Use custom AVPlayerLayer wrapper (no controls, respects mute state)
-                        AVPlayerLayerView(player: player)
-                            .id(uniqueViewId) // Hash of tweet+video+state for unique identity
+                        // CRITICAL: Only show player layer when it has a valid item, OR when we've initialized
+                        // This prevents black screen flicker during fast scroll when player is still loading
+                        let hasValidItem = player.currentItem != nil
+                        let shouldShowLayer = hasValidItem || hasInitialized || loadingState.isLoaded
+
+                        if shouldShowLayer {
+                            AVPlayerLayerView(player: player)
+                                .id(uniqueViewId) // Hash of tweet+video+state for unique identity
+                        } else {
+                            // Player is loading - show black placeholder while waiting
+                            // The last frame overlay below will cover this if available
+                            Rectangle()
+                                .fill(Color.black)
+                        }
                     }
                 } else {
                     // Show placeholder when player is detached (background state)
