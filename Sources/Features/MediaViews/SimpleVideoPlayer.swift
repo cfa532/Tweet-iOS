@@ -823,8 +823,15 @@ struct SimpleVideoPlayer: View {
                 }
             }
 
-            // If we still didn't see frames, keep the cover (spinner stays) and let watchdog/retry handle.
-            // Recovery polling timeout - video may still be loading
+            // Polling timeout - force release the cover to prevent infinite spinner
+            // If player is still broken, user can tap to retry or it will be handled by visibility change
+            print("⚠️ [SimpleVideoPlayer] Recovery polling timeout after 3.5s for \(self.mid) - forcing cover release")
+
+            // Always release the cover after timeout to prevent infinite spinner
+            // This ensures user can see the actual player state (black screen, error, or playing)
+            withAnimation(.easeOut(duration: 0.25)) {
+                self.isHoldingRecoveryCover = false
+            }
         }
     }
     
@@ -2419,6 +2426,23 @@ struct SimpleVideoPlayer: View {
         // Seeking puts player in transitional state that looks "broken" but is actually just mid-seek
         if isSeekingToBeginning {
             print("⏭️ [VIDEO RECOVERY] Skipping health check - video is seeking to beginning")
+            return
+        }
+
+        // SPECIAL CASE: Player shell exists but item was removed to free memory
+        // Reload item into existing player instead of recreating everything
+        if let player = self.player, player.currentItem == nil,
+           player.error == nil, // Player itself is not broken
+           let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: playerCacheKey),
+           cachedPlayer === player { // Verify it's the same cached player shell
+
+            print("🔄 [VIDEO RECOVERY] Reloading item into existing player shell for \(mid)")
+
+            // Player shell is healthy, just needs its item reloaded
+            // Let setupPlayer handle the reload - it will reuse the shell from cache
+            loadingState = .idle
+            playbackState = .notStarted
+            setupPlayer()
             return
         }
 

@@ -793,10 +793,32 @@ class SharedAssetCache: ObservableObject {
         // CRITICAL: Cache key must ALWAYS be the mediaID (video attachment mid).
         // tweetId must never affect player caching; it caused incorrect reuse/eviction behavior.
         let cacheKey = mediaID
-        
+
         // Try to get cached player first
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
-            return cachedPlayer
+            // Check if this is a player shell (item was removed to free memory)
+            if cachedPlayer.currentItem == nil {
+                print("🔄 [SharedAssetCache] Found player shell for \(mediaID), reloading item...")
+                // Player exists but item was cleared - reload the item into existing player
+                do {
+                    let playerItem = try await getOrCreatePlayerItem(for: url, mediaID: mediaID, mediaType: mediaType)
+                    await MainActor.run {
+                        cachedPlayer.replaceCurrentItem(with: playerItem)
+                        print("✅ [SharedAssetCache] Reloaded item into player shell for \(mediaID)")
+                    }
+                    return cachedPlayer
+                } catch {
+                    // Failed to reload item - fall through to create new player
+                    print("⚠️ [SharedAssetCache] Failed to reload item into shell: \(error)")
+                    // Remove broken shell from cache
+                    await MainActor.run {
+                        _ = playerCache.removeValue(forKey: cacheKey)
+                    }
+                }
+            } else {
+                // Player has item - return it
+                return cachedPlayer
+            }
         }
         
         // NEW: Throttle concurrent player creation to prevent memory spikes
@@ -2044,6 +2066,34 @@ class SharedAssetCache: ObservableObject {
     
     /// Clear video players for background recovery after long background periods
     /// This is called when app returns from extended background (>5 minutes)
+    /// Release video memory but keep AVPlayer shells for fast recovery
+    /// This releases heavy video buffers while preserving player objects for quick resume
+    func releaseVideoMemoryButKeepPlayers() {
+        print("💾 [SharedAssetCache] Releasing video memory (keeping player shells for fast recovery)")
+
+        // Pause all players and detach their items to release video buffers
+        // This releases the heavy memory (decoded frames, buffered data) but keeps the AVPlayer objects
+        for (key, player) in playerCache {
+            player.pause()
+            player.replaceCurrentItem(with: nil) // Releases video buffers and assets
+            print("💾 [SharedAssetCache] Released memory for player: \(key)")
+        }
+        // DON'T remove from playerCache - keep the shells for fast recovery
+
+        // Clear CachingPlayerItem instances - they hold heavy references
+        cachingPlayerItems.removeAll()
+
+        // Clear assets - they contain the heavy video data
+        assetCache.removeAll()
+
+        // Cancel loading tasks to prevent memory usage during background
+        loadingTasks.removeAll()
+        preloadTasks.removeAll()
+
+        // Keep playerCache, resourceLoaderDelegates, cacheTimestamps for fast recovery
+        print("💾 [SharedAssetCache] Memory released - kept \(playerCache.count) player shells for recovery")
+    }
+
     func clearVideoPlayersForBackgroundRecovery() {
         // Clear all cached players - they may have invalid video layers
         // Players will be recreated on demand with fresh video layers
@@ -2052,20 +2102,20 @@ class SharedAssetCache: ObservableObject {
             player.replaceCurrentItem(with: nil) // CRITICAL: Detach the item to invalidate layer
         }
         playerCache.removeAll()
-        
+
         // Clear CachingPlayerItem instances - they hold references to old players
         cachingPlayerItems.removeAll()
-        
+
         // CRITICAL: Also clear assets - they can have stale video layers after backgrounding
         assetCache.removeAll()
-        
+
         // Clear loading tasks to force fresh loads
         loadingTasks.removeAll()
         preloadTasks.removeAll()
-        
+
         // CRITICAL: Clear disk cache status so videos will reload fresh from network
         diskCacheStatus.removeAll()
-        
+
         // Keep resourceLoaderDelegates - they're needed for HLS playback
         // Keep cacheTimestamps - they track cache expiration
         // Keep HLS disk cache - playlists now use relative paths (port-independent!)

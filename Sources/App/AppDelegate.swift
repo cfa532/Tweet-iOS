@@ -352,9 +352,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Note: iOS takes the app snapshot BEFORE didEnterBackground, so clearing
         // caches here won't affect the app switcher preview
 
-        // 1. Release all video players (already captured last frames in willResignActive)
-        print("🧹 [AppDelegate] Releasing all video players")
-        SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+        // 1. Release video memory but keep player shells for fast recovery
+        // This releases heavy video buffers while keeping AVPlayer objects for quick resume
+        print("💾 [AppDelegate] Releasing video memory (keeping player shells)")
+        SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
 
         // 2. Clear video last frame cache (snapshot already taken)
         print("🧹 [AppDelegate] Clearing video frame cache")
@@ -372,7 +373,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("🔌 [AppDelegate] Stopping LocalHTTPServer")
         LocalHTTPServer.shared.stop()
 
-        print("✅ [AppDelegate] Background cleanup complete - memory footprint minimized")
+        print("✅ [AppDelegate] Background cleanup complete - memory released, player shells preserved")
     }
     
     /// Handle app returning to foreground from background state
