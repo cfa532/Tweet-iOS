@@ -124,6 +124,7 @@ class TweetTableViewController: UITableViewController {
     private var lastVideoVisibilityUpdate: Date?
     private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms - faster video starts
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
+    private var lastPreloadTweetIds: Set<String> = [] // Cache last preload zone tweet IDs
     
     // Cached main content rect to avoid recalculating on every visibility check
     private var cachedMainContentRect: CGRect?
@@ -1336,14 +1337,23 @@ class TweetTableViewController: UITableViewController {
     private func updateVisibleTweetsForVideoPlayback() {
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
 
-        // OPTIMIZATION: Use simpler visibility calculation to reduce CPU usage
-        // Instead of complex intersection calculations, use index-based approximation
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
 
-        // Convert visible index paths to tweet IDs more efficiently
+        // Calculate the actual user-visible rect, excluding areas behind translucent bars.
+        // adjustedContentInset accounts for navigation bar, status bar, and toolbar.
+        let insets = tableView.adjustedContentInset
+        let visibleTop = tableView.contentOffset.y + insets.top
+        let visibleBottom = tableView.contentOffset.y + tableView.bounds.height - insets.bottom
+        let visibleRect = CGRect(x: 0, y: visibleTop, width: tableView.bounds.width, height: max(0, visibleBottom - visibleTop))
+
+        // Only include tweets whose cells actually intersect the user-visible area
         let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
             let totalRows = pinnedTweets.count + tweets.count
             guard indexPath.row < totalRows else { return nil }
+
+            // Check if this cell's frame is within the visible rect (not behind bars)
+            let cellRect = tableView.rectForRow(at: indexPath)
+            guard cellRect.intersects(visibleRect) else { return nil }
 
             // Determine which tweet this row represents
             if indexPath.row < pinnedTweets.count {
@@ -1360,6 +1370,35 @@ class TweetTableViewController: UITableViewController {
         if visibleTweetIds != lastVisibleTweetIds {
             lastVisibleTweetIds = visibleTweetIds
             videoCoordinator.updateVisibleTweets(visibleTweetIds)
+        }
+
+        // Compute preload zone: extend visible rows by a buffer for video preloading.
+        // This uses spatial proximity (actual row neighbors) instead of index-based
+        // adjacency in the allVideos array, which may skip many non-video tweets.
+        if let firstVisible = visibleIndexPaths.first, let lastVisible = visibleIndexPaths.last {
+            let totalRows = pinnedTweets.count + tweets.count
+            let preloadBuffer = 5
+            let preloadMin = max(0, firstVisible.row - preloadBuffer)
+            let preloadMax = min(totalRows - 1, lastVisible.row + preloadBuffer)
+
+            var preloadTweetIds = Set<String>()
+            for row in preloadMin...preloadMax {
+                // Skip rows already in the visible set
+                if row >= firstVisible.row && row <= lastVisible.row { continue }
+                if row < pinnedTweets.count {
+                    preloadTweetIds.insert(pinnedTweets[row].mid)
+                } else {
+                    let regularIndex = row - pinnedTweets.count
+                    if regularIndex < tweets.count {
+                        preloadTweetIds.insert(tweets[regularIndex].mid)
+                    }
+                }
+            }
+
+            if preloadTweetIds != lastPreloadTweetIds {
+                lastPreloadTweetIds = preloadTweetIds
+                videoCoordinator.updateNearbyTweetsForPreloading(preloadTweetIds)
+            }
         }
     }
     

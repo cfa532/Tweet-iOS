@@ -16,7 +16,7 @@ enum Constants {
     
     // Cache Configuration - RESTORED to original limits for better performance
     static let MAX_ASSET_CACHE_SIZE = 40
-    static let MAX_PLAYER_CACHE_SIZE = 6 // number of players to cache in memory (4 visible + 2 preload)
+    static let MAX_PLAYER_CACHE_SIZE = 10 // number of players to cache (players released on background)
     static let MAX_CONCURRENT_PLAYER_CREATIONS = 4 // Research-backed: iPhone supports 4 connections/host by default, matches iOS network best practices
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 300 // 5 minutes - reasonable balance of memory vs performance
     

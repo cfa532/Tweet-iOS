@@ -1290,6 +1290,21 @@ class VideoPlaybackCoordinator: ObservableObject {
         return result
     }
 
+    /// Preload videos for nearby (but not yet visible) tweets.
+    /// Called by the table view controller with spatially adjacent tweet IDs
+    /// that are just outside the visible area, providing better preloading than
+    /// index-based adjacency in the allVideos array.
+    func updateNearbyTweetsForPreloading(_ nearbyTweetIds: Set<String>) {
+        let videosToPreload = allVideos.filter {
+            nearbyTweetIds.contains($0.cellTweetId)
+                && $0.isInVisibleMediaRange
+                && !preloadedVideoMids.contains($0.videoMid)
+        }
+        for video in videosToPreload {
+            preloadVideoAsset(video)
+        }
+    }
+
     /// Clear preloaded video tracking (called when video list is rebuilt)
     private func clearPreloadedTracking() {
         preloadedVideoMids.removeAll()
