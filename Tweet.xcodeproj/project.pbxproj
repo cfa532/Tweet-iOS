@@ -99,6 +99,7 @@
 		46B03D992E4C56C2000E08DF /* HapticButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */; };
 		46B03D9B2E4D7336000E08DF /* NotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B03D9A2E4D7336000E08DF /* NotificationManager.swift */; };
 		46B1F4E02E05AF3700B3CE6C /* HLSVideoProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */; };
+		46B25DF12F35836100F0EE94 /* TweetHeightCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B25DF02F35836100F0EE94 /* TweetHeightCache.swift */; };
 		46B795862F21B0D70060DCB3 /* LightweightVideoPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B795852F21B0D70060DCB3 /* LightweightVideoPlayerView.swift */; };
 		46B795962F2201920060DCB3 /* TweetHeightCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B795952F2201920060DCB3 /* TweetHeightCalculator.swift */; };
 		46B95F4C2E0EF77500D81590 /* ImageCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */; };
@@ -242,6 +243,7 @@
 		46B03D982E4C56C2000E08DF /* HapticButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticButtonStyle.swift; sourceTree = "<group>"; };
 		46B03D9A2E4D7336000E08DF /* NotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationManager.swift; sourceTree = "<group>"; };
 		46B1F4DF2E05AF3700B3CE6C /* HLSVideoProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLSVideoProcessor.swift; sourceTree = "<group>"; };
+		46B25DF02F35836100F0EE94 /* TweetHeightCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetHeightCache.swift; sourceTree = "<group>"; };
 		46B795852F21B0D70060DCB3 /* LightweightVideoPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightweightVideoPlayerView.swift; sourceTree = "<group>"; };
 		46B795952F2201920060DCB3 /* TweetHeightCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetHeightCalculator.swift; sourceTree = "<group>"; };
 		46B95F4B2E0EF77100D81590 /* ImageCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCacheManager.swift; sourceTree = "<group>"; };
@@ -372,6 +374,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				46B25DF02F35836100F0EE94 /* TweetHeightCache.swift */,
 				46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */,
 				A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */,
 				46A73E3B2F04C76D001310E5 /* NodePool.swift */,
@@ -908,6 +911,7 @@
 				46349FAD2F23491E00CBDE7D /* SharedVideoPlayerManager.swift in Sources */,
 				46E5B36D2DE3617400AEF31F /* AvatarFullScreenView.swift in Sources */,
 				469A99502DEBFBC100954049 /* Tweet.swift in Sources */,
+				46B25DF12F35836100F0EE94 /* TweetHeightCache.swift in Sources */,
 				46E5B3512DDCA00000AEF31F /* Settings.swift in Sources */,
 				46E5B3672DE2DD2900AEF31F /* TweetListView.swift in Sources */,
 				46E5B33A2DDA315700AEF31F /* RecommendedTweetView.swift in Sources */,

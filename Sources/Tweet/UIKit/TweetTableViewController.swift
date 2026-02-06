@@ -1232,6 +1232,7 @@ class TweetTableViewController: UITableViewController {
             // Only cache if embedded tweet doesn't exist OR is fully loaded
             if embeddedTweetLoaded {
                 tweet.cachedHeight = cell.frame.height
+                TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
             }
             // If embedded tweet not loaded, don't cache - we'll cache later when it loads
         }
