@@ -1731,8 +1731,22 @@ struct SimpleVideoPlayer: View {
             guard isVisible else { return }
             guard !DetailVideoManager.shared.isDetailViewActive() else { return }
             guard coordinatorWantsToPlay else { return }
-            guard let player = player, loadingState == .loaded else { return }
-            
+
+            // FIX: Handle case where player isn't ready after overlay dismissal
+            // This can happen due to race condition between overlay notification and coordinator play command
+            guard let player = player, loadingState == .loaded else {
+                // Player not ready but coordinator wants to play - trigger setup if needed
+                if player == nil && shouldLoadVideo && !loadingState.isLoading {
+                    print("🔧 [OVERLAY DISMISS] Player nil but coordinatorWantsToPlay=true - triggering setup for \(mid)")
+                    setupPlayer()
+                } else if loadingState == .idle && shouldLoadVideo {
+                    print("🔧 [OVERLAY DISMISS] Loading state idle but coordinatorWantsToPlay=true - triggering setup for \(mid)")
+                    setupPlayer()
+                }
+                // Player will start playing when ready via handlePlayerChange or loading state change
+                return
+            }
+
             if player.rate == 0 {
                 player.isMuted = MuteState.shared.isMuted
                 player.volume = 0
