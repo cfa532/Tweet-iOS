@@ -404,7 +404,24 @@ struct ContentView: View {
             }
         )
         
-        // 9. Deeplink received
+        // 9. Navigate guest user to alphaId profile
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .appUserReady,
+                object: nil,
+                queue: .main
+            ) { _ in
+                guard self.hproseInstance.appUser.isGuest else { return }
+                guard self.navigationPath.isEmpty else { return }
+                guard let alphaId = Gadget.getAlphaIds().first else { return }
+                let alphaUser = User.getInstance(mid: alphaId)
+                guard alphaUser.username != nil else { return }
+                self.selectedTab = 0
+                self.navigationPath.append(alphaUser)
+            }
+        )
+
+        // 10. Deeplink received
         notificationObservers.append(
             NotificationCenter.default.addObserver(
                 forName: .deeplinkReceived,
@@ -421,7 +438,7 @@ struct ContentView: View {
             }
         )
         
-        // 10. Deeplink tweet not found
+        // 11. Deeplink tweet not found
         notificationObservers.append(
             NotificationCenter.default.addObserver(
                 forName: .deeplinkTweetNotFound,
