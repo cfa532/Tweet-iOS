@@ -485,31 +485,88 @@ final class HproseInstance: ObservableObject {
     /// - Note: Called during app initialization by `initialize()` method
     /// - Note: Sets `isInitializationComplete = true` once baseUrl is resolved
     func initAppEntry() async throws {
-        guard let entryIP = try await findEntryIP() else {
+        var entryIP: String? = nil
+        var fetchedUser: User? = nil  // Store fetched user from cached baseUrl verification
+
+        // Try using cached baseUrl first if available
+        if let cachedBaseUrl = appUser.baseUrl,
+           let cachedHost = cachedBaseUrl.host {
+            print("🔄 [INIT] Attempting to use cached baseUrl: \(cachedBaseUrl.absoluteString)")
+
+            // Set HproseInstance.baseUrl to cached value temporarily
+            HproseInstance.baseUrl = cachedBaseUrl
+            entryIP = cachedHost
+
+            // For logged-in users, verify cached baseUrl still works
+            if !appUser.isGuest {
+                do {
+                    // Try fetching user data with cached baseUrl (don't force re-resolution)
+                    let user = try await fetchUser(appUser.mid, baseUrl: cachedHost)
+                    if let user = user {
+                        print("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
+                        fetchedUser = user  // Save for later use
+                    } else {
+                        print("⚠️ [INIT] Cached baseUrl returned nil user - falling back to findEntryIP()")
+                        entryIP = nil
+                    }
+                } catch {
+                    print("⚠️ [INIT] Cached baseUrl failed with error: \(error) - falling back to findEntryIP()")
+                    entryIP = nil
+                }
+            } else {
+                // For guest users, assume cached baseUrl is valid (will be verified when fetching data)
+                print("✅ [INIT] Using cached baseUrl for guest user")
+            }
+        }
+
+        // Fallback to findEntryIP if cached baseUrl not available or failed
+        if entryIP == nil {
+            print("🔍 [INIT] Resolving fresh entry IP via findEntryIP()")
+            guard let freshIP = try await findEntryIP() else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
+            }
+            entryIP = freshIP
+            print("✅ [INIT] Fresh entry IP resolved: \(freshIP)")
+        }
+
+        // Ensure we have a valid entryIP at this point
+        guard let finalEntryIP = entryIP else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
         }
-        
+
         if !appUser.isGuest {
-            // Always force refresh of appUser's baseURL on app start to ensure we have the latest IP
-            // Pass empty string to force IP re-resolution and bypass cache
-            let user = try await fetchUser(appUser.mid, baseUrl: "")
-            print("✅ [INIT] appUser data fetched: \(String(describing: user))")
-            
+            // Use already-fetched user if we verified cached baseUrl successfully
+            // Otherwise, fetch user data with the resolved IP
+            var user: User? = fetchedUser
+
+            if user == nil {
+                // Need to fetch user data since we didn't use cached baseUrl or it failed
+                // Pass empty string to force IP re-resolution
+                user = try await fetchUser(appUser.mid, baseUrl: "")
+                print("✅ [INIT] appUser data fetched: \(String(describing: user))")
+            } else {
+                print("✅ [INIT] Using verified appUser data from cached baseUrl")
+            }
+
             if let user = user {
                 // App is now initialized with base connectivity
                 await MainActor.run {
                     isInitializationComplete = true
                     User.updateUserInstance(with: user, true)
                     _appUserId = user.mid
-                    
+
                     // Notify UI that app is ready (tweets can now render with real IP)
                     NotificationCenter.default.post(name: .appUserReady, object: nil)
                 }
-                
+
                 // Ensure the refreshed user with updated baseURL is saved to cache
                 TweetCacheManager.shared.saveUser(user)
-                print("✅ [INIT] App initialized with real IP: \(entryIP)")
-                
+                if fetchedUser != nil {
+                    print("✅ [INIT] App initialized with cached baseUrl: \(finalEntryIP)")
+                } else {
+                    print("✅ [INIT] App initialized with fresh entry IP: \(finalEntryIP)")
+                }
+
                 // Fetch followings and blacklist in background (non-blocking)
                 Task.detached(priority: .background) {
                     let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
@@ -527,39 +584,39 @@ final class HproseInstance: ObservableObject {
                 // DO NOT log out user just because their IPs are temporarily unreachable
                 print("⚠️ [INIT] fetchUser failed but user is logged in - using cached appUser data")
                 print("⚠️ [INIT] User \(appUser.mid) will use cached data until network recovers")
-                
+
                 await MainActor.run {
                     // appUser is already loaded from cache in initializeAppUser()
                     // Just set entry IP as fallback and mark initialization as complete
                     if appUser.baseUrl == nil {
-                        appUser.baseUrl = URL(string: "http://\(entryIP)")
+                        appUser.baseUrl = URL(string: "http://\(finalEntryIP)")
                     }
-                    
+
                     // Ensure followings list has at least alphaIds
                     if appUser.followingList?.isEmpty ?? true {
                         appUser.followingList = Gadget.getAlphaIds()
                     }
-                    
+
                     isInitializationComplete = true
-                    
+
                     // Notify UI that app is ready (will use cached data)
                     NotificationCenter.default.post(name: .appUserReady, object: nil)
                 }
-                
+
                 print("✅ [INIT] App initialized with cached data - network will retry in background")
             }
         } else {
             let user = User.getInstance(mid: Constants.GUEST_ID)
             await MainActor.run {
-                user.baseUrl = URL(string: "http://\(entryIP)")
+                user.baseUrl = URL(string: "http://\(finalEntryIP)")
                 user.followingList = Gadget.getAlphaIds()
                 _appUserId = user.mid
-                
+
                 // App is now initialized since appUser has IP address
                 isInitializationComplete = true
             }
-            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
-            
+            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(finalEntryIP)")
+
             // For guest users, fetch the alphaId user from backend now that we have proper IP
             await fetchAlphaIdUserForGuest()
         }
