@@ -400,6 +400,7 @@ struct ContentView: View {
                 object: nil,
                 queue: .main
             ) { _ in
+                self.isNavigationVisible = true
                 self.checkForPendingUpload()
             }
         )
