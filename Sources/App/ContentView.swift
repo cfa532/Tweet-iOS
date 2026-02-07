@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var pendingUpload: TweetUploadManager.PendingTweetUpload? = nil
     @State private var showPendingUploadDialog = false
     @State private var showCloudDriveLimitAlert = false
+    @State private var showLoginSheet = false
     @State private var notificationObservers: [NSObjectProtocol] = []
     
     var body: some View {
@@ -96,7 +97,9 @@ struct ContentView: View {
                 
                 // Chat Tab
                 Button(action: {
-                    if selectedTab != 1 {
+                    if hproseInstance.appUser.isGuest {
+                        showLoginSheet = true
+                    } else if selectedTab != 1 {
                         selectedTab = 1
                     } else {
                         // Already on chat tab - navigate back to chat list
@@ -119,6 +122,10 @@ struct ContentView: View {
                 
                 // Compose Tab
                 Button(action: {
+                    if hproseInstance.appUser.isGuest {
+                        showLoginSheet = true
+                        return
+                    }
                     // Check if user has no valid cloudDrivePort and has reached tweet limit
                     let cloudDrivePort = hproseInstance.appUser.cloudDrivePort
                     let tweetCount = hproseInstance.appUser.tweetCount ?? 0
@@ -161,8 +168,12 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
         }
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
         }
         .onChange(of: showComposeSheet) { _, isPresented in
             if isPresented {

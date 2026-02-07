@@ -26,6 +26,7 @@ struct ReplyEditorView: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .error
+    @State private var showLoginSheet = false
     @FocusState private var isTextFieldFocused: Bool
     var onClose: (() -> Void)? = nil
     var onExpandedClose: (() -> Void)? = nil
@@ -72,6 +73,9 @@ struct ReplyEditorView: View {
         }
         .sheet(isPresented: $showImagePicker) {
             PhotosPicker("Select Media", selection: $selectedItems, matching: .any(of: [.images, .videos]))
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
         }
         .onAppear {
             // Set initial expanded state if requested
@@ -157,7 +161,11 @@ struct ReplyEditorView: View {
     
     private var collapsedView: some View {
         Button(action: {
-            isExpanded = true
+            if hproseInstance.appUser.isGuest {
+                showLoginSheet = true
+            } else {
+                isExpanded = true
+            }
         }) {
             HStack(spacing: 12) {
                 // User avatar

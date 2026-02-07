@@ -565,68 +565,31 @@ struct TweetActionButtonsView: View {
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
             }
         }
-        .sheet(item: $shareSheetItems, onDismiss: {
-            // Reset state when sheet is dismissed
-            attachmentPreviewImage = nil
-            isPreparingShare = false
-            print("DEBUG: [SHARE] Sheet dismissed, state cleared")
-            onShareVisibilityChange?(false)
+        .background(
+            ShareSheet(
+                shareData: $shareSheetItems,
+                onPresented: {
+                    isPreparingShare = false
+                    onShareVisibilityChange?(true)
+                    print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
+                },
+                onDismiss: {
+                    attachmentPreviewImage = nil
+                    isPreparingShare = false
+                    print("DEBUG: [SHARE] Sheet dismissed, state cleared")
+                    onShareVisibilityChange?(false)
 
-            // CRITICAL: Always end the overlay, even if it was never registered properly
-            // This prevents the coordinator from getting stuck in "covered" state
-            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
+                    OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
 
-            // CRITICAL FIX: Force reload of visible videos after dismissing share sheet
-            // This handles the case where app returned from background while share sheet was active:
-            // 1. Background recovery posted .reloadVisibleVideosOnly
-            // 2. But MediaCell didn't reload because isActuallyVisible=false (share overlay active)
-            // 3. Now that share sheet is dismissed, MediaCell is visible but has nil player (stuck spinner)
-            // Solution: Post reload notification again after overlay ends (same as MediaBrowserView)
-            Task { @MainActor in
-                // CRITICAL: Increased delay from 0.1s to 0.3s to ensure overlay state propagates
-                // The .overlayCoverageChanged notification must be fully processed by SimpleVideoPlayer
-                // before .reloadVisibleVideosOnly arrives, otherwise isActuallyVisible will be false
-                // and the reload will be skipped, leaving the video stuck with black screen + spinner
-                try? await Task.sleep(nanoseconds: 300_000_000) // 0.3 seconds
-
-                // Double-check that overlay was properly cleaned up
-                OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
-
-                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
-            }
-        }) { sheetData in
-            let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
-            onShareVisibilityChange?(true)
-            return ZStack {
-                ShareSheet(activityItems: sheetData.items)
-                
-                // Show loading overlay if still generating preview
-                if isPreparingShare {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
-                    
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        
-                        Text("Generating preview...")
-                            .foregroundColor(.white)
-                            .font(.headline)
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
+                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                        print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
                     }
-                    .padding(32)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(16)
                 }
-            }
-            .onAppear {
-                // Hide spinner only when share sheet actually appears
-                isPreparingShare = false
-                print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
-                // REMOVED: beginOverlay - now called before sheet presents for proper timing
-            }
-        }
+            )
+        )
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
@@ -1592,16 +1555,71 @@ struct TweetActionButtonsView: View {
     }
 }
 
+/// Presents UIActivityViewController directly via UIKit to avoid
+/// SwiftUI .sheet safe-area corruption that causes blank space under the tab bar.
 struct ShareSheet: UIViewControllerRepresentable {
-    var activityItems: [Any]
-    var applicationActivities: [UIActivity]? = nil
+    @Binding var shareData: ShareSheetData?
+    let onPresented: () -> Void
+    let onDismiss: () -> Void
 
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
-        return controller
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = UIViewController()
+        vc.view.isHidden = true
+        vc.view.frame = .zero
+        return vc
     }
 
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        context.coordinator.onPresented = onPresented
+        context.coordinator.onDismiss = onDismiss
+        context.coordinator.dataBinding = $shareData
+
+        if shareData != nil, !context.coordinator.isPresenting {
+            context.coordinator.present(items: shareData!.items)
+        }
+    }
+
+    class Coordinator {
+        var isPresenting = false
+        var dataBinding: Binding<ShareSheetData?>?
+        var onPresented: (() -> Void)?
+        var onDismiss: (() -> Void)?
+
+        func present(items: [Any]) {
+            isPresenting = true
+
+            let activityVC = UIActivityViewController(
+                activityItems: items,
+                applicationActivities: nil
+            )
+
+            activityVC.completionWithItemsHandler = { [weak self] _, _, _, _ in
+                guard let self else { return }
+                self.isPresenting = false
+                DispatchQueue.main.async {
+                    self.dataBinding?.wrappedValue = nil
+                    self.onDismiss?()
+                }
+            }
+
+            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let rootVC = windowScene.windows.first?.rootViewController else {
+                isPresenting = false
+                return
+            }
+
+            var topVC = rootVC
+            while let presented = topVC.presentedViewController {
+                topVC = presented
+            }
+
+            topVC.present(activityVC, animated: true) { [weak self] in
+                self?.onPresented?()
+            }
+        }
+    }
 }
 
 class CustomShareItem: NSObject, UIActivityItemSource {
