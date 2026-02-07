@@ -259,30 +259,14 @@ struct HomeView: View {
             object: nil,
             queue: .main
         ) { [self] _ in
-            // When returning from background, ensure navigation state is consistent
-            // The white space issue occurs when the navigation was in a transition state
-            // Force a definitive state to ensure proper layout
-            print("DEBUG: [HomeView] App returned to foreground, navigation visible: \(isNavigationVisible), scrollOffset: \(scrollOffset)")
-
-            // Force layout recalculation by toggling state without animation, then restoring
-            // This clears any stale layout state from before backgrounding
-            let currentState = isNavigationVisible
-
-            // Immediately set to opposite state (no animation) to force layout invalidation
-            isNavigationVisible = !currentState
-
-            // Then restore the correct state after a brief delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isNavigationVisible = currentState
-                }
-                // Re-post the notification to ensure bottom tab bar is synced
-                NotificationCenter.default.post(
-                    name: .navigationVisibilityChanged,
-                    object: nil,
-                    userInfo: ["isVisible": currentState]
-                )
-            }
+            // Always reset navigation to visible when returning from background
+            print("DEBUG: [HomeView] App returned to foreground, resetting navigation visible to true")
+            isNavigationVisible = true
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
         }
     }
 }

@@ -136,6 +136,14 @@ struct ProfileView: View {
             .onDisappear {
                 handleViewDisappear()
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                isNavigationVisible = true
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": true]
+                )
+            }
     }
     
     @ViewBuilder

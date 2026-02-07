@@ -352,6 +352,9 @@ class TweetTableViewController: UITableViewController {
             // Restore the scroll position after a brief delay to let layout settle
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                 guard let self = self else { return }
+                // Set lastContentOffset before restoring so scrollViewDidScroll sees zero delta
+                // This prevents the restoration from triggering toolbar hiding
+                self.lastContentOffset = savedPosition
                 self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
                 self.scrollPositionBeforeBackground = nil
 
@@ -445,6 +448,7 @@ class TweetTableViewController: UITableViewController {
             if let savedPosition = savedScrollPosition {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self, !self.isScrollingToTop else { return }
+                    self.lastContentOffset = savedPosition
                     self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
                     self.lastScrollOffset = savedPosition
                     self.savedScrollPosition = nil
@@ -456,6 +460,7 @@ class TweetTableViewController: UITableViewController {
                     // Wait a bit longer for layout when restoring from persistent storage
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                         guard let self = self, !self.isScrollingToTop else { return }
+                        self.lastContentOffset = persistentPosition
                         self.tableView.setContentOffset(CGPoint(x: 0, y: persistentPosition), animated: false)
                         self.lastScrollOffset = persistentPosition
                         // Keep position in storage until we scroll away or scroll to top
