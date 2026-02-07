@@ -246,15 +246,15 @@ struct CircularImageCropperView: View {
             height: circleSize * scaleToImage
         )
         
-        NSLog("🔍 [Crop] Image size: \(image.size), Display size: \(displaySize), Scale: \(scale)")
-        NSLog("🔍 [Crop] Offset: \(offset), Circle center: (\(circleCenterX), \(circleCenterY))")
-        NSLog("🔍 [Crop] Crop rect: \(cropRect)")
+        print("🔍 [Crop] Image size: \(image.size), Display size: \(displaySize), Scale: \(scale)")
+        print("🔍 [Crop] Offset: \(offset), Circle center: (\(circleCenterX), \(circleCenterY))")
+        print("🔍 [Crop] Crop rect: \(cropRect)")
         
         // Perform the actual crop
         if let croppedImage = cropToSquare(image: image, rect: cropRect) {
             onCrop(croppedImage)
         } else {
-            NSLog("⚠️ [Crop] Failed to crop, returning original")
+            print("⚠️ [Crop] Failed to crop, returning original")
             onCrop(image)
         }
     }
@@ -272,16 +272,16 @@ struct CircularImageCropperView: View {
         cropRect.size.width = min(cropRect.size.width, imageSize.width)
         cropRect.size.height = min(cropRect.size.height, imageSize.height)
         
-        NSLog("🔍 [Crop] Final rect after clamping: \(cropRect)")
+        print("🔍 [Crop] Final rect after clamping: \(cropRect)")
         
         // Crop to square
         guard let croppedCGImage = cgImage.cropping(to: cropRect) else { 
-            NSLog("⚠️ [Crop] CGImage cropping failed")
+            print("⚠️ [Crop] CGImage cropping failed")
             return nil 
         }
         
         let croppedImage = UIImage(cgImage: croppedCGImage, scale: image.scale, orientation: image.imageOrientation)
-        NSLog("✅ [Crop] Cropped to size: \(croppedImage.size)")
+        print("✅ [Crop] Cropped to size: \(croppedImage.size)")
         
         return croppedImage
     }

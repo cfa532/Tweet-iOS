@@ -30,6 +30,20 @@ class MemoryWarningManager: ObservableObject {
     @objc private func handleMemoryWarning() {
         print("DEBUG: [MemoryWarningManager] System memory warning received")
         
+        // CRITICAL: Check if video upload is in progress
+        // During FFmpeg video conversion, memory spikes are expected and temporary
+        // Clearing video player caches during upload breaks existing players
+        if UploadProgressManager.shared.isProcessingVideo {
+            print("⚠️ [MemoryWarningManager] Video upload in progress - skipping video cache cleanup to prevent player breakage")
+            print("⚠️ [MemoryWarningManager] Memory spike is expected during FFmpeg conversion and will subside after upload")
+            
+            // Still clean non-video caches to help with memory pressure
+            Task {
+                await releaseNonVideoCaches()
+            }
+            return
+        }
+        
         // Check if memory usage exceeds 1.4GB before taking action
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
@@ -63,6 +77,20 @@ class MemoryWarningManager: ObservableObject {
         TweetCacheManager.shared.releasePartialCache(percentage: 20)
         
         print("DEBUG: [MemoryWarningManager] Memory cache release completed")
+    }
+    
+    /// Release only non-video caches during video upload
+    /// This helps with memory pressure without breaking video players
+    private func releaseNonVideoCaches() async {
+        print("DEBUG: [MemoryWarningManager] Releasing non-video caches during upload...")
+        
+        // SKIP video cache clearing - would break existing players during upload
+        // Release image and tweet caches only
+        ImageCacheManager.shared.releasePartialCache(percentage: 30)
+        TweetCacheManager.shared.releasePartialCache(percentage: 30)
+        ChatCacheManager.shared.clearMemoryCache()
+        
+        print("DEBUG: [MemoryWarningManager] Non-video cache release completed (video players preserved)")
     }
     
     /// Get current memory usage in bytes

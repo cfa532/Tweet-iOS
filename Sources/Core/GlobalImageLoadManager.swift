@@ -58,7 +58,7 @@ class GlobalImageLoadManager: ObservableObject {
     
     // MARK: - Configuration
     private let maxConcurrentLoads = 8  // Balanced for stable network performance
-    private let maxQueueSize = 100
+    private let maxQueueSize = 50
     private let memoryWarningThreshold = 0.45 // 45% of available memory
     
     // MARK: - State Management
@@ -73,6 +73,10 @@ class GlobalImageLoadManager: ObservableObject {
     // MARK: - Memory Management
     private var currentMemoryUsage: UInt64 = 0
     private var maxMemoryUsage: UInt64 = 0
+
+    // MARK: - Network Failure Tracking
+    private var consecutiveNetworkFailures: Int = 0
+    private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
     
     // MARK: - Statistics
     @Published var activeLoadCount: Int = 0
@@ -89,23 +93,68 @@ class GlobalImageLoadManager: ObservableObject {
     
     /// Load an image with priority and concurrency control
     func loadImage(request: ImageLoadRequest) {
+        // ✅ CHECK BLACKLIST FIRST - Don't waste resources on known-bad images
+        let mediaID = MimeiId(request.attachment.mid)
+        if BlackList.shared.isBlacklisted(mediaID) {
+            print("🚫 [IMAGE BLACKLIST] Skipping blacklisted image: \(mediaID)")
+            // Call completion with nil to update UI - already on MainActor since class is @MainActor
+            request.completion(nil)
+            return
+        }
+        
         // Check if already completed successfully
         if completedRequests.contains(request.id) {
-            return
+            // PERFORMANCE FIX: Only check memory cache on main thread (no disk I/O)
+            // If not in memory, check disk asynchronously
+            let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: request.attachment)
+            
+            if let cachedImage = cachedImage {
+                // Found in memory cache - return immediately
+                request.completion(cachedImage)
+                return
+            } else {
+                // Not in memory - check disk cache asynchronously
+                Task.detached(priority: .userInitiated) {
+                    let diskCachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment)
+                    await MainActor.run {
+                        if let diskCachedImage = diskCachedImage {
+                            request.completion(diskCachedImage)
+                        } else {
+                            // Image was evicted from cache, remove from completed so it can be reloaded
+                            self.completedRequests.remove(request.id)
+                            // Restart loading
+                            self.loadImage(request: request)
+                        }
+                    }
+                }
+                return
+            }
         }
         
         // Check if this request previously returned non-image content (don't retry)
         if nonImageResponses.contains(request.id) {
+            // Call completion with nil to update UI state
+            request.completion(nil)
             return
         }
         
         // Check if this request has permanently failed (exhausted all retries)
         if permanentlyFailedRequests.contains(request.id) {
+            // Call completion with nil to update UI state
+            request.completion(nil)
             return
         }
         
         // Check if already loading
         if activeLoads[request.id] != nil {
+            // PERFORMANCE FIX: Only check memory cache on main thread (no disk I/O)
+            let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: request.attachment)
+            if cachedImage != nil {
+                // Found in memory cache, return it immediately
+                request.completion(cachedImage)
+            }
+            // If not in memory cache, the existing request will call completion when done
+            // Don't call completion(nil) here as that would reset loading state prematurely
             return
         }
         
@@ -117,7 +166,29 @@ class GlobalImageLoadManager: ObservableObject {
         
         // Check memory pressure
         if isMemoryPressureHigh() {
-            ImageCacheManager.shared.releasePartialCache(percentage: 40)
+            print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(activeLoads.count) active loads, \(scheduledRetries.count) scheduled retries")
+
+            // Cancel ALL active network loads immediately to free memory
+            for (requestId, task) in activeLoads {
+                print("DEBUG: [GlobalImageLoadManager] Cancelling active load: \(requestId)")
+                task.cancel()
+            }
+            activeLoads.removeAll()
+
+            // Cancel ALL scheduled retries immediately to free memory
+            for workItem in scheduledRetries.values {
+                workItem.cancel()
+            }
+            scheduledRetries.removeAll()
+
+            // Clear pending requests to prevent accumulation
+            let pendingCount = pendingRequests.count
+            pendingRequests.removeAll()
+            print("DEBUG: [GlobalImageLoadManager] Cleared \(pendingCount) pending requests due to memory pressure")
+
+            // Release cache moderately (was 50%, too aggressive - causes thrashing)
+            ImageCacheManager.shared.releasePartialCache(percentage: 20)
+            
             if request.priority.rawValue < ImageLoadingPriority.high.rawValue {
                 // Defer low priority requests during memory pressure
                 deferRequest(request)
@@ -147,8 +218,13 @@ class GlobalImageLoadManager: ObservableObject {
             print("DEBUG: [GlobalImageLoadManager] Cancelled scheduled retry for: \(id)")
         }
         
-        // Remove from pending queue
+        // ✅ CRITICAL FIX: Remove from pending queue to release closure-captured memory
+        let removedCount = pendingRequests.count
         pendingRequests.removeAll { $0.id == id }
+        let actualRemoved = removedCount - pendingRequests.count
+        if actualRemoved > 0 {
+            print("🧹 [GlobalImageLoadManager] Removed \(actualRemoved) pending request(s) for: \(id)")
+        }
         
         updateStatistics()
     }
@@ -186,7 +262,7 @@ class GlobalImageLoadManager: ObservableObject {
         retryCounts.removeAll()
         nonImageResponses.removeAll()
         permanentlyFailedRequests.removeAll()
-        
+
         // Cancel all scheduled retries
         if !scheduledRetries.isEmpty {
             print("DEBUG: [GlobalImageLoadManager] Clearing history, cancelling \(scheduledRetries.count) scheduled retries")
@@ -195,8 +271,29 @@ class GlobalImageLoadManager: ObservableObject {
             }
             scheduledRetries.removeAll()
         }
-        
+
         updateStatistics()
+    }
+
+    /// Clear ALL cache and cancel ALL operations (for settings cache clear)
+    func clearAll() {
+        print("DEBUG: [GlobalImageLoadManager] Clearing ALL cache and operations")
+
+        // Cancel all active loads
+        activeLoads.values.forEach { $0.cancel() }
+        activeLoads.removeAll()
+        print("DEBUG: [GlobalImageLoadManager] Cancelled \(activeLoads.count) active loads")
+
+        // Clear all pending requests
+        pendingRequests.removeAll()
+        print("DEBUG: [GlobalImageLoadManager] Cleared \(pendingRequests.count) pending requests")
+
+        // Clear all history and retries
+        clearHistory()
+        print("DEBUG: [GlobalImageLoadManager] Cleared history and retries")
+
+        updateStatistics()
+        print("DEBUG: [GlobalImageLoadManager] Clear all complete")
     }
     
     /// Get current loading statistics
@@ -242,30 +339,61 @@ class GlobalImageLoadManager: ObservableObject {
         let newRetryCount = currentRetryCount + 1
         retryCounts[request.id] = newRetryCount
         
-        if newRetryCount < 3 {
+        // REDUCED: Only 2 retries instead of 3, with longer delays during network issues
+        let maxRetries = 2
+        
+        if newRetryCount < maxRetries {
             // Cancel any existing scheduled retry for this request
             scheduledRetries[request.id]?.cancel()
             
-            // Schedule retry with exponential backoff using DispatchWorkItem for cancellation
-            let delay = Double(newRetryCount) * 2.0 // 2s, 4s, 6s delays
+            // Longer delays with exponential backoff: 5s, 10s
+            let delay = Double(newRetryCount) * 5.0
+            
+            // ✅ CRITICAL MEMORY LEAK FIX: Only capture minimal data, NOT completion handlers
+            // Completion handlers may capture views, creating retain cycles via DispatchWorkItem
+            // Instead of capturing the completion handler, we mark request as "needs retry"
+            // and let the cell request it again when it reappears
+            let requestId = request.id
             
             // Create a weak reference to avoid retain cycles
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 // Remove the work item from tracking
-                self.scheduledRetries.removeValue(forKey: request.id)
-                // Retry the load
-                self.loadImage(request: request)
+                self.scheduledRetries.removeValue(forKey: requestId)
+                
+                // ✅ MEMORY FIX: Check if request was cancelled before retry
+                // If cancelLoad() was called, don't retry (cell disappeared)
+                if !self.activeLoads.keys.contains(requestId) && 
+                   !self.pendingRequests.contains(where: { $0.id == requestId }) {
+                    print("🧹 [GlobalImageLoadManager] Skipping retry - request was cancelled: \(requestId)")
+                    // Remove from completed so cell can retry when it reappears
+                    self.completedRequests.remove(requestId)
+                    return
+                }
+                
+                // Check memory pressure before retry - if high, skip retry
+                if self.isMemoryPressureHigh() {
+                    print("DEBUG: [GlobalImageLoadManager] Skipping retry due to memory pressure: \(requestId)")
+                    self.permanentlyFailedRequests.insert(requestId)
+                    self.retryCounts.removeValue(forKey: requestId)
+                    return
+                }
+                
+                // ✅ CRITICAL MEMORY LEAK FIX: Don't capture request or completion handler
+                // Instead, just remove from completedRequests so cell can retry when visible
+                // This prevents memory leak from holding completion handlers in DispatchWorkItem
+                self.completedRequests.remove(requestId)
+                print("🔄 [GlobalImageLoadManager] Retry time reached for \(requestId) - removed from completed, cell will reload when visible")
             }
             
             scheduledRetries[request.id] = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
             print("DEBUG: [GlobalImageLoadManager] Scheduled retry #\(newRetryCount) in \(delay)s for: \(request.id)")
         } else {
-            // After 3 retries, mark as permanently failed to prevent further attempts
+            // After retries, mark as permanently failed to prevent further attempts
             permanentlyFailedRequests.insert(request.id)
             retryCounts.removeValue(forKey: request.id)
-            print("DEBUG: [GlobalImageLoadManager] Image permanently failed after 3 retries: \(request.id)")
+            print("DEBUG: [GlobalImageLoadManager] Image permanently failed after \(maxRetries) retries: \(request.id)")
         }
     }
     
@@ -287,11 +415,19 @@ class GlobalImageLoadManager: ObservableObject {
             let image = await loadImageFromNetwork(request)
             
             await MainActor.run {
+                let mediaID = MimeiId(request.attachment.mid)
+                
                 if let image = image {
+                    // ✅ RECORD SUCCESS TO BLACKLIST
+                    BlackList.shared.recordSuccess(mediaID)
+                    
                     request.completion(image)
                     self.completedRequests.insert(request.id)
                     self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                 } else {
+                    // ❌ RECORD FAILURE TO BLACKLIST
+                    BlackList.shared.recordFailure(mediaID)
+                    
                     // Always call completion, even on failure, so UI can update isLoading state
                     request.completion(nil)
                     self.handleLoadFailure(request)
@@ -310,7 +446,7 @@ class GlobalImageLoadManager: ObservableObject {
         do {
             // Create URLRequest with timeout
             var urlRequest = URLRequest(url: request.url)
-            urlRequest.timeoutInterval = 10.0 // 10 second timeout
+            urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
             urlRequest.cachePolicy = .returnCacheDataElseLoad
             
             let (data, response) = try await URLSession.shared.data(for: urlRequest)
@@ -334,14 +470,30 @@ class GlobalImageLoadManager: ObservableObject {
             }
             
             if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment) {
+                // Reset network failure counter on successful load
+                consecutiveNetworkFailures = 0
                 return image
             }
-            
+
             print("Error: Failed to cache UIImage from data for \(request.url)")
             return nil
             
         } catch {
             print("Error loading image from network (\(request.url)): \(error.localizedDescription)")
+
+            // Track consecutive network failures
+            consecutiveNetworkFailures += 1
+            print("DEBUG: [GlobalImageLoadManager] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+
+            // Trigger emergency cleanup if too many consecutive failures
+            if consecutiveNetworkFailures >= maxConsecutiveFailures {
+                print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
+                Task { @MainActor in
+                    self.handleNetworkFailureCleanup()
+                }
+                consecutiveNetworkFailures = 0 // Reset counter after cleanup
+            }
+
             return nil
         }
     }
@@ -374,9 +526,14 @@ class GlobalImageLoadManager: ObservableObject {
     private func startLoadingOptimized(_ request: ImageLoadRequest, maxSize: CGSize) {
         let task = Task {
             do {
+                // Check cancellation early
+                try Task.checkCancellation()
+                
                 // Check if image is already cached
                 if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                     await MainActor.run {
+                        // Check cancellation again before completing
+                        guard !Task.isCancelled else { return }
                         request.completion(cachedImage)
                         self.completedRequests.insert(request.id)
                         self.activeLoads.removeValue(forKey: request.id)
@@ -386,17 +543,66 @@ class GlobalImageLoadManager: ObservableObject {
                     return
                 }
                 
+                // Check cancellation before network request
+                try Task.checkCancellation()
+                
                 // Load from network with size optimization
-                let optimizedImage = await loadImageFromNetworkOptimized(request, maxSize: maxSize)
+                let optimizedImage = try await loadImageFromNetworkOptimized(request, maxSize: maxSize)
                 
                 await MainActor.run {
+                    // Check cancellation before completing - don't call completion if cancelled
+                    guard !Task.isCancelled else {
+                        // Clean up if cancelled
+                        self.activeLoads.removeValue(forKey: request.id)
+                        self.updateStatistics()
+                        return
+                    }
+                    
                     request.completion(optimizedImage)
                     if optimizedImage != nil {
+                        // Reset network failure counter on successful load
+                        self.consecutiveNetworkFailures = 0
                         self.completedRequests.insert(request.id)
                         self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                     } else {
                         self.handleLoadFailure(request)
                     }
+                    self.activeLoads.removeValue(forKey: request.id)
+                    self.updateStatistics()
+                    self.processNextPendingRequest()
+                }
+            } catch {
+                // Handle cancellation silently - don't treat it as a failure
+                if error is CancellationError {
+                    await MainActor.run {
+                        // Clean up cancelled task
+                        self.activeLoads.removeValue(forKey: request.id)
+                        self.updateStatistics()
+                    }
+                    return
+                }
+                
+                // Handle actual errors
+                await MainActor.run {
+                    // Only handle failure if not cancelled
+                    guard !Task.isCancelled else {
+                        self.activeLoads.removeValue(forKey: request.id)
+                        self.updateStatistics()
+                        return
+                    }
+
+                    // Track consecutive network failures
+                    self.consecutiveNetworkFailures += 1
+                    print("DEBUG: [GlobalImageLoadManager] Network failure count: \(self.consecutiveNetworkFailures)/\(self.maxConsecutiveFailures)")
+
+                    // Trigger emergency cleanup if too many consecutive failures
+                    if self.consecutiveNetworkFailures >= self.maxConsecutiveFailures {
+                        print("DEBUG: [GlobalImageLoadManager] Too many consecutive network failures, triggering cleanup")
+                        self.handleNetworkFailureCleanup()
+                        self.consecutiveNetworkFailures = 0 // Reset counter after cleanup
+                    }
+
+                    self.handleLoadFailure(request)
                     self.activeLoads.removeValue(forKey: request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
@@ -408,14 +614,20 @@ class GlobalImageLoadManager: ObservableObject {
         updateStatistics()
     }
     
-    private func loadImageFromNetworkOptimized(_ request: ImageLoadRequest, maxSize: CGSize) async -> UIImage? {
+    private func loadImageFromNetworkOptimized(_ request: ImageLoadRequest, maxSize: CGSize) async throws -> UIImage? {
         do {
+            // Check cancellation before network request
+            try Task.checkCancellation()
+            
             // Create URLRequest with timeout
             var urlRequest = URLRequest(url: request.url)
-            urlRequest.timeoutInterval = 10.0 // 10 second timeout
+            urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
             urlRequest.cachePolicy = .returnCacheDataElseLoad
             
             let (data, response) = try await URLSession.shared.data(for: urlRequest)
+            
+            // Check cancellation after network request
+            try Task.checkCancellation()
             
             // Check if we got a valid response
             guard let httpResponse = response as? HTTPURLResponse,
@@ -424,16 +636,26 @@ class GlobalImageLoadManager: ObservableObject {
                 return nil
             }
             
-            // Update progress
+            // Update progress (only if not cancelled)
             await MainActor.run {
+                guard !Task.isCancelled else { return }
                 request.onProgress(1.0)
             }
+            
+            // Check cancellation before image processing
+            try Task.checkCancellation()
             
             // Create UIImage from data
             guard let originalImage = UIImage(data: data) else { return nil }
             
+            // Check cancellation before resizing
+            try Task.checkCancellation()
+            
             // Resize image to fit within maxSize while maintaining aspect ratio
             let resizedImage = resizeImage(originalImage, toFit: maxSize)
+            
+            // Check cancellation before caching
+            try Task.checkCancellation()
             
             if let resizedData = resizedImage.jpegData(compressionQuality: 0.8) {
                 if let cachedImage = ImageCacheManager.shared.cacheImageData(resizedData, for: request.attachment) {
@@ -443,6 +665,10 @@ class GlobalImageLoadManager: ObservableObject {
             
             return resizedImage
         } catch {
+            // Re-throw cancellation errors so they can be handled upstream
+            if error is CancellationError {
+                throw error
+            }
             return nil
         }
     }
@@ -551,11 +777,12 @@ class GlobalImageLoadManager: ObservableObject {
                 maxMemoryUsage = currentMemoryUsage
             }
             
-            // Simple heuristic: if we're using more than 80% of available memory
+            // Simple heuristic: if we're using more than threshold or absolute MB limit
             let availableMemory = ProcessInfo.processInfo.physicalMemory
             let memoryUsageRatio = Double(currentMemoryUsage) / Double(availableMemory)
             let memoryUsageMB = Double(currentMemoryUsage) / (1024.0 * 1024.0)
-            let isHigh = memoryUsageRatio > memoryWarningThreshold || memoryUsageMB > 600.0
+            // Reduced from 600MB to 450MB for more aggressive memory management
+            let isHigh = memoryUsageRatio > memoryWarningThreshold || memoryUsageMB > 450.0
             
             if isHigh {
                 let percentageString = String(format: "%.1f", memoryUsageRatio * 100)
@@ -574,6 +801,38 @@ class GlobalImageLoadManager: ObservableObject {
         pendingLoadCount = pendingRequests.count
         completedLoadCount = completedRequests.count
         retryCount = retryCounts.values.reduce(0, +)
+    }
+
+    /// Emergency cleanup during network failures
+    func handleNetworkFailureCleanup() {
+        print("DEBUG: [GlobalImageLoadManager] Network failure detected, performing emergency cleanup")
+
+        // Cancel all active loads
+        for (requestId, task) in activeLoads {
+            print("DEBUG: [GlobalImageLoadManager] Cancelling active load due to network failure: \(requestId)")
+            task.cancel()
+        }
+        activeLoads.removeAll()
+
+        // Cancel all scheduled retries
+        for workItem in scheduledRetries.values {
+            workItem.cancel()
+        }
+        scheduledRetries.removeAll()
+
+        // Clear most pending requests (keep only high priority ones)
+        let originalCount = pendingRequests.count
+        pendingRequests = pendingRequests.filter { $0.priority == .critical }
+        let removedCount = originalCount - pendingRequests.count
+        print("DEBUG: [GlobalImageLoadManager] Cleared \(removedCount) pending requests due to network failure")
+
+        // Clear retry counts for failed requests
+        retryCounts.removeAll()
+
+        // Release cache
+        ImageCacheManager.shared.releasePartialCache(percentage: 30)
+
+        updateStatistics()
     }
     
     // MARK: - Memory Monitoring
@@ -615,40 +874,68 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func handleMemoryWarning() {
-        // Check if memory usage exceeds 1.4GB before taking action
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
         
-        print("DEBUG: [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
+        print("🚨 [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
         
-        // Only take action if memory usage exceeds 600MB (preventive cleanup threshold)
-        if memoryUsageMB > 600 {
-            print("DEBUG: [GlobalImageLoadManager] Memory usage exceeds 600MB, performing cleanup")
-            
-            // Cancel all low priority requests
-            cancelLoads(priority: .low)
-            
-            // Cancel all scheduled retries to free memory from pending closures
-            print("DEBUG: [GlobalImageLoadManager] Cancelling \(scheduledRetries.count) scheduled retries")
+        // Only perform aggressive cleanup if memory usage exceeds 1.2GB
+        // This prevents wasteful cleanup when memory usage is actually low
+        guard memoryUsageMB > 1200 else {
+            print("ℹ️ [GlobalImageLoadManager] Memory usage low (\(memoryUsageMB)MB), skipping aggressive cleanup")
+            return
+        }
+        
+        // AGGRESSIVE cleanup on memory warning when usage is high
+        print("🧹 [GlobalImageLoadManager] Performing aggressive cleanup")
+        
+        // Cancel all low and normal priority requests
+        cancelLoads(priority: .normal)
+        
+        // Cancel ALL scheduled retries immediately
+        if !scheduledRetries.isEmpty {
+            print("🧹 [GlobalImageLoadManager] Cancelling \(scheduledRetries.count) scheduled retries")
             for workItem in scheduledRetries.values {
                 workItem.cancel()
             }
             scheduledRetries.removeAll()
-            
-            // Clear completed request history to free memory
-            completedRequests.removeAll()
-            
-            // Clean up retry tracking
-            retryCounts.removeAll()
-            
-            // Force garbage collection
-            updateStatistics()
-            
-            // Aggressively trim cached images
-            ImageCacheManager.shared.releasePartialCache(percentage: 60)
-        } else {
-            print("DEBUG: [GlobalImageLoadManager] Memory usage under 600MB threshold, no action needed")
         }
+        
+        // ✅ CRITICAL FIX: Clear pending queue to release closure-captured memory
+        // This is the main source of memory buildup - closures capturing SwiftUI views
+        let totalPending = pendingRequests.count
+        if totalPending > 0 {
+            // Keep only critical priority requests
+            let criticalRequests = pendingRequests.filter { $0.priority == .critical }
+            let removedCount = totalPending - criticalRequests.count
+            pendingRequests = criticalRequests
+            
+            if removedCount > 0 {
+                print("🧹 [GlobalImageLoadManager] Removed \(removedCount) pending requests (freed closure memory!)")
+                print("🧹 [GlobalImageLoadManager] Kept \(criticalRequests.count) critical requests")
+            }
+        }
+        
+        // Clear completed request history to free memory
+        let completedCount = completedRequests.count
+        completedRequests.removeAll()
+        if completedCount > 0 {
+            print("🧹 [GlobalImageLoadManager] Cleared \(completedCount) completed requests")
+        }
+        
+        // Clean up retry tracking
+        retryCounts.removeAll()
+        
+        // Clear permanently failed to allow retry after memory recovers
+        permanentlyFailedRequests.removeAll()
+        
+        // Force garbage collection
+        updateStatistics()
+        
+        // Aggressively trim cached images on memory warning (was 70%, reduced to 40%)
+        ImageCacheManager.shared.releasePartialCache(percentage: 40)
+        
+        print("✅ [GlobalImageLoadManager] Cleanup complete")
     }
     
     private func handleAppBackgrounded() {

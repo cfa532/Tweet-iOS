@@ -29,10 +29,8 @@ class AppState: ObservableObject {
                     self.isInitialized = true
                 }
                 
-                // Load chat sessions after user is properly initialized
-                await ChatSessionManager.shared.loadSessionsWhenUserAvailable()
-                
-                // Check for new messages after sessions are loaded (only updates badge, no notifications)
+                // Chat sessions will be loaded lazily when chat screens are accessed
+                // Check for new messages (only updates badge, no notifications)
                 await ChatSessionManager.shared.checkBackendForNewMessages(suppressNotifications: true)
                 print("[TweetApp] ✅ Initial message check completed after app initialization")
                 
@@ -42,13 +40,8 @@ class AppState: ObservableObject {
                 // Refresh theme state from preferences after HproseInstance is ready
                 await ThemeManager.shared.refreshFromPreferences()
                 
-                // Initialize audio session manager for call-friendly audio handling
-                _ = AudioSessionManager.shared
-                
-                // Initialize fullscreen singleton player early to avoid first-open delay
-                await MainActor.run {
-                    FullScreenVideoManager.shared.initializePlayerEarly()
-                }
+                // Audio session and video players will be initialized lazily when first needed
+                // to avoid blocking app startup
                 
                 // Cleanup caches after a delay
                 Task.detached(priority: .background) {

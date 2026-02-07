@@ -320,7 +320,8 @@ struct MediaUploadHelper {
     static func prepareItemData(
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage],
-        selectedVideos: [URL] = []
+        selectedVideos: [URL] = [],
+        selectedDocuments: [DocumentFile] = []
     ) async throws -> [HproseInstance.PendingTweetUpload.ItemData] {
         var itemData: [HproseInstance.PendingTweetUpload.ItemData] = []
         
@@ -355,6 +356,15 @@ struct MediaUploadHelper {
         
         // Process camera images
         for image in selectedImages {
+            // Validate image dimensions before processing
+            let imageSize = image.size
+            guard imageSize.width.isFinite, imageSize.height.isFinite,
+                  imageSize.width > 0, imageSize.height > 0,
+                  imageSize.width < 50000, imageSize.height < 50000 else {
+                print("DEBUG: Skipping invalid camera image with dimensions: \(imageSize)")
+                continue
+            }
+            
             if let imageData = image.jpegData(compressionQuality: 0.8) {
                 let timestamp = Int(Date().timeIntervalSince1970)
                 let filename = "\(timestamp)_\(UUID().uuidString).jpg"
@@ -389,25 +399,82 @@ struct MediaUploadHelper {
             }
         }
         
+        // Process document files (PDF, Word, Excel, etc.)
+        for document in selectedDocuments {
+            print("DEBUG: Processing document: \(document.fileName), size: \(document.fileSize) bytes")
+            
+            // Determine type identifier based on media type
+            let typeIdentifier = getTypeIdentifier(for: document.mediaType)
+            
+            itemData.append(HproseInstance.PendingTweetUpload.ItemData(
+                identifier: document.id.uuidString,
+                typeIdentifier: typeIdentifier,
+                data: document.data,
+                fileName: document.fileName,
+                noResample: true  // Don't resample document files
+            ))
+        }
+        
         return itemData
     }
     
+    private static func getTypeIdentifier(for mediaType: MediaType) -> String {
+        switch mediaType {
+        case .pdf:
+            return "application/pdf"
+        case .word:
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case .excel:
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case .ppt:
+            return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        case .zip:
+            return "application/zip"
+        case .txt:
+            return "text/plain"
+        case .html:
+            return "text/html"
+        default:
+            return "application/octet-stream"
+        }
+    }
+    
     private static func getFileExtension(for typeIdentifier: String) -> String {
-        if typeIdentifier.contains("jpeg") || typeIdentifier.contains("jpg") {
+        let lowercased = typeIdentifier.lowercased()
+        
+        // Images
+        if lowercased.contains("jpeg") || lowercased.contains("jpg") {
             return "jpg"
-        } else if typeIdentifier.contains("png") {
+        } else if lowercased.contains("png") {
             return "png"
-        } else if typeIdentifier.contains("gif") {
+        } else if lowercased.contains("gif") {
             return "gif"
-        } else if typeIdentifier.contains("heic") || typeIdentifier.contains("heif") {
+        } else if lowercased.contains("heic") || lowercased.contains("heif") {
             return "heic"
-        } else if typeIdentifier.contains("mp4") {
+        }
+        // Videos - check for specific video formats first (before generic "movie"/"video")
+        else if lowercased.contains("mpeg-4") || lowercased.contains("mpeg4") || lowercased.contains("mp4") {
             return "mp4"
-        } else if typeIdentifier.contains("mov") {
+        } else if lowercased.contains("quicktime") || lowercased.contains("mov") {
             return "mov"
-        } else if typeIdentifier.contains("m4v") {
+        } else if lowercased.contains("m4v") {
             return "m4v"
-        } else if typeIdentifier.contains("mkv") {
+        } else if lowercased.contains("mkv") {
+            return "mkv"
+        } else if lowercased.contains("avi") {
+            return "avi"
+        } else if lowercased.contains("webm") {
+            return "webm"
+        }
+        // Videos - check for generic video/movie typeIdentifiers
+        else if lowercased.contains("movie") || lowercased.contains("video") {
+            // Default to mp4 for generic video formats
+            return "mp4"
+        } else if lowercased.contains("mov") {
+            return "mov"
+        } else if lowercased.contains("m4v") {
+            return "m4v"
+        } else if lowercased.contains("mkv") {
             return "mkv"
         } else {
             return "file"
@@ -418,10 +485,11 @@ struct MediaUploadHelper {
         content: String,
         selectedItems: [PhotosPickerItem],
         selectedImages: [UIImage],
-        selectedVideos: [URL] = []
+        selectedVideos: [URL] = [],
+        selectedDocuments: [DocumentFile] = []
     ) -> Bool {
         let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedContent.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty
+        return !trimmedContent.isEmpty || !selectedItems.isEmpty || !selectedImages.isEmpty || !selectedVideos.isEmpty || !selectedDocuments.isEmpty
     }
     
     private static func getFileTypeDescription(from typeIdentifier: String) -> String {
@@ -457,8 +525,22 @@ struct VideoThumbnailView: View {
     @State private var isLoading = true
     @State private var hasError = false
 
-    // Static cache to avoid regenerating thumbnails for the same video
+    // Thread-safe static cache to avoid regenerating thumbnails for the same video
     private static var thumbnailCache: [String: UIImage] = [:]
+    private static let cacheQueue = DispatchQueue(label: "com.tweet.videothumbnailcache", attributes: .concurrent)
+    
+    // Thread-safe cache access methods
+    private static func getCachedThumbnail(forKey key: String) -> UIImage? {
+        return cacheQueue.sync {
+            return thumbnailCache[key]
+        }
+    }
+    
+    private static func setCachedThumbnail(_ image: UIImage, forKey key: String) {
+        cacheQueue.async(flags: .barrier) {
+            thumbnailCache[key] = image
+        }
+    }
     
     var body: some View {
         Group {
@@ -509,8 +591,8 @@ struct VideoThumbnailView: View {
         let videoPath = videoURL.path
         print("DEBUG: [VideoThumbnailView] Starting thumbnail generation for: \(videoURL.lastPathComponent)")
         
-        // Check cache first
-        if let cachedThumbnail = Self.thumbnailCache[videoPath] {
+        // Check cache first (thread-safe)
+        if let cachedThumbnail = Self.getCachedThumbnail(forKey: videoPath) {
             print("DEBUG: [VideoThumbnailView] Using cached thumbnail for: \(videoURL.lastPathComponent)")
             self.thumbnail = cachedThumbnail
             self.isLoading = false
@@ -518,90 +600,120 @@ struct VideoThumbnailView: View {
         }
         
         Task {
-            do {
-                // Check if file exists and is accessible
-                guard FileManager.default.fileExists(atPath: videoURL.path) else {
-                    print("DEBUG: [VideoThumbnailView] Video file does not exist at path: \(videoURL.path)")
-                    await MainActor.run {
-                        self.isLoading = false
-                        self.hasError = true
-                    }
-                    return
-                }
-                
-                let asset = AVURLAsset(url: videoURL)
-                print("DEBUG: [VideoThumbnailView] Created AVURLAsset for: \(videoURL.lastPathComponent)")
-                
-                // Check if asset is playable
-                let isPlayable = try await asset.load(.isPlayable)
-                guard isPlayable else {
-                    print("DEBUG: [VideoThumbnailView] Video asset is not playable: \(videoURL.lastPathComponent)")
-                    await MainActor.run {
-                        self.isLoading = false
-                        self.hasError = true
-                    }
-                    return
-                }
-                
-                let imageGenerator = AVAssetImageGenerator(asset: asset)
-                imageGenerator.appliesPreferredTrackTransform = true
-                imageGenerator.maximumSize = CGSize(width: 120, height: 120)
-                // Allow some tolerance to find nearby keyframes instead of requiring exact time
-                // This prevents falling back to 1.0s when earlier positions don't have exact frames
-                imageGenerator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
-                imageGenerator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
-                
-                print("DEBUG: [VideoThumbnailView] Attempting to generate thumbnail at CMTime.zero")
-                
-                // Try different time positions if zero fails
-                let timePositions: [CMTime] = [
-                    CMTime.zero,
-                    CMTime(seconds: 0.1, preferredTimescale: 600),
-                    CMTime(seconds: 0.5, preferredTimescale: 600),
-                    CMTime(seconds: 1.0, preferredTimescale: 600)
-                ]
-                
-                var thumbnailGenerated = false
-                
-                for timePosition in timePositions {
-                    do {
-                        let cgImage = try await imageGenerator.image(at: timePosition).image
-                        let uiImage = UIImage(cgImage: cgImage)
-                        
-                        print("DEBUG: [VideoThumbnailView] Successfully generated thumbnail at time: \(timePosition.seconds)")
-                        
-                        await MainActor.run {
-                            self.thumbnail = uiImage
-                            self.isLoading = false
-                            self.hasError = false
-                            
-                            // Cache the generated thumbnail
-                            Self.thumbnailCache[videoPath] = uiImage
-                            print("DEBUG: [VideoThumbnailView] Thumbnail cached for: \(videoURL.lastPathComponent)")
-                        }
-                        thumbnailGenerated = true
-                        break
-                    } catch {
-                        print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at time \(timePosition.seconds): \(error)")
-                        continue
-                    }
-                }
-                
-                if !thumbnailGenerated {
-                    print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at any time position")
-                    await MainActor.run {
-                        self.isLoading = false
-                        self.hasError = true
-                    }
-                }
-                
-            } catch {
-                print("DEBUG: [VideoThumbnailView] Error generating video thumbnail: \(error)")
+            // Check if file exists and is accessible
+            guard FileManager.default.fileExists(atPath: videoURL.path) else {
+                print("DEBUG: [VideoThumbnailView] Video file does not exist at path: \(videoURL.path)")
                 await MainActor.run {
                     self.isLoading = false
                     self.hasError = true
                 }
+                return
             }
+            
+            let asset = AVURLAsset(url: videoURL)
+            print("DEBUG: [VideoThumbnailView] Created AVURLAsset for: \(videoURL.lastPathComponent)")
+            
+            // NOTE: Removed isPlayable check - trust the app and data
+            
+            let imageGenerator = AVAssetImageGenerator(asset: asset)
+            imageGenerator.appliesPreferredTrackTransform = true
+            imageGenerator.maximumSize = CGSize(width: 120, height: 120)
+            // Allow some tolerance to find nearby keyframes instead of requiring exact time
+            // This prevents falling back to 1.0s when earlier positions don't have exact frames
+            imageGenerator.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+            imageGenerator.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+            
+            print("DEBUG: [VideoThumbnailView] Attempting to generate thumbnail at CMTime.zero")
+            
+            // Try different time positions if zero fails
+            let timePositions: [CMTime] = [
+                CMTime.zero,
+                CMTime(seconds: 0.1, preferredTimescale: 600),
+                CMTime(seconds: 0.5, preferredTimescale: 600),
+                CMTime(seconds: 1.0, preferredTimescale: 600)
+            ]
+            
+            var thumbnailGenerated = false
+            
+            for timePosition in timePositions {
+                do {
+                    let cgImage = try await imageGenerator.image(at: timePosition).image
+                    let uiImage = UIImage(cgImage: cgImage)
+                    
+                    // Validate image dimensions before using
+                    let imageSize = uiImage.size
+                    guard imageSize.width.isFinite, imageSize.height.isFinite,
+                          imageSize.width > 0, imageSize.height > 0,
+                          imageSize.width < 10000, imageSize.height < 10000 else {
+                        print("DEBUG: [VideoThumbnailView] Invalid thumbnail dimensions: \(imageSize), trying next time position")
+                        continue // Try next time position instead of failing
+                    }
+                    
+                    print("DEBUG: [VideoThumbnailView] Successfully generated thumbnail at time: \(timePosition.seconds) with size: \(imageSize)")
+                    
+                    await MainActor.run {
+                        self.thumbnail = uiImage
+                        self.isLoading = false
+                        self.hasError = false
+                        
+                        // Cache the generated thumbnail (thread-safe)
+                        Self.setCachedThumbnail(uiImage, forKey: videoPath)
+                        print("DEBUG: [VideoThumbnailView] Thumbnail cached for: \(videoURL.lastPathComponent)")
+                    }
+                    thumbnailGenerated = true
+                    break
+                } catch {
+                    print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at time \(timePosition.seconds): \(error)")
+                    continue
+                }
+            }
+            
+            if !thumbnailGenerated {
+                print("DEBUG: [VideoThumbnailView] Failed to generate thumbnail at any time position, using placeholder")
+                await MainActor.run {
+                    self.thumbnail = generatePlaceholderVideoThumbnail()
+                    self.isLoading = false
+                    self.hasError = false // Don't show error state since we have a placeholder
+                    
+                    // Cache the placeholder (thread-safe)
+                    if let placeholderThumbnail = self.thumbnail {
+                        Self.setCachedThumbnail(placeholderThumbnail, forKey: videoPath)
+                    }
+                }
+            }
+        }
+    }
+
+    private func generatePlaceholderVideoThumbnail() -> UIImage {
+        let size = CGSize(width: 120, height: 120)
+        let renderer = UIGraphicsImageRenderer(size: size)
+
+        return renderer.image { context in
+            // Fill with a neutral background
+            UIColor.systemGray5.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+
+            // Draw a simple video icon
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let iconSize: CGFloat = 40
+
+            // Draw rounded rectangle background
+            let bgRect = CGRect(x: center.x - iconSize/2, y: center.y - iconSize/2,
+                               width: iconSize, height: iconSize)
+            let bgPath = UIBezierPath(roundedRect: bgRect, cornerRadius: 6)
+            UIColor.systemGray4.setFill()
+            bgPath.fill()
+
+            // Draw play triangle
+            let triangleSize: CGFloat = iconSize * 0.3
+            let trianglePath = UIBezierPath()
+            trianglePath.move(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y - triangleSize * 0.6))
+            trianglePath.addLine(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y + triangleSize * 0.6))
+            trianglePath.addLine(to: CGPoint(x: center.x + triangleSize * 0.7, y: center.y))
+            trianglePath.close()
+
+            UIColor.white.setFill()
+            trianglePath.fill()
         }
     }
 }

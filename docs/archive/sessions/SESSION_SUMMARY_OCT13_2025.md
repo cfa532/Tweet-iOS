@@ -107,7 +107,6 @@ if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
 static let MAX_ASSET_CACHE_SIZE = 30
 static let MAX_PLAYER_CACHE_SIZE = 25
 static let CACHE_EXPIRATION_SECONDS: TimeInterval = 1800 // 30 minutes
-static let MAX_VIDEO_FILE_CACHE_SIZE: Int64 = 50 * 1024 * 1024 // 50MB
 
 // File Upload Limits
 static let MAX_FILE_SIZE = 240 * 1024 * 1024 // 240MB (user increased from 120MB)

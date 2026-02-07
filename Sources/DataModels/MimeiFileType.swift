@@ -10,6 +10,14 @@ class MimeiFileType: Identifiable, Codable, Hashable, ObservableObject, @uncheck
     let timestamp: Date
     let aspectRatio: Float?
     
+    /// Returns the effective aspect ratio - defaults to 1.0 for images if aspectRatio is null
+    var effectiveAspectRatio: Float {
+        if type == .image {
+            return aspectRatio ?? 1.0
+        }
+        return aspectRatio ?? 1.0  // Default to 1.0 for all media types as fallback
+    }
+    
     // Make url a computed property that updates when author's baseUrl changes
     @Published private var _cachedUrl: String?
     private var baseUrlCancellable: AnyCancellable?

@@ -1,5 +1,7 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
+import Combine
 
 struct ChatScreen: View {
     let receiptId: MimeiId
@@ -13,12 +15,17 @@ struct ChatScreen: View {
     @State private var user: User?
     @State private var selectedAttachment: MimeiFileType?
     @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var selectedDocuments: [DocumentFile] = []
+    @State private var showDocumentPicker = false
+    @State private var isLongPressingAttachment = false
     @State private var attachmentItemData: HproseInstance.PendingTweetUpload.ItemData?
     @State private var isProcessingAttachment = false
     @State private var keyboardHeight: CGFloat = 0
     @FocusState private var isTextFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var messageRefreshTimer: Timer?
+    @State private var visibilityCheckTimer: Timer?
+    @State private var isChatScreenVisible = true
     
     init(receiptId: MimeiId, navigationPath: Binding<NavigationPath> = .constant(NavigationPath()), onProfileNavigate: (() -> Void)? = nil) {
         self.receiptId = receiptId
@@ -38,6 +45,19 @@ struct ChatScreen: View {
     @State private var showToast = false
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
+
+    // Video visibility tracking
+    @State private var visibleVideoMids: Set<String> = []
+
+    // Scroll position persistence
+    @State private var messagesLoaded = false
+    @State private var scrollProxy: ScrollViewProxy?
+
+    // Update visible videos in the video manager
+    private func updateVisibleVideos() {
+        ChatVideoManager.shared.updateVisibleVideos(receiptId: receiptId, visibleMids: visibleVideoMids)
+    }
+
     
     private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
         guard index < messages.count else { return false }
@@ -54,12 +74,85 @@ struct ChatScreen: View {
     }
     
     var body: some View {
+        mainContentView
+            .onTapGesture {
+                hideKeyboard()
+            }
+            .navigationDestination(for: User.self) { user in
+                ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
+            }
+            .overlay(toastOverlay)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+                if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                    keyboardHeight = keyboardFrame.height
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardHeight = 0
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .chatMessageSent)) { notification in
+                handleMessageSent(notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
+                handleMessageSendFailed(notification)
+            }
+            .task {
+                print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
+                isChatScreenVisible = true
+                chatSessionManager.markSessionAsRead(receiptId: receiptId)
+                // Register chat session with video manager
+                ChatVideoManager.shared.registerChatSession(receiptId: receiptId)
+                ChatVideoManager.shared.setChatVisibility(receiptId: receiptId, isVisible: true)
+                await loadUser()
+                await loadMessages()
+                messagesLoaded = true  // Trigger scroll restoration
+                
+                startPeriodicMessageRefresh()
+                startVisibilityCheckTimer()
+                print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
+            }
+            .onDisappear {
+                print("[ChatScreen] Screen disappearing - stopping all videos")
+                isChatScreenVisible = false
+                messagesLoaded = false  // Reset for next appearance
+
+                ChatVideoManager.shared.setChatVisibility(receiptId: receiptId, isVisible: false)
+                ChatVideoManager.shared.unregisterChatSession(receiptId: receiptId)
+                stopPeriodicMessageRefresh()
+                stopVisibilityCheckTimer()
+                visibleVideoMids.removeAll() // Clear visible videos when leaving chat
+            }
+            .sheet(isPresented: $showDocumentPicker) {
+                DocumentPicker(
+                    selectedDocuments: $selectedDocuments,
+                    allowedTypes: [
+                        .pdf,
+                        .text,
+                        .plainText,
+                        .rtf,
+                        .zip,
+                        .data,
+                        .content,
+                        .item  // Allow any file type (DocumentPicker will determine type from extension)
+                    ],
+                    allowsMultipleSelection: false
+                )
+            }
+            .onChange(of: selectedDocuments) { oldDocuments, newDocuments in
+                guard !newDocuments.isEmpty, !isProcessingAttachment else {
+                    return
+                }
+                Task {
+                    await handleDocumentSelection(newDocuments)
+                }
+            }
+    }
+    
+    private var mainContentView: some View {
         VStack(spacing: 0) {
-            // Debug info
             if messages.isEmpty && user == nil {
                 ChatLoadingView(receiptId: receiptId)
             }
-            // Header
             ChatHeaderView(
                 user: user,
                 dismiss: dismiss,
@@ -70,290 +163,290 @@ struct ChatScreen: View {
                     }
                 }
             )
-            
-            // Messages - Take remaining space
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        // Load more indicator at top
-                        if hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
-                            if isLoadingMore {
-                                HStack {
-                                    Spacer()
-                                    ProgressView()
-                                        .padding()
-                                    Spacer()
-                                }
-                            } else {
-                                Color.clear
-                                    .frame(height: 1)
-                                    .onAppear {
-                                        loadMoreMessages()
-                                    }
-                            }
-                        }
-                        
-                        ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
-                            // Add time divider if there's a 5+ minute gap
-                            if index > 0 {
-                                let timeDiff = message.timestamp - messages[index - 1].timestamp
-                                if timeDiff > 3600 { // 1 hour
-                                    TimeDividerView(timestamp: message.timestamp)
-                                }
-                            }
-                            
-                            ChatMessageView(
-                                message: message, 
-                                isFromCurrentUser: message.authorId == HproseInstance.shared.appUser.mid,
-                                isLastMessage: index == messages.count - 1,
-                                isLastFromSender: isLastMessageFromSender(index: index, messages: messages),
-                                showTimestamp: isLastMessageFromSender(index: index, messages: messages) // Show timestamp for last message from each party
-                            )
-                            .id(message.id)
-                        }
-                    }
-                    .padding()
-                }
-                .onChange(of: shouldScrollToBottom) { _, newValue in
-                    guard newValue, let lastMessage = messages.last else { return }
-                    
-                    if shouldAnimateScroll {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
-                    } else {
-                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                    }
-                    
-                    shouldScrollToBottom = false
-                    shouldAnimateScroll = true
-                }
-                .onChange(of: keyboardHeight) { _, newHeight in
-                    // Scroll to bottom when keyboard appears/disappears
-                    if let lastMessage = messages.last {
-                        withAnimation(.easeOut(duration: 0.25)) {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
-                    }
-                }
-                .navigationBarHidden(true)
-                .onAppear {
-                    // Scroll to bottom when messages are loaded
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        if let lastMessage = messages.last {
-                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                        }
-                    }
-                    
-                    // Clear badge count when chat is opened
-                    DispatchQueue.main.async {
-                        UNUserNotificationCenter.current().setBadgeCount(0) { error in
-                            if let error = error {
-                                print("[ChatScreen] Error clearing badge count: \(error)")
-                            }
-                        }
-                    }
-                }
-            }
-            .background(Color(.systemBackground))
-            
-            // Message Input - Fixed at bottom
-            VStack(spacing: 0) {
-                // Attachment preview or loading indicator
-                if isProcessingAttachment {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.8)
-                        Text(NSLocalizedString("Preparing attachment...", comment: "Chat attachment loading"))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
-                } else if let attachment = selectedAttachment {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
+            messagesScrollView
+            messageInputView
+        }
+    }
+    
+    private var messagesScrollView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    // Load more indicator at TOP (for loading older messages)
+                    if hasMoreMessages && !messages.isEmpty && isLoadMoreEnabled {
+                        if isLoadingMore {
                             HStack {
-                                Image(systemName: getAttachmentIcon(for: attachment.type))
-                                    .foregroundColor(.blue)
-                                Text(attachment.fileName ?? "Attachment")
-                                    .font(.caption)
-                                    .foregroundColor(.primary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
+                                Spacer()
+                                ProgressView()
+                                    .padding()
                                 Spacer()
                             }
-                            
-                            if let size = attachment.size {
-                                Text(formatFileSize(size))
-                                    .font(.caption2)
+                        } else {
+                            Color.clear
+                                .frame(height: 1)
+                                .onAppear {
+                                    loadMoreMessages()
+                                }
+                        }
+                    }
+                    
+                    // Show "No more messages" indicator at the top when reached the beginning
+                    // Only show if there are enough messages to fill roughly one screen
+                    if !hasMoreMessages && messages.count > 10 && isLoadMoreEnabled {
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 4) {
+                                Text("•  •  •")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(LocalizedStringKey("No more messages"))
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
                             }
-                        }
-                        
-                        Button(action: {
-                            selectedAttachment = nil
-                            attachmentItemData = nil
-                            selectedPhotos = []
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.red)
+                            .padding(.vertical, 12)
+                            Spacer()
                         }
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
-                }
-                
-                // Message input bar
-                HStack(spacing: 12) {
-                    // Attachment button
-                    PhotosPicker(
-                        selection: $selectedPhotos,
-                        maxSelectionCount: 1,
-                        matching: .any(of: [.images, .videos])
-                    ) {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 20))
-                            .foregroundColor(.blue)
-                    }
-                    .onChange(of: selectedPhotos) { oldItems, newItems in
-                        // Ignore if clearing selection or already processing
-                        guard !newItems.isEmpty, !isProcessingAttachment else {
-                            return
+
+                    // Messages in chronological order (oldest to newest)
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        if index > 0 {
+                            let timeDiff = message.timestamp - messages[index - 1].timestamp
+                            if timeDiff > 3600 {
+                                TimeDividerView(timestamp: message.timestamp)
+                            }
                         }
-                        Task {
-                            await handlePhotoSelection(newItems)
-                        }
+
+                        ChatMessageView(
+                            message: message,
+                            allMessages: messages,
+                            currentIndex: index,
+                            isChatScreenVisible: isChatScreenVisible,
+                            receiptId: receiptId,
+                            onResendMessage: { failedMessage in
+                                resendMessage(failedMessage)
+                            }
+                        )
+                        .id(message.id)
                     }
                     
-                    // Text input
-                    TextField(NSLocalizedString("Type a message...", comment: "Chat message input placeholder"), text: $messageText, axis: .vertical)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12) // Increased vertical padding for taller touchable area
-                        .background(Color(.systemGray6))
-                        .cornerRadius(12)
-                        .lineLimit(1...5)
-                        .focused($isTextFieldFocused)
-                        .foregroundColor(.primary)
-                        .onTapGesture {
-                            // Focus the text field when tapped anywhere in its area
-                            isTextFieldFocused = true
-                        }
-                        .onSubmit {
-                            // Hide keyboard when user submits
-                            hideKeyboard()
-                        }
-                    
-                    // Send button
-                    DebounceButton(
-                        cooldownDuration: 0.3,
-                        enableAnimation: true,
-                        enableVibration: false
-                    ) {
-                        sendMessage()
-                    } label: {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(.white)
-                    }
-                    .frame(width: 32, height: 32)
-                    .background(canSendMessage ? Color.blue : Color.gray)
-                    .clipShape(Circle())
-                    .disabled(!canSendMessage)
+                    // Bottom anchor for initial scroll
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottomAnchor")
                 }
                 .padding()
-                .background(Color(.systemBackground))
-                .overlay(
-                    Rectangle()
-                        .frame(height: 0.5)
-                        .foregroundColor(Color(.separator)),
-                    alignment: .top
-                )
             }
-            .background(Color(.systemBackground))
-        }
-        .onTapGesture {
-            // Hide keyboard when tapping outside input area
-            hideKeyboard()
-        }
-        .toolbar(.hidden, for: .tabBar)
-        .navigationDestination(for: User.self) { user in
-            ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
-        }
-        .overlay(
-            // Toast message overlay
-            VStack {
-                Spacer()
-                if showToast {
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 100)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: shouldScrollToBottom) { _, newValue in
+                guard newValue, let lastMessage = messages.last else { return }
+
+                if shouldAnimateScroll {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    }
+                } else {
+                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                }
+                shouldScrollToBottom = false
+                shouldAnimateScroll = true
+            }
+            .onChange(of: keyboardHeight) { _, newHeight in
+                // Scroll to bottom when keyboard appears
+                if newHeight > 0, let lastMessage = messages.last {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                    }
                 }
             }
-                .animation(.easeInOut(duration: 0.3), value: showToast)
-        )
-        
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
-            if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
-                keyboardHeight = keyboardFrame.height
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardHeight = 0
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .chatMessageSent)) { notification in
-            // Handle successfully sent message
-            if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
-                print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
-                // Add message to UI and cache if not already there
-                if !messages.contains(where: { $0.id == sentMessage.id }) {
-                    messages.append(sentMessage)
-                    allCachedMessages.append(sentMessage)
-                    chatRepository.addMessagesToCoreData([sentMessage])
-                    
-                    // Scroll to bottom for sent message
-                    shouldAnimateScroll = true
-                    shouldScrollToBottom = true
-                    
-                    // Update chat session
-                    Task {
-                        await chatSessionManager.updateOrCreateChatSession(
-                            senderId: receiptId,
-                            message: sentMessage,
-                            hasNews: false
-                        )
+            .navigationBarHidden(true)
+            .onAppear {
+                // Store the scroll proxy for later use
+                scrollProxy = proxy
+                
+                DispatchQueue.main.async {
+                    UNUserNotificationCenter.current().setBadgeCount(0) { error in
+                        if let error = error {
+                            print("[ChatScreen] Error clearing badge count: \(error)")
+                        }
                     }
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
-            if let error = notification.userInfo?["error"] as? Error {
-                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
-            } else {
-                showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
+        .background(Color(.systemBackground))
+    }
+    
+    private var messageInputView: some View {
+        VStack(spacing: 0) {
+            attachmentPreviewView
+            messageInputBar
+        }
+        .background(Color(.systemBackground))
+    }
+    
+    @ViewBuilder
+    private var attachmentPreviewView: some View {
+        if isProcessingAttachment {
+            HStack {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text(NSLocalizedString("Preparing attachment...", comment: "Chat attachment loading"))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray6))
+        } else if let attachment = selectedAttachment {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: getAttachmentIcon(for: attachment.type))
+                            .foregroundColor(.blue)
+                        Text(attachment.fileName ?? "Attachment")
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                    }
+                    if let size = attachment.size {
+                        Text(formatFileSize(size))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Button(action: {
+                    selectedAttachment = nil
+                    attachmentItemData = nil
+                    selectedPhotos = []
+                    selectedDocuments = []
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.red)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray6))
+        }
+    }
+    
+    private var messageInputBar: some View {
+        HStack(spacing: 12) {
+            attachmentButton
+            textInputField
+            sendButton
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundColor(Color(.separator)),
+            alignment: .top
+        )
+    }
+    
+    private var attachmentButton: some View {
+        AttachmentButtonView(
+            selectedPhotos: $selectedPhotos,
+            showDocumentPicker: $showDocumentPicker,
+            isLongPressing: $isLongPressingAttachment,
+            onPhotoSelected: { items in
+                guard !items.isEmpty, !isProcessingAttachment else { return }
+                Task {
+                    await handlePhotoSelection(items)
+                }
+            }
+        )
+    }
+    
+    private var textInputField: some View {
+        TextField(NSLocalizedString("Type a message...", comment: "Chat message input placeholder"), text: $messageText, axis: .vertical)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .background(Color(.systemGray6))
+            .cornerRadius(12)
+            .lineLimit(1...5)
+            .focused($isTextFieldFocused)
+            .foregroundColor(.primary)
+            .onTapGesture {
+                isTextFieldFocused = true
+            }
+            .onSubmit {
+                hideKeyboard()
+            }
+    }
+    
+    private var sendButton: some View {
+        DebounceButton(
+            cooldownDuration: 0.3,
+            enableAnimation: true,
+            enableHaptic: false
+        ) {
+            sendMessage()
+        } label: {
+            Image(systemName: "paperplane.fill")
+                .font(.system(size: 18))
+                .foregroundColor(.white)
+        }
+        .frame(width: 32, height: 32)
+        .background(canSendMessage ? Color.blue : Color.gray)
+        .clipShape(Circle())
+        .disabled(!canSendMessage)
+    }
+    
+    private var toastOverlay: some View {
+        VStack {
+            Spacer()
+            if showToast {
+                ToastView(message: toastMessage, type: toastType)
+                    .padding(.bottom, 100)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        
-        .task {
-            print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
+        .animation(.easeInOut(duration: 0.3), value: showToast)
+    }
+    
+    private func handleMessageSent(_ notification: Notification) {
+        if let sentMessage = notification.userInfo?["message"] as? ChatMessage {
+            print("[ChatScreen] Received notification for sent message: \(sentMessage.id)")
+            print("[ChatScreen] Message content: \(sentMessage.content ?? "nil")")
+            print("[ChatScreen] Message attachments count: \(sentMessage.attachments?.count ?? 0)")
+            if let attachments = sentMessage.attachments {
+                for (index, attachment) in attachments.enumerated() {
+                    print("[ChatScreen] Attachment \(index): type=\(attachment.type.rawValue), mid=\(attachment.mid), url=\(attachment.url ?? "nil")")
+                }
+            }
             
-            // Mark session as read when opened
-            chatSessionManager.markSessionAsRead(receiptId: receiptId)
-            
-            await loadUser()
-            await loadMessages()
-            
-            // Start periodic message refresh after initial load
-            startPeriodicMessageRefresh()
-            
-            print("[ChatScreen] Finished loading chat. User: \(user?.name ?? "nil"), Messages: \(messages.count)")
+            if !messages.contains(where: { $0.id == sentMessage.id }) {
+                // Create new arrays to force SwiftUI to detect the change and refresh views
+                messages = messages + [sentMessage]
+                allCachedMessages = allCachedMessages + [sentMessage]
+                chatRepository.addMessagesToCoreData([sentMessage])
+                shouldAnimateScroll = true
+                shouldScrollToBottom = true
+                
+                print("[ChatScreen] Added new message to list. Total messages: \(messages.count)")
+                
+                Task {
+                    await chatSessionManager.updateOrCreateChatSession(
+                        senderId: receiptId,
+                        message: sentMessage,
+                        hasNews: false
+                    )
+                }
+            }
         }
-        .onDisappear {
-            // Stop the periodic message refresh timer when leaving the screen
-            stopPeriodicMessageRefresh()
+    }
+    
+    private func handleMessageSendFailed(_ notification: Notification) {
+        if let error = notification.userInfo?["error"] as? Error {
+            showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+        } else {
+            showToastMessage(NSLocalizedString("Failed to send message", comment: "Chat error"), type: .error)
         }
     }
     
@@ -369,6 +462,116 @@ struct ChatScreen: View {
         } else {
             // Send text-only message directly
             sendTextMessageDirectly()
+        }
+    }
+    
+    private func resendMessage(_ failedMessage: ChatMessage) {
+        print("[ChatScreen] Attempting to resend message: \(failedMessage.id)")
+        
+        // Check if message has attachments
+        let hasAttachments = failedMessage.attachments != nil && !failedMessage.attachments!.isEmpty
+        
+        if hasAttachments {
+            // For messages with attachments, we can't retry because we don't have the original file data
+            showToastMessage(
+                NSLocalizedString("Cannot resend messages with attachments. Please send the attachment again.", comment: "Chat resend error"),
+                type: .info
+            )
+            return
+        }
+        
+        // For text-only messages, we can resend
+        guard let content = failedMessage.content, !content.isEmpty else {
+            showToastMessage(NSLocalizedString("Cannot resend empty message", comment: "Chat resend error"), type: .error)
+            return
+        }
+        
+        // Remove the failed message from the UI and cache
+        messages.removeAll { $0.id == failedMessage.id }
+        allCachedMessages.removeAll { $0.id == failedMessage.id }
+        
+        // Create a new message with the same content
+        let newMessage = ChatMessage(
+            authorId: HproseInstance.shared.appUser.mid,
+            receiptId: receiptId,
+            chatSessionId: ChatMessage.generateSessionId(userId: HproseInstance.shared.appUser.mid, receiptId: receiptId),
+            content: content,
+            attachments: nil
+        )
+        
+        // Add new message to UI and cache immediately
+        // Create new arrays to force SwiftUI to detect the change
+        messages = messages + [newMessage]
+        allCachedMessages = allCachedMessages + [newMessage]
+        
+        // Scroll to bottom for sent message
+        shouldAnimateScroll = true
+        shouldScrollToBottom = true
+        
+        // Send message
+        Task {
+            do {
+                // Send message to backend
+                let resultMessage = try await HproseInstance.shared.sendMessage(receiptId: receiptId, message: newMessage)
+                
+                // Update the chat session with the result message
+                await chatSessionManager.updateOrCreateChatSession(
+                    senderId: receiptId,
+                    message: resultMessage,
+                    hasNews: false
+                )
+                
+                // Save message to Core Data and update UI
+                await MainActor.run {
+                    // Replace the original message with the result message that has status
+                    if let index = messages.firstIndex(where: { $0.id == newMessage.id }) {
+                        messages[index] = resultMessage
+                    }
+                    chatRepository.addMessagesToCoreData([resultMessage])
+
+                    // Delete the failed message from Core Data
+                    chatRepository.deleteMessage(failedMessage)
+
+                    // Scroll to bottom for resent messages (since it's a user action)
+                    shouldAnimateScroll = true
+                    shouldScrollToBottom = true
+
+                    if resultMessage.success == true {
+                        print("[ChatScreen] Message resent successfully")
+                        showToastMessage(NSLocalizedString("Message sent successfully", comment: "Chat success"), type: .success)
+                    } else {
+                        print("[ChatScreen] Message failed to resend: \(resultMessage.errorMsg ?? "Unknown error")")
+                    }
+                }
+                
+            } catch {
+                print("[ChatScreen] Error resending message: \(error)")
+                
+                // Handle network exceptions the same as backend failures
+                await MainActor.run {
+                    let failedResendMessage = ChatMessage(
+                        id: newMessage.id,
+                        authorId: newMessage.authorId,
+                        receiptId: newMessage.receiptId,
+                        chatSessionId: newMessage.chatSessionId,
+                        content: newMessage.content,
+                        timestamp: newMessage.timestamp,
+                        attachments: newMessage.attachments,
+                        success: false,
+                        errorMsg: ErrorMessageHelper.userFriendlyMessage(from: error)
+                    )
+                    
+                    // Replace the message with the failed message
+                    if let index = messages.firstIndex(where: { $0.id == newMessage.id }) {
+                        messages[index] = failedResendMessage
+                    }
+                    
+                    // Save failed message to Core Data
+                    chatRepository.addMessagesToCoreData([failedResendMessage])
+                    
+                    print("[ChatScreen] Message failed to resend (network error): \(error.localizedDescription)")
+                }
+            }
         }
     }
     
@@ -394,8 +597,9 @@ struct ChatScreen: View {
         messageText = ""
         
         // Add message to UI and cache immediately
-        messages.append(message)
-        allCachedMessages.append(message)
+        // Create new arrays to force SwiftUI to detect the change
+        messages = messages + [message]
+        allCachedMessages = allCachedMessages + [message]
         
         // Scroll to bottom for sent message
         shouldAnimateScroll = true
@@ -421,7 +625,11 @@ struct ChatScreen: View {
                         messages[index] = resultMessage
                     }
                     chatRepository.addMessagesToCoreData([resultMessage])
-                    
+
+                    // Scroll to bottom for sent messages (user action)
+                    shouldAnimateScroll = true
+                    shouldScrollToBottom = true
+
                     if resultMessage.success == true {
                         print("[ChatScreen] Text message sent successfully")
                     } else {
@@ -490,6 +698,7 @@ struct ChatScreen: View {
         selectedAttachment = nil
         attachmentItemData = nil
         selectedPhotos = []
+        selectedDocuments = []
         
         // Create message to send
         let message = ChatMessage(
@@ -519,20 +728,7 @@ struct ChatScreen: View {
     }
     
     private func loadMessages() async {
-        // First, fetch new messages from backend
-        do {
-            let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
-            let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
-            
-            // Save new messages to Core Data
-            chatRepository.addMessagesToCoreData(validBackendMessages)
-            
-            print("[ChatScreen] Fetched \(validBackendMessages.count) messages from backend")
-        } catch {
-            print("[ChatScreen] Error fetching messages from backend: \(error)")
-        }
-        
-        // Load all messages from local storage for pagination
+        // FIRST: Load cached messages immediately for instant display
         let localMessages = chatRepository.getMessages(for: receiptId)
         let validLocalMessages = localMessages.filter { isValidChatMessage($0) }
         let sortedMessages = validLocalMessages.sorted { $0.timestamp < $1.timestamp }
@@ -540,25 +736,62 @@ struct ChatScreen: View {
         await MainActor.run {
             allCachedMessages = sortedMessages
             
-            // Load only the most recent 20 messages initially
-            currentOffset = max(0, sortedMessages.count - 20)
-            let initialMessages = Array(sortedMessages.suffix(20))
+            // Load only the most recent 10 messages initially for faster display
+            currentOffset = max(0, sortedMessages.count - 10)
+            let initialMessages = Array(sortedMessages.suffix(10))
             messages = initialMessages
             hasMoreMessages = currentOffset > 0
             isLoadMoreEnabled = false
             
-            print("[ChatScreen] Loaded \(initialMessages.count) initial messages (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
+            print("[ChatScreen] Loaded \(initialMessages.count) initial messages from cache (total cached: \(sortedMessages.count), hasMore: \(hasMoreMessages))")
             
-            // Scroll to bottom after messages are set
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    shouldAnimateScroll = false
+            // Enable load more after a short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                isLoadMoreEnabled = true
+            }
+        }
+        
+        // THEN: Fetch new messages from backend in the background
+        do {
+            let backendMessages = try await HproseInstance.shared.fetchMessages(senderId: receiptId)
+            let validBackendMessages = backendMessages.filter { isValidChatMessage($0) }
+            
+            // Check if we have new messages that aren't in cache
+            let currentCachedIds = Set(allCachedMessages.map { $0.id })
+            let newMessages = validBackendMessages.filter { !currentCachedIds.contains($0.id) }
+            
+            if !newMessages.isEmpty {
+                print("[ChatScreen] Fetched \(newMessages.count) new messages from backend")
+                
+                // Save new messages to Core Data
+                chatRepository.addMessagesToCoreData(newMessages)
+                
+                await MainActor.run {
+                    // Add new messages to allCachedMessages
+                    var updatedCache = allCachedMessages + newMessages
+                    updatedCache.sort { $0.timestamp < $1.timestamp }
+                    allCachedMessages = updatedCache
+
+                    // Append new messages to displayed messages
+                    messages.append(contentsOf: newMessages)
+                    messages.sort { $0.timestamp < $1.timestamp }
+
+                    // Update offset to account for new messages
+                    currentOffset = max(0, allCachedMessages.count - messages.count)
+                    hasMoreMessages = currentOffset > 0
+
+                    // Scroll to bottom when new messages arrive
+                    shouldAnimateScroll = true
                     shouldScrollToBottom = true
-                    
-                    // Allow loading older messages only after initial scroll completes
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        isLoadMoreEnabled = true
-                    }
+
+                    print("[ChatScreen] Added \(newMessages.count) new messages from backend, total: \(messages.count)")
                 }
+            } else {
+                print("[ChatScreen] No new messages from backend (fetched \(validBackendMessages.count) total)")
+            }
+        } catch {
+            print("[ChatScreen] Error fetching messages from backend: \(error)")
+            // Don't show error toast - cached messages are already displayed
         }
         
         // Update session timestamp if there are messages
@@ -575,6 +808,9 @@ struct ChatScreen: View {
         guard hasMoreMessages && !isLoadingMore else { return }
         
         isLoadingMore = true
+        
+        // Capture the first visible message to restore scroll position
+        let anchorMessageId = messages.first?.id
         
         Task {
             await MainActor.run {
@@ -598,6 +834,13 @@ struct ChatScreen: View {
                 print("[ChatScreen] Loaded \(messagesToLoad) more messages (offset: \(currentOffset), total: \(messages.count), hasMore: \(hasMoreMessages))")
                 
                 isLoadingMore = false
+                
+                // Restore scroll position to the anchor message after a brief delay
+                if let anchorId = anchorMessageId, let proxy = scrollProxy {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        proxy.scrollTo(anchorId, anchor: .top)
+                    }
+                }
             }
         }
     }
@@ -613,7 +856,6 @@ struct ChatScreen: View {
             print("[ChatScreen] Ignoring message with invalid chatSessionId: \(message.id)")
         }
         
-        print("[ChatScreen] Message validation for \(message.id): sessionId=\(message.chatSessionId), isValid=\(isValidSessionId)")
         return isValidSessionId
     }
     
@@ -705,21 +947,90 @@ struct ChatScreen: View {
     private func startPeriodicMessageRefresh() {
         // Stop any existing timer first
         stopPeriodicMessageRefresh()
-        
+
         // Start timer to refresh messages every 15 seconds
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in stopPeriodicMessageRefresh()
         messageRefreshTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { _ in
             Task {
                 await refreshMessagesFromBackend()
             }
         }
-        
+
         print("[ChatScreen] Started periodic message refresh timer (15 seconds)")
     }
-    
+
     private func stopPeriodicMessageRefresh() {
         messageRefreshTimer?.invalidate()
         messageRefreshTimer = nil
         print("[ChatScreen] Stopped periodic message refresh timer")
+    }
+
+    private func startVisibilityCheckTimer() {
+        // Stop any existing timer first
+        stopVisibilityCheckTimer()
+
+        // Only start timer if chat screen is visible
+        guard isChatScreenVisible else { return }
+
+        // Start timer to check video visibility every 1.5 seconds (further reduced frequency)
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in stopVisibilityCheckTimer()
+        visibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+            Task { @MainActor in
+                checkVisibleVideos()
+            }
+        }
+
+        print("[ChatScreen] Started video visibility check timer (1.5 seconds)")
+    }
+
+    private func stopVisibilityCheckTimer() {
+        visibilityCheckTimer?.invalidate()
+        visibilityCheckTimer = nil
+        print("[ChatScreen] Stopped video visibility check timer")
+    }
+
+    private func checkVisibleVideos() {
+        // Only check visibility if chat screen is active and we have messages
+        guard isChatScreenVisible, !messages.isEmpty else {
+            if !visibleVideoMids.isEmpty {
+                visibleVideoMids.removeAll()
+                updateVisibleVideos()
+            }
+            return
+        }
+
+        // Quick check: if we have no videos in recent messages, clear visible videos
+        let recentMessages = messages.suffix(min(20, messages.count))
+        let hasRecentVideos = recentMessages.contains { message in
+            message.attachments?.contains { $0.type == .video || $0.type == .hls_video } ?? false
+        }
+
+        if !hasRecentVideos {
+            if !visibleVideoMids.isEmpty {
+                visibleVideoMids.removeAll()
+                updateVisibleVideos()
+            }
+            return
+        }
+
+        // Collect video mids from recent messages only (for performance)
+        var visibleMids = Set<String>()
+
+        for message in recentMessages {
+            if let attachments = message.attachments {
+                for attachment in attachments {
+                    if attachment.type == .video || attachment.type == .hls_video {
+                        visibleMids.insert(attachment.mid)
+                    }
+                }
+            }
+        }
+
+        // Only update if visibility actually changed
+        if visibleMids != visibleVideoMids {
+            visibleVideoMids = visibleMids
+            updateVisibleVideos()
+        }
     }
     
     // MARK: - Photo Selection
@@ -804,6 +1115,70 @@ struct ChatScreen: View {
         }
     }
     
+    private func handleDocumentSelection(_ documents: [DocumentFile]) async {
+        guard let document = documents.first else { return }
+        
+        // Set processing flag to prevent concurrent selections
+        await MainActor.run {
+            isProcessingAttachment = true
+        }
+        
+        do {
+            print("[ChatScreen] Starting to prepare document attachment data...")
+            
+            // Use MediaUploadHelper to properly prepare the item data (same as tweet attachments)
+            let itemDataArray = try await MediaUploadHelper.prepareItemData(
+                selectedItems: [],
+                selectedImages: [],
+                selectedVideos: [],
+                selectedDocuments: [document]
+            )
+            
+            guard let itemData = itemDataArray.first else {
+                print("[ChatScreen] Failed to prepare document item data")
+                await MainActor.run {
+                    isProcessingAttachment = false
+                }
+                return
+            }
+            
+            print("[ChatScreen] Document prepared: \(document.fileName), size: \(itemData.data.count) bytes, type: \(itemData.typeIdentifier)")
+            
+            // Create a temporary MimeiFileType for the selected document
+            let tempAttachment = MimeiFileType(
+                mid: UUID().uuidString,
+                mediaType: document.mediaType,
+                size: Int64(itemData.data.count),
+                fileName: document.fileName,
+                url: nil
+            )
+            
+            // Set attachment and itemData atomically on main thread
+            await MainActor.run {
+                selectedAttachment = tempAttachment
+                attachmentItemData = itemData // Store the prepared item data - CRITICAL: set this before clearing documents
+                print("[ChatScreen] Document attachment data prepared successfully. attachmentItemData is now set.")
+                
+                // Clear processing flag AFTER everything is set
+                isProcessingAttachment = false
+                
+                // Clear selection AFTER a small delay to ensure state is fully set
+                // This prevents onChange from being triggered while attachmentItemData is still nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    selectedDocuments = []
+                }
+            }
+            
+            print("[ChatScreen] Document selection completed successfully")
+        } catch {
+            print("[ChatScreen] Error loading document: \(error)")
+            await MainActor.run {
+                isProcessingAttachment = false
+                showToastMessage(ErrorMessageHelper.userFriendlyMessage(from: error), type: .error)
+            }
+        }
+    }
+    
     
     
     private func refreshMessagesFromBackend() async {
@@ -854,6 +1229,58 @@ struct ChatScreen: View {
             }
         } catch {
             print("[ChatScreen] Error refreshing messages from backend: \(error)")
+        }
+    }
+}
+
+/// Custom attachment button that handles both tap (photo picker) and long press (document picker)
+struct AttachmentButtonView: View {
+    @Binding var selectedPhotos: [PhotosPickerItem]
+    @Binding var showDocumentPicker: Bool
+    @Binding var isLongPressing: Bool
+    let onPhotoSelected: ([PhotosPickerItem]) -> Void
+    
+    @State private var hasLongPressed = false
+    
+    var body: some View {
+        PhotosPicker(
+            selection: $selectedPhotos,
+            maxSelectionCount: 1,
+            matching: .any(of: [.images, .videos])
+        ) {
+            Image(systemName: "paperclip")
+                .font(.system(size: 20))
+                .foregroundColor(.blue)
+        }
+        .disabled(hasLongPressed)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.5, maximumDistance: 50)
+                .onEnded { _ in
+                    hasLongPressed = true
+                    isLongPressing = true
+                    showDocumentPicker = true
+                }
+        )
+        .onChange(of: selectedPhotos) { oldItems, newItems in
+            guard !newItems.isEmpty, !hasLongPressed else {
+                // Clear selection if it was triggered after long press
+                if hasLongPressed {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        selectedPhotos = []
+                    }
+                }
+                return
+            }
+            onPhotoSelected(newItems)
+        }
+        .onChange(of: showDocumentPicker) { _, newValue in
+            if !newValue {
+                // Reset states when document picker is dismissed
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isLongPressing = false
+                    hasLongPressed = false
+                }
+            }
         }
     }
 }

@@ -35,12 +35,25 @@ class PersistentVideoStateManager: ObservableObject {
     }
     
     /// Save video playback state
+    /// Automatically clears state if video is at or near the end (prevents restoring to end position)
     func saveState(
         videoMid: String,
         currentTime: CMTime,
         wasPlaying: Bool,
         context: VideoPlaybackState.VideoContext
     ) {
+        // CRITICAL: Validate time before saving - prevent NaN or invalid times from crashing later
+        guard currentTime.isValid && currentTime.seconds.isFinite else {
+            print("⚠️ [VIDEO STATE] Rejected invalid time for \(videoMid): \(currentTime.seconds)s - clearing state instead")
+            clearState(videoMid: videoMid, context: context)
+            return
+        }
+        
+        // CRITICAL: Don't save state if video is at or near the end (within 1 second of completion)
+        // This prevents videos from restoring to end position and immediately finishing on next play
+        // Note: We don't have duration here, so we rely on the caller to clear state when video finishes
+        // OR we can check if currentTime is suspiciously close to a typical video end (handled by SimpleVideoPlayer)
+        
         let state = VideoPlaybackState(
             videoMid: videoMid,
             currentTime: currentTime,
@@ -55,9 +68,59 @@ class PersistentVideoStateManager: ObservableObject {
         print("📝 [VIDEO STATE] Saved state for \(videoMid): time=\(currentTime.seconds)s, wasPlaying=\(wasPlaying), context=\(context.rawValue)")
     }
     
+    /// Save video playback state with duration check
+    /// If video is at or near the end, clears state instead of saving
+    func saveState(
+        videoMid: String,
+        currentTime: CMTime,
+        wasPlaying: Bool,
+        context: VideoPlaybackState.VideoContext,
+        duration: CMTime
+    ) {
+        // CRITICAL: Validate time before saving
+        guard currentTime.isValid && currentTime.seconds.isFinite else {
+            print("⚠️ [VIDEO STATE] Rejected invalid time for \(videoMid): \(currentTime.seconds)s - clearing state instead")
+            clearState(videoMid: videoMid, context: context)
+            return
+        }
+        
+        // CRITICAL: If duration is valid, check if video is at or near the end
+        if duration.isValid && duration.seconds > 0 {
+            let timeRemaining = duration.seconds - currentTime.seconds
+            
+            // If within 1 second of the end, clear state instead of saving
+            // This prevents videos from restoring to end position on next play
+            if timeRemaining <= 1.0 {
+                print("🗑️ [VIDEO STATE] Video \(videoMid) at end (\(currentTime.seconds)s / \(duration.seconds)s) - clearing state instead of saving")
+                clearState(videoMid: videoMid, context: context)
+                return
+            }
+        }
+        
+        // Save normally if not at end
+        saveState(videoMid: videoMid, currentTime: currentTime, wasPlaying: wasPlaying, context: context)
+    }
+    
     /// Get saved video playback state
-    func getState(videoMid: String, context: VideoPlaybackState.VideoContext) -> VideoPlaybackState? {
-        return videoStates[context]?[videoMid]
+    /// Automatically validates and clears states that are at/near the end
+    func getState(videoMid: String, context: VideoPlaybackState.VideoContext, duration: CMTime? = nil) -> VideoPlaybackState? {
+        guard let state = videoStates[context]?[videoMid] else {
+            return nil
+        }
+        
+        // If duration is provided, check if saved position is at/near end
+        if let duration = duration, duration.isValid && duration.seconds > 0 {
+            let timeRemaining = duration.seconds - state.currentTime.seconds
+            
+            // If within 1 second of the end, clear this stale state and return nil
+            if timeRemaining <= 1.0 {
+                print("🗑️ [VIDEO STATE] Found stale end-position state for \(videoMid) (\(state.currentTime.seconds)s / \(duration.seconds)s) - clearing")
+                clearState(videoMid: videoMid, context: context)
+                return nil
+            }
+        }
+        
+        return state
     }
     
     /// Remove saved state for a video
@@ -101,8 +164,9 @@ class PersistentVideoStateManager: ObservableObject {
     }
     
     /// Check if we should restore playback for a video
-    func shouldRestorePlayback(videoMid: String, context: VideoPlaybackState.VideoContext) -> Bool {
-        guard let state = getState(videoMid: videoMid, context: context) else {
+    /// Validates that state exists, is recent, and is not at the end
+    func shouldRestorePlayback(videoMid: String, context: VideoPlaybackState.VideoContext, duration: CMTime? = nil) -> Bool {
+        guard let state = getState(videoMid: videoMid, context: context, duration: duration) else {
             return false
         }
         
@@ -117,5 +181,29 @@ class PersistentVideoStateManager: ObservableObject {
         }
         
         return true
+    }
+    
+    /// Clear all saved states at or near the end position
+    /// Call this on app launch to clean up stale end-position states
+    func clearEndPositionStates() {
+        var clearedCount = 0
+        
+        for context in VideoPlaybackState.VideoContext.allCases {
+            guard var bucket = videoStates[context] else { continue }
+            
+            // We can't check duration here, so just clear states that are suspiciously high (>100 seconds)
+            // The real cleanup happens in getState when duration is available
+            // This is just a safety cleanup for very old states
+            let staleMids = bucket.filter { $0.value.currentTime.seconds > 100 }.map { $0.key }
+            for mid in staleMids {
+                bucket.removeValue(forKey: mid)
+                clearedCount += 1
+            }
+            videoStates[context] = bucket
+        }
+        
+        if clearedCount > 0 {
+            print("🗑️ [VIDEO STATE] Cleared \(clearedCount) suspicious end-position states on launch")
+        }
     }
 }

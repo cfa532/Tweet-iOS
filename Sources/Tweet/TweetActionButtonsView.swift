@@ -110,9 +110,11 @@ func composeAttachmentTypeText(for tweet: Tweet) -> String {
 struct TweetActionButtonsView: View {
     @ObservedObject var tweet: Tweet
     var commentsVM: CommentsViewModel? = nil
+    var parentTweet: Tweet? = nil  // For comments: the parent tweet this is a comment on
     var onCommentTap: (() -> Void)? = nil
     var isInDetailView: Bool = false  // NEW: Track if we're in TweetDetailView
     var isFullScreen: Bool = false    // NEW: Track if we're in fullscreen player
+    var currentMediaIndex: Int? = nil  // NEW: Track current media index in fullscreen mode
     var onShareVisibilityChange: ((Bool) -> Void)? = nil
     @State private var showCommentCompose = false
     @State private var showLoginSheet = false
@@ -122,6 +124,7 @@ struct TweetActionButtonsView: View {
     @State private var attachmentPreviewImage: UIImage? = nil
     @State private var isPreparingShare = false
     @State private var shareSheetItems: ShareSheetData? = nil
+    @State private var foregroundObserver: NSObjectProtocol? = nil
     // Removed: @State private var hasPreloadedPreview = false - no longer needed since preloading is disabled
     @EnvironmentObject private var hproseInstance: HproseInstance
 
@@ -211,7 +214,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -233,7 +236,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.5,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -292,7 +295,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -380,7 +383,7 @@ struct TweetActionButtonsView: View {
             DebounceButton(
                 cooldownDuration: 0.3,
                 enableAnimation: true,
-                enableVibration: false
+                enableHaptic: true
             ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
@@ -469,13 +472,43 @@ struct TweetActionButtonsView: View {
                 DebounceButton(
                     cooldownDuration: 0.3,
                     enableAnimation: true,
-                    enableVibration: false
+                    enableHaptic: true
                 ) {
                     // Show spinner immediately when button is tapped (synchronous on main thread)
                     isPreparingShare = true
-                    
+
+                    // CRITICAL FIX: Register overlay BEFORE presenting sheet to ensure proper timing
+                    // This ensures videos know they're covered before willResignActiveNotification fires
+                    OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+
+                    // If in TweetDetailView, pause the video explicitly
+                    if isInDetailView {
+                        DetailVideoManager.shared.pausePlayer()
+                        print("DEBUG: [SHARE] Paused detail view video before share sheet")
+                    }
+
                     Task {
+                        // Ensure overlay is cleaned up if sheet never presents (error handling)
+                        var sheetPresented = false
+                        defer {
+                            if !sheetPresented {
+                                // If sheet was never presented, clean up overlay
+                                Task { @MainActor in
+                                    if self.shareSheetItems == nil {
+                                        OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
+                                        self.isPreparingShare = false
+                                        print("DEBUG: [SHARE] Share cancelled/failed, cleaned up overlay")
+                                    }
+                                }
+                            }
+                        }
+                        
                         print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
+                        
+                        // If sharing from detail view, resolve IPv4 for better compatibility
+                        if isInDetailView {
+                            _ = await getIPv4PreferredBaseUrl(for: tweet)
+                        }
                         
                         // If we don't have a preloaded preview, generate it now
                         if attachmentPreviewImage == nil {
@@ -497,6 +530,7 @@ struct TweetActionButtonsView: View {
                             let items = shareActivityItems()
                             print("DEBUG: [SHARE] Opening sheet with items, count: \(items.count)")
                             shareSheetItems = ShareSheetData(items: items)
+                            sheetPresented = true // Mark that sheet will be presented
                             // Don't hide spinner here - wait for sheet to actually appear
                         }
                     }
@@ -531,48 +565,31 @@ struct TweetActionButtonsView: View {
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
             }
         }
-        .sheet(item: $shareSheetItems, onDismiss: {
-            // Reset state when sheet is dismissed
-            attachmentPreviewImage = nil
-            isPreparingShare = false
-            print("DEBUG: [SHARE] Sheet dismissed, state cleared")
-            onShareVisibilityChange?(false)
-            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
-        }) { sheetData in
-            let _ = print("DEBUG: [SHARE] Sheet presenting with \(sheetData.items.count) items")
-            onShareVisibilityChange?(true)
-            return ZStack {
-                ShareSheet(activityItems: sheetData.items)
-                
-                // Show loading overlay if still generating preview
-                if isPreparingShare {
-                    Color.black.opacity(0.3)
-                        .ignoresSafeArea()
-                    
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        
-                        Text("Generating preview...")
-                            .foregroundColor(.white)
-                            .font(.headline)
+        .background(
+            ShareSheet(
+                shareData: $shareSheetItems,
+                onPresented: {
+                    isPreparingShare = false
+                    onShareVisibilityChange?(true)
+                    print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
+                },
+                onDismiss: {
+                    attachmentPreviewImage = nil
+                    isPreparingShare = false
+                    print("DEBUG: [SHARE] Sheet dismissed, state cleared")
+                    onShareVisibilityChange?(false)
+
+                    OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
+
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 300_000_000)
+                        OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
+                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                        print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
                     }
-                    .padding(32)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(16)
                 }
-            }
-            .onAppear {
-                // Hide spinner only when share sheet actually appears
-                isPreparingShare = false
-                print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
-                OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
-            }
-            .onDisappear {
-                OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView")
-            }
-        }
+            )
+        )
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
@@ -599,6 +616,16 @@ struct TweetActionButtonsView: View {
             // DISABLED: Preload attachment preview causes UI freezing when many video tweets are visible
             // Preview will be generated on-demand when share button is tapped instead
             // preloadAttachmentPreview()
+            
+            // Setup foreground observer to reload resources if they were released during background
+            setupForegroundObserver()
+        }
+        .onDisappear {
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
         }
     }
 
@@ -639,10 +666,50 @@ struct TweetActionButtonsView: View {
         return URL(string: AppConfig.baseUrl)
     }
     
+    /// Setup observer to detect foreground return and reload resources if released
+    private func setupForegroundObserver() {
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only reload if share sheet is currently active
+            guard self.shareSheetItems != nil else { return }
+            
+            print("DEBUG: [SHARE] App returned to foreground with share sheet active - checking resources")
+            
+            // Check if preview image was released by system
+            Task { @MainActor in
+                // If preview image is nil but we had one before (share sheet is showing), regenerate it
+                if self.attachmentPreviewImage == nil {
+                    print("DEBUG: [SHARE] Preview image was released - regenerating")
+                    self.isPreparingShare = true
+                    
+                    let preview = await self.loadAttachmentPreviewImage()
+                    
+                    self.attachmentPreviewImage = preview
+                    self.isPreparingShare = false
+                    
+                    // Update share sheet items with new preview
+                    if preview != nil {
+                        let items = self.shareActivityItems()
+                        self.shareSheetItems = ShareSheetData(items: items)
+                        print("DEBUG: [SHARE] Preview regenerated and share sheet updated")
+                    } else {
+                        print("DEBUG: [SHARE] Failed to regenerate preview")
+                    }
+                } else {
+                    print("DEBUG: [SHARE] Preview image still present - no reload needed")
+                }
+            }
+        }
+    }
+    
     private func loadAttachmentPreviewImage() async -> UIImage? {
         print("DEBUG: [SHARE] loadAttachmentPreviewImage called for tweet: \(tweet.mid)")
         print("DEBUG: [SHARE] Tweet has attachments: \(tweet.attachments?.count ?? 0)")
         print("DEBUG: [SHARE] Tweet originalTweetId: \(tweet.originalTweetId ?? "nil")")
+        print("DEBUG: [SHARE] isFullScreen: \(isFullScreen), currentMediaIndex: \(currentMediaIndex?.description ?? "nil")")
         
         guard let sourceTweet = await resolveSourceTweetWithAttachments() else {
             print("DEBUG: [SHARE] No source tweet with attachments found")
@@ -651,12 +718,21 @@ struct TweetActionButtonsView: View {
         
         print("DEBUG: [SHARE] Source tweet found: \(sourceTweet.mid), attachments: \(sourceTweet.attachments?.count ?? 0)")
         
-        guard let attachment = sourceTweet.attachments?.first else {
-            print("DEBUG: [SHARE] No first attachment found")
-            return nil
+        // In fullscreen mode, use the current media index if provided
+        let attachment: MimeiFileType
+        if isFullScreen, let mediaIndex = currentMediaIndex, let attachments = sourceTweet.attachments, mediaIndex < attachments.count {
+            attachment = attachments[mediaIndex]
+            print("DEBUG: [SHARE] Using attachment at index \(mediaIndex): type=\(attachment.type), mid=\(attachment.mid)")
+        } else {
+            guard let firstAttachment = sourceTweet.attachments?.first else {
+                print("DEBUG: [SHARE] No first attachment found")
+                return nil
+            }
+            attachment = firstAttachment
+            print("DEBUG: [SHARE] Using first attachment: type=\(attachment.type), mid=\(attachment.mid)")
         }
         
-        print("DEBUG: [SHARE] First attachment type: \(attachment.type), mid: \(attachment.mid)")
+        print("DEBUG: [SHARE] Selected attachment type: \(attachment.type), mid: \(attachment.mid)")
         
         let baseURL = await resolveAttachmentBaseURL(for: sourceTweet)
         print("DEBUG: [SHARE] Resolved baseURL: \(baseURL?.absoluteString ?? "nil")")
@@ -784,14 +860,41 @@ struct TweetActionButtonsView: View {
         }
         
         // Determine the cache key to use based on context
-        // When in TweetDetailView, the player is cached with "tweetDetail_\(mid)" key
-        let cacheKey: String
+        // SimpleVideoPlayer always caches with just the mediaID (mid), regardless of mode
+        // So we always use mediaID as the cache key
+        let cacheKey: String = mediaID
         if isInDetailView {
-            cacheKey = "tweetDetail_\(mediaID)"
             print("DEBUG: [SHARE] In TweetDetailView context, using cache key: \(cacheKey)")
         } else {
-            cacheKey = mediaID
             print("DEBUG: [SHARE] In feed/grid context, using cache key: \(cacheKey)")
+        }
+        
+        // CRITICAL: TweetDetailView uses DetailVideoManager singleton, not SharedAssetCache
+        // Check DetailVideoManager first when in detail view context
+        if isInDetailView,
+           let detailPlayer = DetailVideoManager.shared.currentPlayer,
+           DetailVideoManager.shared.currentVideoMid == mediaID,
+           let playerItem = detailPlayer.currentItem {
+            print("DEBUG: [SHARE] Found DetailVideoManager singleton player for: \(mediaID)")
+            
+            let duration = try? await playerItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+                print("DEBUG: [SHARE] DetailVideoManager player duration: \(durationSeconds)s, currentTime: \(currentTime)s")
+                
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    // Use current position, or fallback to 1s if at beginning
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    print("DEBUG: [SHARE] Capturing frame from DetailVideoManager at \(String(format: "%.2f", captureTime))s")
+                    
+                    if let image = await captureFrameFromPlayer(detailPlayer, at: captureTime) {
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        print("DEBUG: [SHARE] Preview generated from DetailVideoManager in \(String(format: "%.2f", elapsed))s")
+                        return image
+                    }
+                }
+            }
         }
         
         // For HLS videos, try to use cached player first
@@ -862,7 +965,8 @@ struct TweetActionButtonsView: View {
         
         // Fallback: use asset loading if no cached player
         do {
-            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid)
+            let mediaType: MediaType = isHLS ? .hls_video : .video
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid, mediaType: mediaType)
             
             // Load duration and tracks to ensure video is ready
             async let durationLoad = asset.load(.duration)
@@ -915,12 +1019,59 @@ struct TweetActionButtonsView: View {
         return url.lastPathComponent
     }
     
+    // Track active captures per player to prevent concurrent captures
+    private static var activeCaptures: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private static let captureQueue = DispatchQueue(label: "com.tweet.videoCapture", attributes: .concurrent)
+    private static let captureLock = NSLock()
+    
     private func captureFrameFromPlayer(_ player: AVPlayer, at seconds: Double) async -> UIImage? {
         print("DEBUG: [SHARE] Attempting to capture frame from player at \(seconds)s")
         
         guard let playerItem = player.currentItem else {
             print("DEBUG: [SHARE] Player has no current item")
             return nil
+        }
+        
+        // CRITICAL FIX: Serialize captures per player to prevent concurrent interference
+        let playerId = ObjectIdentifier(player)
+        
+        // Wait for any existing capture on this player to complete
+        let existingTask = Self.captureLock.withLock { () -> Task<Void, Never>? in
+            return Self.activeCaptures[playerId]
+        }
+        
+        if let existingTask = existingTask {
+            _ = await existingTask.value
+        }
+        
+        // Mark this capture as active
+        let captureTask = Task<Void, Never> {
+            // Task will complete when we exit this scope
+        }
+        
+        Self.captureLock.withLock {
+            Self.activeCaptures[playerId] = captureTask
+        }
+        
+        defer {
+            Self.captureLock.withLock {
+                _ = Self.activeCaptures.removeValue(forKey: playerId)
+            }
+        }
+        
+        // CRITICAL FIX: Save playback state before modifying player
+        let savedState = await MainActor.run { () -> (wasPlaying: Bool, originalTime: CMTime, originalRate: Float) in
+            let wasPlaying = player.rate > 0
+            let originalTime = player.currentTime()
+            let originalRate = player.rate
+            
+            // Pause player before seeking to prevent interference
+            if wasPlaying {
+                player.pause()
+                print("DEBUG: [SHARE] Paused player for frame capture (was playing)")
+            }
+            
+            return (wasPlaying: wasPlaying, originalTime: originalTime, originalRate: originalRate)
         }
         
         // AVPlayer operations must be on main thread
@@ -936,6 +1087,37 @@ struct TweetActionButtonsView: View {
         
         defer {
             Task { @MainActor in
+                // CRITICAL FIX: Restore playback state after capture
+                // Check if player still has the same item (might have been replaced)
+                guard player.currentItem === playerItem else {
+                    print("DEBUG: [SHARE] Player item was replaced during capture, skipping restore")
+                    playerItem.remove(videoOutput)
+                    return
+                }
+                
+                // Restore original playback position
+                let restoreTime = savedState.originalTime
+                player.seek(to: restoreTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if finished {
+                        // Restore playback state if it was playing
+                        if savedState.wasPlaying {
+                            Task { @MainActor in
+                                // Double-check player item is still valid before resuming
+                                if player.currentItem === playerItem {
+                                    player.rate = savedState.originalRate
+                                    print("DEBUG: [SHARE] Restored player playback state (was playing at \(CMTimeGetSeconds(restoreTime))s)")
+                                } else {
+                                    print("DEBUG: [SHARE] Player item changed, not restoring playback")
+                                }
+                            }
+                        } else {
+                            print("DEBUG: [SHARE] Restored player position (was paused at \(CMTimeGetSeconds(restoreTime))s)")
+                        }
+                    } else {
+                        print("DEBUG: [SHARE] Failed to restore player position")
+                    }
+                }
+                
                 playerItem.remove(videoOutput)
             }
         } // swiftlint:disable:this line_length
@@ -945,6 +1127,13 @@ struct TweetActionButtonsView: View {
         let retryTimes = [0.1, 0.3, 0.5]
         
         for retryOffset in retryTimes {
+            // CRITICAL FIX: Check if player item was replaced during capture
+            let currentItem = await MainActor.run { player.currentItem }
+            guard currentItem === playerItem else {
+                print("DEBUG: [SHARE] Player item was replaced during capture, aborting")
+                return nil
+            }
+            
             let targetTime = seconds + retryOffset
             print("DEBUG: [SHARE] Attempting capture at \(targetTime)s (offset: \(retryOffset)s)")
             
@@ -954,6 +1143,11 @@ struct TweetActionButtonsView: View {
             // CRITICAL: Wait for seek to complete using completion handler
             // This is especially important for HLS videos where segments need to load
             let seekCompleted = await MainActor.run { () -> Task<Bool, Never> in
+                // Double-check player item is still valid before seeking
+                guard player.currentItem === playerItem else {
+                    return Task { false }
+                }
+                
                 return Task {
                     await withCheckedContinuation { continuation in
                         player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
@@ -978,6 +1172,12 @@ struct TweetActionButtonsView: View {
             
             while attempts < maxAttempts {
                 hasDataAtTime = await MainActor.run { () -> Bool in
+                    // CRITICAL FIX: Check if player item was replaced
+                    guard player.currentItem === playerItem else {
+                        print("DEBUG: [SHARE] Player item replaced during segment loading check")
+                        return false
+                    }
+                    
                     let currentTime = playerItem.currentTime()
                     let loadedRanges = playerItem.loadedTimeRanges
                     
@@ -1016,6 +1216,12 @@ struct TweetActionButtonsView: View {
             // CRITICAL: All CVBuffer operations must happen within MainActor.run to avoid Sendable warnings
             // The pixel buffer is converted to UIImage (which is Sendable) before leaving this context
             let initialImage = await MainActor.run { () -> UIImage? in
+                // CRITICAL FIX: Check if player item was replaced before capturing
+                guard player.currentItem === playerItem else {
+                    print("DEBUG: [SHARE] Player item replaced before frame capture")
+                    return nil
+                }
+                
                 let currentTime = playerItem.currentTime()
                 print("DEBUG: [SHARE] Attempting capture at seeked time: \(CMTimeGetSeconds(currentTime))s")
                 
@@ -1234,6 +1440,51 @@ struct TweetActionButtonsView: View {
         }
     }
     
+    /// Get an IPv4-preferred baseUrl for sharing from detail view
+    /// If the current baseUrl is IPv6, resolves IPv4 via getProviderIP and updates user's baseUrl
+    /// - Parameter tweet: The tweet being shared
+    /// - Returns: IPv4 baseUrl string if available, otherwise falls back to current baseUrl
+    private func getIPv4PreferredBaseUrl(for tweet: Tweet) async -> String {
+        guard let author = tweet.author else {
+            return AppConfig.baseUrl
+        }
+        
+        let currentBaseUrl = author.baseUrl?.absoluteString ?? AppConfig.baseUrl
+        
+        // Quick check: if already IPv4 (no brackets and at most one colon for port), use it
+        if !currentBaseUrl.contains("[") && currentBaseUrl.filter({ $0 == ":" }).count <= 1 {
+            print("DEBUG: [SHARE IPv4] Current baseUrl is already IPv4: \(currentBaseUrl)")
+            return currentBaseUrl
+        }
+        
+        // IPv6 detected - resolve IPv4 via getProviderIP
+        print("DEBUG: [SHARE IPv4] IPv6 detected in baseUrl, resolving IPv4 for author: \(author.mid)")
+        
+        // Call getProviderIP with v4Only=true to get the author's IPv4 provider IP
+        do {
+            if let ipv4 = try await hproseInstance.getProviderIP(author.mid, v4Only: true) {
+                let ipv4BaseUrl = "http://\(ipv4)"
+                print("DEBUG: [SHARE IPv4] ✅ Resolved IPv4 via getProviderIP: \(ipv4BaseUrl)")
+                
+                // Update author's baseUrl with IPv4
+                if let ipv4URL = URL(string: ipv4BaseUrl) {
+                    await MainActor.run {
+                        author.baseUrl = ipv4URL
+                        print("DEBUG: [SHARE IPv4] Updated author's baseUrl to IPv4")
+                    }
+                }
+                
+                return ipv4BaseUrl
+            } else {
+                print("DEBUG: [SHARE IPv4] ⚠️ getProviderIP returned nil, falling back to original baseUrl")
+                return currentBaseUrl
+            }
+        } catch {
+            print("DEBUG: [SHARE IPv4] ⚠️ getProviderIP failed with error: \(error), falling back to original baseUrl")
+            return currentBaseUrl
+        }
+    }
+    
     private func tweetShareText(_ tweet: Tweet) -> String {
         // Create a share text that includes app branding
         var shareText = ""
@@ -1261,14 +1512,28 @@ struct TweetActionButtonsView: View {
             shareText += "\n\n"
         }
         
-        // Add URL - use different format based on context
+        // Add URL - compose based on context (comment vs regular tweet, detail view vs feed)
         let urlText: String
-        if isInDetailView {
-            // In detail view: use author's baseUrl with entry format
+        let effectiveParentTweet = parentTweet ?? commentsVM?.parentTweet
+        
+        if let parent = effectiveParentTweet, isInDetailView {
+            // Comment in detail view: use entry format with query params in hash fragment
+            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
+            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
+        } else if let parent = effectiveParentTweet {
+            // Comment in feed/list: use traditional format with query parameters
+            // Ensure domainToShare has http:// protocol prefix if it doesn't already have a protocol
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
+        } else if isInDetailView {
+            // Regular tweet in detail view: use author's baseUrl with entry format
             let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
             urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
         } else {
-            // In feed/grid: use traditional format
+            // Regular tweet in feed/grid: use traditional format
             // Ensure domainToShare has http:// protocol prefix if it doesn't already have a protocol
             var domain = hproseInstance.domainToShare
             if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
@@ -1290,16 +1555,71 @@ struct TweetActionButtonsView: View {
     }
 }
 
+/// Presents UIActivityViewController directly via UIKit to avoid
+/// SwiftUI .sheet safe-area corruption that causes blank space under the tab bar.
 struct ShareSheet: UIViewControllerRepresentable {
-    var activityItems: [Any]
-    var applicationActivities: [UIActivity]? = nil
+    @Binding var shareData: ShareSheetData?
+    let onPresented: () -> Void
+    let onDismiss: () -> Void
 
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: activityItems, applicationActivities: applicationActivities)
-        return controller
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = UIViewController()
+        vc.view.isHidden = true
+        vc.view.frame = .zero
+        return vc
     }
 
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        context.coordinator.onPresented = onPresented
+        context.coordinator.onDismiss = onDismiss
+        context.coordinator.dataBinding = $shareData
+
+        if shareData != nil, !context.coordinator.isPresenting {
+            context.coordinator.present(items: shareData!.items)
+        }
+    }
+
+    class Coordinator {
+        var isPresenting = false
+        var dataBinding: Binding<ShareSheetData?>?
+        var onPresented: (() -> Void)?
+        var onDismiss: (() -> Void)?
+
+        func present(items: [Any]) {
+            isPresenting = true
+
+            let activityVC = UIActivityViewController(
+                activityItems: items,
+                applicationActivities: nil
+            )
+
+            activityVC.completionWithItemsHandler = { [weak self] _, _, _, _ in
+                guard let self else { return }
+                self.isPresenting = false
+                DispatchQueue.main.async {
+                    self.dataBinding?.wrappedValue = nil
+                    self.onDismiss?()
+                }
+            }
+
+            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let rootVC = windowScene.windows.first?.rootViewController else {
+                isPresenting = false
+                return
+            }
+
+            var topVC = rootVC
+            while let presented = topVC.presentedViewController {
+                topVC = presented
+            }
+
+            topVC.present(activityVC, animated: true) { [weak self] in
+                self?.onPresented?()
+            }
+        }
+    }
 }
 
 class CustomShareItem: NSObject, UIActivityItemSource {

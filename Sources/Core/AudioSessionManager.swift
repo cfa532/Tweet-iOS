@@ -12,13 +12,21 @@ import AVFoundation
 /// and prevent interference with incoming calls in communication apps
 class AudioSessionManager {
     static let shared = AudioSessionManager()
-    
+
     private var isUsingPlaybackCategory = false
-    
+    private var isInitialized = false
+
     private init() {
-        setupAudioSession()
+        // Defer audio session setup until first needed
     }
-    
+
+    /// Ensure audio session is initialized (called lazily)
+    private func ensureInitialized() {
+        guard !isInitialized else { return }
+        setupAudioSession()
+        isInitialized = true
+    }
+
     /// Configure audio session for video playback without interfering with calls
     private func setupAudioSession() {
         do {
@@ -39,6 +47,7 @@ class AudioSessionManager {
     
     /// Activate audio session for video playback
     func activateForVideoPlayback() {
+        ensureInitialized()
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
@@ -61,6 +70,7 @@ class AudioSessionManager {
     /// NOTE: Does NOT call setActive(false) to avoid interrupting MediaCell playback
     /// Only changes category back to .ambient while keeping session active
     func deactivateForVideoPlayback() {
+        ensureInitialized()
         do {
             let audioSession = AVAudioSession.sharedInstance()
             
@@ -118,6 +128,7 @@ class AudioSessionManager {
     
     /// Setup audio interruption notifications
     func setupInterruptionNotifications() {
+        ensureInitialized()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAudioInterruption(_:)),

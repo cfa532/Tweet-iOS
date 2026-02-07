@@ -173,6 +173,15 @@ class ChatRepository: ObservableObject {
         }
     }
     
+    /// Delete a single message
+    func deleteMessage(_ message: ChatMessage) {
+        // Delete from Core Data
+        chatCacheManager.deleteChatMessage(message)
+        
+        // Remove from local array
+        chatMessages.removeAll { $0.id == message.id }
+    }
+    
     // MARK: - Core Data Methods
     
     /// Save message to Core Data

@@ -48,7 +48,18 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         
         // Decode other fields from backend
         self.content = try container.decodeIfPresent(String.self, forKey: .content)
-        self.timestamp = try container.decode(TimeInterval.self, forKey: .timestamp)
+        
+        // Decode timestamp from milliseconds (consistent with Tweet timestamps)
+        // Handle both Int64 and Double for robustness
+        if let timestampMillis = try? container.decode(Int64.self, forKey: .timestamp) {
+            self.timestamp = Double(timestampMillis) / 1000.0
+        } else if let timestampDouble = try? container.decode(Double.self, forKey: .timestamp) {
+            // Handle backward compatibility: if value is large (>1e10), it's in milliseconds
+            // Otherwise treat as seconds (for old data)
+            self.timestamp = timestampDouble > 1e10 ? timestampDouble / 1000.0 : timestampDouble
+        } else {
+            self.timestamp = Date().timeIntervalSince1970
+        }
         
         // Handle attachments - decode as array
         self.attachments = try? container.decode([MimeiFileType].self, forKey: .attachments)
@@ -70,7 +81,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         try container.encode(authorId, forKey: .authorId)
         try container.encode(receiptId, forKey: .receiptId)
         try container.encodeIfPresent(content, forKey: .content)
-        try container.encode(timestamp, forKey: .timestamp)
+        // Encode timestamp in milliseconds (consistent with Tweet timestamps)
+        try container.encode(Int64(timestamp * 1000), forKey: .timestamp)
         try container.encodeIfPresent(attachments, forKey: .attachments)
         try container.encodeIfPresent(success, forKey: .success)
         try container.encodeIfPresent(errorMsg, forKey: .errorMsg)

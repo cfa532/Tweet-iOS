@@ -34,7 +34,7 @@ extension Notification.Name {
     
     /// Posted when a tweet's privacy status is successfully updated (for toast notification)
     static let tweetPrivacyUpdated = Notification.Name("TweetPrivacyUpdated")
-    
+
     /// Posted when a new comment is added
     static let newCommentAdded = Notification.Name("newCommentAdded")
     static let commentDeleted = Notification.Name("commentDeleted")
@@ -65,6 +65,7 @@ extension Notification.Name {
     // MARK: - System Errors
     static let backgroundUploadFailed = Notification.Name("backgroundUploadFailed")
     static let backgroundUploadRetrying = Notification.Name("backgroundUploadRetrying")
+    static let uploadCancelled = Notification.Name("uploadCancelled")
     static let tweetPublishFailed = Notification.Name("TweetPublishFailed")
     static let tweetDeletdFailed = Notification.Name("TweetDeletdFailed")
     static let commentPublishFailed = Notification.Name("CommentPublishFailed")
@@ -87,16 +88,22 @@ extension Notification.Name {
     // MARK: - App Lifecycle
     /// Posted when the app becomes active (returns from background)
     static let appDidBecomeActive = Notification.Name("AppDidBecomeActive")
+    /// Posted when the app startup phase has ended and deferred operations can proceed
+    static let startupPhaseEnded = Notification.Name("StartupPhaseEnded")
     
     // MARK: - Cache Related
     /// Posted when all cache is cleared (manual or on signout) to trigger media reload
     static let cacheCleared = Notification.Name("CacheCleared")
     /// Posted when video infrastructure is restarted after background recovery
     static let videoInfrastructureRestarted = Notification.Name("VideoInfrastructureRestarted")
+    /// Posted when an image is successfully cached (avatarId in userInfo)
+    static let imageCached = Notification.Name("ImageCached")
     
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
+    /// Posted when the main feed view appears (for restarting video playback after navigation)
+    static let feedViewDidAppear = Notification.Name("FeedViewDidAppear")
     /// Posted when app content is covered/uncovered by an overlay (sheet/fullScreenCover/login/share).
     /// userInfo: ["isCovered": Bool, "activeCount": Int, "source": String?]
     static let overlayCoverageChanged = Notification.Name("OverlayCoverageChanged")
@@ -127,21 +134,44 @@ final class OverlayVisibilityCoordinator: ObservableObject {
     func beginOverlay(id: String, source: String? = nil) {
         let inserted = activeOverlayIds.insert(id).inserted
         if inserted {
+            print("DEBUG: [OverlayVisibilityCoordinator] Began overlay '\(id)' from source: \(source ?? "unknown"). Active count: \(activeOverlayIds.count)")
             updateIfNeeded(source: source)
+        } else {
+            print("WARNING: [OverlayVisibilityCoordinator] Overlay '\(id)' was already registered. Active overlays: \(activeOverlayIds)")
         }
     }
 
     func endOverlay(id: String, source: String? = nil) {
         let removed = activeOverlayIds.remove(id) != nil
         if removed {
+            print("DEBUG: [OverlayVisibilityCoordinator] Ended overlay '\(id)' from source: \(source ?? "unknown")")
             updateIfNeeded(source: source)
+        } else {
+            print("WARNING: [OverlayVisibilityCoordinator] Attempted to end overlay '\(id)' but it wasn't registered. Active overlays: \(activeOverlayIds)")
         }
     }
 
     func reset(source: String? = nil) {
         guard !activeOverlayIds.isEmpty else { return }
+        print("WARNING: [OverlayVisibilityCoordinator] Resetting coordinator state. Clearing \(activeOverlayIds.count) active overlays: \(activeOverlayIds)")
         activeOverlayIds.removeAll()
         updateIfNeeded(source: source)
+    }
+    
+    /// Force check if the coordinator is in a stuck state (has active overlays but no actual visible overlays)
+    /// This can happen if beginOverlay was called but endOverlay was never called due to dismiss issues
+    func verifyConsistency(source: String? = nil) {
+        // If we think we're covered but the count seems wrong, log it
+        if isCovered && activeOverlayIds.isEmpty {
+            print("ERROR: [OverlayVisibilityCoordinator] Inconsistent state detected: isCovered=true but no active overlays!")
+            // Force update to fix the inconsistency
+            isCovered = false
+            NotificationCenter.default.post(
+                name: .overlayCoverageChanged,
+                object: nil,
+                userInfo: ["isCovered": false, "activeCount": 0, "source": source ?? "consistency-check"]
+            )
+        }
     }
 
     private func updateIfNeeded(source: String?) {

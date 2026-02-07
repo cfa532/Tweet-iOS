@@ -49,6 +49,7 @@ struct DetailMediaCell: View {
     @State private var loading = false
     let showMuteButton: Bool
     @State private var hasRestoredPosition = false // Track if we've restored position
+    @State private var foregroundObserver: NSObjectProtocol? = nil // Observer for app foreground events
     
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, showMuteButton: Bool = true) {
         self.parentTweet = parentTweet
@@ -79,25 +80,20 @@ struct DetailMediaCell: View {
                     // Videos already use .fit in tweetDetail mode, wrap in black background
                     ZStack {
                         Color.black
-                        if shouldLoadVideo {
-                            SimpleVideoPlayer(
-                                url: url,
-                                mid: attachment.mid,
-                                parentTweetId: parentTweet.mid,
-                                isVisible: true,
-                                mediaType: attachment.type,
-                                autoPlay: true,
-                                videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                                showNativeControls: true,
-                                isMuted: false,
-                                mode: .tweetDetail
-                            )
-                        } else {
-                            // Show placeholder for videos that haven't been loaded yet
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.5)
-                        }
+                        SimpleVideoPlayer(
+                            url: url,
+                            mid: attachment.mid,
+                            parentTweetId: parentTweet.mid,
+                            isVisible: shouldLoadVideo, // Control visibility instead of conditionally creating
+                            mediaType: attachment.type,
+                            authorId: parentTweet.authorId, // Pass authorId for health check
+                            autoPlay: shouldLoadVideo, // Only autoplay when selected
+                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
+                            showNativeControls: true,
+                            isMuted: false,
+                            mode: .tweetDetail
+                        )
+                        .opacity(shouldLoadVideo ? 1.0 : 0.0) // Hide when not selected
                     }
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
@@ -116,7 +112,8 @@ struct DetailMediaCell: View {
                                     .if(!isLandscape) { $0.clipped() }
                             } else if loading {
                                 // Show cached placeholder while loading original image
-                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+                                // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
                                     Image(uiImage: cachedImage)
                                         .resizable()
                                         .aspectRatio(contentMode: isLandscape ? .fit : .fill)
@@ -137,7 +134,8 @@ struct DetailMediaCell: View {
                                 }
                             } else {
                                 // Show cached placeholder if available, otherwise gray background
-                                if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
+                                // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
+                                if let cachedImage = ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) {
                                     Image(uiImage: cachedImage)
                                         .resizable()
                                         .aspectRatio(contentMode: isLandscape ? .fit : .fill)
@@ -149,6 +147,7 @@ struct DetailMediaCell: View {
                         }
                     }
                 default:
+                    // Documents are shown in DocumentAttachmentsView, not in detail media viewer
                     Color.gray.opacity(0.2)
                 }
             } else {
@@ -156,9 +155,10 @@ struct DetailMediaCell: View {
             }
         }
         .onAppear {
-            print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid)")
+            print("DEBUG: [DetailMediaCell] Cell appeared for attachment \(attachmentIndex): \(attachment.type), mid: \(attachment.mid), shouldLoadVideo: \(shouldLoadVideo)")
             
             // For videos in detail view, check if we need to restore position
+            // This runs regardless of shouldLoadVideo since player is always created
             if attachment.type == .video || attachment.type == .hls_video {
                 if !hasRestoredPosition {
                     if let savedState = PersistentVideoStateManager.shared.getState(videoMid: attachment.mid, context: .detailView),
@@ -176,6 +176,9 @@ struct DetailMediaCell: View {
                 print("DEBUG: [DetailMediaCell] Starting image load for attachment \(attachmentIndex)")
                 loadImage()
             }
+            
+            // Setup foreground observer to reload resources if released during background
+            setupForegroundObserver()
         }
         .onDisappear {
             // For videos in detail view, post notification to save state
@@ -190,21 +193,66 @@ struct DetailMediaCell: View {
                     ]
                 )
             }
+            
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
         }
 
+    }
+    
+    /// Setup observer to detect foreground return and reload image if released
+    private func setupForegroundObserver() {
+        // Only setup for image attachments
+        guard attachment.type == .image else { return }
+        
+        // Avoid duplicate observers
+        guard foregroundObserver == nil else { return }
+        
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only reload if image was released
+            guard self.image == nil, self.attachment.type == .image else { return }
+            
+            print("DEBUG: [DetailMediaCell] App returned to foreground, image released - reloading: \(self.attachment.mid)")
+            self.loadImage()
+        }
     }
     
     private func loadImage() {
         guard let baseUrl = baseUrl,
               let url = attachment.getUrl(baseUrl) else { return }
         
-        let loadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
+        // ✅ FIX: Use only mid as request ID - cache key is based on mid, so request ID should match
+        // This ensures cached images are reused even when baseUrl changes
+        let loadId = attachment.mid
         print("DEBUG: [TweetDetailView] loadImage called for \(loadId)")
         
-        // First, try to get cached image immediately
+        // First, try to get cached image immediately (disk check is OK in async context)
         if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
             print("DEBUG: [TweetDetailView] Found cached image for \(loadId)")
             self.image = cachedImage
+            
+            // ✅ Load original image in background and replace compressed cache
+            // This ensures detail view uses the highest quality image
+            Task {
+                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                    from: url,
+                    for: attachment,
+                    baseUrl: baseUrl,
+                    replaceCompressedCache: true
+                ) {
+                    // Update image with original
+                    await MainActor.run {
+                        self.image = originalImage
+                    }
+                }
+            }
             return
         }
         
@@ -220,14 +268,30 @@ struct DetailMediaCell: View {
             baseUrl: baseUrl
         ) { loadedImage in
             print("DEBUG: [TweetDetailView] Load completed for \(loadId), success: \(loadedImage != nil)")
-            // Completion is already @MainActor, but use Task to ensure SwiftUI view updates properly
-            Task { @MainActor in
-                self.image = loadedImage
-                self.loading = false
+            // Completion is already @MainActor, update state immediately without additional Task wrapper
+            // The extra Task wrapper was causing a delay in UI updates, making spinners stick
+            self.image = loadedImage
+            self.loading = false
+            
+            // ✅ Load original image in background and replace compressed cache
+            // This ensures detail view uses the highest quality image
+            if loadedImage != nil {
+                Task {
+                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                        from: url,
+                        for: attachment,
+                        baseUrl: baseUrl,
+                        replaceCompressedCache: true
+                    ) {
+                        // Update image with original
+                        await MainActor.run {
+                            self.image = originalImage
+                        }
+                    }
+                }
             }
         }
     }
-    
 }
 
 @MainActor
@@ -245,11 +309,23 @@ struct TweetDetailView: View {
     @State private var shouldShowExpandedReply = false
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
-    
+
     // Scroll detection state for top navigation bar
     @State private var isTopNavigationVisible = true
     @State private var previousScrollOffset: CGFloat = 0
-    
+
+    // Comments video playback coordinator
+    @StateObject private var commentsVideoCoordinator = CommentsVideoPlaybackCoordinator()
+
+    // Track if the main tweet's media section is visible (for video pause/resume)
+    @State private var isMainMediaVisible = true
+
+    // Track if the main tweet has video attachments
+    private var hasVideoAttachment: Bool {
+        guard let attachments = displayTweet.attachments else { return false }
+        return attachments.contains { $0.type == .video || $0.type == .hls_video }
+    }
+
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
@@ -316,13 +392,33 @@ struct TweetDetailView: View {
                 VStack(spacing: 0) {
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            mediaSection
-                            tweetHeader
-                            tweetContent
-                            actionButtons
-                            Divider()
-                                .padding(.top, 8)
-                                .padding(.bottom, 4)
+                            // Main tweet section with deeper background
+                            VStack(spacing: 0) {
+                                mediaSection
+                                    .background(
+                                        // Track main tweet video visibility for comment autoplay coordination
+                                        Group {
+                                            if hasVideoAttachment {
+                                                GeometryReader { geometry in
+                                                    Color.clear
+                                                        .onAppear {
+                                                            updateMainVideoVisibility(geometry: geometry)
+                                                        }
+                                                        .onChange(of: geometry.frame(in: .named("commentsScroll"))) { _, _ in
+                                                            updateMainVideoVisibility(geometry: geometry)
+                                                        }
+                                                }
+                                            }
+                                        }
+                                    )
+                                tweetHeader
+                                documentsSection
+                                tweetContent
+                                actionButtons
+                            }
+                            .padding(.bottom, 8)
+                            .background(Color(UIColor.secondarySystemBackground))
+                            
                             commentsListView
                                 .padding(.leading, -4)
                         }
@@ -330,7 +426,10 @@ struct TweetDetailView: View {
                             setupInitialData()
                         }
                     }
-                    .coordinateSpace(name: "scroll")
+                    .coordinateSpace(name: "commentsScroll")
+                    .refreshable {
+                        await refreshTweetAndComments()
+                    }
             .simultaneousGesture(
                 DragGesture()
                     .onChanged { value in
@@ -415,7 +514,7 @@ struct TweetDetailView: View {
             }
         }
         .onAppear {
-            
+
             // Ensure top navigation is visible when view appears
             isTopNavigationVisible = true
             print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
@@ -423,9 +522,13 @@ struct TweetDetailView: View {
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
 
-            // Coordinate singleton lifecycle across nested detail navigations (quoted -> original).
-            DetailVideoManager.shared.beginDetailViewSession()
-            
+            // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
+            DetailVideoManager.shared.activateForDetail()
+
+            // Activate comments video playback coordinator
+            // Pass hasVideoAttachment so coordinator knows to suppress comment videos initially
+            commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
+
             // Detail view playback position is persisted independently (not seeded from feed positions).
         }
         .onChange(of: originalTweet) { _, _ in
@@ -439,9 +542,11 @@ struct TweetDetailView: View {
             // Mark detail view as inactive
             NavigationStateManager.shared.setDetailViewActive(false)
 
-            // End session: we pause immediately, and clear only if no other detail view appears shortly.
-            // This avoids black flashes when pushing from one detail view to another.
-            DetailVideoManager.shared.endDetailViewSession()
+            // Deactivate manager - this handles session end and lifecycle teardown
+            DetailVideoManager.shared.deactivate()
+
+            // Deactivate comments video playback coordinator
+            commentsVideoCoordinator.deactivate()
             
             // Reset top navigation visibility when view disappears
             withAnimation(.easeInOut(duration: 0.3)) {
@@ -456,13 +561,13 @@ struct TweetDetailView: View {
             refreshTimer = nil
             
             // Cancel any pending image loads to prevent memory leaks
-            if let attachments = displayTweet.attachments,
-               let baseUrl = displayTweet.author?.baseUrl {
+            if let attachments = displayTweet.attachments {
                 for attachment in attachments {
-                    let mainLoadId = "\(attachment.mid)_\(baseUrl.absoluteString)"
-                    
+                    // ✅ FIX: Use only mid as request ID (matching loadImageHighPriority above)
+                    let mainLoadId = attachment.mid
+
                     print("DEBUG: [TweetDetailView] Cancelling load: \(mainLoadId)")
-                    
+
                     GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
                 }
             }
@@ -475,27 +580,60 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                // Use a fixed height based on all attachments to prevent jumping
-                let fixedAspect = calculateFixedAspectRatio(for: attachments)
-                TabView(selection: $selectedMediaIndex) {
-                    ForEach(attachments.indices, id: \.self) { index in
-                        DetailMediaCell(
-                            parentTweet: displayTweet,
-                            attachmentIndex: index,
-                            aspectRatio: Float(aspectRatio(for: attachments[index], at: index)),
-                            shouldLoadVideo: index == selectedMediaIndex,
-                            showMuteButton: false
-                        )
-                        .tag(index)
+                // Filter to only show media types (images, videos, audio)
+                let mediaAttachments = attachments.filter { isMediaType($0.type) }
+                
+                if !mediaAttachments.isEmpty {
+                    // Use a fixed height based on media attachments only
+                    let fixedAspect = calculateFixedAspectRatio(for: mediaAttachments)
+                    TabView(selection: $selectedMediaIndex) {
+                        ForEach(mediaAttachments.indices, id: \.self) { index in
+                            let attachment = mediaAttachments[index]
+                            DetailMediaCell(
+                                parentTweet: displayTweet,
+                                attachmentIndex: attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? index,
+                                aspectRatio: Float(aspectRatio(for: attachment, at: index)),
+                                shouldLoadVideo: index == selectedMediaIndex && isMainMediaVisible, // Only play when selected AND visible
+                                showMuteButton: false
+                            )
+                            .tag(index)
+                        }
+                    }
+                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: UIScreen.main.bounds.width / fixedAspect)
+                    .background(Color.black)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showBrowser = true
                     }
                 }
-                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.width / fixedAspect)
-                .background(Color.black)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showBrowser = true
+            }
+        }
+    }
+    
+    private var documentsSection: some View {
+        Group {
+            if let attachments = displayTweet.attachments,
+               !attachments.isEmpty {
+                // Filter to only show documents
+                let documentAttachments = attachments.filter { isDocumentType($0.type) }
+                
+                if !documentAttachments.isEmpty {
+                    DocumentAttachmentsView(
+                        parentTweet: displayTweet,
+                        documents: documentAttachments,
+                        maxDocuments: nil // Show all documents in detail view
+                    )
+                    .padding(.leading, 48) // Left alignment with 48pt padding
+                    .padding(.trailing, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onAppear {
+                        print("DEBUG: [TweetDetailView] Total attachments: \(attachments.count), Documents: \(documentAttachments.count)")
+                        for (index, attachment) in attachments.enumerated() {
+                            print("DEBUG: [TweetDetailView] Attachment \(index): type=\(attachment.type), fileName=\(attachment.fileName ?? "nil")")
+                        }
+                    }
                 }
             }
         }
@@ -578,7 +716,7 @@ struct TweetDetailView: View {
     }
     
     private var commentsListView: some View {
-        CommentListView<CommentItemView>(
+        CommentListView<CommentVideoTrackingWrapper>(
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
@@ -615,12 +753,11 @@ struct TweetDetailView: View {
             ],
             isEmbedded: true, // Embedded in TweetDetailView's ScrollView, avoid nested scrolling
             rowView: { comment in
-                CommentItemView(
+                CommentVideoTrackingWrapper(
                     parentTweet: displayTweet,
                     comment: comment,
-                    isInProfile: false,
-                    onAvatarTap: nil, // NavigationLink will be handled inside CommentItemView
-                    linkToComment: true // Enable NavigationLink wrapping
+                    coordinator: commentsVideoCoordinator,
+                    scrollCoordinateSpace: "commentsScroll"
                 )
             }
         )
@@ -632,6 +769,7 @@ struct TweetDetailView: View {
         refreshTweet()
         
         // Set up periodic refresh timer (every 5 minutes)
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in onDisappear
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
                 refreshTweet()
@@ -651,6 +789,28 @@ struct TweetDetailView: View {
                 }
             }
         }
+    }
+    
+    private func refreshTweetAndComments() async {
+        // Refresh both tweet and comments when pull-to-refresh is triggered
+        async let tweetRefresh: Void = {
+            if let refreshedTweet = try? await hproseInstance.refreshTweet(
+                tweetId: tweet.mid,
+                authorId: tweet.authorId
+            ) {
+                await MainActor.run {
+                    try? tweet.update(from: refreshedTweet)
+                }
+            }
+        }()
+        
+        async let commentsRefresh: Void = {
+            await refreshComments()
+        }()
+        
+        // Wait for both to complete
+        await tweetRefresh
+        await commentsRefresh
     }
     
     private func refreshComments() {
@@ -752,9 +912,52 @@ struct TweetDetailView: View {
         return max(0.5, min(2.0, minAspectRatio))
     }
     
+    // Helper to check if attachment is media type (image, video, audio)
+    private func isMediaType(_ type: MediaType) -> Bool {
+        switch type {
+        case .image, .video, .hls_video, .audio:
+            return true
+        default:
+            return false
+        }
+    }
+    
+    // Helper to check if attachment is document type (pdf, word, excel, etc)
+    private func isDocumentType(_ type: MediaType) -> Bool {
+        switch type {
+        case .pdf, .word, .excel, .ppt, .zip, .txt, .html, .unknown:
+            return true
+        default:
+            return false
+        }
+    }
+    
     @State private var scrollUpdateTask: Task<Void, Never>?
     @State private var lastStateChangeTime: Date = Date()
-    
+
+    /// Update main tweet video visibility for comment autoplay coordination
+    private func updateMainVideoVisibility(geometry: GeometryProxy) {
+        let frame = geometry.frame(in: .named("commentsScroll"))
+        let screenBounds = UIScreen.main.bounds
+
+        // Calculate how much of the video section is visible
+        let visibleTop = max(frame.minY, 0)
+        let visibleBottom = min(frame.maxY, screenBounds.height)
+        let visibleHeight = max(0, visibleBottom - visibleTop)
+        let totalHeight = frame.height
+
+        // Consider video visible if at least 30% is on screen
+        let visibilityRatio = totalHeight > 0 ? visibleHeight / totalHeight : 0
+        let isVisible = visibilityRatio >= 0.30
+
+        // Update state to control main video playback
+        if isMainMediaVisible != isVisible {
+            isMainMediaVisible = isVisible
+        }
+
+        commentsVideoCoordinator.reportMainTweetVideoVisibility(isVisible: isVisible)
+    }
+
     private func handleScroll(offset: CGFloat) {
         // Cancel any existing update task
         scrollUpdateTask?.cancel()
@@ -809,6 +1012,84 @@ struct TweetDetailView: View {
         }
         
         previousScrollOffset = offset
+    }
+}
+
+// MARK: - Comment Video Tracking Wrapper
+
+/// Wrapper view that tracks video visibility for comments and coordinates autoplay
+@available(iOS 16.0, *)
+struct CommentVideoTrackingWrapper: View {
+    let parentTweet: Tweet
+    @ObservedObject var comment: Tweet
+    let coordinator: CommentsVideoPlaybackCoordinator
+    let scrollCoordinateSpace: String
+
+    /// Returns the first video attachment in the comment, if any
+    private var videoAttachment: (index: Int, attachment: MimeiFileType)? {
+        guard let attachments = comment.attachments else { return nil }
+        for (index, attachment) in attachments.enumerated() {
+            if attachment.type == .video || attachment.type == .hls_video {
+                return (index, attachment)
+            }
+        }
+        return nil
+    }
+
+    var body: some View {
+        CommentItemView(
+            parentTweet: parentTweet,
+            comment: comment,
+            isInProfile: false,
+            onAvatarTap: nil,
+            linkToComment: true
+        )
+        .background(
+            // Only track visibility if the comment has video attachments
+            Group {
+                if let video = videoAttachment {
+                    GeometryReader { geometry in
+                        Color.clear
+                            .onAppear {
+                                updateVisibility(geometry: geometry, videoInfo: video)
+                            }
+                            .onChange(of: geometry.frame(in: .named(scrollCoordinateSpace))) { _, _ in
+                                updateVisibility(geometry: geometry, videoInfo: video)
+                            }
+                    }
+                }
+            }
+        )
+        .onDisappear {
+            if videoAttachment != nil {
+                coordinator.reportVideoNotVisible(commentId: comment.mid)
+            }
+        }
+    }
+
+    private func updateVisibility(geometry: GeometryProxy, videoInfo: (index: Int, attachment: MimeiFileType)) {
+        let frame = geometry.frame(in: .named(scrollCoordinateSpace))
+        let screenBounds = UIScreen.main.bounds
+
+        // Calculate how much of the comment is visible
+        let visibleTop = max(frame.minY, 0)
+        let visibleBottom = min(frame.maxY, screenBounds.height)
+        let visibleHeight = max(0, visibleBottom - visibleTop)
+        let totalHeight = frame.height
+
+        let visibilityRatio = totalHeight > 0 ? visibleHeight / totalHeight : 0
+
+        if visibilityRatio > 0 {
+            coordinator.reportVideoVisible(
+                commentId: comment.mid,
+                videoMid: videoInfo.attachment.mid,
+                attachmentIndex: videoInfo.index,
+                visibilityRatio: visibilityRatio,
+                yPosition: frame.minY
+            )
+        } else {
+            coordinator.reportVideoNotVisible(commentId: comment.mid)
+        }
     }
 }
 

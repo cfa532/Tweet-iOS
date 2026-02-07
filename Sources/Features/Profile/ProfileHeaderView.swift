@@ -58,7 +58,7 @@ struct ProfileHeaderView: View {
                     DebounceButton(
                         isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"),
                         cooldownDuration: 0.5,
-                        enableVibration: false
+                        enableHaptic: false
                     ) {
                         onFollowToggle()
                     }
@@ -79,7 +79,6 @@ struct ProfileHeaderView: View {
                     .truncationMode(.tail)
             }
         }
-        .padding(.horizontal)
         .padding(.top)
         .padding(.bottom, 4)
     }

@@ -10,36 +10,6 @@ import AVFoundation
 import CryptoKit
 import ImageIO
 
-private actor ImageDownloadGate {
-    private let limit: Int
-    private var current: Int = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    
-    init(limit: Int) {
-        self.limit = max(1, limit)
-    }
-    
-    func acquire() async {
-        if current < limit {
-            current += 1
-            return
-        }
-        
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
-        }
-        current += 1
-    }
-    
-    func release() {
-        current = max(0, current - 1)
-        if let continuation = waiters.first {
-            waiters.removeFirst()
-            continuation.resume()
-        }
-    }
-}
-
 // MARK: - Image Cache Manager
 class ImageCacheManager: @unchecked Sendable {
     static let shared = ImageCacheManager()
@@ -51,6 +21,15 @@ class ImageCacheManager: @unchecked Sendable {
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
     private let maxDownsampleDimension: CGFloat = 1024
     
+    // Permanent image IDs (from bookmarks/favorites - never expire)
+    private var permanentImageIDs: Set<String> = []
+    private let permanentImageIDsQueue = DispatchQueue(label: "com.tweet.permanentImageIDs")
+    
+    // Avatar cache key tracking (for memory protection)
+    private var avatarCacheKeys: Set<String> = []
+    private var memoryCachedKeys: Set<String> = []
+    private let cacheKeysQueue = DispatchQueue(label: "com.tweet.cacheKeys", attributes: .concurrent)
+    
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
     private var ongoingRequests: [String: Task<UIImage?, Never>] = [:]
     private let requestsQueue = DispatchQueue(label: "com.zz.imagecache.requests", attributes: .concurrent)
@@ -60,10 +39,6 @@ class ImageCacheManager: @unchecked Sendable {
     private var activeAvatarLoads: [String: Task<UIImage?, Never>] = [:]
     private var pendingAvatarRequests: [(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL, continuation: CheckedContinuation<UIImage?, Never>)] = []
     private let avatarQueue = DispatchQueue(label: "com.zz.imagecache.avatars", attributes: .concurrent)
-    
-    // General image download throttling
-    private let maxConcurrentImageDownloads = 3
-    private let imageDownloadGate: ImageDownloadGate
     
     private func memoryDuplicateBlockState() -> (blocked: Bool, percentage: Double, threshold: Double) {
         let manager = MemoryCapManager.shared
@@ -106,14 +81,7 @@ class ImageCacheManager: @unchecked Sendable {
         return true
     }
     
-    private func withImageDownloadSlot<T>(_ work: () async throws -> T) async rethrows -> T {
-        await imageDownloadGate.acquire()
-        defer { Task { await imageDownloadGate.release() } }
-        return try await work()
-    }
-    
     private init() {
-        imageDownloadGate = ImageDownloadGate(limit: maxConcurrentImageDownloads)
         
         // Get the cache directory
         let cachesDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -167,6 +135,60 @@ class ImageCacheManager: @unchecked Sendable {
         let pixelHeight = Int(image.size.height * image.scale)
         let cost = max(1, pixelWidth * pixelHeight * 4)
         cache.setObject(image, forKey: key as NSString, cost: cost)
+        
+        // Track this key for selective memory cache release
+        cacheKeysQueue.async(flags: .barrier) {
+            self.memoryCachedKeys.insert(key)
+            
+            // Mark as avatar if key contains "avatar_"
+            if key.contains("avatar_") {
+                self.avatarCacheKeys.insert(key)
+            }
+        }
+    }
+    
+    // MARK: - Permanent Image Management
+    
+    /// Mark image IDs from bookmarks/favorites as permanent (never expire)
+    func markImageIDsAsPermanent(_ imageIDs: [String]) {
+        permanentImageIDsQueue.async {
+            self.permanentImageIDs.formUnion(imageIDs)
+            // Only log if marking 5+ items to reduce log spam
+            if imageIDs.count >= 5 {
+                print("💾 [ImageCacheManager] Marked \(imageIDs.count) image IDs as permanent (total: \(self.permanentImageIDs.count))")
+            }
+        }
+    }
+    
+    /// Remove image IDs from permanent set (when unbookmarked/unfavorited)
+    func unmarkImageIDsAsPermanent(_ imageIDs: [String]) {
+        permanentImageIDsQueue.async {
+            self.permanentImageIDs.subtract(imageIDs)
+            print("🗑️ [ImageCacheManager] Unmarked \(imageIDs.count) image IDs (remaining: \(self.permanentImageIDs.count))")
+        }
+    }
+    
+    /// Check if image ID is marked as permanent
+    private func isPermanentImageID(_ imageID: String) -> Bool {
+        var result = false
+        permanentImageIDsQueue.sync {
+            result = permanentImageIDs.contains(imageID)
+        }
+        return result
+    }
+    
+    /// Check if an image ID belongs to a private tweet
+    private func isPrivateTweet(imageID: String) -> Bool {
+        // Check if this image ID belongs to a private tweet
+        if let tweet = findTweetByMediaID(imageID) {
+            return tweet.isPrivate ?? false
+        }
+        return false
+    }
+    
+    /// Find a tweet by its media ID
+    private func findTweetByMediaID(_ mediaID: String) -> Tweet? {
+        return Tweet.getInstance(for: mediaID)
     }
     
     func cleanupOldCache() {
@@ -182,6 +204,21 @@ class ImageCacheManager: @unchecked Sendable {
                    let modificationDate = attributes[.modificationDate] as? Date,
                    let fileSize = attributes[.size] as? Int64 {
                     totalSize += fileSize
+
+                    // Extract image ID from filename (format: imageID or imageID-thumb)
+                    let filename = fileURL.deletingPathExtension().lastPathComponent
+                    let imageID = filename.components(separatedBy: "-").first ?? filename
+
+                    // NEVER delete: private tweets OR bookmarks/favorites OR avatars
+                    let isPrivate = isPrivateTweet(imageID: imageID)
+                    let isPermanent = isPermanentImageID(imageID)
+                    let isAvatar = filename.contains("avatar_")
+
+                    if isPrivate || isPermanent || isAvatar {
+                        print("💾 [ImageCacheManager] Skipping permanent image: \(imageID) (private: \(isPrivate), bookmarked: \(isPermanent), avatar: \(isAvatar))")
+                        continue
+                    }
+
                     if now.timeIntervalSince(modificationDate) > maxCacheAge {
                         filesToDelete.append(fileURL)
                     }
@@ -197,6 +234,19 @@ class ImageCacheManager: @unchecked Sendable {
                 }
                 
                 for fileURL in sortedFiles {
+                    // Extract image ID from filename
+                    let filename = fileURL.deletingPathExtension().lastPathComponent
+                    let imageID = filename.components(separatedBy: "-").first ?? filename
+
+                    // NEVER delete: private tweets OR bookmarks/favorites OR avatars
+                    let isPrivate = isPrivateTweet(imageID: imageID)
+                    let isPermanent = isPermanentImageID(imageID)
+                    let isAvatar = filename.contains("avatar_")
+
+                    if isPrivate || isPermanent || isAvatar {
+                        continue
+                    }
+                    
                     if let fileSize = try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? Int64 {
                         filesToDelete.append(fileURL)
                         totalSize -= fileSize
@@ -217,18 +267,25 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     func clearAllCache() {
+        print("DEBUG: [ImageCacheManager] Clearing all cache - memory and disk")
+
         // Clear memory cache
         cache.removeAllObjects()
-        
+        print("DEBUG: [ImageCacheManager] Cleared memory cache")
+
         // Clear all disk cache files
         do {
             let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [])
+            print("DEBUG: [ImageCacheManager] Found \(contents.count) files in disk cache")
             for fileURL in contents {
                 try? fileManager.removeItem(at: fileURL)
             }
+            print("DEBUG: [ImageCacheManager] Cleared all disk cache files")
         } catch {
             print("Error clearing all cache: \(error)")
         }
+
+        print("DEBUG: [ImageCacheManager] Cache clearing complete")
     }
     
     /// Clear cache for a specific media ID (image)
@@ -246,8 +303,15 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     func clearAvatarCache(for userId: String) {
-        // NSCache doesn't have allKeys, so we'll just clear the disk cache
-        // The memory cache will be cleared when the app receives memory warnings
+        // Clear memory cache for this user's avatar
+        cacheKeysQueue.async(flags: .barrier) {
+            let keysToRemove = self.avatarCacheKeys.filter { $0.contains(userId) }
+            for key in keysToRemove {
+                self.cache.removeObject(forKey: key as NSString)
+                self.memoryCachedKeys.remove(key)
+                self.avatarCacheKeys.remove(key)
+            }
+        }
         
         // Clear disk cache for avatar files
         do {
@@ -264,8 +328,14 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     func clearAllAvatarCache() {
-        // NSCache doesn't have allKeys, so we'll just clear the disk cache
-        // The memory cache will be cleared when the app receives memory warnings
+        // Clear memory cache for all avatars
+        cacheKeysQueue.async(flags: .barrier) {
+            for key in self.avatarCacheKeys {
+                self.cache.removeObject(forKey: key as NSString)
+                self.memoryCachedKeys.remove(key)
+            }
+            self.avatarCacheKeys.removeAll()
+        }
         
         // Clear disk cache for all avatar files
         do {
@@ -286,33 +356,65 @@ class ImageCacheManager: @unchecked Sendable {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
         print("DEBUG: [ImageCacheManager] Releasing \(percentageToRemove)% of image cache")
         
-        // Clear memory cache completely (NSCache doesn't support partial clearing)
-        cache.removeAllObjects()
+        // Selectively clear memory cache (protect avatars)
+        cacheKeysQueue.sync {
+            let nonAvatarKeys = memoryCachedKeys.subtracting(avatarCacheKeys)
+            let countToRemove = max(0, (nonAvatarKeys.count * percentageToRemove) / 100)
+            
+            if countToRemove > 0 {
+                // Remove percentage of non-avatar images from memory
+                let keysToRemove = Array(nonAvatarKeys.prefix(countToRemove))
+                for key in keysToRemove {
+                    cache.removeObject(forKey: key as NSString)
+                    memoryCachedKeys.remove(key)
+                }
+                print("DEBUG: [ImageCacheManager] Released \(keysToRemove.count) images from memory (avatars protected: \(avatarCacheKeys.count))")
+            } else {
+                print("DEBUG: [ImageCacheManager] No non-avatar images to release from memory")
+            }
+        }
         
-        // Remove percentage of disk cache files (oldest first)
+        // Remove percentage of disk cache files (oldest first), but preserve avatars
         do {
             let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
-            
+
+            // Filter out avatar files to protect them from cleanup
+            let nonAvatarFiles = contents.filter { fileURL in
+                let fileName = fileURL.lastPathComponent
+                return !fileName.contains("avatar_")
+            }
+
             // Sort by modification date (oldest first)
-            let sortedFiles = contents.sorted { url1, url2 in
+            let sortedFiles = nonAvatarFiles.sorted { url1, url2 in
                 let date1 = (try? fileManager.attributesOfItem(atPath: url1.path)[.modificationDate] as? Date) ?? Date.distantPast
                 let date2 = (try? fileManager.attributesOfItem(atPath: url2.path)[.modificationDate] as? Date) ?? Date.distantPast
                 return date1 < date2
             }
-            
+
             let countToRemove = max(1, (sortedFiles.count * percentageToRemove) / 100)
             let filesToRemove = Array(sortedFiles.prefix(countToRemove))
-            
+
             for fileURL in filesToRemove {
                 try? fileManager.removeItem(at: fileURL)
             }
-            
-            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from cache")
+
+            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from disk (avatars protected)")
         } catch {
             print("Error releasing partial image cache: \(error)")
         }
     }
-    
+
+    /// Clear memory cache only (keep disk cache intact)
+    /// Use this for background cleanup - images will reload from disk when needed
+    func clearMemoryCache() {
+        cache.removeAllObjects()
+        cacheKeysQueue.async(flags: .barrier) {
+            self.memoryCachedKeys.removeAll()
+            // Keep avatarCacheKeys - they'll be re-added when loaded from disk
+        }
+        print("🧹 [ImageCacheManager] Cleared memory cache (disk cache preserved)")
+    }
+
     private func getCacheKey(for attachment: MimeiFileType) -> String? {
         // ALWAYS use mid as the cache key (stable identifier)
         // If mid is somehow empty, this is a programming error that should be fixed at the source
@@ -326,19 +428,35 @@ class ImageCacheManager: @unchecked Sendable {
         return cacheDirectory.appendingPathComponent("\(key)_compressed.jpg")
     }
     
+    /// Get compressed image from memory cache only (safe for synchronous access in view body)
+    /// This method does NOT perform disk I/O and is safe to call from the main thread
+    func getCompressedImageFromMemory(for attachment: MimeiFileType) -> UIImage? {
+        guard let key = getCacheKey(for: attachment) else { return nil }
+        let cacheKey = "\(key)_compressed"
+        
+        // Only check memory cache - no disk I/O to avoid blocking UI
+        return cache.object(forKey: cacheKey as NSString)
+    }
+    
+    /// Get compressed image from memory or disk cache
+    /// ⚠️ WARNING: This method performs synchronous disk I/O and should NOT be called from main thread
+    /// Use getCompressedImageFromMemory() for main thread access
+    /// This method should only be used in background contexts (Task.detached, DispatchQueue.global, etc.)
     func getCompressedImage(for attachment: MimeiFileType) -> UIImage? {
         guard let key = getCacheKey(for: attachment) else { return nil }
         let cacheKey = "\(key)_compressed"
         
-        // Check memory cache first
+        // Check memory cache first (thread-safe, NSCache handles locking)
         if let cachedImage = cache.object(forKey: cacheKey as NSString) {
             return cachedImage
         }
         
-        // Check disk cache
+        // PERFORMANCE: Disk I/O happens here - should only be called from background thread
+        // This is the source of the 227ms hang when called from main thread
         let fileURL = getCompressedCacheFileURL(for: key)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
+            // Cache in memory for next time (NSCache is thread-safe)
             cacheImageInMemory(image, forKey: cacheKey)
             return image
         }
@@ -346,7 +464,18 @@ class ImageCacheManager: @unchecked Sendable {
         return nil
     }
     
+    /// Get cached compressed image by mid alone (memory only, for when baseUrl is not yet available)
+    /// This method does NOT perform disk I/O and is safe to call from the main thread
+    func getCachedCompressedImageFromMemory(forMid mid: String) -> UIImage? {
+        guard !mid.isEmpty else { return nil }
+        let cacheKey = "\(mid)_compressed"
+        
+        // Only check memory cache - no disk I/O
+        return cache.object(forKey: cacheKey as NSString)
+    }
+    
     /// Get cached compressed image by mid alone (for when baseUrl is not yet available)
+    /// ⚠️ WARNING: This method performs synchronous disk I/O - only use in async contexts
     func getCachedCompressedImage(forMid mid: String) -> UIImage? {
         guard !mid.isEmpty else { return nil }
         
@@ -357,7 +486,7 @@ class ImageCacheManager: @unchecked Sendable {
             return cachedImage
         }
         
-        // Check disk cache
+        // Check disk cache (synchronous I/O - only use in async contexts)
         let fileURL = getCompressedCacheFileURL(for: mid)
         if let data = try? Data(contentsOf: fileURL),
            let image = UIImage(data: data) {
@@ -385,20 +514,37 @@ class ImageCacheManager: @unchecked Sendable {
             return nil
         }
         
-        // Create compressed version (under 300KB)
-        let compressedImage = compressImageToSize(targetImage, maxSize: maxCompressedImageSize)
-        let compressedFileURL = getCompressedCacheFileURL(for: key)
+        // CRITICAL FIX: Cache to memory IMMEDIATELY so subsequent cache checks can find it
+        // This prevents race condition where cells miss the cache and start loading again
+        cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
         
-        // Write compressed data to disk
-        do {
-            try compressedImage.write(to: compressedFileURL)
-        } catch {
-            print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
+        // Then compress and write to disk in background
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self = self else { return }
+            
+            // Create compressed version (under 300KB) on background thread
+            let compressedImage = self.compressImageToSize(targetImage, maxSize: self.maxCompressedImageSize)
+            let compressedFileURL = self.getCompressedCacheFileURL(for: key)
+
+            // Write compressed data to disk
+            do {
+                try compressedImage.write(to: compressedFileURL)
+                print("DEBUG: [ImageCacheManager] Successfully cached compressed image to disk for \(key)")
+            } catch {
+                print("DEBUG: [ImageCacheManager] Failed to write compressed image to disk for \(key): \(error)")
+            }
+            
+            // Notify Avatar views that this image is now cached
+            await MainActor.run {
+                NotificationCenter.default.post(
+                    name: .imageCached,
+                    object: nil,
+                    userInfo: ["avatarId": key]
+                )
+            }
         }
         
-        // Add to memory cache
-        cacheImageInMemory(targetImage, forKey: "\(key)_compressed")
-        print("DEBUG: [ImageCacheManager] Successfully cached compressed image for \(key)")
+        // Return immediately without waiting for compression
         return targetImage
     }
     
@@ -410,11 +556,16 @@ class ImageCacheManager: @unchecked Sendable {
             // Image is already opaque, use as-is
             opaqueImage = image
         } else {
-            // Re-render without alpha channel to ensure opaque format
-            UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
-            image.draw(in: CGRect(origin: .zero, size: image.size))
-            opaqueImage = UIGraphicsGetImageFromCurrentImageContext() ?? image
-            UIGraphicsEndImageContext()
+            // MODERN API: Use UIGraphicsImageRenderer instead of old UIGraphicsBeginImageContext
+            // This is more efficient and thread-safe
+            let renderer = UIGraphicsImageRenderer(size: image.size, format: UIGraphicsImageRendererFormat.default())
+            opaqueImage = renderer.image { context in
+                // Set opaque background
+                UIColor.white.setFill()
+                context.fill(CGRect(origin: .zero, size: image.size))
+                // Draw image on top
+                image.draw(in: CGRect(origin: .zero, size: image.size))
+            }
         }
         
         var compression: CGFloat = 1.0
@@ -484,31 +635,37 @@ class ImageCacheManager: @unchecked Sendable {
         
         // Create new request task
         let task = Task<UIImage?, Never> {
+            var tempURL: URL?
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
+                if let tempURL = tempURL {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+            }
+            
             do {
                 guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[thumbnail]") else {
                     return nil
                 }
-                return try await self.withImageDownloadSlot {
-                    try Task.checkCancellation()
-                    
-                    var request = URLRequest(url: url)
-                    request.timeoutInterval = 10.0 // 10 second timeout
-                    request.cachePolicy = .returnCacheDataElseLoad
-                    
-                    let (tempURL, response) = try await URLSession.shared.download(for: request)
-                    
-                    guard let httpResponse = response as? HTTPURLResponse,
-                          (200...299).contains(httpResponse.statusCode) else {
-                        print("Error: Invalid response for image at \(url)")
-                        return nil
-                    }
-                    
-                    let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
-                    self.cacheImageData(data, for: attachment)
-                    try? FileManager.default.removeItem(at: tempURL)
-                    
-                    return self.getCompressedImage(for: attachment)
+                try Task.checkCancellation()
+                
+                var request = URLRequest(url: url)
+                request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let downloadResult = try await URLSession.shared.download(for: request)
+                tempURL = downloadResult.0  // Store for cleanup in defer
+                
+                guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("Error: Invalid response for image at \(url)")
+                    return nil
                 }
+                
+                let data = try Data(contentsOf: downloadResult.0, options: .mappedIfSafe)
+                self.cacheImageData(data, for: attachment)
+                
+                return self.getCompressedImage(for: attachment)
             } catch {
                 print("Error loading image from \(url): \(error.localizedDescription)")
                 return nil
@@ -531,7 +688,14 @@ class ImageCacheManager: @unchecked Sendable {
         return result
     }
     
-    func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
+    /// Load original image and optionally replace compressed cache with it
+    /// - Parameters:
+    ///   - url: URL to load the original image from
+    ///   - attachment: The attachment to load the image for
+    ///   - baseUrl: Base URL for the attachment
+    ///   - replaceCompressedCache: If true, replace the compressed cache entry with the original image
+    /// - Returns: The loaded original image, or nil if loading failed
+    func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL, replaceCompressedCache: Bool = false) async -> UIImage? {
         guard let key = getCacheKey(for: attachment) else {
             print("DEBUG: [ImageCacheManager] Cannot load original image - no cache key available")
             return nil
@@ -550,37 +714,54 @@ class ImageCacheManager: @unchecked Sendable {
                 return nil
             }
             print("DEBUG: [ImageCacheManager] Reusing existing request for original image \(cacheKey)")
-            return await existingTask.value
+            let result = await existingTask.value
+            // Replace compressed cache if requested
+            if replaceCompressedCache, let originalImage = result {
+                replaceCompressedCacheWithOriginal(image: originalImage, for: key)
+            }
+            return result
         }
         
         // Create new request task
         let task = Task<UIImage?, Never> {
+            var tempURL: URL?
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
+                if let tempURL = tempURL {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+            }
+            
             do {
                 guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[original]") else {
                     return nil
                 }
-                return try await self.withImageDownloadSlot {
-                    try Task.checkCancellation()
-                    
-                    var request = URLRequest(url: url)
-                    request.timeoutInterval = 15.0 // 15 second timeout for original images (larger files)
-                    request.cachePolicy = .returnCacheDataElseLoad
-                    
-                    let (tempURL, response) = try await URLSession.shared.download(for: request)
-                    
-                    guard let httpResponse = response as? HTTPURLResponse,
-                          (200...299).contains(httpResponse.statusCode) else {
-                        print("Error: Invalid response for original image at \(url)")
-                        return nil
-                    }
-                    
-                    let image = UIImage(contentsOfFile: tempURL.path)
-                    if image == nil {
-                        print("Error loading original image from disk (nil) at \(tempURL)")
-                    }
-                    try? FileManager.default.removeItem(at: tempURL)
-                    return image
+                try Task.checkCancellation()
+                
+                var request = URLRequest(url: url)
+                request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let downloadResult = try await URLSession.shared.download(for: request)
+                tempURL = downloadResult.0  // Store for cleanup in defer
+                
+                guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("Error: Invalid response for original image at \(url)")
+                    return nil
                 }
+                
+                let image = UIImage(contentsOfFile: downloadResult.0.path)
+                if image == nil {
+                    print("Error loading original image from disk (nil) at \(downloadResult.0)")
+                }
+                
+                // Replace compressed cache if requested
+                if replaceCompressedCache, let originalImage = image {
+                    replaceCompressedCacheWithOriginal(image: originalImage, for: key)
+                }
+                
+                return image
             } catch {
                 print("Error loading original image from \(url): \(error.localizedDescription)")
                 return nil
@@ -601,6 +782,26 @@ class ImageCacheManager: @unchecked Sendable {
         }
         
         return result
+    }
+    
+    /// Replace compressed cache entry with original image
+    /// - Parameters:
+    ///   - image: The original image to cache
+    ///   - key: The cache key (without _compressed or _original suffix)
+    private func replaceCompressedCacheWithOriginal(image: UIImage, for key: String) {
+        let compressedKey = "\(key)_compressed"
+        // Replace in memory cache
+        cacheImageInMemory(image, forKey: compressedKey)
+        
+        // Replace on disk (save original as compressed cache file)
+        let compressedFileURL = getCompressedCacheFileURL(for: key)
+        Task.detached(priority: .utility) {
+            // Save original image to compressed cache location
+            if let jpegData = image.jpegData(compressionQuality: 1.0) {
+                try? jpegData.write(to: compressedFileURL)
+                print("✅ [ImageCacheManager] Replaced compressed cache with original image for \(key)")
+            }
+        }
     }
     
     // MARK: - Avatar Loading with Throttling
@@ -652,31 +853,37 @@ class ImageCacheManager: @unchecked Sendable {
     
     private func startAvatarLoad(cacheKey: String, url: URL, attachment: MimeiFileType, baseUrl: URL) async -> UIImage? {
         let task = Task<UIImage?, Never> {
+            var tempURL: URL?
+            defer {
+                // ✅ CRITICAL MEMORY FIX: Always clean up temp file, even on error
+                if let tempURL = tempURL {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+            }
+            
             do {
                 guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[avatar]") else {
                     return nil
                 }
-                return try await self.withImageDownloadSlot {
-                    try Task.checkCancellation()
-                    
-                    var request = URLRequest(url: url)
-                    request.timeoutInterval = 10.0
-                    request.cachePolicy = .returnCacheDataElseLoad
-                    
-                    let (tempURL, response) = try await URLSession.shared.download(for: request)
-                    
-                    guard let httpResponse = response as? HTTPURLResponse,
-                          (200...299).contains(httpResponse.statusCode) else {
-                        print("DEBUG: [ImageCacheManager] Invalid response for avatar at \(url)")
-                        return nil
-                    }
-                    
-                    let data = try Data(contentsOf: tempURL, options: .mappedIfSafe)
-                    self.cacheImageData(data, for: attachment)
-                    try? FileManager.default.removeItem(at: tempURL)
-                    
-                    return self.getCompressedImage(for: attachment)
+                try Task.checkCancellation()
+                
+                var request = URLRequest(url: url)
+                request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
+                request.cachePolicy = .returnCacheDataElseLoad
+                
+                let downloadResult = try await URLSession.shared.download(for: request)
+                tempURL = downloadResult.0  // Store for cleanup in defer
+                
+                guard let httpResponse = downloadResult.1 as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    print("DEBUG: [ImageCacheManager] Invalid response for avatar at \(url)")
+                    return nil
                 }
+                
+                let data = try Data(contentsOf: downloadResult.0, options: .mappedIfSafe)
+                self.cacheImageData(data, for: attachment)
+                
+                return self.getCompressedImage(for: attachment)
             } catch {
                 print("DEBUG: [ImageCacheManager] Error loading avatar from \(url): \(error.localizedDescription)")
                 return nil

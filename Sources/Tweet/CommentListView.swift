@@ -288,7 +288,7 @@ struct CommentListContentView<RowView: View>: View {
                     Image(systemName: "bubble.left")
                         .font(.system(size: 48))
                         .foregroundColor(.secondary)
-                    Text(NSLocalizedString("No comments yet", comment: "No comments available message"))
+                    Text(NSLocalizedString("No comment yet", comment: "No comment available message"))
                         .font(.headline)
                         .foregroundColor(.secondary)
                 }

@@ -21,50 +21,87 @@ public class HLSVideoProcessor {
     /// Get video aspect ratio with multiple fallback approaches
     public func getVideoAspectRatio(filePath: String) async throws -> Float? {
         print("DEBUG: Getting video aspect ratio for file: \(filePath)")
-        
+
         let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
         let tracks = try await asset.loadTracks(withMediaType: .video)
         guard let track = tracks.first else { return nil }
-        
+
         let size = try await track.load(.naturalSize)
-        guard size.height > 0 else { return nil }
-        
+
+        // Validate dimensions are reasonable (allow small videos but reject impossible values)
+        guard size.width >= 1, size.height >= 1,
+              size.width.isFinite, size.height.isFinite,
+              size.width < 100000, size.height < 100000 else {
+            print("DEBUG: Unreasonable video dimensions: width=\(size.width), height=\(size.height), using fallback")
+            // For truly invalid dimensions, return a standard aspect ratio instead of failing
+            return 16.0/9.0 // Standard widescreen fallback
+        }
+
         // Get comprehensive video parameters
         await printVideoParameters(filePath: filePath, track: track, size: size)
-        
+
         // Calculate display aspect ratio that accounts for rotation
         let displayAspectRatio = await getDisplayAspectRatio(track: track, naturalSize: size)
-        print("DEBUG: Display aspect ratio: \(displayAspectRatio)")
-        return displayAspectRatio
+
+        // Validate and clamp the calculated aspect ratio to reasonable bounds
+        let clampedAspectRatio: Float
+        if displayAspectRatio.isFinite && displayAspectRatio > 0 {
+            // Clamp to reasonable bounds (0.1:1 to 10:1 aspect ratios)
+            clampedAspectRatio = max(0.1, min(10.0, displayAspectRatio))
+        } else {
+            print("DEBUG: Invalid calculated aspect ratio: \(displayAspectRatio), using fallback")
+            clampedAspectRatio = 16.0/9.0 // Standard widescreen fallback
+        }
+
+        print("DEBUG: Display aspect ratio: \(clampedAspectRatio)")
+        return clampedAspectRatio
     }
     
     /// Calculate display aspect ratio accounting for video rotation
     private func getDisplayAspectRatio(track: AVAssetTrack, naturalSize: CGSize) async -> Float {
         do {
             let preferredTransform = try await track.load(.preferredTransform)
-            
+
             // Calculate rotation from transform
             let angle = atan2(preferredTransform.b, preferredTransform.a) * 180 / .pi
             let rotation = Int(round(angle))
-            
+
             // Check if dimensions should be swapped for display
-            let isRotated90or270 = rotation == 90 || rotation == 270 || 
+            let isRotated90or270 = rotation == 90 || rotation == 270 ||
                                   (abs(preferredTransform.a) < 0.1 && abs(preferredTransform.d) < 0.1)
-            
+
             let aspectRatio: Float
             if isRotated90or270 {
                 // For 90° or 270° rotation, swap width and height
-                aspectRatio = Float(naturalSize.height / naturalSize.width)
+                // Use max() to avoid division by zero, but allow very small dimensions
+                let safeWidth = max(Float(naturalSize.width), 1.0)
+                aspectRatio = Float(naturalSize.height) / safeWidth
             } else {
                 // For 0° or 180° rotation, use normal dimensions
-                aspectRatio = Float(naturalSize.width / naturalSize.height)
+                // Use max() to avoid division by zero, but allow very small dimensions
+                let safeHeight = max(Float(naturalSize.height), 1.0)
+                aspectRatio = Float(naturalSize.width) / safeHeight
             }
-            
+
+            // Ensure aspect ratio is reasonable (clamp to valid range or use fallback)
+            if !aspectRatio.isFinite || aspectRatio <= 0 {
+                print("DEBUG: Invalid aspect ratio calculated: \(aspectRatio), using fallback")
+                return 16.0/9.0 // Standard widescreen fallback
+            }
+
             return aspectRatio
         } catch {
             print("DEBUG: Error getting preferred transform, using natural aspect ratio: \(error)")
             // Fallback to natural aspect ratio if transform loading fails
-            return Float(naturalSize.width / naturalSize.height)
+            // Use max() to avoid division by zero
+            let safeHeight = max(Float(naturalSize.height), 1.0)
+            let fallbackRatio = Float(naturalSize.width) / safeHeight
+
+            if !fallbackRatio.isFinite || fallbackRatio <= 0 {
+                print("DEBUG: Invalid fallback aspect ratio: \(fallbackRatio), using standard fallback")
+                return 16.0/9.0 // Standard widescreen fallback
+            }
+            return fallbackRatio
         }
     }
     
@@ -92,6 +129,23 @@ public class HLSVideoProcessor {
         } catch {
             print("DEBUG: Error getting video dimensions: \(error)")
             return CGSize(width: 480, height: 270) // Default fallback
+        }
+    }
+    
+    /// Get source video bitrate in kbps
+    public func getSourceVideoBitrate(filePath: String) async throws -> Int? {
+        let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        guard let track = tracks.first else { return nil }
+        
+        do {
+            let bitRate = try await track.load(.estimatedDataRate)
+            // Convert from bps to kbps
+            let bitRateKbps = Int(bitRate / 1000)
+            return bitRateKbps
+        } catch {
+            print("❌ Error getting source video bitrate: \(error)")
+            return nil
         }
     }
     
@@ -245,86 +299,45 @@ public class HLSVideoProcessor {
         print("=== END VIDEO PARAMETERS ===")
     }
     
-    /// Get video info using FFmpeg (like the server does)
-    public func getVideoInfoWithFFmpeg(filePath: String) async -> (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)? {
-        return await withCheckedContinuation { continuation in
-            let command = "ffprobe -v quiet -print_format json -show_format -show_streams \"\(filePath)\""
-            print("DEBUG: [FFMPEG PROBE] Running command: \(command)")
-            
-            FFmpegKit.executeAsync(command) { session in
-                guard let session = session else {
-                    print("DEBUG: [FFMPEG PROBE] Failed to create session")
-                    continuation.resume(returning: nil)
-                    return
-                }
-                
-                let returnCode = session.getReturnCode()
-                print("DEBUG: [FFMPEG PROBE] Return code: \(String(describing: returnCode))")
-                
-                if ReturnCode.isSuccess(returnCode) {
-                    if let logs = session.getLogs() as? [Log] {
-                        var output = ""
-                        for log in logs {
-                            output += log.getMessage()
-                        }
-                        print("DEBUG: [FFMPEG PROBE] Raw output: \(output)")
-                        
-                        // Parse JSON output
-                        if let data = output.data(using: .utf8),
-                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let streams = json["streams"] as? [[String: Any]] {
-                            
-                            print("DEBUG: [FFMPEG PROBE] Found \(streams.count) streams")
-                            
-                            for stream in streams {
-                                if stream["codec_type"] as? String == "video" {
-                                    let width = stream["width"] as? Int ?? 0
-                                    let height = stream["height"] as? Int ?? 0
-                                    
-                                    var rotation = 0
-                                    if let sideDataList = stream["side_data_list"] as? [[String: Any]] {
-                                        print("DEBUG: [FFMPEG PROBE] Found side_data_list with \(sideDataList.count) items")
-                                        for sideData in sideDataList {
-                                            if sideData["side_data_type"] as? String == "Display Matrix" {
-                                                if let matrix = sideData["rotation"] as? Int {
-                                                    rotation = matrix
-                                                }
-                                                break
-                                            }
-                                        }
-                                    } else {
-                                        print("DEBUG: [FFMPEG PROBE] No side_data_list found")
-                                    }
-                                    
-                                    var displayWidth = width
-                                    var displayHeight = height
-                                    
-                                    if rotation == 90 || rotation == -90 {
-                                        displayWidth = height
-                                        displayHeight = width
-                                    }
-                                    
-                                    print("DEBUG: [FFMPEG PROBE] Video dimensions: \(width)x\(height)")
-                                    print("DEBUG: [FFMPEG PROBE] Display dimensions (after rotation): \(displayWidth)x\(displayHeight)")
-                                    print("DEBUG: [FFMPEG PROBE] Rotation: \(rotation) degrees")
-                                    
-                                    continuation.resume(returning: (width, height, displayWidth, displayHeight, rotation))
-                                    return
-                                }
-                            }
-                            print("DEBUG: [FFMPEG PROBE] No video stream found")
-                        } else {
-                            print("DEBUG: [FFMPEG PROBE] Failed to parse JSON")
-                        }
-                    } else {
-                        print("DEBUG: [FFMPEG PROBE] No logs found")
-                    }
-                    continuation.resume(returning: nil)
-                } else {
-                    print("DEBUG: [FFMPEG PROBE] Command failed with return code: \(String(describing: returnCode))")
-                    continuation.resume(returning: nil)
-                }
+    /// Get video info using AVFoundation (replaces unreliable ffprobe on iOS)
+    public func getVideoInfo(filePath: String) async -> (width: Int, height: Int, displayWidth: Int, displayHeight: Int, rotation: Int)? {
+        
+        let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
+        
+        do {
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            guard let videoTrack = tracks.first else {
+                print("DEBUG: [AVFoundation] No video track found")
+                return nil
             }
+            
+            // Get natural dimensions
+            let size = try await videoTrack.load(.naturalSize)
+            let width = Int(size.width)
+            let height = Int(size.height)
+            
+            // Get rotation from preferred transform
+            let preferredTransform = try await videoTrack.load(.preferredTransform)
+            let angle = atan2(preferredTransform.b, preferredTransform.a) * 180 / .pi
+            let rotation = Int(round(angle))
+            
+            // Calculate display dimensions (accounting for rotation)
+            var displayWidth = width
+            var displayHeight = height
+            
+            if rotation == 90 || rotation == -90 || rotation == 270 || rotation == -270 {
+                displayWidth = height
+                displayHeight = width
+            }
+            
+            print("DEBUG: [AVFoundation] Video dimensions: \(width)x\(height)")
+            print("DEBUG: [AVFoundation] Display dimensions (after rotation): \(displayWidth)x\(displayHeight)")
+            print("DEBUG: [AVFoundation] Rotation: \(rotation)°")
+            
+            return (width, height, displayWidth, displayHeight, rotation)
+        } catch {
+            print("DEBUG: [AVFoundation] Error getting video info: \(error)")
+            return nil
         }
     }
 } 

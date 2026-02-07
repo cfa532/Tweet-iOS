@@ -14,13 +14,18 @@
 "Recommendation" = "Recommendation";
 
 // MARK: - Upload Progress
-"Preparing upload..." = "Preparing upload... Don't close the app";
+"Preparing upload... Please stay on this screen" = "Preparing upload... Please stay on this screen";
 "Preparing attachments..." = "Preparing attachments...";
 "Converting video..." = "Converting video...";
-"Uploading attachments..." = "Uploading attachments...";
+"Uploading attachments... Please stay on this screen" = "Uploading attachments... Please stay on this screen";
 "Submitting tweet..." = "Submitting tweet...";
+"Submitting comment..." = "Submitting comment...";
 "Retrying upload..." = "Retrying upload...";
 "Upload completed" = "Upload completed";
+"Upload cancelled" = "Upload cancelled";
+"Cancel Upload" = "Cancel Upload";
+"Are you sure you want to cancel this upload? This action cannot be undone." = "Are you sure you want to cancel this upload? This action cannot be undone.";
+"Continue" = "Continue";
 "Posting Tweet" = "Posting Tweet";
 "Posting Comment" = "Posting Comment";
 "Sending Message" = "Sending Message";
@@ -30,9 +35,11 @@
 "Checking video status..." = "Checking video status...";
 "Processing on server..." = "Processing on server...";
 "Your tweet will be posted when ready" = "Your tweet will be posted when ready";
+"Your comment will be posted when ready" = "Your comment will be posted when ready";
 "Your message will be sent when ready" = "Your message will be sent when ready";
 "Uploading %@ %d/%d..." = "Uploading %@ %d/%d...";
 "Processing video %d/%d" = "Processing video %d/%d";
+"Processing video %d/%d - Please stay on this screen" = "Processing video %d/%d - Please stay on this screen";
 "Uploading image %d/%d" = "Uploading image %d/%d";
 "Tweet posted successfully" = "Tweet posted successfully";
 "Failed to check video status" = "Failed to check video status";
@@ -41,6 +48,7 @@
 "Video processing timed out" = "Video processing timed out";
 "Failed to prepare attachments" = "Failed to prepare attachments";
 "Failed to post tweet" = "Failed to post tweet";
+"Failed to post comment after retries" = "Failed to post comment after retries";
 "Unknown video status" = "Unknown video status";
 
 // MARK: - Pending Upload Dialog
@@ -137,6 +145,7 @@
 
 // MARK: - Tweet Actions
 "Show more" = "Show more";
+"More..." = "More...";
 "Forwarded by %@" = "Forwarded by %@";
 "Forwarded by you" = "Forwarded by you";
 "Quote Tweet" = "Quote Tweet";
@@ -168,6 +177,7 @@
 // MARK: - Tweet Detail
 "Tweet" = "Tweet";
 "Comments" = "Comments";
+"No comment yet" = "No comment yet";
 
 // MARK: - Loading States
 "Loading tweets..." = "Loading tweets...";
@@ -480,6 +490,8 @@
 "Received" = "Received";
 "Yesterday" = "Yesterday";
 "%@ %@" = "%@ %@";
+"No more messages" = "No more messages";
+"No more tweets" = "No more tweets";
 
 // MARK: - Video Player
 "Failed to load video" = "Failed to load video";
@@ -524,6 +536,14 @@
 // MARK: - Chat Messages
 "Failed to send message" = "Failed to send message";
 "Sending message in background..." = "Sending message in background...";
+"Sending message..." = "Sending message...";
+"Cannot resend messages with attachments. Please send the attachment again." = "Cannot resend messages with attachments. Please send the attachment again.";
+"Cannot resend empty message" = "Cannot resend empty message";
+"Message sent successfully" = "Message sent successfully";
+"Please wait while the attachment is being prepared..." = "Please wait while the attachment is being prepared...";
+"Attachment not ready. Please try selecting the media again." = "Attachment not ready. Please try selecting the media again.";
+"Failed to create error message" = "Failed to create error message";
+"Message cannot be empty" = "Message cannot be empty";
 
 // MARK: - Fallback Text
 "User Name" = "User Name";

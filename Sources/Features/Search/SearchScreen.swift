@@ -34,7 +34,7 @@ struct SearchScreen: View {
                             DebounceButton(
                                 cooldownDuration: 0.3,
                                 enableAnimation: true,
-                                enableVibration: false
+                                enableHaptic: false
                             ) {
                                 searchViewModel.searchText = ""
                                 // Don't clear results when clearing search text - keep them for better UX
@@ -52,7 +52,7 @@ struct SearchScreen: View {
                     DebounceButton(
                         
                         enableAnimation: true,
-                        enableVibration: false
+                        enableHaptic: false
                     ) {
                         hideKeyboard()
                         Task {

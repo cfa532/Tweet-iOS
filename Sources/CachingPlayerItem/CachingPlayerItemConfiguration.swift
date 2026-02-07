@@ -10,10 +10,13 @@ import Foundation
 /// CachingPlayerItem global configuration.
 public enum CachingPlayerItemConfiguration {
     /// How much data is downloaded in memory before stored on a file.
-    public static var downloadBufferLimit: Int = 128.KB
+    /// MEMORY FIX: Reduced from 128KB to 64KB to minimize memory usage during fast scrolling
+    public static var downloadBufferLimit: Int = 64.KB
 
     /// How much data is allowed to be read in memory at a time.
-    public static var readDataLimit: Int = 10.MB
+    /// MEMORY FIX: Reduced from 10MB to 2MB to prevent memory accumulation
+    /// With 100 videos during fast scrolling: 100 × 2MB = 200MB instead of 1GB
+    public static var readDataLimit: Int = 2.MB
 
     /// Flag for deciding whether an error should be thrown when URLResponse's expectedContentLength is not equal with the downloaded media file bytes count. Defaults to `false`.
     public static var shouldVerifyDownloadedFileSize: Bool = false

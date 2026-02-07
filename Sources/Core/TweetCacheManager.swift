@@ -121,41 +121,58 @@ final class TweetCacheManager: @unchecked Sendable {
     /// Manual cleanup from settings screen - clears everything including private tweets
     func manualClearAllCache() {
         print("DEBUG: [TweetCacheManager] Manual cache clear - clearing EVERYTHING")
-        
+
+        // Log initial state
+        let initialTweetCount = context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            return (try? context.fetch(request).count) ?? 0
+        }
+        print("DEBUG: [TweetCacheManager] Initial tweet count: \(initialTweetCount)")
+
         context.performAndWait {
             // Get all tweets
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
             if let allTweets = try? context.fetch(request) {
                 print("DEBUG: [TweetCacheManager] Manual clear: deleting \(allTweets.count) tweets and their media")
-                
+
                 for cdTweet in allTweets {
                     // Delete associated media (clears from caches per media ID)
                     if let tweet = try? Tweet.from(cdTweet: cdTweet) {
                         deleteMediaForTweet(tweet)
                     }
-                    
+
                     // Delete tweet from CoreData
                     context.delete(cdTweet)
                 }
-                
+
                 try? context.save()
+                print("DEBUG: [TweetCacheManager] CoreData tweets deleted successfully")
             }
         }
-        
+
         // Clear access times
         tweetAccessTimes.removeAll()
         saveAccessTimes()
-        
+        print("DEBUG: [TweetCacheManager] Access times cleared")
+
         // Final sweep: clear any remaining caches that might not be tweet-associated
         Task { @MainActor in
             SharedAssetCache.shared.clearAllCaches()
+            print("DEBUG: [TweetCacheManager] SharedAssetCache cleared")
         }
         ImageCacheManager.shared.clearAllCache()
-        
+        print("DEBUG: [TweetCacheManager] ImageCacheManager cleared")
+
         // Clear memory cache
         Tweet.clearAllInstances()
-        
-        print("✅ Manual cache clear complete")
+        print("DEBUG: [TweetCacheManager] Memory cache cleared")
+
+        // Verify cleanup
+        let finalTweetCount = context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            return (try? context.fetch(request).count) ?? 0
+        }
+        print("✅ Manual cache clear complete - final tweet count: \(finalTweetCount)")
     }
     
     // MARK: - Signout Cleanup
@@ -180,7 +197,16 @@ extension TweetCacheManager {
                 
                 // Always load from userId cache (which equals authorId for profile views)
                 request.predicate = NSPredicate(format: "uid == %@", userId)
-                request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+                
+                // For bookmarks and favorites, sort by timeCached (when bookmarked/favorited)
+                // For other types, sort by timestamp (tweet creation time)
+                let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+                if isBookmarkOrFavorite {
+                    request.sortDescriptors = [NSSortDescriptor(key: "timeCached", ascending: false)]
+                } else {
+                    request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
+                }
+                
                 // Fetch more tweets if filtering by authorId (to account for filtering)
                 let fetchLimit = shouldFilterByAuthorId ? Int(pageSize * 3) : Int(pageSize)
                 request.fetchLimit = fetchLimit
@@ -230,7 +256,10 @@ extension TweetCacheManager {
                             // Filter private tweets:
                             // - Main feed: Always filter out private tweets (show all tweets, but no private ones)
                             // - Profile view: Only show private tweets if appUser is viewing their own profile
-                            if tweet.isPrivate == true {
+                            // - Bookmarks/Favorites: NEVER filter (user explicitly bookmarked/favorited them)
+                            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+                            
+                            if tweet.isPrivate == true && !isBookmarkOrFavorite {
                                 if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
                                     // Profile view: Allow private tweets only if viewing own profile (appUser == visited user)
                                     tweets.append(tweet)
@@ -239,7 +268,7 @@ extension TweetCacheManager {
                                     continue
                                 }
                             } else {
-                                // Public tweet: Always include
+                                // Public tweet OR bookmarked/favorited private tweet: Always include
                                 tweets.append(tweet)
                             }
                         } catch {
@@ -264,6 +293,50 @@ extension TweetCacheManager {
     /// - Original tweets are cached under their authorId
     /// - Retweets are cached under appUser.mid
     /// - When we only have a tweet mid, we don't know which user's cache it's in
+    /// Synchronously fetch tweet from cache (in-memory singleton or Core Data)
+    /// Used for height estimation and other synchronous operations
+    /// Returns nil if tweet is not cached
+    func fetchTweetSync(mid: String) -> Tweet? {
+        // First check in-memory singleton
+        if let tweetInstance = Tweet.getInstance(for: mid) {
+            return tweetInstance
+        }
+        
+        // Otherwise, load from Core Data cache synchronously
+        return context.performAndWait {
+            let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+            request.predicate = NSPredicate(format: "tid == %@", mid)
+            
+            guard let cdTweet = try? context.fetch(request).first else {
+                return nil
+            }
+            
+            do {
+                let tweet = try Tweet.from(cdTweet: cdTweet)
+                
+                // Load author from cache if available
+                if tweet.author == nil {
+                    let authorSingleton = User.getInstance(mid: tweet.authorId)
+                    
+                    if authorSingleton.username == nil {
+                        let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                        userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+                        if let cdUser = try? context.fetch(userRequest).first {
+                            _ = User.from(cdUser: cdUser)
+                        }
+                    }
+                    
+                    tweet.author = User.getInstance(mid: tweet.authorId)
+                }
+                
+                return tweet
+            } catch {
+                print("Error processing tweet synchronously: \(error)")
+                return nil
+            }
+        }
+    }
+    
     func fetchTweet(mid: String) async -> Tweet? {
         return await withCheckedContinuation { continuation in
             // First check in-memory singleton
@@ -322,7 +395,12 @@ extension TweetCacheManager {
 
     /// Save a tweet to the cache. If tweet is nil, do nothing. To remove a tweet, use deleteTweet.
     /// If a tweet with the same mid already exists, it will be updated with new counts and favorites instead of being replaced.
-    func saveTweet(_ tweet: Tweet, userId: String) {
+    /// - Parameters:
+    ///   - tweet: The tweet to save
+    ///   - userId: The cache key (e.g., "bookmark_list_userId" or user's mid)
+    ///   - timeCached: Optional timestamp to use for timeCached. If nil, uses current Date().
+    ///                 For bookmarks/favorites, this should be set to preserve server order.
+    func saveTweet(_ tweet: Tweet, userId: String, timeCached: Date? = nil) {
         // Validate timestamp before caching
         if tweet.timestamp.timeIntervalSince1970 <= 0 {
             print("ERROR: [TweetCacheManager] Attempting to cache tweet with invalid timestamp: \(tweet.timestamp), skipping cache")
@@ -330,14 +408,37 @@ extension TweetCacheManager {
         }
         
         context.performAndWait {
+            // For bookmarks/favorites, look up by both tid AND uid to find the exact cache entry
+            // This ensures we update the correct entry and preserve order
+            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
             let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-            request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+            
+            if isBookmarkOrFavorite {
+                // Look up by both tid and uid for bookmarks/favorites to find exact cache entry
+                request.predicate = NSPredicate(format: "tid == %@ AND uid == %@", tweet.mid, userId)
+            } else {
+                // For other types, look up by tid only (tweet can be in multiple caches)
+                request.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+            }
+            
             let cdTweet: CDTweet
             
             if let existingTweet = try? context.fetch(request).first {
                 cdTweet = existingTweet
             } else {
-                cdTweet = CDTweet(context: context)
+                // If not found with the specific uid (for bookmarks/favorites), check if tweet exists with different uid
+                if isBookmarkOrFavorite {
+                    let fallbackRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    fallbackRequest.predicate = NSPredicate(format: "tid == %@", tweet.mid)
+                    if let existingWithDifferentUid = try? context.fetch(fallbackRequest).first {
+                        // Update existing entry to use the bookmark/favorite cache key
+                        cdTweet = existingWithDifferentUid
+                    } else {
+                        cdTweet = CDTweet(context: context)
+                    }
+                } else {
+                    cdTweet = CDTweet(context: context)
+                }
             }
             
             // Always save the current in-memory tweet state to cache
@@ -352,9 +453,31 @@ extension TweetCacheManager {
             cdTweet.tid = tweet.mid
             cdTweet.uid = userId
             cdTweet.timestamp = tweet.timestamp
-            cdTweet.timeCached = Date()
+            // Use provided timeCached, or current time if not provided
+            // For bookmarks/favorites, timeCached should be set to preserve server order
+            cdTweet.timeCached = timeCached ?? Date()
             
             try? context.save()
+        }
+        
+        // Mark media as permanent for: private tweets OR bookmarks/favorites
+        let isPrivate = tweet.isPrivate == true
+        let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+        
+        if (isPrivate || isBookmarkOrFavorite), let attachments = tweet.attachments {
+            // Mark videos as permanent
+            let videoIDs = attachments.filter { $0.type == .video || $0.type == .hls_video }.compactMap { $0.mid }
+            if !videoIDs.isEmpty {
+                DiskCacheCleanupManager.shared.markMediaIDsAsPermanent(videoIDs)
+                // Reduced logging to prevent buffer overflow
+            }
+            
+            // Mark images as permanent
+            let imageIDs = attachments.filter { $0.type == .image }.compactMap { $0.mid }
+            if !imageIDs.isEmpty {
+                ImageCacheManager.shared.markImageIDsAsPermanent(imageIDs)
+                // Reduced logging to prevent buffer overflow
+            }
         }
     }
 
@@ -381,9 +504,16 @@ extension TweetCacheManager {
                     // Decode tweet to check if it's private
                     guard let tweet = try? Tweet.from(cdTweet: cdTweet) else { continue }
                     
-                    // NEVER auto-delete private tweets - only manual or signout
-                    if tweet.isPrivate == true {
-                        preservedPrivateCount += 1
+                    // NEVER auto-delete: private tweets OR bookmarks/favorites
+                    let isPrivate = tweet.isPrivate == true
+                    let isBookmarkOrFavorite = cdTweet.uid?.hasPrefix("bookmark_list_") == true || 
+                                               cdTweet.uid?.hasPrefix("favorite_list_") == true
+                    
+                    if isPrivate || isBookmarkOrFavorite {
+                        if isPrivate {
+                            preservedPrivateCount += 1
+                        }
+                        print("💾 [TweetCacheManager] Preserving permanent tweet: \(tweetId) (private: \(isPrivate), bookmarked: \(isBookmarkOrFavorite))")
                         continue
                     }
                     
@@ -555,7 +685,7 @@ extension Tweet {
                 // Replace tweet's author with the singleton
                 tweet.author = authorSingleton
                 
-                NSLog("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
+                print("DEBUG: [Tweet.from(cdTweet)] Tweet \(tweet.mid) using author singleton for user \(authorSingleton.mid), baseUrl: \(authorSingleton.baseUrl?.absoluteString ?? "NIL")")
                 
                 // Trigger fetchUser if baseUrl is nil to resolve IP
                 // (Rare case: old cache data before IP caching, or newly created user)
@@ -669,7 +799,7 @@ extension TweetCacheManager {
             cdUser.timeCached = Date()
             if let userData = try? JSONEncoder().encode(user) {
                 cdUser.userData = userData
-                NSLog("DEBUG: [saveUserAndWait] Saved user \(user.mid) with avatar: \(user.avatar ?? "nil")")
+                print("DEBUG: [saveUserAndWait] Saved user \(user.mid) with avatar: \(user.avatar ?? "nil")")
             }
             try? self.context.save()
         }

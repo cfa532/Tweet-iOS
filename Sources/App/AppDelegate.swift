@@ -72,6 +72,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         // Listen for app initialization to check messages
         setupMessageCheckOnInitialization()
+        
+        // Listen for app initialization to fetch app URLs
+        setupAppUrlsFetch()
 
         // Schedule initial background message check
         print("[AppDelegate] 🚀 Scheduling initial background message check on app launch")
@@ -250,6 +253,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     
                     // Restart infrastructure asynchronously (non-blocking)
                     infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                        // CRITICAL: Refresh appUser IP FIRST for long screen locks
+                        // Network connections may have changed during extended lock
+                        print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                        await self.refreshAppUserIP()
+                        print("[AppDelegate] ✅ AppUser IP refresh complete")
+                        
                         // Restart server in background
                         await self.restartVideoInfrastructureAsync()
                         
@@ -257,7 +266,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         await MainActor.run {
                             self.hideLoadingOverlay()
                             AppDelegate.isVideoInfrastructureReady = true
-                            // Post notification for ONLY visible videos to reload
+                            // Post notification for visible videos to reload
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Server restarted after long screen lock - posted reloadVisibleVideosOnly notification")
                         }
@@ -271,7 +280,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                         LocalHTTPServer.shared.resetConnectionPool()
                         print("[AppDelegate] Short screen lock recovery complete - videos kept intact")
-                        // Post notification for ONLY visible videos to reload
+                        // Post notification for visible videos to check health (they skip if seeking)
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                         print("[AppDelegate] Short screen lock recovery - posted reloadVisibleVideosOnly notification")
                     } else {
@@ -292,14 +301,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         
                         // Restart server asynchronously (non-blocking)
                         infrastructureRestartTask = Task.detached(priority: .userInitiated) {
-                            // Restart server in background
-                            LocalHTTPServer.shared.startAndWait()
+                            // CRITICAL: Refresh appUser IP FIRST before restarting server
+                            // This ensures videos load with fresh IPs after server restart
+                            print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                            await self.refreshAppUserIP()
+                            print("[AppDelegate] ✅ AppUser IP refresh complete")
                             
+                            // Restart server in background (async - doesn't block!)
+                            await LocalHTTPServer.shared.startAndWaitAsync()
+
                             // Hide loading indicator and notify visible videos to reload
                             await MainActor.run {
                                 self.hideLoadingOverlay()
                                 AppDelegate.isVideoInfrastructureReady = true
-                                // Post notification for ONLY visible videos to reload
+                                // Post notification for visible videos to reload
                                 NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                                 print("[AppDelegate] Server restarted after screen lock - posted reloadVisibleVideosOnly notification")
                             }
@@ -321,19 +336,44 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     @objc private func handleAppDidEnterBackground() {
-        NSLog("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
-        
+        print("🌙🌙🌙 [AppDelegate] ===== DID ENTER BACKGROUND =====")
+
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
+
+        // CRITICAL: Save main feed scroll position to survive app termination
+        ScrollPositionManager.shared.savePersistentScrollPositionNow()
 
         // Perform immediate background message check when entering background
         print("[AppDelegate] 🚀 Performing IMMEDIATE background message check on app background")
         performImmediateBackgroundCheck()
 
-        // DON'T stop LocalHTTPServer - iOS keeps network listeners alive for short backgrounds
-        // Only stop for long backgrounds (>5 min) to avoid race conditions and port changes
-        
-        // Background handling is now done by SimpleVideoPlayer's notification observers
+        // CRITICAL: Aggressive memory cleanup to prevent iOS termination
+        // Note: iOS takes the app snapshot BEFORE didEnterBackground, so clearing
+        // caches here won't affect the app switcher preview
+
+        // 1. Release video memory but keep player shells for fast recovery
+        // This releases heavy video buffers while keeping AVPlayer objects for quick resume
+        print("💾 [AppDelegate] Releasing video memory (keeping player shells)")
+        SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
+
+        // 2. Clear video last frame cache (snapshot already taken)
+        print("🧹 [AppDelegate] Clearing video frame cache")
+        VideoLastFrameCache.shared.clearAll()
+
+        // 3. Clear video state cache
+        print("🧹 [AppDelegate] Clearing video state cache")
+        VideoStateCache.shared.clearAllCache()
+
+        // 4. Clear image memory cache (keep disk cache for fast reload)
+        print("🧹 [AppDelegate] Clearing image memory cache")
+        ImageCacheManager.shared.clearMemoryCache()
+
+        // 5. Stop LocalHTTPServer to release network resources
+        print("🔌 [AppDelegate] Stopping LocalHTTPServer")
+        LocalHTTPServer.shared.stop()
+
+        print("✅ [AppDelegate] Background cleanup complete - memory released, player shells preserved")
     }
     
     /// Handle app returning to foreground from background state
@@ -364,42 +404,30 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     /// - Note: Duration-based recovery is more reliable than isRunning checks
     /// - Note: Only visible videos reload automatically; off-screen videos load when scrolled into view
     @objc private func handleAppWillEnterForeground() {
-        NSLog("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
-        
+        print("☀️☀️☀️ [AppDelegate] ===== WILL ENTER FOREGROUND =====")
+
         // CRITICAL: Skip recovery routine on app startup - server is already started in didFinishLaunchingWithOptions
         // willEnterForeground can be called immediately after launch, so check if we've finished launching
         if !hasFinishedLaunching {
-            NSLog("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
+            print("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
             return
-        }
-        
-        // Proactively refresh appUser's IP address when returning from background
-        // This ensures we don't use stale IPs if the server changed while app was suspended
-        Task {
-            await refreshAppUserIP()
-        }
-
-        // Check for new messages when returning to foreground (only updates badge, no notifications)
-        Task {
-            print("[AppDelegate] 📬 Checking for new messages on foreground return")
-            await checkMessagesForBadgeOnly()
         }
         
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
-            NSLog("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
+            print("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
             
             // CRITICAL: Use DURATION-based recovery, not isRunning check
             // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
             if timeInBackground > 300 {  // 5 minutes
                 // LONG background - ALWAYS do full restart
                 // Even if isRunning=true, the listener may be suspended and unresponsive
-                NSLog("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
+                print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
                 
                 // Check if already restarting
                 if isRestartingInfrastructure {
-                    NSLog("[AppDelegate] Infrastructure restart already in progress, skipping")
+                    print("[AppDelegate] Infrastructure restart already in progress, skipping")
                     return
                 }
                 
@@ -410,6 +438,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 // Restart infrastructure asynchronously (non-blocking)
                 // Videos will show loading state until server is ready, but UI remains interactive
                 infrastructureRestartTask = Task.detached(priority: .userInitiated) {
+                    // CRITICAL: Refresh appUser IP FIRST before restarting server
+                    // This ensures videos load with fresh IPs, not stale ones that would timeout
+                    print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                    await self.refreshAppUserIP()
+                    print("[AppDelegate] ✅ AppUser IP refresh complete")
+                    
                     // Restart server in background
                     await self.restartVideoInfrastructureAsync()
                     
@@ -417,48 +451,88 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     await MainActor.run {
                         self.hideLoadingOverlay()
                         AppDelegate.isVideoInfrastructureReady = true
-                        // Post notification for ONLY visible videos to reload
+                        
+                        // Post notification for visible videos to reload
+                        // Coordinator will intelligently decide whether to preserve or reset state
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                        NSLog("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
+                        print("✅ [AppDelegate] Server fully restarted - posted reloadVisibleVideosOnly notification")
                     }
                 }
             } else {
-                // SHORT background (<5min) - simple approach: always clear and let videos recreate
-                NSLog("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - clearing players for clean state")
-                AppDelegate.isVideoInfrastructureReady = false
+                // SHORT background (<5min) - SMART recovery: only clear if server restarted
+                print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - smart recovery")
                 
-                // Always clear players for predictable recovery
-                // Trying to keep them "intact" creates too many edge cases
-                SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
-                
-                // Reset connection pool
-                LocalHTTPServer.shared.resetConnectionPool()
-                
-                // Ensure server is running
-                if !LocalHTTPServer.shared.isRunning {
-                    NSLog("⚠️ [AppDelegate] Server not running, restarting...")
-                    LocalHTTPServer.shared.startAndWait()
+                // CRITICAL: Refresh IP FIRST, then do video recovery
+                // Videos must not reload with stale IPs or they will timeout
+                Task.detached(priority: .userInitiated) {
+                    print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
+                    await self.refreshAppUserIP()
+                    print("[AppDelegate] ✅ AppUser IP refresh complete")
+                    
+                    // Check if server is still running on the same port
+                    let wasServerRunning = LocalHTTPServer.shared.isRunning
+                    let oldPort = LocalHTTPServer.shared.currentPort
+                    
+                    if !wasServerRunning {
+                        // Server died - need full recovery
+                        print("⚠️ [AppDelegate] Server not running, restarting...")
+                        
+                        await MainActor.run {
+                            AppDelegate.isVideoInfrastructureReady = false
+                            // Clear players because server will restart on a new port
+                            SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
+                        }
+                        
+                        // Restart server (async - doesn't block!)
+                        await LocalHTTPServer.shared.startAndWaitAsync()
+
+                        let newPort = LocalHTTPServer.shared.currentPort
+                        print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
+                        
+                        await MainActor.run {
+                            AppDelegate.isVideoInfrastructureReady = true
+
+                            // Post notification for visible videos to reload with new port
+                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                            print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
+                        }
+                    } else {
+                        // Server still running - KEEP PLAYERS INTACT!
+                        print("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
+                        
+                        await MainActor.run {
+                            // Just refresh video layers and reset connection pool
+                            SharedAssetCache.shared.refreshVideoLayersForShortBackground()
+                            LocalHTTPServer.shared.resetConnectionPool()
+                            
+                            print("✅ [AppDelegate] Short background recovery complete - players preserved")
+                            
+                            // Still post notification to refresh any stale players
+                            NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                            print("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
+                        }
+                    }
                 }
-                
-                NSLog("✅ [AppDelegate] Short background recovery complete - players cleared")
-                AppDelegate.isVideoInfrastructureReady = true
-                
-                // Post notification for ONLY visible videos to reload
-                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                NSLog("[AppDelegate] Short background recovery - posted reloadVisibleVideosOnly notification")
             }
         } else {
             // No background timestamp - this means app was just launched or killed
             // Server should already be started in didFinishLaunchingWithOptions
             // Just ensure it's running, but don't do full recovery
-            NSLog("🚀 [AppDelegate] App startup or crash recovery - ensuring server is running")
+            print("🚀 [AppDelegate] App startup or crash recovery - ensuring server is running")
             if !LocalHTTPServer.shared.isRunning {
                 // Fast non-blocking start for app startup
                 LocalHTTPServer.shared.start()
             } else {
-                NSLog("✅ [AppDelegate] Server already running - no recovery needed")
+                print("✅ [AppDelegate] Server already running - no recovery needed")
             }
             AppDelegate.isVideoInfrastructureReady = true
+        }
+        
+        // Check for new messages when returning to foreground (only updates badge, no notifications)
+        // Run this in background, doesn't need to block video recovery
+        Task {
+            print("[AppDelegate] 📬 Checking for new messages on foreground return")
+            await checkMessagesForBadgeOnly()
         }
         
         // Foreground handling is now done by SimpleVideoPlayer's notification observers
@@ -608,7 +682,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Restart the server - use faster method if possible
         // OPTIMIZATION: If server is already running (rare), skip restart
         if !LocalHTTPServer.shared.isRunning {
-            LocalHTTPServer.shared.startAndWait()
+            await LocalHTTPServer.shared.startAndWaitAsync()  // ✅ Async - doesn't block!
         } else {
             print("[AppDelegate] Server already running - skipping restart")
         }
@@ -644,6 +718,22 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             Task {
                 print("[AppDelegate] 📬 Checking for new messages after app initialization")
                 await self?.checkMessagesForBadgeOnly()
+            }
+        }
+    }
+    
+    /// Setup app URLs fetching when app user is initialized
+    private func setupAppUrlsFetch() {
+        // Listen for app user ready notification
+        NotificationCenter.default.addObserver(
+            forName: .appUserReady,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Fetch and set app URLs after appUser is initialized
+            Task {
+                print("[AppDelegate] 🔧 AppUser initialized - fetching app URLs")
+                await self?.fetchAndSetAppUrls()
             }
         }
     }
@@ -718,6 +808,146 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.loadingWindow?.isHidden = true
             self.loadingWindow = nil
         }
+    }
+    
+    // MARK: - App URLs Initialization
+    
+    /// Fetch app URLs from entry MimeiId provider and save to preferences
+    ///
+    /// This method runs after app initialization to:
+    /// 1. Resolve provider IP for `AppConfig.entryMimeiId` using `getProviderIP()`
+    /// 2. Fetch content from `http://ip/mm/entryMimeiId`
+    /// 3. Parse response and save URLs via `PreferenceHelper.setAppUrls()`
+    ///
+    /// **Process:**
+    /// - Uses `getProviderIP()` for intelligent IP resolution with health checks
+    /// - Makes HTTP GET request to retrieve app URLs configuration
+    /// - Parses response as comma-separated URLs or JSON array
+    /// - Saves to UserDefaults for app-wide access
+    ///
+    /// **Error Handling:**
+    /// - Logs errors but doesn't block app launch
+    /// - App continues with existing cached URLs if fetch fails
+    private func fetchAndSetAppUrls() async {
+        print("[AppDelegate] 🔧 Fetching app URLs from entry MimeiId provider...")
+        
+        do {
+            // Step 1: Get provider IP for entryMimeiId
+            let entryMimeiId = AppConfig.entryMimeiId
+            print("[AppDelegate] Resolving provider IP for entryMimeiId: \(entryMimeiId)")
+            
+            guard let providerIP = try await HproseInstance.shared.getProviderIP(entryMimeiId) else {
+                print("[AppDelegate] ⚠️ Failed to resolve provider IP for entryMimeiId")
+                return
+            }
+            
+            print("[AppDelegate] ✅ Resolved provider IP: \(providerIP)")
+            
+            // Step 2: Fetch content from http://ip/mm/entryMimeiId
+            let urlString = "http://\(providerIP)/mm/\(entryMimeiId)"
+            guard let url = URL(string: urlString) else {
+                print("[AppDelegate] ❌ Invalid URL: \(urlString)")
+                return
+            }
+            
+            print("[AppDelegate] Fetching app URLs from: \(urlString)")
+            
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 10.0
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            // Check HTTP response
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                print("[AppDelegate] ❌ Invalid HTTP response: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+                return
+            }
+            
+            print("[AppDelegate] ✅ Successfully fetched app URLs data (\(data.count) bytes)")
+            
+            // Step 3: Parse response and save URLs
+            let urls = try parseAppUrls(from: data)
+            
+            if urls.isEmpty {
+                print("[AppDelegate] ⚠️ No URLs found in response")
+                return
+            }
+            
+            print("[AppDelegate] Parsed \(urls.count) URL(s): \(urls)")
+            
+            // Step 4: Save to preferences
+            let preferenceHelper = PreferenceHelper()
+            preferenceHelper.setAppUrls(urls)
+            
+            print("[AppDelegate] ✅ Successfully saved app URLs to preferences")
+            
+        } catch {
+            print("[AppDelegate] ❌ Error fetching app URLs: \(error)")
+            // Non-fatal - app continues with existing URLs
+        }
+    }
+    
+    /// Parse app URLs from response data
+    ///
+    /// Supports multiple formats:
+    /// - JSON array: ["http://url1.com", "http://url2.com"]
+    /// - JSON object with "urls" or "data" key: {"urls": ["http://url1.com"]}
+    /// - Plain text comma-separated: "http://url1.com,http://url2.com"
+    /// - Plain text newline-separated: "http://url1.com\nhttp://url2.com"
+    private func parseAppUrls(from data: Data) throws -> Set<String> {
+        // Try parsing as JSON first
+        if let json = try? JSONSerialization.jsonObject(with: data) {
+            // Case 1: JSON array of strings
+            if let urlArray = json as? [String] {
+                return Set(urlArray.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+            }
+            
+            // Case 2: JSON object with "urls" or "data" key
+            if let jsonDict = json as? [String: Any] {
+                if let urlArray = jsonDict["urls"] as? [String] {
+                    return Set(urlArray.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+                }
+                if let urlArray = jsonDict["data"] as? [String] {
+                    return Set(urlArray.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+                }
+                
+                // Case 3: Single URL string in object
+                if let urlString = jsonDict["urls"] as? String {
+                    let urls = urlString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    return Set(urls.filter { !$0.isEmpty })
+                }
+                if let urlString = jsonDict["data"] as? String {
+                    let urls = urlString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                    return Set(urls.filter { !$0.isEmpty })
+                }
+            }
+        }
+        
+        // Try parsing as plain text (comma or newline separated)
+        if let text = String(data: data, encoding: .utf8) {
+            let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            // Try comma-separated first
+            if trimmedText.contains(",") {
+                let urls = trimmedText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                return Set(urls.filter { !$0.isEmpty })
+            }
+            
+            // Try newline-separated
+            if trimmedText.contains("\n") {
+                let urls = trimmedText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                return Set(urls.filter { !$0.isEmpty })
+            }
+            
+            // Single URL
+            if !trimmedText.isEmpty {
+                return Set([trimmedText])
+            }
+        }
+        
+        return Set()
     }
     
     // MARK: - URL Handling (Deeplinks)

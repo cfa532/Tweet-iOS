@@ -13,11 +13,11 @@ import UIKit
 struct MediaBrowserView: View {
     let tweet: Tweet
     let initialIndex: Int
-    let sourceTweetId: String? // The tweet ID where user tapped (could be retweet)
+    let cellTweetId: String? // The visible cell's tweet ID (could be retweet or quoting tweet)
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @State private var currentTweet: Tweet // Allow changing tweet for auto-advance
-    @State private var currentSourceTweetId: String // Track position in visible feed
+    @State private var currentCellTweetId: String // Track position in visible feed
     @State private var showVideoPlayer = false
     @State private var play = false
     @State private var isVisible = true
@@ -32,8 +32,18 @@ struct MediaBrowserView: View {
     @State private var isTransitioning = false // Track transition animation
     @State private var transitionOffset: CGFloat = 0 // Offset for slide transition
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
+    @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
     private var attachments: [MimeiFileType] {
-        return currentTweet.attachments ?? []
+        // Filter to only show media types (images, videos, audio) - no documents
+        let allAttachments = currentTweet.attachments ?? []
+        return allAttachments.filter { attachment in
+            switch attachment.type {
+            case .image, .video, .hls_video, .audio:
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     private var baseUrl: URL {
@@ -44,15 +54,15 @@ struct MediaBrowserView: View {
             ?? HproseInstance.baseUrl
     }
 
-    init(tweet: Tweet, initialIndex: Int, sourceTweetId: String? = nil) {
+    init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil) {
         self.tweet = tweet
         self.initialIndex = initialIndex
-        self.sourceTweetId = sourceTweetId
+        self.cellTweetId = cellTweetId
         self._currentIndex = State(initialValue: initialIndex)
         self._currentTweet = State(initialValue: tweet)
-        self._currentSourceTweetId = State(initialValue: sourceTweetId ?? tweet.mid)
+        self._currentCellTweetId = State(initialValue: cellTweetId ?? tweet.mid)
         self._previousIndex = State(initialValue: initialIndex)
-        print("MediaBrowserView init - tweet: \(tweet.mid), sourceTweet: \(sourceTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
+        print("MediaBrowserView init - tweet: \(tweet.mid), cellTweet: \(cellTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 
     var body: some View {
@@ -69,8 +79,9 @@ struct MediaBrowserView: View {
                 isImageZoomed: $isImageZoomed,
                 isTransitioning: $isTransitioning,
                 transitionOffset: $transitionOffset,
+                suppressTabPagingAnimation: $suppressTabPagingAnimation,
                 currentTweet: currentTweet,
-                currentSourceTweetId: currentSourceTweetId,
+                currentCellTweetId: currentCellTweetId,
                 dismiss: { dismiss() },
                 startControlsTimer: startControlsTimer,
                 resetControlsTimer: resetControlsTimer,
@@ -91,6 +102,8 @@ struct MediaBrowserView: View {
                 }
             )
             .onAppear {
+                // Activate manager first to register lifecycle observers
+                FullScreenVideoManager.shared.activateForFullscreen()
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
 
@@ -98,18 +111,31 @@ struct MediaBrowserView: View {
                 // MediaCell videos will pause via overlay visibility detection once the fullscreen cover is presented.
             }
             .onDisappear {
-                FullScreenVideoManager.shared.clearSingletonPlayer()
+                // Deactivate manager - this unregisters lifecycle observers and clears player
+                FullScreenVideoManager.shared.deactivate()
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
+                
+                // CRITICAL: Clean up controls timer to prevent CPU cycles accumulation
+                controlsTimer?.invalidate()
+                controlsTimer = nil
+                
+                // DON'T post reloadVisibleVideosOnly here
+                // MediaCell videos manage themselves via VideoPlaybackCoordinator
+                // Fullscreen manager is now inactive and won't interfere
             }
     }
     
     private func setupFullScreenManager() {
         // Set up navigation callback for auto-advance and swipe up
         FullScreenVideoManager.shared.onNavigateToNextVideo = { [self] nextTweet, videoIndex, nextSourceTweetId in
-            print("DEBUG: [MediaBrowserView] Navigating to tweet: \(nextTweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(nextSourceTweetId)")
             
             // Animate transition: slide current video up and next video in from bottom
             Task { @MainActor in
+                // Prevent TabView from doing a horizontal paging animation when we change currentIndex programmatically.
+                // We want the vertical slide animation to be the only visible transition.
+                suppressTabPagingAnimation = true
+                defer { suppressTabPagingAnimation = false }
+
                 // Start transition - slide current content up (only 30% of screen for tight transition)
                 let slideDistance = UIScreen.main.bounds.height * 0.3
                 isTransitioning = true
@@ -129,12 +155,11 @@ struct MediaBrowserView: View {
                         ?? HproseInstance.baseUrl
                     
                     if let url = attachment.getUrl(baseUrl) {
-                        print("DEBUG: [MediaBrowserView] Loading next video: \(url)")
                         FullScreenVideoManager.shared.loadVideo(
                             url: url,
                             mid: attachment.mid,
                             tweetId: nextTweet.mid,
-                            sourceTweetId: nextSourceTweetId,
+                            cellTweetId: nextSourceTweetId,
                             videoIndex: videoIndex,
                             mediaType: attachment.type
                         )
@@ -143,9 +168,12 @@ struct MediaBrowserView: View {
                 
                 // Update UI state
                 self.currentTweet = nextTweet
-                self.currentIndex = videoIndex
-                self.previousIndex = videoIndex
-                self.currentSourceTweetId = nextSourceTweetId
+                // Don't animate this index change; TabView will otherwise page horizontally.
+                withAnimation(.none) {
+                    self.currentIndex = videoIndex
+                    self.previousIndex = videoIndex
+                }
+                self.currentCellTweetId = nextSourceTweetId
                 self.imageStates = [:]
                 
                 // Reset to bottom position for slide-in (30% for tight transition)
@@ -164,7 +192,6 @@ struct MediaBrowserView: View {
         
         // Set up exit fullscreen callback (when no more videos)
         FullScreenVideoManager.shared.onExitFullScreen = { [self] in
-            print("DEBUG: [MediaBrowserView] Exiting fullscreen - no more videos")
             dismiss()
         }
     }
@@ -183,13 +210,27 @@ struct MediaBrowserView: View {
         @Binding var isImageZoomed: Bool
         @Binding var isTransitioning: Bool
         @Binding var transitionOffset: CGFloat
+        @Binding var suppressTabPagingAnimation: Bool
         let currentTweet: Tweet
-        let currentSourceTweetId: String
+        let currentCellTweetId: String
         let dismiss: () -> Void
         let startControlsTimer: () -> Void
         let resetControlsTimer: () -> Void
         let onShareVisibilityChange: (Bool) -> Void
         let loadImageIfNeededClosure: (MimeiFileType, Int) -> Void
+
+        /// Find the next video attachment index after the current index (skips images/audio).
+        /// Returns nil if there is no next video in this tweet.
+        private func nextVideoIndexInThisTweet(after index: Int) -> Int? {
+            guard index + 1 < attachments.count else { return nil }
+            for i in (index + 1)..<attachments.count {
+                let att = attachments[i]
+                if att.type == .video || att.type == .hls_video {
+                    return i
+                }
+            }
+            return nil
+        }
         
         var body: some View {
             ZStack {
@@ -208,6 +249,8 @@ struct MediaBrowserView: View {
                                     audioView(for: attachment, url: url, index: index)
                                 } else if isImageAttachment(attachment), let url = attachment.getUrl(baseUrl) {
                                     imageView(for: attachment, url: url, index: index)
+                                } else if isPDFAttachment(attachment) {
+                                    pdfView(for: attachment, index: index)
                                 }
                             }
                             .background(Color.black)
@@ -217,8 +260,70 @@ struct MediaBrowserView: View {
                     .background(Color.black)
                     .tabViewStyle(.page)
                     .indexViewStyle(.page(backgroundDisplayMode: .always))
+                    .transaction { txn in
+                        if suppressTabPagingAnimation {
+                            txn.animation = nil
+                        }
+                    }
+                    // Keep horizontal paging for attachments.
+                    // Add vertical swipe that jumps to the next VIDEO (skipping non-video attachments).
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 25)
+                            .onEnded { value in
+                                guard !isTransitioning, !isImageZoomed else { return }
+                                
+                                // Require a clearly-vertical swipe so we don't interfere with horizontal paging.
+                                let vertical = abs(value.translation.height)
+                                let horizontal = abs(value.translation.width)
+                                guard vertical > horizontal * 1.25 else { return }
+                                
+                                let swipeThreshold: CGFloat = 90
+                                let velocityThreshold: CGFloat = 450
+                                
+                                // Swipe down: dismiss
+                                if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
+                                    dismiss()
+                                    return
+                                }
+                                
+                                // Swipe up: next video (in this tweet if available, otherwise next tweet's video)
+                                if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
+                                    if let nextVideoIndex = nextVideoIndexInThisTweet(after: currentIndex) {
+                                        // Vertical transition: suppress TabView paging animation.
+                                        suppressTabPagingAnimation = true
+                                        defer { suppressTabPagingAnimation = false }
+                                        
+                                        // Quick slide-up cue.
+                                        let slideDistance = UIScreen.main.bounds.height * 0.25
+                                        isTransitioning = true
+                                        withAnimation(.easeOut(duration: 0.2)) {
+                                            transitionOffset = -slideDistance
+                                        }
+                                        
+                                        // Switch to the next video index without paging animation.
+                                        withAnimation(.none) {
+                                            currentIndex = nextVideoIndex
+                                            previousIndex = nextVideoIndex
+                                        }
+                                        
+                                        // Slide back in.
+                                        transitionOffset = slideDistance
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            transitionOffset = 0
+                                        }
+                                        
+                                        // End transition after animation window.
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                                            isTransitioning = false
+                                        }
+                                    } else {
+                                        // No more videos in this tweet, move to next tweet's video.
+                                        FullScreenVideoManager.shared.navigateToNext()
+                                    }
+                                }
+                            }
+                    )
                     .onChange(of: currentIndex) { _, newIndex in
-                        print("DEBUG: [MediaBrowserView] TabView index changed from \(previousIndex) to \(newIndex)")
                         previousIndex = newIndex
                         
                         // Clean up non-visible images to free memory
@@ -240,21 +345,25 @@ struct MediaBrowserView: View {
                                 Spacer()
                             }
                             Spacer()
-                            HStack {
-                                TweetActionButtonsView(
-                                    tweet: currentTweet,
-                                    isInDetailView: true,
-                                    isFullScreen: true,
-                                    onShareVisibilityChange: { isVisible in
-                                        // Forward share visibility changes to outer view
-                                        onShareVisibilityChange(isVisible)
-                                    }
-                                )
-                                .environment(\.colorScheme, .dark)
-                                .tint(.white)
+                            // Hide action buttons for chat messages
+                            if !currentTweet.mid.hasPrefix("chat_") {
+                                HStack {
+                                    TweetActionButtonsView(
+                                        tweet: currentTweet,
+                                        isInDetailView: true,
+                                        isFullScreen: true,
+                                        currentMediaIndex: currentIndex,
+                                        onShareVisibilityChange: { isVisible in
+                                            // Forward share visibility changes to outer view
+                                            onShareVisibilityChange(isVisible)
+                                        }
+                                    )
+                                    .environment(\.colorScheme, .dark)
+                                    .tint(.white)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 60)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 60)
                         }
                         .transition(.opacity)
                     }
@@ -264,58 +373,6 @@ struct MediaBrowserView: View {
                 .opacity(isTransitioning ? 1.0 : (1.0 - abs(dragOffset.height) / 500.0))
             }
             .statusBar(hidden: true)
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        // Disable gestures during transition
-                        if isTransitioning {
-                            return
-                        }
-                        
-                        // Allow vertical swipes if no image is zoomed
-                        if !isImageZoomed {
-                            dragOffset = value.translation
-                            isDragging = true
-                            showControls = true
-                        }
-                    }
-                    .onEnded { value in
-                        // Disable gestures during transition
-                        if isTransitioning {
-                            return
-                        }
-                        
-                        // Only handle gestures if no image is zoomed
-                        if !isImageZoomed {
-                            let swipeThreshold: CGFloat = 100
-                            let velocityThreshold: CGFloat = 500
-                            // Ignore system home-indicator swipe-ups (close app / go Home).
-                            // Only treat swipe-up as "next video" if the gesture started away from the bottom edge.
-                            let bottomExclusion: CGFloat = 44 + MediaBrowserView.currentBottomSafeAreaInset()
-                            let startedNearBottomEdge = value.startLocation.y > (UIScreen.main.bounds.height - bottomExclusion)
-                            
-                            // Swipe down - exit fullscreen
-                            if value.translation.height > swipeThreshold || value.velocity.height > velocityThreshold {
-                                dismiss()
-                                return
-                            }
-                            
-                            // Swipe up - next video
-                            if !startedNearBottomEdge,
-                               (value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold) {
-                                print("DEBUG: [SWIPE] Swipe up detected - navigating to next video")
-                                FullScreenVideoManager.shared.navigateToNext()
-                            }
-                        }
-                        
-                        // Reset drag offset
-                        withAnimation(.spring()) {
-                            dragOffset = .zero
-                        }
-                        isDragging = false
-                        resetControlsTimer()
-                    }
-            )
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showControls = true
@@ -357,6 +414,10 @@ struct MediaBrowserView: View {
             attachment.type == .image
         }
         
+        private func isPDFAttachment(_ attachment: MimeiFileType) -> Bool {
+            attachment.type == .pdf
+        }
+        
         private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
             ImageViewWithPlaceholder(
                 attachment: attachment,
@@ -378,7 +439,7 @@ struct MediaBrowserView: View {
                 url: url,
                 mid: attachment.mid,
                 tweetId: currentTweet.mid,
-                sourceTweetId: currentSourceTweetId,
+                cellTweetId: currentCellTweetId,
                 videoIndex: index,
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
@@ -391,19 +452,24 @@ struct MediaBrowserView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
-            .onChange(of: currentIndex) { _, newIndex in
-                print("DEBUG: [MediaBrowserView] TabView index changed to \(newIndex)")
+            .onChange(of: currentIndex) { oldIndex, newIndex in
                 
-                // Load new video when user swipes
+                // Load new video when user swipes TO this video
                 if newIndex == index && isVideoAttachment(attachment) {
                     FullScreenVideoManager.shared.loadVideo(
                         url: url,
                         mid: attachment.mid,
                         tweetId: currentTweet.mid,
-                        sourceTweetId: currentSourceTweetId,
+                        cellTweetId: currentCellTweetId,
                         videoIndex: index,
                         mediaType: attachment.type
                     )
+                }
+                // Pause video when user swipes AWAY from this video
+                else if oldIndex == index && newIndex != index && 
+                        FullScreenVideoManager.shared.currentVideoMid == attachment.mid &&
+                        isVideoAttachment(attachment) {
+                    FullScreenVideoManager.shared.pause()
                 }
             }
             .onAppear {
@@ -413,7 +479,7 @@ struct MediaBrowserView: View {
                         url: url,
                         mid: attachment.mid,
                         tweetId: currentTweet.mid,
-                        sourceTweetId: currentSourceTweetId,
+                        cellTweetId: currentCellTweetId,
                         videoIndex: index,
                         mediaType: attachment.type
                     )
@@ -429,6 +495,13 @@ struct MediaBrowserView: View {
             .environmentObject(MuteState.shared)
         }
         
+        private func pdfView(for attachment: MimeiFileType, index: Int) -> some View {
+            PDFPreviewViewFullScreen(
+                attachment: attachment,
+                baseUrl: baseUrl
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
 
     }
 
@@ -452,6 +525,7 @@ struct MediaBrowserView: View {
             return
         }
         
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated properly
         controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
             // Hide close button for ALL content types after 3 seconds
             // but only if share sheet isn't visible anymore
@@ -469,23 +543,38 @@ struct MediaBrowserView: View {
     }
     
     private func loadImageIfNeeded(for attachment: MimeiFileType, at index: Int) {
-        let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
-        print("DEBUG: [MediaBrowserView] loadImageIfNeeded called for \(loadId)")
+        // ✅ FIX: Remove baseUrl from request ID - cache key is based on mid, so request ID should match
+        // Keep index prefix to distinguish between different browser views of the same image
+        let loadId = "browser_\(index)_\(attachment.mid)"
         
         // First, try to get compressed image immediately
         if let compressedImage = ImageCacheManager.shared.getCompressedImage(for: attachment) {
-            print("DEBUG: [MediaBrowserView] Found cached image for \(loadId)")
             imageStates[index] = .loaded(compressedImage)
+            
+            // ✅ Load original image in background and replace compressed cache
+            // This ensures fullscreen views use the highest quality image
+            guard let url = attachment.getUrl(baseUrl) else { return }
+            Task {
+                if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                    from: url,
+                    for: attachment,
+                    baseUrl: baseUrl,
+                    replaceCompressedCache: true
+                ) {
+                    // Update image state with original image
+                    await MainActor.run {
+                        self.imageStates[index] = .loaded(originalImage)
+                    }
+                }
+            }
             return
         }
         
         // If no compressed image available, show loading state
-        print("DEBUG: [MediaBrowserView] Starting network load for \(loadId)")
         imageStates[index] = .loading
         
         // Load and cache compressed image
         guard let url = attachment.getUrl(baseUrl) else { 
-            print("DEBUG: [MediaBrowserView] No URL for \(loadId)")
             imageStates[index] = .error
             return 
         }
@@ -497,9 +586,24 @@ struct MediaBrowserView: View {
             attachment: attachment,
             baseUrl: baseUrl
         ) { compressedImage in
-            print("DEBUG: [MediaBrowserView] Load completed for \(loadId), success: \(compressedImage != nil)")
             if let compressedImage = compressedImage {
                 self.imageStates[index] = .loaded(compressedImage)
+                
+                // ✅ Load original image in background and replace compressed cache
+                // This ensures fullscreen and detail views use the highest quality image
+                Task {
+                    if let originalImage = await ImageCacheManager.shared.loadOriginalImage(
+                        from: url,
+                        for: attachment,
+                        baseUrl: baseUrl,
+                        replaceCompressedCache: true
+                    ) {
+                        // Update image state with original image
+                        await MainActor.run {
+                            self.imageStates[index] = .loaded(originalImage)
+                        }
+                    }
+                }
             } else {
                 self.imageStates[index] = .error
             }
@@ -516,15 +620,15 @@ struct MediaBrowserView: View {
     
     private static func cleanupImageStates(attachments: [MimeiFileType], imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
         // Cancel all pending image loads
+        // ✅ FIX: Use same request ID format as loadImageIfNeeded (without baseUrl)
         for (index, attachment) in attachments.enumerated() {
-            let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+            let loadId = "browser_\(index)_\(attachment.mid)"
             GlobalImageLoadManager.shared.cancelLoad(id: loadId)
         }
         
         // Clear image states to free memory
         imageStates.wrappedValue.removeAll()
         
-        print("DEBUG: [MediaBrowserView] Cleaned up image states and cancelled loads")
     }
     
     private static func cleanupNonVisibleImages(attachments: [MimeiFileType], currentIndex: Int, imageStates: Binding<[Int: ImageState]>, baseUrl: URL) {
@@ -535,9 +639,10 @@ struct MediaBrowserView: View {
         for (index, _) in imageStates.wrappedValue {
             if !keepRange.contains(index) {
                 // Cancel load for non-visible images
+                // ✅ FIX: Use same request ID format as loadImageIfNeeded (without baseUrl)
                 if index < attachments.count {
                     let attachment = attachments[index]
-                    let loadId = "browser_\(index)_\(attachment.mid)_\(baseUrl.absoluteString)"
+                    let loadId = "browser_\(index)_\(attachment.mid)"
                     GlobalImageLoadManager.shared.cancelLoad(id: loadId)
                 }
                 
@@ -818,7 +923,7 @@ struct SingletonVideoPlayerView: View {
     let url: URL
     let mid: String
     let tweetId: String
-    let sourceTweetId: String
+    let cellTweetId: String
     let videoIndex: Int
     let mediaType: MediaType
     let aspectRatio: Float?
@@ -830,7 +935,8 @@ struct SingletonVideoPlayerView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                if let player = manager.singletonPlayer, manager.currentVideoMid == mid {
+                // CRITICAL: Also check currentItem is valid - after background release, player may exist but currentItem is nil
+                if let player = manager.singletonPlayer, manager.currentVideoMid == mid, player.currentItem != nil {
                     // Show player
                     SimplerAVPlayerViewController(player: player, aspectRatio: aspectRatio)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -862,17 +968,21 @@ struct SingletonVideoPlayerView: View {
                 }
             }
             .onAppear {
-                    // If player is nil or doesn't match current video, reload it
-                    if manager.singletonPlayer == nil || manager.currentVideoMid != mid {
+                    // If player is nil, broken (no currentItem), or doesn't match current video, reload it
+                    // CRITICAL: After background release, singletonPlayer may exist but currentItem is nil
+                    let isPlayerBroken = manager.singletonPlayer != nil && manager.singletonPlayer?.currentItem == nil
+                    if manager.singletonPlayer == nil || isPlayerBroken || manager.currentVideoMid != mid {
                         if !hasAttemptedReload {
                             hasAttemptedReload = true
-                            print("DEBUG: [SingletonVideoPlayerView] Player missing or mismatched - reloading video for mid: \(mid)")
+                            if isPlayerBroken {
+                                print("🔧 [FULLSCREEN] Player exists but broken (no currentItem) - reloading video \(mid)")
+                            }
                             // Reload the video
                             manager.loadVideo(
                                 url: url,
                                 mid: mid,
                                 tweetId: tweetId,
-                                sourceTweetId: sourceTweetId,
+                                cellTweetId: cellTweetId,
                                 videoIndex: videoIndex,
                                 mediaType: mediaType
                             )
@@ -880,8 +990,17 @@ struct SingletonVideoPlayerView: View {
                     }
                 }
                 .onChange(of: manager.currentVideoMid) { _, newMid in
-                    // Reset reload flag when video changes
-                    if newMid == mid {
+                    // Reset reload flag when video changes OR when player is cleared (nil)
+                    // This allows retry when loading fails and clears state
+                    if newMid == mid || newMid == nil {
+                        hasAttemptedReload = false
+                    }
+                }
+                .onChange(of: manager.singletonPlayer?.currentItem) { _, newItem in
+                    // CRITICAL: Reset reload flag when player item is cleared
+                    // This handles the case where loadVideo fails and clears the player
+                    // Allowing the view to retry loading
+                    if newItem == nil && manager.currentVideoMid == nil {
                         hasAttemptedReload = false
                     }
                 }
@@ -917,7 +1036,6 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         
         // Rotate landscape videos (aspectRatio > 1) by -90 degrees
         if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
-            print("DEBUG: [SingletonVideoPlayer] Landscape video detected (aspectRatio: \(aspectRatio)), rotating -90 degrees")
             controller.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
         }
         
@@ -926,7 +1044,6 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         
         // Observe currentItem changes to set up observer for new items
         context.coordinator.currentItemObserver = player.observe(\.currentItem, options: [.new]) { player, _ in
-            print("DEBUG: [SingletonVideoPlayer] Player currentItem changed, setting up new observer")
             setupPlayerItemObserver(player: player, context: context)
         }
         
@@ -940,13 +1057,10 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         // FullScreenVideoManager will check for saved state and seek/play accordingly
         if let playerItem = player.currentItem {
             if playerItem.status == .readyToPlay {
-                print("DEBUG: [SingletonVideoPlayer] Player already ready - FullScreenVideoManager will handle playback")
                 // FullScreenVideoManager will handle playback after checking for saved state
             } else {
-                print("DEBUG: [SingletonVideoPlayer] Player not ready yet, setting up observer")
                 context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                     if item.status == .readyToPlay {
-                        print("DEBUG: [SingletonVideoPlayer] Player became ready - FullScreenVideoManager will handle playback")
                         // FullScreenVideoManager will handle playback after checking for saved state
                         context.coordinator.statusObserver?.invalidate()
                         context.coordinator.statusObserver = nil
@@ -962,12 +1076,10 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
         // Update rotation based on aspect ratio
         if let aspectRatio = aspectRatio, aspectRatio > 1.0 {
             if uiViewController.view.transform == .identity {
-                print("DEBUG: [SingletonVideoPlayer] Applying rotation on update (aspectRatio: \(aspectRatio))")
                 uiViewController.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
             }
         } else {
             if uiViewController.view.transform != .identity {
-                print("DEBUG: [SingletonVideoPlayer] Removing rotation on update")
                 uiViewController.view.transform = .identity
             }
         }
@@ -979,12 +1091,10 @@ private struct SimplerAVPlayerViewController: UIViewControllerRepresentable {
             context.coordinator.statusObserver?.invalidate()
             if let playerItem = player.currentItem {
                 if playerItem.status == .readyToPlay {
-                    print("DEBUG: [SingletonVideoPlayer] Player ready on update - FullScreenVideoManager will handle playback")
                     // FullScreenVideoManager will handle playback after checking for saved state
                 } else {
                     context.coordinator.statusObserver = playerItem.observe(\.status, options: [.new]) { item, _ in
                         if item.status == .readyToPlay {
-                            print("DEBUG: [SingletonVideoPlayer] Player ready after update - FullScreenVideoManager will handle playback")
                             // FullScreenVideoManager will handle playback after checking for saved state
                             context.coordinator.statusObserver?.invalidate()
                             context.coordinator.statusObserver = nil

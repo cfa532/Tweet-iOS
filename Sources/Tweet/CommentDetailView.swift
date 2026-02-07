@@ -8,6 +8,21 @@
 import SwiftUI
 import AVKit
 
+// Navigation wrapper to pass both comment and parent tweet
+struct CommentNavigation: Hashable {
+    let comment: Tweet
+    let parentTweet: Tweet
+    
+    static func == (lhs: CommentNavigation, rhs: CommentNavigation) -> Bool {
+        lhs.comment.mid == rhs.comment.mid && lhs.parentTweet.mid == rhs.parentTweet.mid
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(comment.mid)
+        hasher.combine(parentTweet.mid)
+    }
+}
+
 @MainActor
 @available(iOS 16.0, *)
 struct CommentDetailViewWithParent: View {
@@ -78,6 +93,10 @@ struct CommentDetailView: View {
     @State private var showLoginSheet = false
     @State private var replies: [Tweet] = []
     
+    // Reply editor states
+    @State private var showReplyEditor = true
+    @State private var shouldShowExpandedReply = false
+    
     // Toast states
     @State private var showToast = false
     @State private var toastMessage = ""
@@ -98,19 +117,40 @@ struct CommentDetailView: View {
     }
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                mediaSection
-                commentHeader
-                commentContent
-                actionButtons
-                Divider()
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-                repliesListView
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Main comment section with deeper background
+                    VStack(alignment: .leading, spacing: 0) {
+                        mediaSection
+                        commentHeader
+                        commentContent
+                        actionButtons
+                    }
+                    .padding(.bottom, 8)
+                    .background(Color(UIColor.secondarySystemBackground))
+                    
+                    repliesListView
+                }
+            }
+            .background(Color(.systemBackground))
+            
+            // ReplyEditor as a component at the bottom
+            if showReplyEditor {
+                ReplyEditorView(
+                    parentTweet: comment,
+                    isQuoting: false,
+                    onClose: {
+                        showReplyEditor = false
+                    },
+                    onExpandedClose: {
+                        shouldShowExpandedReply = false
+                    },
+                    initialExpanded: shouldShowExpandedReply
+                )
+                .padding(.bottom, 48) // Add padding to avoid navigation bar
             }
         }
-        .background(Color(.systemBackground))
         .navigationTitle(NSLocalizedString("Reply", comment: "Reply screen title"))
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showBrowser) {
@@ -129,10 +169,16 @@ struct CommentDetailView: View {
         .onAppear {
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
+            
+            // Activate detail video manager
+            DetailVideoManager.shared.activateForDetail()
         }
         .onDisappear {
             // Mark detail view as inactive
             NavigationStateManager.shared.setDetailViewActive(false)
+            
+            // Deactivate detail video manager
+            DetailVideoManager.shared.deactivate()
         }
         .task {
             // Refresh comment after a short delay
@@ -146,11 +192,19 @@ struct CommentDetailView: View {
         Group {
             if let attachments = comment.attachments, !attachments.isEmpty {
                 let aspect = CGFloat(attachments.first?.aspectRatio ?? 4.0/3.0)
+                let _ = print("DEBUG: [CommentDetailView] Showing \(attachments.count) attachments from comment \(comment.mid)")
+                let _ = print("DEBUG: [CommentDetailView]   comment.author = \(comment.author?.username ?? "nil")")
+                let _ = print("DEBUG: [CommentDetailView]   comment.author.baseUrl = \(comment.author?.baseUrl?.absoluteString ?? "nil")")
+                let _ = attachments.enumerated().forEach { index, att in
+                    print("DEBUG: [CommentDetailView]   [\(index)] type=\(att.type), mid=\(att.mid)")
+                }
                 TabView(selection: $selectedMediaIndex) {
                     ForEach(attachments.indices, id: \.self) { index in
                         DetailMediaCell(
                             parentTweet: comment,
                             attachmentIndex: index,
+                            aspectRatio: attachments[index].aspectRatio ?? 16.0/9.0,
+                            shouldLoadVideo: index == selectedMediaIndex, // Only load current video
                             showMuteButton: false
                         )
                         .tag(index)
@@ -160,6 +214,13 @@ struct CommentDetailView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: UIScreen.main.bounds.width / aspect)
                 .background(Color.black)
+            } else {
+                let _ = print("DEBUG: [CommentDetailView] No attachments found for comment \(comment.mid)")
+                let _ = print("DEBUG: [CommentDetailView]   comment.attachments = \(comment.attachments?.description ?? "nil")")
+                let _ = print("DEBUG: [CommentDetailView]   comment.author = \(comment.author?.username ?? "nil")")
+                let _ = print("DEBUG: [CommentDetailView]   parentTweet.mid = \(parentTweet.mid)")
+                let _ = print("DEBUG: [CommentDetailView]   parentTweet.attachments = \(parentTweet.attachments?.count ?? 0) items")
+                EmptyView()
             }
         }
     }
@@ -169,10 +230,11 @@ struct CommentDetailView: View {
             if let user = comment.author {
                 Avatar(user: user)
             }
+            Spacer(minLength: 4)
             TweetItemHeaderView(tweet: comment)
             Spacer(minLength: 0)
             CommentMenu(comment: comment, parentTweet: parentTweet)
-                .padding(.trailing, -20)
+                .padding(.trailing, -16)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
@@ -192,10 +254,17 @@ struct CommentDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(tweet: comment, isInDetailView: true)
-            .padding(.leading, 48)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+        TweetActionButtonsView(
+            tweet: comment,
+            parentTweet: parentTweet,
+            onCommentTap: {
+                shouldShowExpandedReply = true
+            },
+            isInDetailView: true
+        )
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
     
     private var toastOverlay: some View {
@@ -267,12 +336,13 @@ struct CommentDetailView: View {
                 )
             }
         )
-        .padding(.leading, -4)
+        .padding(.leading, -8)
+        .padding(.trailing, 4)
     }
     
     private func refreshComment() async {
         do {
-            if let refreshedComment = try await hproseInstance.refreshTweet(tweetId: comment.mid, authorId: comment.authorId) {
+            if let refreshedComment = try await hproseInstance.getTweet(tweetId: comment.mid, authorId: comment.authorId) {
                 try comment.update(from: refreshedComment)
             }
         } catch {

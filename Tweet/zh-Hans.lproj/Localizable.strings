@@ -14,13 +14,18 @@
 "Recommendation" = "推荐";
 
 // MARK: - Upload Progress
-"Preparing upload..." = "正在准备上传...请勿关闭应用";
+"Preparing upload... Please stay on this screen" = "正在准备上传...请不要离开此屏幕";
 "Preparing attachments..." = "正在准备附件...";
 "Converting video..." = "正在转换视频...";
-"Uploading attachments..." = "正在上传附件...";
+"Uploading attachments... Please stay on this screen" = "正在上传附件...请不要离开此屏幕";
 "Submitting tweet..." = "正在提交推文...";
+"Submitting comment..." = "正在提交评论...";
 "Retrying upload..." = "正在重试上传...";
 "Upload completed" = "上传完成";
+"Upload cancelled" = "上传已取消";
+"Cancel Upload" = "取消上传";
+"Are you sure you want to cancel this upload? This action cannot be undone." = "您确定要取消此上传吗？此操作无法撤销。";
+"Continue" = "继续";
 "Posting Tweet" = "正在发布推文";
 "Posting Comment" = "正在发布评论";
 "Sending Message" = "正在发送消息";
@@ -30,9 +35,11 @@
 "Checking video status..." = "正在检查视频状态...";
 "Processing on server..." = "服务器处理中...";
 "Your tweet will be posted when ready" = "准备就绪后将发布您的推文";
+"Your comment will be posted when ready" = "准备就绪后将发布您的评论";
 "Your message will be sent when ready" = "准备就绪后将发送您的消息";
 "Uploading %@ %d/%d..." = "正在上传%@ %d/%d...";
 "Processing video %d/%d" = "正在处理视频 %d/%d";
+"Processing video %d/%d - Please stay on this screen" = "正在处理视频 %d/%d - 请不要离开此屏幕";
 "Uploading image %d/%d" = "正在上传图片 %d/%d";
 "Tweet posted successfully" = "推文发布成功";
 "Failed to check video status" = "检查视频状态失败";
@@ -41,6 +48,7 @@
 "Video processing timed out" = "视频处理超时";
 "Failed to prepare attachments" = "准备附件失败";
 "Failed to post tweet" = "发布推文失败";
+"Failed to post comment after retries" = "重试后发布评论失败";
 "Unknown video status" = "未知视频状态";
 
 // MARK: - Pending Upload Dialog
@@ -125,6 +133,7 @@
 
 // MARK: - Tweet Actions
 "Show more" = "显示更多";
+"More..." = "更多...";
 "Forwarded by %@" = "由 %@ 转发";
 "Forwarded by you" = "由你转发";
 "Quote Tweet" = "引用推文";
@@ -156,6 +165,7 @@
 // MARK: - Tweet Detail
 "Tweet" = "推文";
 "Comments" = "评论";
+"No comment yet" = "暂无评论";
 
 // MARK: - Loading States
 "Loading tweets..." = "正在加载推文...";
@@ -472,6 +482,8 @@
 "Received" = "已接收";
 "Yesterday" = "昨天";
 "%@ %@" = "%@ %@";
+"No more messages" = "没有更多消息了";
+"No more tweets" = "没有更多推文了";
 
 // MARK: - Video Player
 "Failed to load video" = "视频加载失败";
@@ -516,6 +528,14 @@
 // MARK: - Chat Messages
 "Failed to send message" = "发送消息失败";
 "Sending message in background..." = "正在后台发送消息...";
+"Sending message..." = "正在发送消息...";
+"Cannot resend messages with attachments. Please send the attachment again." = "无法重新发送带附件的消息。请重新发送附件。";
+"Cannot resend empty message" = "无法重新发送空消息";
+"Message sent successfully" = "消息发送成功";
+"Please wait while the attachment is being prepared..." = "正在准备附件...请稍候...";
+"Attachment not ready. Please try selecting the media again." = "附件未准备好。请重新选择媒体。";
+"Failed to create error message" = "创建错误消息失败";
+"Message cannot be empty" = "消息不能为空";
 
 // MARK: - Fallback Text
 "User Name" = "用户名";

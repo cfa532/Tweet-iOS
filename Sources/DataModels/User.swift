@@ -164,8 +164,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             
             let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
             
-            // Configure timeout for regular operations (5 minutes)
-            client.timeout = 300000  // 5 minutes in milliseconds (matches Kotlin regular client)
+            // Configure timeout for regular operations (15 seconds - fast fail for bad servers)
+            client.timeout = 15000  // 15 seconds in milliseconds (detect slow servers quickly)
             
             return client
         }
@@ -179,8 +179,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             
             let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
             
-            // Configure timeout for upload operations (50 minutes for large uploads)
-            client.timeout = 3000000  // 50 minutes (same as Kotlin) for large uploads
+            // Configure timeout for upload operations (10 seconds to detect bad servers)
+            // Note: Actual file upload uses URLSession with 10-minute timeout (see HproseInstance.swift:4628)
+            client.timeout = 10000  // 10 seconds - fast fail for slow servers, URLSession handles actual upload
             
             return client
         }
@@ -569,10 +570,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     var avatarUrl: String? {
         if let avatar = avatar {
             // Use user's baseUrl if available, otherwise fallback to HproseInstance.baseUrl
-            // baseUrl now usually available (cached from disk), fallback for edge cases
-            if let baseUrl = baseUrl {
-                return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(baseUrl)/ipfs/\(avatar)" :  "\(baseUrl)/mm/\(avatar)"
-            }
+            // This ensures avatars load even when cached user doesn't have baseUrl yet (e.g., at app startup)
+            let effectiveBaseUrl = baseUrl ?? HproseInstance.baseUrl
+            return avatar.count > Constants.MIMEI_ID_LENGTH ? "\(effectiveBaseUrl)/ipfs/\(avatar)" :  "\(effectiveBaseUrl)/mm/\(avatar)"
         }
         return nil
     }
@@ -595,18 +595,56 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Writable URL Resolution
     /// Returns the writable URL for the user, resolving via hostIds if needed
+    /// Follows NodePool pattern: check pool -> resolve fresh -> update pool on success
     @MainActor
     func resolveWritableUrl() async throws -> URL? {
+        // Return cached writableUrl if available
         if let writableUrl = self.writableUrl {
+            print("DEBUG: [resolveWritableUrl] Using cached writableUrl: \(writableUrl.absoluteString)")
             return writableUrl
         }
-        if let hostId = self.hostIds?.first, !hostId.isEmpty {
-            if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: "true") {
-                let url = URL(string: "http://\(hostIP)")
-                self.writableUrl = url
-                return url
-            }
+        
+        print("DEBUG: [resolveWritableUrl] No cached writableUrl, checking NodePool...")
+        print("DEBUG: [resolveWritableUrl] hostIds: \(self.hostIds?.description ?? "nil")")
+        
+        guard let hostId = self.hostIds?.first, !hostId.isEmpty else {
+            print("ERROR: [resolveWritableUrl] hostIds[0] is nil or empty")
+            throw NSError(domain: "HproseService", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString("Upload server not configured. Please set Host ID in profile settings.", comment: "Upload error")
+            ])
         }
-        throw NSError(domain: "HproseService", code: -1, userInfo: [NSLocalizedDescriptionKey: "No writable url available"])
+        
+        print("DEBUG: [resolveWritableUrl] Writable host ID: \(hostId)")
+        
+        // Step 1: Check if writable host (hostIds[0]) is in NodePool
+        if let poolIP = NodePool.shared.getIPForNode(nodeMid: hostId) {
+            print("DEBUG: [resolveWritableUrl] ✅ Found IP in NodePool for writable host \(hostId): \(poolIP)")
+            let url = URL(string: "http://\(poolIP)")
+            self.writableUrl = url
+            return url
+        }
+        
+        print("DEBUG: [resolveWritableUrl] Writable host \(hostId) not in pool, resolving fresh IP...")
+        
+        // Step 2: Resolve fresh IP from hostIds[0] via getHostIP (includes health check)
+        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: true) {
+            print("DEBUG: [resolveWritableUrl] ✅ Resolved and health-checked IP: \(hostIP)")
+            
+            // Step 3: Update NodePool with successful writable host IP
+            NodePool.shared.updateNodeIP(nodeMid: hostId, newIP: "http://\(hostIP)")
+            print("DEBUG: [resolveWritableUrl] ✅ Updated NodePool with writable host \(hostId) -> \(hostIP)")
+            
+            let url = URL(string: "http://\(hostIP)")
+            self.writableUrl = url
+            return url
+        }
+        
+        print("ERROR: [resolveWritableUrl] getHostIP returned nil for hostId: \(hostId) (all IPs failed health check)")
+        
+        // No fallback - if writable host is unavailable, upload should fail
+        throw NSError(domain: "HproseService", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: NSLocalizedString("Upload server not responding. Please try again later.", comment: "Upload error"),
+            NSLocalizedFailureReasonErrorKey: "Writable host \(hostId) failed health check"
+        ])
     }
 }

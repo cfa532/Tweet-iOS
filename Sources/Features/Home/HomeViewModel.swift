@@ -22,6 +22,7 @@ struct HomeView: View {
     @State private var isNavigationVisible = true
     @State private var previousScrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
+    @State private var foregroundObserver: NSObjectProtocol? = nil
     
     @EnvironmentObject private var hproseInstance: HproseInstance
     
@@ -93,7 +94,16 @@ struct HomeView: View {
                 onReturnToHome?()
             }, navigationPath: $navigationPath)
         }
-            .navigationDestination(for: Tweet.self) { tweet in
+        .navigationDestination(for: UserListDestination.self) { destination in
+            UserListDestinationView(destination: destination, navigationPath: $navigationPath)
+        }
+        .navigationDestination(for: TweetListDestination.self) { destination in
+            TweetListDestinationView(destination: destination, navigationPath: $navigationPath)
+        }
+        .navigationDestination(for: CommentNavigation.self) { commentNav in
+            CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
+        }
+        .navigationDestination(for: Tweet.self) { tweet in
             // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
             if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
                 // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
@@ -126,26 +136,52 @@ struct HomeView: View {
                 try await HproseInstance.shared.initialize()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("NavigateToCommentDetail"))) { notification in
+            if let comment = notification.userInfo?["comment"] as? Tweet,
+               let parentTweet = notification.userInfo?["parentTweet"] as? Tweet {
+                let commentNav = CommentNavigation(comment: comment, parentTweet: parentTweet)
+                navigationPath.append(commentNav)
+            }
+        }
         .onDisappear {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isNavigationVisible = true
             }
-            onNavigationVisibilityChanged?(true)
-            
-            // Clean up complete
-            
-            print("DEBUG: [HomeView] View disappeared")
+            // Post notification for bottom tab bar
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
+
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
+
+            print("DEBUG: [HomeView] View disappeared, navigation reset to visible")
         }
         .onAppear {
             // Ensure navigation is visible when view appears
             isNavigationVisible = true
-            onNavigationVisibilityChanged?(true)
+            // Post notification for bottom tab bar
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
             print("DEBUG: [HomeView] View appeared, navigation set to visible")
+
+            // Setup foreground observer to restore navigation state when app returns from background
+            setupForegroundObserver()
         }
     }
     
     // MARK: - Scroll Handling
     @State private var lastSignificantDelta: CGFloat = 0
+    @State private var lastNotificationTime: Date?
+    private let notificationThrottleInterval: TimeInterval = 0.1 // 100ms - prevent rapid-fire notifications
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
         // Threshold for detecting intentional scroll
@@ -157,7 +193,8 @@ struct HomeView: View {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = true
                 }
-                onNavigationVisibilityChanged?(true)
+                // Post notification for bottom tab bar (with state change check)
+                postNavigationVisibilityNotification(isVisible: true)
             }
             return
         }
@@ -177,15 +214,193 @@ struct HomeView: View {
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = false
             }
-            onNavigationVisibilityChanged?(false)
+            // Post notification for bottom tab bar (with state change check)
+            postNavigationVisibilityNotification(isVisible: false)
             lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show header and bottom bar
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = true
             }
-            onNavigationVisibilityChanged?(true)
+            // Post notification for bottom tab bar (with state change check)
+            postNavigationVisibilityNotification(isVisible: true)
             lastSignificantDelta = delta
+        }
+    }
+    
+    // Helper to post navigation visibility notification with throttling
+    private func postNavigationVisibilityNotification(isVisible: Bool) {
+        // Throttle notifications to prevent excessive posting during rapid scroll
+        let now = Date()
+        if let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
+            return
+        }
+
+        lastNotificationTime = now
+        NotificationCenter.default.post(
+            name: .navigationVisibilityChanged,
+            object: nil,
+            userInfo: ["isVisible": isVisible]
+        )
+    }
+
+    // MARK: - Foreground Observer
+    /// Setup observer to restore navigation state when app returns from background
+    /// This prevents the white space issue when navigation was semi-hidden before backgrounding
+    private func setupForegroundObserver() {
+        // Avoid duplicate observers
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+            foregroundObserver = nil
+        }
+
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [self] _ in
+            // Always reset navigation to visible when returning from background
+            print("DEBUG: [HomeView] App returned to foreground, resetting navigation visible to true")
+            isNavigationVisible = true
+            NotificationCenter.default.post(
+                name: .navigationVisibilityChanged,
+                object: nil,
+                userInfo: ["isVisible": true]
+            )
+        }
+    }
+}
+
+// MARK: - Navigation Destination Views
+// These wrapper views handle navigation destinations at the root level to avoid conflicts
+// when multiple ProfileViews are nested in the navigation stack
+
+struct UserListDestinationView: View {
+    let destination: UserListDestination
+    @Binding var navigationPath: NavigationPath
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    
+    var body: some View {
+        UserListView(
+            title: userListTitle(for: destination),
+            userFetcher: { page, size in
+                // Only fetch all IDs once when page is 0
+                if page == 0 {
+                    let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                    let targetUser = User.getInstance(mid: destination.userId)
+                    let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
+                    // Update user properties on main thread
+                    await MainActor.run {
+                        if destination.listType == .FOLLOWER {
+                            targetUser.fansList = ids
+                        } else {
+                            targetUser.followingList = ids
+                        }
+                    }
+                    return ids
+                } else {
+                    let targetUser = User.getInstance(mid: destination.userId)
+                    return if destination.listType == .FOLLOWER {
+                        targetUser.fansList ?? []
+                    } else {
+                        targetUser.followingList ?? []
+                    }
+                }
+            },
+            navigationPath: $navigationPath,
+            onFollowToggle: { user in
+                Task {
+                    await handleToggleFollowing(for: user)
+                }
+            }
+        )
+    }
+    
+    private func userListTitle(for destination: UserListDestination) -> String {
+        let targetUser = User.getInstance(mid: destination.userId)
+        let displayName = targetUser.name ?? targetUser.username ?? NSLocalizedString("Noone", comment: "No one")
+        let titleKey = destination.listType == .FOLLOWER ? "Fans@%@" : "Followings@%@"
+        return String(format: NSLocalizedString(titleKey, comment: "User list title"), displayName)
+    }
+    
+    private func handleToggleFollowing(for user: User) async {
+        if let ret = try? await hproseInstance.toggleFollowing(followingId: user.mid) {
+            // Update app user's followingList based on the result
+            if ret {
+                // User is now following - add to followingList
+                if hproseInstance.appUser.followingList == nil {
+                    hproseInstance.appUser.followingList = []
+                }
+                if !hproseInstance.appUser.followingList!.contains(user.mid) {
+                    hproseInstance.appUser.followingList!.append(user.mid)
+                }
+            } else {
+                // User is no longer following - remove from followingList
+                hproseInstance.appUser.followingList?.removeAll { $0 == user.mid }
+            }
+        }
+    }
+}
+
+struct TweetListDestinationView: View {
+    let destination: TweetListDestination
+    @Binding var navigationPath: NavigationPath
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @State private var tweets: [Tweet] = []
+    
+    var body: some View {
+        let targetUser = User.getInstance(mid: destination.userId)
+        let isTargetAppUser = destination.userId == hproseInstance.appUser.mid
+        
+        TweetListView(
+            title: listTitle(isAppUser: isTargetAppUser),
+            tweets: $tweets,
+            tweetFetcher: { page, size, isFromCache in
+                if isFromCache {
+                    // Load from CoreData cache using prefixed key to avoid mixing with feed
+                    // Use format: "bookmark_list_userId" or "favorite_list_userId"
+                    let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
+                    let cacheKey = "\(tweetType.rawValue)_\(destination.userId)"
+                    let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
+                        for: cacheKey,
+                        page: page,
+                        pageSize: size,
+                        currentUserId: hproseInstance.appUser.mid,
+                        isProfileView: false  // Don't filter by authorId - bookmarks/favorites can be from any author
+                    )
+                    return cachedTweets
+                } else {
+                    let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
+                    let fetchedTweets = try await hproseInstance.getUserTweetsByType(user: targetUser, type: tweetType, pageNumber: page, pageSize: size)
+                    return fetchedTweets
+                }
+            },
+            preserveOrder: isTargetAppUser,  // Preserve server order (bookmark/favorite time) for appUser's lists
+            rowView: { tweet in
+                TweetItemView(
+                    tweet: tweet,
+                    showDeleteButton: isTargetAppUser,
+                    isLastItem: tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
+                    onAvatarTap: { tappedUser in
+                        navigationPath.append(tappedUser)
+                    },
+                    onTap: { tappedTweet in
+                        navigationPath.append(tappedTweet)
+                    }
+                )
+            }
+        )
+    }
+    
+    private func listTitle(isAppUser: Bool) -> String {
+        if destination.listType == .BOOKMARKS {
+            return isAppUser 
+                ? NSLocalizedString("Your Bookmarks", comment: "Your bookmarks title")
+                : NSLocalizedString("Bookmarks", comment: "Bookmarks title")
+        } else {
+            return isAppUser 
+                ? NSLocalizedString("Your Favorites", comment: "Your favorites title")
+                : NSLocalizedString("Favorites", comment: "Favorites title")
         }
     }
 }

@@ -1,5 +1,4 @@
 import Foundation
-import Foundation
 import hprose
 import PhotosUI
 import AVFoundation
@@ -9,12 +8,27 @@ import ffmpegkit
     func runMApp(_ entry: String, _ request: [String: Any], _ args: [NSData]?) -> Any?
 }
 
+// MARK: - IP Cache Entry
+private struct IPCacheEntry {
+    let ip: String
+    let timestamp: Date
+    
+    var isExpired: Bool {
+        // 30 seconds expiry
+        return Date().timeIntervalSince(timestamp) > 30
+    }
+}
+
 // MARK: - HproseInstance
 final class HproseInstance: ObservableObject {
     // MARK: - Properties
     static let shared = HproseInstance()
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     private var _domainToShare: String = AppConfig.baseUrl
+    
+    // IP Cache: Stores validated IPs with 30-minute expiry
+    private var ipCache: [String: IPCacheEntry] = [:]
+    private let ipCacheLock = NSLock()
     
     /// The domain to use for sharing links
     var domainToShare: String {
@@ -333,7 +347,7 @@ final class HproseInstance: ObservableObject {
         // This ensures safe operation even after cache is completely cleared
         let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
         
-        NSLog("🔍 [initializeAppUser] Loaded cached appUser: \(userId), avatar: \(cachedUser.avatar ?? "nil"), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
+        print("🔍 [initializeAppUser] Loaded cached appUser: \(userId), avatar: \(cachedUser.avatar ?? "nil"), baseUrl: \(cachedUser.baseUrl?.absoluteString ?? "nil")")
         
         await MainActor.run {
             // CRITICAL: Update the singleton instance instead of replacing appUser
@@ -346,7 +360,7 @@ final class HproseInstance: ObservableObject {
             let appUserInstance = User.getInstance(mid: userId)
             appUserInstance.followingList = Gadget.getAlphaIds()
             
-            NSLog("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil"), baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
+            print("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil"), baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
             // Mark initialization as complete so error messages can be shown
@@ -437,7 +451,8 @@ final class HproseInstance: ObservableObject {
     private func findEntryIP() async throws -> String? {
         for url in preferenceHelper?.getAppUrls() ?? [] {
             do {
-                let html = try await fetchHTML(from: url)
+                let urlWithPrefix = ensureHttpPrefix(url)
+                let html = try await fetchHTML(from: urlWithPrefix)
                 let paramData = Gadget.shared.extractParamMap(from: html)
                 // Update appId from server if provided, otherwise keep AppConfig value
                 if let serverAppId = paramData["mid"] as? String, !serverAppId.isEmpty {
@@ -470,31 +485,88 @@ final class HproseInstance: ObservableObject {
     /// - Note: Called during app initialization by `initialize()` method
     /// - Note: Sets `isInitializationComplete = true` once baseUrl is resolved
     func initAppEntry() async throws {
-        guard let entryIP = try await findEntryIP() else {
+        var entryIP: String? = nil
+        var fetchedUser: User? = nil  // Store fetched user from cached baseUrl verification
+
+        // Try using cached baseUrl first if available
+        if let cachedBaseUrl = appUser.baseUrl,
+           let cachedHost = cachedBaseUrl.host {
+            print("🔄 [INIT] Attempting to use cached baseUrl: \(cachedBaseUrl.absoluteString)")
+
+            // Set HproseInstance.baseUrl to cached value temporarily
+            HproseInstance.baseUrl = cachedBaseUrl
+            entryIP = cachedHost
+
+            // For logged-in users, verify cached baseUrl still works
+            if !appUser.isGuest {
+                do {
+                    // Try fetching user data with cached baseUrl (don't force re-resolution)
+                    let user = try await fetchUser(appUser.mid, baseUrl: cachedHost)
+                    if let user = user {
+                        print("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
+                        fetchedUser = user  // Save for later use
+                    } else {
+                        print("⚠️ [INIT] Cached baseUrl returned nil user - falling back to findEntryIP()")
+                        entryIP = nil
+                    }
+                } catch {
+                    print("⚠️ [INIT] Cached baseUrl failed with error: \(error) - falling back to findEntryIP()")
+                    entryIP = nil
+                }
+            } else {
+                // For guest users, assume cached baseUrl is valid (will be verified when fetching data)
+                print("✅ [INIT] Using cached baseUrl for guest user")
+            }
+        }
+
+        // Fallback to findEntryIP if cached baseUrl not available or failed
+        if entryIP == nil {
+            print("🔍 [INIT] Resolving fresh entry IP via findEntryIP()")
+            guard let freshIP = try await findEntryIP() else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
+            }
+            entryIP = freshIP
+            print("✅ [INIT] Fresh entry IP resolved: \(freshIP)")
+        }
+
+        // Ensure we have a valid entryIP at this point
+        guard let finalEntryIP = entryIP else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
         }
-        
+
         if !appUser.isGuest {
-            // Always force refresh of appUser's baseURL on app start to ensure we have the latest IP
-            // Pass empty string to force IP re-resolution and bypass cache
-            let user = try await fetchUser(appUser.mid, baseUrl: "")
-            print("✅ [INIT] appUser data fetched: \(String(describing: user))")
-            
+            // Use already-fetched user if we verified cached baseUrl successfully
+            // Otherwise, fetch user data with the resolved IP
+            var user: User? = fetchedUser
+
+            if user == nil {
+                // Need to fetch user data since we didn't use cached baseUrl or it failed
+                // Pass empty string to force IP re-resolution
+                user = try await fetchUser(appUser.mid, baseUrl: "")
+                print("✅ [INIT] appUser data fetched: \(String(describing: user))")
+            } else {
+                print("✅ [INIT] Using verified appUser data from cached baseUrl")
+            }
+
             if let user = user {
                 // App is now initialized with base connectivity
                 await MainActor.run {
                     isInitializationComplete = true
                     User.updateUserInstance(with: user, true)
                     _appUserId = user.mid
-                    
+
                     // Notify UI that app is ready (tweets can now render with real IP)
                     NotificationCenter.default.post(name: .appUserReady, object: nil)
                 }
-                
+
                 // Ensure the refreshed user with updated baseURL is saved to cache
                 TweetCacheManager.shared.saveUser(user)
-                print("✅ [INIT] App initialized with real IP: \(entryIP)")
-                
+                if fetchedUser != nil {
+                    print("✅ [INIT] App initialized with cached baseUrl: \(finalEntryIP)")
+                } else {
+                    print("✅ [INIT] App initialized with fresh entry IP: \(finalEntryIP)")
+                }
+
                 // Fetch followings and blacklist in background (non-blocking)
                 Task.detached(priority: .background) {
                     let followings = (try? await self.getListByType(user: user, entry: .FOLLOWING)) ?? Gadget.getAlphaIds()
@@ -508,31 +580,43 @@ final class HproseInstance: ObservableObject {
                     }
                 }
             } else {
-                print("DEBUG: [initAppEntry] fetchUser failed after retry, falling back to guest user")
-                let user = User.getInstance(mid: Constants.GUEST_ID)
+                // Fetch failed but user is logged in - use cached appUser data
+                // DO NOT log out user just because their IPs are temporarily unreachable
+                print("⚠️ [INIT] fetchUser failed but user is logged in - using cached appUser data")
+                print("⚠️ [INIT] User \(appUser.mid) will use cached data until network recovers")
+
                 await MainActor.run {
-                    user.baseUrl = URL(string: "http://\(entryIP)")
-                    user.followingList = Gadget.getAlphaIds()
-                    _appUserId = user.mid
-                    
-                    // App is now initialized since appUser has IP address
+                    // appUser is already loaded from cache in initializeAppUser()
+                    // Just set entry IP as fallback and mark initialization as complete
+                    if appUser.baseUrl == nil {
+                        appUser.baseUrl = URL(string: "http://\(finalEntryIP)")
+                    }
+
+                    // Ensure followings list has at least alphaIds
+                    if appUser.followingList?.isEmpty ?? true {
+                        appUser.followingList = Gadget.getAlphaIds()
+                    }
+
                     isInitializationComplete = true
+
+                    // Notify UI that app is ready (will use cached data)
+                    NotificationCenter.default.post(name: .appUserReady, object: nil)
                 }
-                await fetchAlphaIdUserForGuest()
-                print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
+
+                print("✅ [INIT] App initialized with cached data - network will retry in background")
             }
         } else {
             let user = User.getInstance(mid: Constants.GUEST_ID)
             await MainActor.run {
-                user.baseUrl = URL(string: "http://\(entryIP)")
+                user.baseUrl = URL(string: "http://\(finalEntryIP)")
                 user.followingList = Gadget.getAlphaIds()
                 _appUserId = user.mid
-                
+
                 // App is now initialized since appUser has IP address
                 isInitializationComplete = true
             }
-            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(entryIP)")
-            
+            print("DEBUG: [initAppEntry] Updated appUser singleton baseUrl to IP: \(finalEntryIP)")
+
             // For guest users, fetch the alphaId user from backend now that we have proper IP
             await fetchAlphaIdUserForGuest()
         }
@@ -606,16 +690,28 @@ final class HproseInstance: ObservableObject {
                     let comment = try await MainActor.run {
                         return try Tweet.from(dict: dict)
                     }
-                    // Try to fetch user, fall back to skeleton if fetch fails
-                    if let author = try? await fetchUser(comment.authorId) {
+
+                    // Check if there's cached author data (expired or not)
+                    let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
+
+                    // If we have cached data with username and baseUrl, use it regardless of expiration
+                    if cachedAuthor.username != nil && cachedAuthor.baseUrl != nil {
                         await MainActor.run {
-                            comment.author = author
+                            comment.author = cachedAuthor
                         }
+                        print("DEBUG: [fetchComments] Using cached author for \(comment.authorId), skipping network fetch")
                     } else {
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            comment.author = User.getInstance(mid: comment.authorId)
-                            print("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
+                        // Only fetch from network if there's no cached data
+                        if let author = try? await fetchUser(comment.authorId) {
+                            await MainActor.run {
+                                comment.author = author
+                            }
+                        } else {
+                            // Server fetch failed - use skeleton to indicate error
+                            await MainActor.run {
+                                comment.author = User.getInstance(mid: comment.authorId)
+                                print("⚠️ [fetchComments] Server fetch failed, using skeleton for \(comment.authorId) to indicate error")
+                            }
                         }
                     }
                     commentsWithAuthors.append(comment)
@@ -697,21 +793,22 @@ final class HproseInstance: ObservableObject {
             if let dict = originalTweetDict {
                 do {
                     let originalTweet = try await MainActor.run { return try Tweet.from(dict: dict) }
-                    // Fetch the author - fetchUser returns singleton, which will be updated by background Task if needed
-                    // The singleton reference will see updates when fetch completes
-                    do {
-                        let author = try await fetchUser(originalTweet.authorId)
-                        await MainActor.run {
-                            originalTweet.author = author  // Set on main thread since author is @Published
-                        }
-                    } catch {
-                        print("⚠️ [fetchTweetFeed] Failed to fetch original author \(originalTweet.authorId) for tweet \(originalTweet.mid): \(error)")
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            originalTweet.author = User.getInstance(mid: originalTweet.authorId)
-                            print("⚠️ [fetchTweetFeed] Server fetch failed, using skeleton for \(originalTweet.authorId) to indicate error")
+                    
+                    // Use skeleton author immediately - fetch in background to avoid blocking
+                    await MainActor.run {
+                        originalTweet.author = User.getInstance(mid: originalTweet.authorId)
+                    }
+                    
+                    // Fetch author in background - will update singleton when complete
+                    Task.detached(priority: .userInitiated) {
+                        do {
+                            _ = try await self.fetchUser(originalTweet.authorId)
+                            // Author singleton is already set, it will update automatically
+                        } catch {
+                            print("⚠️ [fetchTweetFeed] Background fetch failed for original author \(originalTweet.authorId): \(error)")
                         }
                     }
+                    
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
                     TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
@@ -728,17 +825,19 @@ final class HproseInstance: ObservableObject {
             if let tweetDict = item {
                 do {
                     let tweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                    do {
-                        let author = try await fetchUser(tweet.authorId)
-                        await MainActor.run {
-                            tweet.author = author  // Set on main thread since author is @Published
-                        }
-                    } catch {
-                        print("⚠️ [fetchTweetFeed] Failed to fetch author \(tweet.authorId) for tweet \(tweet.mid): \(error)")
-                        // Server fetch failed - use skeleton to indicate error
-                        await MainActor.run {
-                            tweet.author = User.getInstance(mid: tweet.authorId)
-                            print("⚠️ [fetchTweetFeed] Server fetch failed, using skeleton for \(tweet.authorId) to indicate error")
+                    
+                    // Use skeleton author immediately - fetch in background to avoid blocking
+                    await MainActor.run {
+                        tweet.author = User.getInstance(mid: tweet.authorId)
+                    }
+                    
+                    // Fetch author in background - will update singleton when complete
+                    Task.detached(priority: .userInitiated) {
+                        do {
+                            _ = try await self.fetchUser(tweet.authorId)
+                            // Author singleton is already set, it will update automatically
+                        } catch {
+                            print("⚠️ [fetchTweetFeed] Background fetch failed for author \(tweet.authorId): \(error)")
                         }
                     }
                     
@@ -782,7 +881,6 @@ final class HproseInstance: ObservableObject {
     ) async throws -> [Tweet?] {
         // If app is not initialized, only return cached tweets
         if !isInitializationComplete {
-            print("DEBUG: [fetchUserTweets] App not initialized, returning cached tweets only for user: \(user.mid)")
             let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
             return cachedTweets
         }
@@ -804,14 +902,14 @@ final class HproseInstance: ObservableObject {
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
         
         guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweet"])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweets"])
         }
         
         // Check success status first
         guard let success = response["success"] as? Bool, success else {
             let errorMessage = response["message"] as? String ?? "Unknown error occurred"
-            print("[fetchUserTweet] Tweets loading failed for user \(user.mid): \(errorMessage)")
-            print("[fetchUserTweet] Response: \(response)")
+            print("[fetchUserTweets] Tweets loading failed for user \(user.mid): \(errorMessage)")
+            print("[fetchUserTweets] Response: \(response)")
             
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
         }
@@ -819,9 +917,6 @@ final class HproseInstance: ObservableObject {
         // Extract tweets and originalTweets from the new response format
         let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
-        
-        print("[fetchUserTweet] Fetching tweets for user: \(user.mid), page: \(pageNumber), size: \(pageSize)")
-        print("[fetchUserTweet] Got \(tweetsData.count) tweets and \(originalTweetsData.count) original tweets from server")
         
         // Cache original tweets first - cache under their authorId, not appUser.mid
         // This applies to all users, not just appUser, to ensure consistent caching
@@ -847,9 +942,7 @@ final class HproseInstance: ObservableObject {
                     // CRITICAL: Cache original tweet under its authorId, not appUser.mid
                     // This prevents original tweets from appearing in main feed when their author is different
                     TweetCacheManager.shared.saveTweet(originalTweet, userId: originalTweet.authorId)
-                    print("[fetchUserTweet] Cached original tweet: \(originalTweet.mid) under authorId: \(originalTweet.authorId)")
                 } catch {
-                    print("[fetchUserTweet] Error caching original tweet: \(error)")
                 }
             }
         }
@@ -874,7 +967,6 @@ final class HproseInstance: ObservableObject {
                     TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                     tweets.append(tweet)
                 } catch {
-                    print("[fetchUserTweet] Error processing tweet: \(error)")
                     tweets.append(nil)
                 }
             } else {
@@ -882,8 +974,6 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        let validTweets = tweets.compactMap{ $0 }
-        print("[fetchUserTweet] Returning \(tweets.count) tweets, valid=\(validTweets.count) for \(user.mid) \(pageNumber) \(pageSize)")
         return tweets
     }
     
@@ -1112,26 +1202,33 @@ final class HproseInstance: ObservableObject {
                 if !hasExpired && !baseUrl.isEmpty {
                     return cachedUser
                 } else if hasExpired {
-                    // User data has expired, but we can return stale data while refreshing in the background
-                    // Check if a background refresh is already in progress using thread-safe queue
-                    let shouldStartBackgroundRefresh = userUpdateQueue.sync {
-                        if !ongoingUserUpdates.contains(userId) {
-                            // Mark this user as being updated to prevent duplicate refreshes
-                            ongoingUserUpdates.insert(userId)
-                            return true
+                    // User data has expired
+                    // If baseUrl is empty (forcing fresh IP resolution), don't return stale data
+                    // This is critical during login to ensure we get a healthy IP
+                    if baseUrl.isEmpty {
+                        print("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
+                        // Fall through to fetch fresh data with IP resolution below
+                    } else {
+                        // For normal fetches, return stale data while refreshing in background for better UX
+                        let shouldStartBackgroundRefresh = userUpdateQueue.sync {
+                            if !ongoingUserUpdates.contains(userId) {
+                                // Mark this user as being updated to prevent duplicate refreshes
+                                ongoingUserUpdates.insert(userId)
+                                return true
+                            }
+                            return false
                         }
-                        return false
-                    }
-                    
-                    // Kick off background refresh if we're the first to notice expiration
-                    if shouldStartBackgroundRefresh {
-                        Task {
-                            await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
+                        
+                        // Kick off background refresh if we're the first to notice expiration
+                        if shouldStartBackgroundRefresh {
+                            Task {
+                                await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
+                            }
                         }
+                        
+                        // Return the stale cached user immediately for better UX (non-login flows)
+                        return cachedUser
                     }
-                    
-                    // Return the stale cached user immediately for better UX
-                    return cachedUser
                 }
             }
         }
@@ -1165,29 +1262,16 @@ final class HproseInstance: ObservableObject {
             // Get or create a User instance for this userId
             let user = User.getInstance(mid: userId)
             
-            // Determine the base URL to use for fetching user data
-            let finalBaseUrl: String
-            if baseUrl.isEmpty {
-                // No baseUrl provided, so resolve it from the provider IP service
-                if let providerIP = try await getProviderIP(userId) {
-                    // Ensure the IP has the proper http:// prefix
-                    finalBaseUrl = ensureHttpPrefix(providerIP)
-                } else {
-                    // Cannot proceed without a valid baseUrl - provider IP resolution failed
-                    print("DEBUG: [fetchUser] Cannot fetch user \(userId): no valid baseUrl available")
-                    return nil
+            // Apply the provided baseUrl to the user object if not empty
+            // If baseUrl is empty, performUserUpdate will handle IP resolution via resolveAndUpdateBaseUrl
+            if !baseUrl.isEmpty {
+                if let url = URL(string: baseUrl) {
+                    await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser initial setup")
                 }
-            } else {
-                // Use the provided baseUrl directly
-                finalBaseUrl = baseUrl
-            }
-            
-            // Apply the resolved baseUrl to the user object if valid
-            if let url = URL(string: finalBaseUrl) {
-                await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser initial setup")
             }
             
             // Perform the actual user data fetch with retry logic and error handling
+            // This will handle IP resolution if baseUrl was empty
             return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser")
         } catch {
             // Catch and log any exceptions during the fetch process
@@ -1251,17 +1335,15 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Checks if two normalized IPs represent a redirect loop
-    private func isRedirectLoop(currentIp: String, newIp: String) -> Bool {
-        return currentIp == newIp && !currentIp.isEmpty
-    }
-    
     /// Performs the complete user update flow with retry logic
     /// This is the main workhorse method that handles retries and redirects
     private func performUserUpdate(_ user: User, maxRetries: Int, skipRetryAndBlacklist: Bool, logPrefix: String) async throws -> User {
         let originalBaseUrl = user.baseUrl?.absoluteString
         let hasExpired = await user.hasExpired()
         let userHasBaseUrl = user.baseUrl != nil && !(user.baseUrl?.absoluteString.isEmpty ?? true)
-        let forceFreshIP = originalBaseUrl == nil || originalBaseUrl?.isEmpty == true || hasExpired
+        // Only force fresh IP if we don't have a baseUrl at all
+        // Don't force fresh IP just because user data expired - that's why we're fetching it!
+        let forceFreshIP = originalBaseUrl == nil || originalBaseUrl?.isEmpty == true
         
         var lastError: Error?
         
@@ -1283,7 +1365,7 @@ final class HproseInstance: ObservableObject {
                 let params: [String: Any] = [
                     "aid": appId,
                     "ver": "last",
-                    "version": "v2",
+                    "version": "v3",
                     "userid": user.mid
                 ]
                 
@@ -1299,7 +1381,8 @@ final class HproseInstance: ObservableObject {
                 
                 // Check if the response is an error object (network failure case)
                 if let error = rawResponse as? Error {
-                    print("ERROR: [\(logPrefix)] Network error during get_user: userId: \(user.mid), error: \(error.localizedDescription)")
+                    let nsError = error as NSError
+                    print("ERROR: [\(logPrefix)] Network error during get_user: userId: \(user.mid), domain: \(nsError.domain), code: \(nsError.code)")
                     throw error
                 }
                 
@@ -1309,23 +1392,55 @@ final class HproseInstance: ObservableObject {
                 let response = try Self.unwrapV2Response(rawResponse)
                 
                 // Process the response
-                let success = try await processUserDataResponse(user: user, response: response as Any, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params)
+                let success = try await processUserDataResponse(user: user, response: response as Any, skipRetryAndBlacklist: skipRetryAndBlacklist)
                 
                 if success {
                     return user
                 }
-            } catch {
-                lastError = error
-                print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), error: \(error.localizedDescription)")
                 
-                // Check for redirect loop
-                if let errorMessage = (error as NSError?)?.localizedDescription,
-                   errorMessage.contains("Redirect loop detected") {
-                    print("ERROR: [\(logPrefix)] REDIRECT LOOP DETECTED, stopping retries for userId: \(user.mid)")
+                // If we get here, response was null - clear baseUrl and let retry loop handle it
+                print("DEBUG: [\(logPrefix)] NULL RESPONSE for userId: \(user.mid) on attempt \(attempt)/\(maxRetries)")
+                
+                // Remove unhealthy node from pool (null response indicates node issue)
+                if let baseUrlString = user.baseUrl?.absoluteString,
+                   let hostIds = user.hostIds, hostIds.count > 1 {
+                    let accessNodeMid = hostIds[1]
+                    print("DEBUG: [\(logPrefix)] Removing node \(accessNodeMid) from pool after null response")
+                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+                }
+                
+                user.baseUrl = nil
+                
+                // If this was the last attempt, fail
+                if attempt >= maxRetries {
+                    print("ERROR: [\(logPrefix)] NULL RESPONSE on final attempt for userId: \(user.mid), adding to blacklist")
                     if !skipRetryAndBlacklist {
                         blackList.recordFailure(user.mid)
                     }
-                    throw error
+                    throw HproseError.userNotFound(userId: user.mid, reason: "User returned null after \(maxRetries) attempts")
+                }
+                
+                // Otherwise, continue to next attempt - resolveAndUpdateBaseUrl will get fresh IP
+                print("DEBUG: [\(logPrefix)] Will retry with fresh providerIP on next attempt")
+                lastError = HproseError.userNotFound(userId: user.mid, reason: "Null response")
+                continue
+            } catch {
+                // Handle cancellation specially - don't log as failure, don't retry
+                if error is CancellationError {
+                    print("DEBUG: [\(logPrefix)] Fetch cancelled for userId: \(user.mid), attempt: \(attempt)/\(maxRetries)")
+                    throw error // Propagate cancellation immediately
+                }
+                
+                lastError = error
+                let nsError = error as NSError
+                print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
+                
+                // Remove unhealthy node from pool if this is a network/connection error
+                if let baseUrlString = user.baseUrl?.absoluteString,
+                   let hostIds = user.hostIds, hostIds.count > 1 {
+                    let accessNodeMid = hostIds[1]
+                    print("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failure")
+                    NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
                 }
                 
                 if skipRetryAndBlacklist {
@@ -1340,8 +1455,14 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // All retries failed
+        // All retries failed - remove node from pool
         print("ERROR: [\(logPrefix)] ALL RETRIES FAILED: userId: \(user.mid), maxRetries: \(maxRetries)")
+        if let baseUrlString = user.baseUrl?.absoluteString,
+           let hostIds = user.hostIds, hostIds.count > 1 {
+            let accessNodeMid = hostIds[1]
+            print("DEBUG: [\(logPrefix)] Removing failed node \(accessNodeMid) from pool after all retries failed")
+            NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
+        }
         if !skipRetryAndBlacklist {
             blackList.recordFailure(user.mid)
         }
@@ -1349,13 +1470,8 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Processes user data response from server
-    /// Returns true if successful, throws exception otherwise
-    private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool, entry: String, params: [String: Any]) async throws -> Bool {
-        // Handle string response (redirect)
-        if let redirectIP = response as? String {
-            return try await handleRedirectAndRetry(user: user, providerIP: redirectIP.trimmingCharacters(in: .whitespacesAndNewlines), entry: entry, params: params, skipRetryAndBlacklist: skipRetryAndBlacklist)
-        }
-        
+    /// Returns true if successful, false if null (needs retry), throws exception for errors
+    private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool) async throws -> Bool {
         // Handle dictionary response (user data)
         if let userDict = response as? [String: Any] {
             if !skipRetryAndBlacklist {
@@ -1365,6 +1481,14 @@ final class HproseInstance: ObservableObject {
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false)
             
             if isValidUserData(user) {
+                // Update NodePool with successful access (replace IP list with working IP)
+                // Only update access node (hostIds[1]) since that's what we resolved during fetchUser
+                if let baseUrlString = user.baseUrl?.absoluteString,
+                   let hostIds = user.hostIds, hostIds.count > 1 {
+                    let accessNodeMid = hostIds[1]
+                    NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString)
+                    print("DEBUG: [processUserDataResponse] ✅ Updated pool: access node \(accessNodeMid) now has working IP")
+                }
                 return true
             } else {
                 print("ERROR: [processUserDataResponse] INVALID USER DATA: userId: \(user.mid), mid: \(user.mid), username: \(user.username ?? "nil")")
@@ -1372,78 +1496,16 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // Handle nil response
+        // Handle nil response - return false to indicate retry needed
         if response is NSNull {
-            print("ERROR: [processUserDataResponse] NULL RESPONSE: userId: \(user.mid)")
-            throw HproseError.noResponse(userId: user.mid)
+            print("DEBUG: [processUserDataResponse] NULL RESPONSE: userId: \(user.mid), will retry with fresh providerIP")
+            return false
         }
         
         // Unexpected response type
         print("ERROR: [processUserDataResponse] UNEXPECTED RESPONSE TYPE: userId: \(user.mid), type: \(type(of: response))")
         throw HproseError.unexpectedResponse(response: response)
     }
-    
-    /// Handles redirect response and retries the request
-    private func handleRedirectAndRetry(user: User, providerIP: String, entry: String, params: [String: Any], skipRetryAndBlacklist: Bool) async throws -> Bool {
-        print("DEBUG: [handleRedirectAndRetry] PROVIDER IP RECEIVED: userId: \(user.mid), providerIP: \(providerIP)")
-        
-        let normalizedRedirectIp = normalizeIpFromUrl(providerIP)
-        let normalizedCurrentIp = normalizeIpFromUrl(user.baseUrl?.absoluteString ?? "")
-        
-        if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedRedirectIp) {
-            print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected to same IP:port: \(providerIP) (current: \(user.baseUrl?.absoluteString ?? "nil"))")
-            throw HproseError.redirectLoop(ip: providerIP)
-        }
-        
-        // Update baseUrl and retry
-        if let redirectURL = URL(string: ensureHttpPrefix(providerIP)) {
-            await applyBaseUrlIfNeeded(user, url: redirectURL, reason: "redirect")
-        }
-        
-        // Retry with new baseUrl
-        guard let hproseClient = user.hproseClient else {
-            throw HproseError.noClient(userId: user.mid)
-        }
-        
-        guard let retryRawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params]) else {
-            throw HproseError.noResponse(userId: user.mid)
-        }
-        
-        // Check if the response is an error object (network failure case)
-        if let error = retryRawResponse as? Error {
-            print("ERROR: [handleRedirectAndRetry] Network error after redirect: userId: \(user.mid), error: \(error.localizedDescription)")
-            throw error
-        }
-        
-        let retryResponse = try Self.unwrapV2Response(retryRawResponse)
-        
-        // Handle second response
-        if let newIpAddress = retryResponse as? String {
-            let trimmedNewIp = newIpAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-            let newNormalizedIp = normalizeIpFromUrl(trimmedNewIp)
-            
-            if isRedirectLoop(currentIp: newNormalizedIp, newIp: normalizedRedirectIp) {
-                print("ERROR: [handleRedirectAndRetry] REDIRECT LOOP DETECTED: userId: \(user.mid), redirected server returned same IP:port: \(trimmedNewIp)")
-                throw HproseError.redirectLoop(ip: trimmedNewIp)
-            }
-            
-            print("ERROR: [handleRedirectAndRetry] USER NOT FOUND AFTER REDIRECT: userId: \(user.mid), second IP returned: \(trimmedNewIp)")
-            throw HproseError.userNotFound(userId: user.mid, reason: "User not found after redirect - second IP returned: \(trimmedNewIp)")
-        }
-        
-        if let userDict = retryResponse as? [String: Any] {
-            return try await processUserDataResponse(user: user, response: userDict, skipRetryAndBlacklist: skipRetryAndBlacklist, entry: entry, params: params)
-        }
-        
-        if retryResponse is NSNull {
-            print("ERROR: [handleRedirectAndRetry] NULL RESPONSE AFTER REDIRECT: userId: \(user.mid)")
-            throw HproseError.noResponse(userId: user.mid)
-        }
-        
-        print("ERROR: [handleRedirectAndRetry] UNEXPECTED RESPONSE TYPE AFTER REDIRECT: userId: \(user.mid), type: \(type(of: retryResponse))")
-        throw HproseError.unexpectedResponse(response: retryResponse as Any)
-    }
-    
     /// Resolves and updates user's baseUrl (for first attempt or retries)
     private func resolveAndUpdateBaseUrl(
         user: User,
@@ -1454,52 +1516,58 @@ final class HproseInstance: ObservableObject {
         hasExpired: Bool,
         originalBaseUrl: String?
     ) async throws {
+        // First attempt logic with NodePool integration
+        // On first attempt, if user has baseUrl or node in pool, trust it and use directly
         if attempt == 1 && !forceFreshIP && userHasBaseUrl && !(user.baseUrl?.absoluteString.isEmpty ?? true) {
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using user's existing baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid) (hasExpired: \(hasExpired))")
+            // Try to get IP from user's node in pool (indexed by nodeId)
+            if let poolIP = NodePool.shared.getIPFromNode(for: user) {
+                // TRUST the pooled IP - use it directly without health check
+                // If it's bad, retry logic will handle it and update the pool
+                if let url = URL(string: ensureHttpPrefix(poolIP)) {
+                    await applyBaseUrlIfNeeded(user, url: url, reason: "from NodePool (trusted)")
+                    print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using trusted IP from NodePool: \(poolIP) for userId: \(user.mid)")
+                    return
+                }
+            }
+            
+            // User's node not in pool - use user's existing baseUrl (also trusted)
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User's node not in pool, using existing baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
             return
         }
         
-        // Resolve fresh IP
-        if attempt > 1 {
-            // Retry attempts: check for redirect loop before resolving
-            guard let providerIP = try await getProviderIP(user.mid) else {
-                throw HproseError.noResponse(userId: user.mid)
-            }
-            
-            let normalizedProviderIp = normalizeIpFromUrl(providerIP)
-            let normalizedCurrentIp = normalizeIpFromUrl(user.baseUrl?.absoluteString ?? "")
-            
-            if isRedirectLoop(currentIp: normalizedCurrentIp, newIp: normalizedProviderIp) {
-                print("ERROR: [resolveAndUpdateBaseUrl] REDIRECT LOOP DETECTED on retry - resolved IP:port (\(providerIP)) same as current IP:port (\(user.baseUrl?.absoluteString ?? "nil"))")
-                throw HproseError.redirectLoop(ip: providerIP)
-            }
-            
-            if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                await applyBaseUrlIfNeeded(user, url: url, reason: "retry attempt \(attempt)")
-            }
+        // Resolve fresh IP (retry attempts or forced refresh)
+        let reason: String
+        if originalBaseUrl == nil || originalBaseUrl?.isEmpty == true {
+            reason = "no baseUrl"
+        } else if hasExpired {
+            reason = "cache expired"
+        } else if attempt > 1 {
+            reason = "retry after failure"
         } else {
-            // First attempt with fresh IP
-            let reason: String
-            if originalBaseUrl == nil || originalBaseUrl?.isEmpty == true {
-                reason = "forcing fresh IP resolution (baseUrl param empty)"
-            } else if hasExpired {
-                reason = "forcing fresh IP resolution (user cache expired, baseUrl also considered expired)"
-            } else {
-                reason = "no baseUrl"
-            }
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid), old baseUrl: \(user.baseUrl?.absoluteString ?? "nil"), reason: \(reason)")
-            
+            reason = "forcing fresh IP"
+        }
+        
+        print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid), reason: \(reason)")
+        
+        do {
             guard let providerIP = try await getProviderIP(user.mid) else {
-                throw HproseError.noResponse(userId: user.mid)
+                // getProviderIP returned nil (not exception) - user not found or no IPs available
+                print("WARNING: [resolveAndUpdateBaseUrl] getProviderIP returned nil for userId: \(user.mid) - user not found or no IPs available")
+                // Continue with current baseUrl - calling code will handle appropriately
+                return
             }
             
             if let url = URL(string: ensureHttpPrefix(providerIP)) {
-                await applyBaseUrlIfNeeded(user, url: url, reason: "initial resolution")
+                await applyBaseUrlIfNeeded(user, url: url, reason: "from getProviderIP (\(reason))")
             }
             
             if user.hproseClient == nil {
                 print("ERROR: [resolveAndUpdateBaseUrl] hproseClient is null after setting baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
             }
+        } catch {
+            // getProviderIP threw exception - network error, should trigger retry
+            print("WARNING: [resolveAndUpdateBaseUrl] Network error calling getProviderIP for userId: \(user.mid), attempt: \(attempt)/\(maxRetries)")
+            throw error  // Re-throw to trigger retry logic
         }
     }
     
@@ -1510,121 +1578,340 @@ final class HproseInstance: ObservableObject {
     /// - Parameter attemptNumber: Internal parameter to track retry attempts (1 or 2)
     /// - Returns: A healthy provider IP address, or nil if none found
     /// - Throws: Error only after both attempts fail
-    func getProviderIP(_ mid: String) async throws -> String? {
+    func getProviderIP(_ mid: String, v4Only: Bool = false) async throws -> String? {
         // Safety check: never try to get provider IP for GUEST_ID
         if mid == Constants.GUEST_ID {
             print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
         }
         
-        let providerIP = await _getProviderIP(mid)
-        if (providerIP != nil) {
-            return providerIP
-        }
-
-        if (mid == appUser.mid) {
+        do {
+            // Try to get provider IP - may throw network exception or return nil (user not found)
+            let providerIP = try await _getProviderIP(mid, v4Only: v4Only)
+            if (providerIP != nil) {
+                return providerIP
+            }
+            
+            // providerIP is nil - user not found or no healthy IPs
+            // For non-appUser, return nil (don't try fallback)
+            if (mid != appUser.mid) {
+                print("DEBUG: [getProviderIP] No provider IP found for \(mid) - user not found or all IPs unhealthy")
+                return nil
+            }
+            
+            // For appUser only, try entry IP fallback
             guard let entryIP = try await findEntryIP() else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
             }
-            return await _getProviderIP(mid, hproseClient: clientPool.getClientByIP(for: entryIP))
-        } else {
-            guard let appUserClient = appUser.hproseClient else {
-                print("ERROR: [getProviderIP] appUser.hproseClient is nil")
-                return nil
-            }
-            if (await isServerHealthy(appUserClient) != true) {
+            return try await _getProviderIP(mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
+        } catch {
+            // Network exception from _getProviderIP - check if we should try fallback
+            if (mid == appUser.mid) {
+                // For appUser, try entry IP fallback
+                print("DEBUG: [getProviderIP] Network error for appUser, trying entry IP fallback")
                 guard let entryIP = try await findEntryIP() else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
                 }
-                let ip = await _getProviderIP(appUser.mid, hproseClient: clientPool.getClientByIP(for: entryIP))
+                let ip = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
                 if let ip = ip {
                     appUser.baseUrl = URL(string: "http://\(ip)")
                 }
-                return await _getProviderIP(mid)
+                return try await _getProviderIP(mid, v4Only: v4Only)
+            } else {
+                // For non-appUser, re-throw network exception to trigger retry
+                print("WARNING: [getProviderIP] Network error for \(mid) - re-throwing to trigger retry")
+                throw error
             }
-            // Server is healthy but initial lookup returned nil - return nil
-            // This allows caller to handle "provider not found" case
-            return nil
         }
     }
     
     private func _getProviderIP(
         _ mid: MimeiId,
+        v4Only: Bool = false,
         hproseClient: HproseClient? = HproseInstance.shared.appUser.hproseClient
-    ) async -> String? {
+    ) async throws -> String? {
         let entry = "get_provider_ips"
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "mid": mid
+            "mid": mid,
+            "v4only": v4Only ? "true" : "false"
         ]
         
         guard let hproseClient = hproseClient else {
             print("DEBUG: [_getProviderIP] No hprose client available")
-            return nil
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No hprose client available"])
         }
         
+        // Let network errors propagate as exceptions
         let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
         guard let response = rawResponse else {
-            print("DEBUG: [_getProviderIP] No response from server.")
-            return nil
+            print("DEBUG: [_getProviderIP] No response from server - network error")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "No response from server"])
         }
         
-        // Unwrap v2 response - handle IP redirects which may be strings
-        let unwrappedResponse: Any?
-        do {
-            unwrappedResponse = try Self.unwrapV2Response(response)
-        } catch {
-            print("DEBUG: [_getProviderIP] Error unwrapping v2 response: \(error)")
-            return nil
-        }
+        // Unwrap v2 response - let exceptions propagate for network/format errors
+        let unwrappedResponse = try Self.unwrapV2Response(response)
         
         if let ipList = unwrappedResponse as? [String] {
             // Filter and trim IP addresses
             let ipAddresses = ipList
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            // Check each IP for health and return the first healthy one
-            for ip in ipAddresses {
-                let client = clientPool.getClientByIP(for: ip)
+            
+            print("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
+            
+            // Test IPs in batches of 4 for faster discovery during high load
+            let batchSize = 4
+            for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, ipAddresses.count)
+                let batch = Array(ipAddresses[batchStart..<batchEnd])
                 
-                let isHealthy = await isServerHealthy(client)
+                print("DEBUG: [_getProviderIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
                 
-                // Release client back to pool
-                clientPool.releaseClient(client, for: ip)
+                // Test this batch in parallel - return as soon as first IP responds successfully
+                let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
+                    for (index, ip) in batch.enumerated() {
+                        let absoluteIndex = batchStart + index + 1
+                        group.addTask {
+                            // Check for cancellation before starting
+                            if Task.isCancelled {
+                                return nil
+                            }
+                            
+                            print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
+                            
+                            let client = self.clientPool.getClientByIP(for: ip)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 5.0)
+                            self.clientPool.releaseClient(client, for: ip)
+                            
+                            // Check for cancellation after health check
+                            if Task.isCancelled {
+                                return nil
+                            }
+                            
+                            if isHealthy {
+                                print("DEBUG: [_getProviderIP] ✅ IP test PASSED: \(ip)")
+                            } else {
+                                print("DEBUG: [_getProviderIP] ❌ IP test FAILED: \(ip)")
+                            }
+                            
+                            return (ip, isHealthy)
+                        }
+                    }
+                    
+                    // Return IMMEDIATELY when first healthy IP is found
+                    for await result in group {
+                        if let (ip, isHealthy) = result, isHealthy {
+                            print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip) - returning immediately")
+                            group.cancelAll()  // Cancel remaining checks in this batch
+                            return ip as String?
+                        }
+                    }
+                    return nil as String?
+                }
                 
-                if isHealthy {
-                    print("DEBUG: [_getProviderIP] Found healthy provider IP: \(ip)")
+                // If we found a healthy IP in this batch, return it
+                if let ip = healthyIP {
                     return ip
                 }
             }
             
-            // If no healthy IP found, throw error
-            print("DEBUG: [_getProviderIP] No healthy provider IP found in list: \(ipList)")
+            // If no healthy IP found in any batch, return nil to trigger entry IP fallback
+            // getProviderIP() will try via entry IP, and if that fails too, it can try the first IP as last resort
+            if !ipAddresses.isEmpty {
+                print("DEBUG: [_getProviderIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil to trigger fallback")
+                return nil
+            }
+            
+            print("DEBUG: [_getProviderIP] No IPs available in response")
             return nil
         }
         print("DEBUG: [_getProviderIP] Invalid IpList response format")
         return nil
     }
     
-    private func isServerHealthy(_ hproseClient: HproseClient) async -> Bool {
-        let entry = "health"
-        let params: [String: Any] = [
-            "aid": appId,
-            "ver": "last"
-        ]
+    // MARK: - IP Cache Methods
+    
+    /// Check if an IP is in the cache and still valid
+    private func getCachedIP(_ ip: String) -> Bool {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
         
-        // Perform the invoke in a Task to avoid blocking
-        return await Task {
-            let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
-            if let responseDict = rawResponse as? [String: Any] {
-                if let success = responseDict["success"] as? Bool, success {
+        if let entry = ipCache[ip] {
+            if !entry.isExpired {
+                print("DEBUG: [IPCache] Cache HIT for IP: \(ip) (age: \(Int(Date().timeIntervalSince(entry.timestamp)))s)")
+                return true
+            } else {
+                print("DEBUG: [IPCache] Cache EXPIRED for IP: \(ip)")
+                ipCache.removeValue(forKey: ip)
+            }
+        }
+        return false
+    }
+    
+    /// Cache a validated IP
+    private func cacheIP(_ ip: String) {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        ipCache[ip] = IPCacheEntry(ip: ip, timestamp: Date())
+        print("DEBUG: [IPCache] Cached IP: \(ip)")
+    }
+    
+    /// Clear expired entries from cache
+    private func cleanupExpiredCache() {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        let beforeCount = ipCache.count
+        ipCache = ipCache.filter { !$0.value.isExpired }
+        let removedCount = beforeCount - ipCache.count
+        if removedCount > 0 {
+            print("DEBUG: [IPCache] Cleaned up \(removedCount) expired entries")
+        }
+    }
+    
+    /// Invalidate a specific IP from cache (useful when an IP fails after being cached)
+    func invalidateIPCache(for ip: String) {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        if ipCache.removeValue(forKey: ip) != nil {
+            print("DEBUG: [IPCache] Invalidated cache for IP: \(ip)")
+        }
+    }
+    
+    /// Clear all cached IPs (useful for testing or reset)
+    func clearIPCache() {
+        ipCacheLock.lock()
+        defer { ipCacheLock.unlock() }
+        
+        let count = ipCache.count
+        ipCache.removeAll()
+        print("DEBUG: [IPCache] Cleared all \(count) cached IPs")
+    }
+    
+    // MARK: - Health Check Methods
+    
+    /// Checks if a server is healthy using HTTP HEAD request to base URL
+    /// - Parameter hproseClient: The client to check (uses its uri property)
+    /// - Returns: true if server responds to HEAD request, false otherwise
+    private func isServerHealthy(_ hproseClient: HproseClient) async -> Bool {
+        // Extract IP from client URI
+        guard let uriString = hproseClient.uri else {
+            print("DEBUG: [isServerHealthy] No URI found in client")
+            return false
+        }
+        
+        // Extract base URL (without /webapi/ path) for server health check
+        // URI format is "http://IP/webapi/" -> we want "http://IP/"
+        guard let fullURL = URL(string: uriString),
+              let scheme = fullURL.scheme,
+              let host = fullURL.host else {
+            print("DEBUG: [isServerHealthy] Invalid URI: \(uriString)")
+            return false
+        }
+        
+        // Construct base URL for testing the server itself
+        // Handle IPv6 addresses which need brackets: [2001:...]:port
+        var baseURLString = "\(scheme)://"
+        
+        // Check if this is an IPv6 address (contains colons but not wrapped in brackets yet)
+        if host.contains(":") && !host.hasPrefix("[") {
+            baseURLString += "[\(host)]"
+        } else {
+            baseURLString += host
+        }
+        
+        if let port = fullURL.port {
+            baseURLString += ":\(port)"
+        }
+        baseURLString += "/"
+        
+        // Check cache first (cache by IP only, not full URL)
+        // For IPv6, use the raw host without brackets for caching
+        let cacheKey = host + (fullURL.port.map { ":\($0)" } ?? "")
+        if getCachedIP(cacheKey) {
+            return true
+        }
+        
+        guard let baseURL = URL(string: baseURLString) else {
+            print("DEBUG: [isServerHealthy] Failed to construct base URL from: \(uriString)")
+            return false
+        }
+        
+        // Perform HTTP HEAD request to base URL (test server, not service endpoint)
+        var request = URLRequest(url: baseURL, timeoutInterval: 5.0)
+        request.httpMethod = "HEAD"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                let isHealthy = (200...299).contains(httpResponse.statusCode)
+                
+                if isHealthy {
+                    print("DEBUG: [isServerHealthy] ✅ HEAD request succeeded: \(baseURLString) (status: \(httpResponse.statusCode))")
+                    
+                    // Cache the validated IP
+                    cacheIP(cacheKey)
                     return true
+                } else {
+                    print("DEBUG: [isServerHealthy] ❌ HEAD request failed: \(baseURLString) (status: \(httpResponse.statusCode))")
                 }
             }
+        } catch {
+            // Check if this is a cancellation (normal when faster IP found)
+            let nsError = error as NSError
+            let isCancellation = nsError.code == NSURLErrorCancelled
+            
+            if isCancellation {
+                print("DEBUG: [isServerHealthy] ⏭️  HEAD request cancelled for \(baseURLString) (faster IP found)")
+            } else {
+                print("DEBUG: [isServerHealthy] ❌ HEAD request error for \(baseURLString): domain=\(nsError.domain), code=\(nsError.code)")
+            }
+        }
+        
+        return false
+    }
+    
+    /// Checks if a server is healthy with a timeout
+    /// - Parameters:
+    ///   - hproseClient: The client to check
+    ///   - timeout: Timeout in seconds (default: 5)
+    /// - Returns: true if healthy within timeout, false otherwise
+    private func isServerHealthyWithTimeout(_ hproseClient: HproseClient, timeout: TimeInterval = 5.0) async -> Bool {
+        // Check if already cancelled before starting
+        if Task.isCancelled {
             return false
-        }.value
+        }
+        
+        // Periodically clean up expired cache entries
+        cleanupExpiredCache()
+        
+        return await withTaskGroup(of: Bool.self) { group in
+            // Task 1: Perform health check (HEAD request)
+            group.addTask {
+                if Task.isCancelled {
+                    return false
+                }
+                return await self.isServerHealthy(hproseClient)
+            }
+            
+            // Task 2: Timeout task
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false  // Return false on timeout
+            }
+            
+            // Return first result (either health check or timeout)
+            let result = await group.next() ?? false
+            group.cancelAll()  // Cancel the other task
+            return result
+        }
     }
     
 
@@ -1652,7 +1939,6 @@ final class HproseInstance: ObservableObject {
     private enum HproseError: LocalizedError {
         case noClient(userId: String)
         case noResponse(userId: String)
-        case redirectLoop(ip: String)
         case userNotFound(userId: String, reason: String)
         case unexpectedResponse(response: Any)
         
@@ -1662,8 +1948,6 @@ final class HproseInstance: ObservableObject {
                 return "No hprose client available for user: \(userId)"
             case .noResponse(let userId):
                 return "No response from server for user: \(userId)"
-            case .redirectLoop(let ip):
-                return "Redirect loop detected - redirected to same IP: \(ip)"
             case .userNotFound(let userId, let reason):
                 return "User \(userId) not found: \(reason)"
             case .unexpectedResponse(let response):
@@ -1672,14 +1956,7 @@ final class HproseInstance: ObservableObject {
         }
         
         var nsError: NSError {
-            let code: Int
-            switch self {
-            case .redirectLoop:
-                code = -2
-            default:
-                code = -1
-            }
-            return NSError(domain: "HproseClient", code: code, userInfo: [
+            return NSError(domain: "HproseClient", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: errorDescription ?? "Unknown error"
             ])
         }
@@ -1787,13 +2064,16 @@ final class HproseInstance: ObservableObject {
         ]
         
         guard let baseUrl = loginUser.baseUrl else {
-            print("[login] Nil user baseUrl")
+            print("ERROR: [login] Nil user baseUrl")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
         
+        print("DEBUG: [login] Starting login API call to baseUrl: \(baseUrl.absoluteString)")
+        
         return try await retryOperation(maxRetries: 3) {
+            print("DEBUG: [login] Creating client for baseUrl: \(baseUrl.absoluteString)")
             let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            newClient.timeout = 30000  // 30s
+            newClient.timeout = 10.0  // 10 seconds (fast fail for slow servers)
             
             // Release client back to pool when done (no need to close)
             defer { 
@@ -1801,22 +2081,36 @@ final class HproseInstance: ObservableObject {
                 // Let the pool manage lifecycle naturally
             }
             
+            print("DEBUG: [login] Invoking login API...")
             let rawResponse = newClient.invoke("runMApp", withArgs: [entry, params])
+            print("DEBUG: [login] Got raw response, unwrapping...")
+            
+            // Check if the response is nil (network error)
+            guard rawResponse != nil else {
+                print("ERROR: [login] Network request failed - nil response (timeout or connection error)")
+                throw NSError(domain: "NSURLErrorDomain", code: -1001, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Request timed out", comment: "Network timeout error")])
+            }
+            
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             
             guard let response = unwrappedResponse as? [String: Any] else {
+                print("ERROR: [login] Invalid response format from server")
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
             }
+            
+            print("DEBUG: [login] Response received: \(response)")
             
             // Handle v2 format: check success field first, then status field for backward compatibility
             if let success = response["success"] as? Bool {
                 if !success {
                     let message = response["message"] as? String ?? NSLocalizedString("Login failed", comment: "Generic login failure message")
                     let localizedReason = self.localizeLoginError(message)
+                    print("DEBUG: [login] Login failed with message: \(message)")
                     return ["reason": localizedReason, "status": "failure"]
                 }
                 // success is true, check for user data
                 if response["user"] != nil || response["data"] != nil {
+                    print("DEBUG: [login] Login successful, setting appUser")
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
@@ -1827,6 +2121,29 @@ final class HproseInstance: ObservableObject {
                     return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
                 }
             }
+            
+            // Check for status field (alternate response format)
+            if let status = response["status"] as? String {
+                if status == "failure" {
+                    // Extract and localize the reason from server
+                    let serverReason = response["reason"] as? String ?? NSLocalizedString("Login failed", comment: "Generic login failure message")
+                    let localizedReason = self.localizeLoginError(serverReason)
+                    print("DEBUG: [login] Login failed with status: \(status), reason: \(serverReason)")
+                    return ["reason": localizedReason, "status": "failure"]
+                } else if status == "success" && response["user"] != nil {
+                    print("DEBUG: [login] Login successful (status field), setting appUser")
+                    await MainActor.run {
+                        self.preferenceHelper?.setUserId(loginUser.mid)
+                        self.appUser = loginUser
+                    }
+                    Task {
+                        await self.populateFellowLists(user: loginUser)
+                    }
+                    return ["reason": NSLocalizedString("Success", comment: "Success message"), "status": "success"]
+                }
+            }
+            
+            print("DEBUG: [login] Login failed - no success field or no user data")
             return ["reason": NSLocalizedString("Login failed", comment: "Generic login failure message"), "status": "failure"]
         }
     }
@@ -2125,6 +2442,11 @@ final class HproseInstance: ObservableObject {
         
         print("DEBUG: [HproseInstance] getUserTweetsByType - Got response with \(response.count) items")
         
+        // For bookmarks/favorites, preserve server order by using a base timestamp minus index
+        // This ensures tweets are sorted correctly when retrieved from cache
+        let isBookmarkOrFavorite = type == .BOOKMARKS || type == .FAVORITES
+        let baseTime = Date()
+        
         var tweetsWithAuthors: [Tweet?] = []
         for (index, dict) in response.enumerated() {
             if let item = dict {
@@ -2137,7 +2459,28 @@ final class HproseInstance: ObservableObject {
                             }
                         }
                     }
-                    // Don't cache tweets from bookmarks/favorites - only cache from main feed
+                    // Cache tweets from bookmarks/favorites with prefixed key to avoid mixing with feed
+                    // Use format: "bookmark_list_userId" or "favorite_list_userId"
+                    // saveTweet will automatically mark media as permanent based on the prefix
+                    let cacheKey = "\(type.rawValue)_\(user.mid)"
+                    
+                    // For bookmarks/favorites, preserve server order by using a timestamp that reflects position
+                    // Subtract index milliseconds to ensure earlier items (lower index) have later timestamps
+                    // This way, when sorted descending by timeCached, they appear in the correct order
+                    // Using milliseconds provides better precision for large lists
+                    let timeCached: Date?
+                    if isBookmarkOrFavorite {
+                        // Use baseTime minus index milliseconds to preserve order (most recent bookmark first)
+                        // Index 0 gets baseTime (latest), index 1 gets baseTime - 0.001s, etc.
+                        timeCached = baseTime.addingTimeInterval(-TimeInterval(index) * 0.001)
+                    } else {
+                        // For other types, use current time
+                        timeCached = nil
+                    }
+                    
+                    // Reduced logging to prevent console buffer overflow
+                    TweetCacheManager.shared.saveTweet(tweet, userId: cacheKey, timeCached: timeCached)
+                    
                     tweetsWithAuthors.append(tweet)
                     print("DEBUG: [HproseInstance] getUserTweetsByType - Successfully processed tweet \(index): \(tweet.mid)")
                 } catch {
@@ -2150,16 +2493,25 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // Sort tweets in descending order by timestamp (most recent first)
-        let sortedTweets = tweetsWithAuthors.sorted { tweet1, tweet2 in
-            guard let t1 = tweet1, let t2 = tweet2 else {
-                // Put non-nil tweets before nil tweets
-                return tweet1 != nil && tweet2 == nil
+        // For bookmarks and favorites, preserve the server's order (already sorted by bookmark/favorite time)
+        // For other types, sort by tweet creation timestamp (most recent first)
+        let sortedTweets: [Tweet?]
+        if type == .BOOKMARKS || type == .FAVORITES {
+            // Preserve server order - don't sort
+            sortedTweets = tweetsWithAuthors
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), preserving server order (bookmarks/favorites)")
+        } else {
+            // Sort tweets in descending order by timestamp (most recent first)
+            sortedTweets = tweetsWithAuthors.sorted { tweet1, tweet2 in
+                guard let t1 = tweet1, let t2 = tweet2 else {
+                    // Put non-nil tweets before nil tweets
+                    return tweet1 != nil && tweet2 == nil
+                }
+                return t1.timestamp > t2.timestamp
             }
-            return t1.timestamp > t2.timestamp
+            print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), sorted by timestamp (descending)")
         }
         
-        print("DEBUG: [HproseInstance] getUserTweetsByType - Returning \(sortedTweets.count) tweets, valid: \(sortedTweets.compactMap { $0 }.count), sorted by timestamp (descending)")
         return sortedTweets
     }
     
@@ -2983,8 +3335,14 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Process and upload media files (images, videos, audio, documents)
-        func processAndUpload(
+        /// Process and upload video files with new routing logic:
+        /// 1. Normalize to 720p/1000k (preserving original if lower resolution)
+        /// 2. Route based on normalized size and resolution:
+        ///    - ≤ 32MB: Progressive video route
+        ///    - > 32MB: HLS conversion based on resolution
+        ///      * resolution > 480p: HLS with 720p + 480p variants
+        ///      * resolution ≤ 480p: HLS with 480p variant only
+        static func processVideo(
             data: Data,
             typeIdentifier: String,
             fileName: String?,
@@ -2994,194 +3352,212 @@ final class HproseInstance: ObservableObject {
             appId: String,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
+            print("Starting video processing with optimized resolution-based routing logic")
             
-            let mediaType = await detectMediaType(from: typeIdentifier, fileName: fileName, data: data)
-            
-            switch mediaType {
-            case .video:
-                return try await processVideo(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    noResample: noResample,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            case .image:
-                return try await processImage(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    noResample: noResample,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            case .audio:
-                return try await processAudio(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            default:
-                return try await processDocument(
-                    data: data,
-                    typeIdentifier: typeIdentifier,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    mediaType: mediaType,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            }
-        }
-        
-        // MARK: - Media Type Specific Methods
-        
-        /// Process and upload image files
-        func processImage(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            noResample: Bool,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            let result = try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                mediaType: .image,
-                appUser: appUser,
-                appId: appId
-            )
-            return (result, nil)
-        }
-        
-        /// Process and upload video files
-        func processVideo(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            noResample: Bool,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            
-            // Check file size - if less than 50MB, upload as regular video without conversion
-            let fileSizeMB = Double(data.count) / (1024 * 1024)
-            let sizeThresholdMB = 50.0
-            
-            if fileSizeMB < sizeThresholdMB {
-                print("Video upload: Sub-50MB path – converting to MP4 before IPFS upload (\(String(format: "%.1f", fileSizeMB))MB)")
-                return try await uploadVideoWithMp4Fallback(
-                    data: data,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer {
+                try? FileManager.default.removeItem(at: tempDir)
             }
             
-            let cloudPort = appUser.cloudDrivePort
-            if cloudPort <= 0 {
-                print("Video upload: MP4 fallback (no cloud drive configured)")
-                return try await uploadVideoWithMp4Fallback(
-                    data: data,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
-                )
-            }
+            // Ensure video file has proper .mp4 extension for AVFoundation/FFmpeg compatibility
+            let originalFileName = fileName ?? "video.mp4"
+            let fileExtension = (originalFileName as NSString).pathExtension.lowercased()
+            let baseFileName = (originalFileName as NSString).deletingPathExtension
             
-            progressCallback?("Checking video service availability...", 5)
-            let isCloudDriveAvailable = await checkCloudDriveServiceAvailability(appUser: appUser)
-            
-            if isCloudDriveAvailable {
-                print("Video upload: HLS conversion (cloud drive available)")
-                return try await uploadVideoWithLocalHLSConversion(
-                    data: data,
-                    fileName: fileName,
-                    referenceId: referenceId,
-                    noResample: noResample,
-                    appUser: appUser,
-                    progressCallback: progressCallback
-                )
+            // Use .mp4 extension if file has wrong extension or no extension
+            let properFileName: String
+            if fileExtension.isEmpty || fileExtension == "file" || !["mp4", "mov", "m4v", "mkv", "avi", "wmv", "flv", "webm", "3gp"].contains(fileExtension) {
+                properFileName = "\(baseFileName).mp4"
             } else {
-                return try await uploadVideoWithMp4Fallback(
+                properFileName = originalFileName
+            }
+            
+            let originalVideoURL = tempDir.appendingPathComponent(properFileName)
+            try data.write(to: originalVideoURL)
+            
+            // Step 1: Get original video resolution to decide if normalization is needed
+            progressCallback?("Analyzing video...", 5)
+            let originalVideoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: originalVideoURL.path)
+            var originalVideoResolution: Int? = nil
+            if let info = originalVideoInfo {
+                let aspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                // Video resolution is defined by height for landscape, width for portrait
+                if aspectRatio < 1.0 {
+                    originalVideoResolution = info.displayWidth
+                } else {
+                    originalVideoResolution = info.displayHeight
+                }
+                print("Original video resolution: \(info.displayWidth)x\(info.displayHeight) (\(originalVideoResolution ?? 0)p)")
+            }
+            
+            // Step 2: Always normalize videos (≤720p keeps original resolution with proportional bitrate, >720p scales to 720p)
+            print("📹 [VIDEO UPLOAD] Starting video normalization")
+            if let origRes = originalVideoResolution {
+                if origRes <= 720 {
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p ≤ 720p: will normalize with original resolution and proportional bitrate")
+                } else {
+                    print("📹 [VIDEO UPLOAD] Resolution \(origRes)p > 720p: will normalize to 720p with 1500k bitrate")
+                }
+            } else {
+                print("📹 [VIDEO UPLOAD] Could not detect resolution: will normalize (defaulting to 720p if needed)")
+            }
+            
+            print("========== FIRST NORMALIZATION (Standardization) ==========")
+            print("📹 [VIDEO UPLOAD] Original video: \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
+            print("📹 [VIDEO UPLOAD] Purpose: Unified format for 32MB routing decision")
+            
+            progressCallback?("Normalizing video...", 10)
+            let normalizedFileName = "normalized_\(UUID().uuidString).mp4"
+            let normalizedVideoURL = tempDir.appendingPathComponent(normalizedFileName)
+            
+            
+            let normalizationSuccess = await MediaProcessor.normalizeTo720p1000k(
+                inputURL: originalVideoURL,
+                outputURL: normalizedVideoURL,
+                progressCallback: progressCallback
+            )
+            print("==========================================================")
+            
+            guard normalizationSuccess else {
+                print("❌ [VIDEO UPLOAD] Video normalization failed, falling back to original video")
+                progressCallback?("Uploading original video...", 10)
+                let result = try await MediaProcessor.uploadRegularFile(
                     data: data,
+                    typeIdentifier: typeIdentifier,
                     fileName: fileName,
                     referenceId: referenceId,
+                    mediaType: .video,
                     appUser: appUser,
-                    appId: appId,
-                    progressCallback: progressCallback
+                    appId: appId
                 )
+                return (result, nil)
+            }
+            
+            print("✅ [VIDEO UPLOAD] Video normalization completed successfully")
+            let videoData = try Data(contentsOf: normalizedVideoURL)
+            let videoSize = Int64(videoData.count)
+            
+            // Get actual resolution from normalized video
+            let normalizedVideoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: normalizedVideoURL.path)
+            let videoResolution: Int
+            if let info = normalizedVideoInfo {
+                let aspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
+                if aspectRatio < 1.0 {
+                    videoResolution = info.displayWidth
+                } else {
+                    videoResolution = info.displayHeight
+                }
+                print("📹 [VIDEO UPLOAD] Normalized video resolution: \(info.displayWidth)x\(info.displayHeight) (\(videoResolution)p)")
+            } else {
+                // Fallback to original resolution if detection fails
+                videoResolution = originalVideoResolution ?? 720
+                print("📹 [VIDEO UPLOAD] Could not detect normalized video resolution, using original: \(videoResolution)p")
+            }
+            
+            let videoFileName = normalizedFileName
+            print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", Double(videoSize) / (1024 * 1024)))MB")
+            
+            // Step 3: Route based on video size
+            let videoSizeMB = Double(videoSize) / (1024 * 1024)
+            print("📹 [VIDEO UPLOAD] Normalized video size: \(String(format: "%.1f", videoSizeMB))MB (\(videoSize) bytes)")
+            
+            if videoSize <= Constants.PROGRESSIVE_VIDEO_THRESHOLD_BYTES {
+                // ≤ 32MB: progressive video route
+                print("📹 [VIDEO UPLOAD] Size ≤ 32MB: using progressive video route (direct MP4 upload)")
+                progressCallback?("Uploading video...", 50)
+                let result = try await uploadRegularFile(
+                    data: videoData,
+                    typeIdentifier: "public.mpeg-4",
+                    fileName: videoFileName,
+                    referenceId: referenceId,
+                    mediaType: .video,
+                    appUser: appUser,
+                    appId: appId
+                )
+                print("✅ [VIDEO UPLOAD] Progressive video uploaded successfully, CID: \(result.mid)")
+                return (result, nil)
+            } else {
+                // > 32MB: Need HLS conversion - check if cloud drive is available
+                print("📹 [VIDEO UPLOAD] Size > 32MB: will use HLS conversion route")
+                let cloudPort = appUser.cloudDrivePort
+                guard cloudPort > 0 else {
+                    print("⚠️ [VIDEO UPLOAD] No cloud drive configured, falling back to progressive video")
+                    progressCallback?("Uploading video...", 50)
+                    let result = try await uploadRegularFile(
+                        data: videoData,
+                        typeIdentifier: "public.mpeg-4",
+                        fileName: videoFileName,
+                        referenceId: referenceId,
+                        mediaType: .video,
+                        appUser: appUser,
+                        appId: appId
+                    )
+                    return (result, nil)
+                }
+                
+                progressCallback?("Checking video service availability...", 10)
+                print("📹 [VIDEO UPLOAD] Checking cloud drive service availability (port: \(cloudPort))...")
+                
+                // Resolve writableUrl once for all video HTTP operations
+                _ = try await appUser.resolveWritableUrl()
+                let isCloudDriveAvailable = await MediaProcessor.checkCloudDriveServiceAvailability(appUser: appUser)
+                
+                guard isCloudDriveAvailable else {
+                    print("⚠️ [VIDEO UPLOAD] Cloud drive service not available, falling back to progressive video")
+                    progressCallback?("Uploading video...", 50)
+                    let result = try await uploadRegularFile(
+                        data: videoData,
+                        typeIdentifier: "public.mpeg-4",
+                        fileName: videoFileName,
+                        referenceId: referenceId,
+                        mediaType: .video,
+                        appUser: appUser,
+                        appId: appId
+                    )
+                    return (result, nil)
+                }
+                
+                // All videos are normalized now
+                let wasNormalized = true
+                
+                // Route based on video resolution
+                if videoResolution > 480 {
+                    // Resolution > 480p: HLS with high-quality + 480p variants
+                    // High-quality variant uses actual resolution (capped at 720p)
+                    print("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p > 480p: using HLS with \(min(videoResolution, 720))p + 480p variants")
+                    return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
+                        data: videoData,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        noResample: noResample,
+                        appUser: appUser,
+                        singleVariant480p: false,
+                        sourceVideoResolution: videoResolution,
+                        isNormalized: wasNormalized,
+                        progressCallback: progressCallback
+                    )
+                } else {
+                    // Resolution ≤ 480p: HLS with 480p variant only
+                    print("📹 [VIDEO UPLOAD] Resolution \(videoResolution)p ≤ 480p: using HLS with 480p variant only")
+                    return try await MediaProcessor.uploadVideoWithLocalHLSConversion(
+                        data: videoData,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        noResample: noResample,
+                        appUser: appUser,
+                        singleVariant480p: true,
+                        sourceVideoResolution: videoResolution,
+                        isNormalized: wasNormalized,
+                        progressCallback: progressCallback
+                    )
+                }
             }
         }
         
-        /// Process and upload audio files
-        func processAudio(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            let result = try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                mediaType: .audio,
-                appUser: appUser,
-                appId: appId
-            )
-            return (result, nil)
-        }
-        
-        /// Process and upload document files (PDF, Word, Excel, etc.)
-        func processDocument(
-            data: Data,
-            typeIdentifier: String,
-            fileName: String?,
-            referenceId: String?,
-            mediaType: MediaType,
-            appUser: User,
-            appId: String,
-            progressCallback: ((String, Int) -> Void)? = nil
-        ) async throws -> (MimeiFileType?, String?) {
-            let result = try await uploadRegularFile(
-                data: data,
-                typeIdentifier: typeIdentifier,
-                fileName: fileName,
-                referenceId: referenceId,
-                mediaType: mediaType,
-                appUser: appUser,
-                appId: appId
-            )
-            return (result, nil)
-        }
         
         /// Detect media type from type identifier, filename, and file header
-        func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
+        static func detectMediaType(from typeIdentifier: String, fileName: String?, data: Data) async -> MediaType {
             // Check type identifier first
             if typeIdentifier.hasPrefix("public.image") {
                 return .image
@@ -3227,45 +3603,74 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Upload video with local FFmpeg HLS conversion
-        private func uploadVideoWithLocalHLSConversion(
+        /// - Parameter singleVariant480p: If true, creates only 480p variant. If false, creates high-quality + 480p variants.
+        /// - Parameter sourceVideoResolution: Actual video resolution (used to determine high-quality variant resolution, capped at 720p)
+        private static func uploadVideoWithLocalHLSConversion(
             data: Data,
             fileName: String?,
             referenceId: String?,
             noResample: Bool,
             appUser: User,
+            singleVariant480p: Bool = false,
+            sourceVideoResolution: Int,
+            isNormalized: Bool = false,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async throws -> (MimeiFileType?, String?) {
-            print("Starting local HLS conversion with FFmpeg")
+            print("Starting local HLS conversion with FFmpeg (single 480p variant: \(singleVariant480p))")
             progressCallback?("Converting video to HLS...", 10)
+
+            // Log initial memory state
+            VideoConversionService.shared.logMemoryUsage("start of HLS conversion")
             
             // Create temporary directory for conversion
             let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             
-            // Save original video to temp file
+            // Save original video to temp file - ensure proper .mp4 extension
             let originalFileName = fileName ?? "video.mp4"
-            let originalVideoURL = tempDir.appendingPathComponent(originalFileName)
-            try data.write(to: originalVideoURL)
+            let fileExtension = (originalFileName as NSString).pathExtension.lowercased()
+            let baseFileName = (originalFileName as NSString).deletingPathExtension
             
-            // Get video info using FFmpeg (like the server does)
-            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
+            // Use .mp4 extension if file has wrong extension or no extension
+            let properFileName: String
+            if fileExtension.isEmpty || fileExtension == "file" || !["mp4", "mov", "m4v", "mkv", "avi", "wmv", "flv", "webm", "3gp"].contains(fileExtension) {
+                properFileName = "\(baseFileName).mp4"
+            } else {
+                properFileName = originalFileName
+            }
+            
+            let originalVideoURL = tempDir.appendingPathComponent(properFileName)
+
+            // Log memory before writing temp file
+            VideoConversionService.shared.logMemoryUsage("before writing temp video file")
+
+            try data.write(to: originalVideoURL)
+
+            // Log memory after writing temp file (this is where memory usage spikes)
+            VideoConversionService.shared.logMemoryUsage("after writing temp video file")
+            
+            // Get video info using AVFoundation
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: originalVideoURL.path)
             let videoAspectRatio: Float?
             if let info = videoInfo {
                 // Calculate aspect ratio from display dimensions (after rotation correction)
                 videoAspectRatio = Float(info.displayWidth) / Float(info.displayHeight)
                 print("DEBUG: [HLS CONVERSION] FFmpeg detected: \(info.width)x\(info.height), display: \(info.displayWidth)x\(info.displayHeight), rotation: \(info.rotation)°, aspect ratio: \(videoAspectRatio!)")
             } else {
-                videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
+                videoAspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
                 print("DEBUG: [HLS CONVERSION] Fallback to AVFoundation, aspect ratio: \(videoAspectRatio ?? 0.0)")
             }
             
-            // Convert to HLS using FFmpeg with background processing
+            // Convert to HLS using FFmpeg with foreground processing (high priority)
             let conversionResult = await withCheckedContinuation { continuation in
                 VideoConversionService.shared.convertVideoToHLS(
                     inputURL: originalVideoURL,
                     outputDirectory: tempDir,
                     fileSizeBytes: Int64(data.count),
                     aspectRatio: videoAspectRatio,
+                    singleVariant480p: singleVariant480p,
+                    sourceVideoResolution: sourceVideoResolution,
+                    isNormalized: isNormalized,
                     progressCallback: { progress in
                         DispatchQueue.main.async {
                             progressCallback?(progress.stage, 10 + Int(Double(progress.progress) * 0.2)) // 10-30% for conversion
@@ -3284,25 +3689,89 @@ final class HproseInstance: ObservableObject {
                 try? FileManager.default.removeItem(at: tempDir)
                 throw NSError(domain: "VideoConversion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to convert video to HLS"])
             }
-            
+
+            // Log memory after HLS conversion completes
+            VideoConversionService.shared.logMemoryUsage("after HLS conversion complete")
+
             progressCallback?("Compressing HLS files...", 40)
-            
+
+            // Log memory usage before compression
+            VideoConversionService.shared.logMemoryUsage("before HLS compression")
+
+            // Monitor HLS directory size for memory planning
+            if let hlsAttributes = try? FileManager.default.attributesOfItem(atPath: hlsDirectory.path),
+               let hlsSize = hlsAttributes[.size] as? Int64 {
+                print("DEBUG: [MEMORY MONITORING] HLS directory size: \(hlsSize / 1024)KB")
+            }
+
             // Compress the HLS directory
-            let compressedURL = try await compressHLSDirectory(
+            let compressedURL = try await MediaProcessor.compressHLSDirectory(
                 hlsDirectory: hlsDirectory,
-                originalFileName: originalFileName
+                originalFileName: originalFileName,
+                progressCallback: progressCallback
             )
-            
+
+            // Force memory cleanup after compression
+            autoreleasepool {}
+
+            // Log memory usage after compression
+            VideoConversionService.shared.logMemoryUsage("after HLS compression")
+
             progressCallback?("Uploading HLS zip to server...", 60)
+
+            // Log memory usage before upload
+            VideoConversionService.shared.logMemoryUsage("before HLS upload")
+
+            // Upload compressed HLS to server with retry logic
+            var lastError: Error?
+            var jobId: String?
+            let maxRetries = 2
             
-            // Upload compressed HLS to server
-            let jobId = try await uploadCompressedHLS(
-                compressedURL: compressedURL,
-                fileName: "\(originalFileName)_hls.zip",
-                referenceId: referenceId,
-                appUser: appUser
-            )
+            for attempt in 1...maxRetries {
+                do {
+                    // Resolve writableUrl (may use cached or resolve fresh)
+                    _ = try await appUser.resolveWritableUrl()
+                    print("DEBUG: [HLS Upload] Attempt \(attempt)/\(maxRetries) - writableUrl: \(appUser.writableUrl?.absoluteString ?? "nil")")
+                    
+                    jobId = try await MediaProcessor.uploadCompressedHLS(
+                        compressedURL: compressedURL,
+                        fileName: "\(originalFileName)_hls.zip",
+                        referenceId: referenceId,
+                        appUser: appUser
+                    )
+                    break // Success - exit retry loop
+                    
+                } catch let error {
+                    lastError = error
+                    let nsError = error as NSError
+                    print("ERROR: [HLS Upload] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
+                    
+                    if attempt >= maxRetries {
+                        print("ERROR: [HLS Upload] All retry attempts exhausted")
+                        throw error
+                    }
+                    
+                    // Clear cached writableUrl to force fresh resolution on retry
+                    await MainActor.run {
+                        print("DEBUG: [HLS Upload] Clearing writableUrl to force fresh IP resolution on retry")
+                        appUser.writableUrl = nil
+                    }
+                    
+                    // Small delay before retry
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                }
+            }
             
+            guard let jobId = jobId else {
+                throw lastError ?? NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "HLS upload failed"])
+            }
+
+            // Force memory cleanup after upload
+            autoreleasepool {}
+
+            // Log memory usage after upload
+            VideoConversionService.shared.logMemoryUsage("after HLS upload")
+
             print("✅ [HLS Upload] Uploaded to server, job ID: \(jobId)")
             progressCallback?("Video uploaded to server", 100)
             
@@ -3320,9 +3789,21 @@ final class HproseInstance: ObservableObject {
                 url: nil
             )
             
-            // Clean up temp files
+            // Clean up temp files (aggressive cleanup to reduce memory footprint)
+            print("DEBUG: [HLS UPLOAD] Cleaning up temporary files...")
+
+            // Force memory cleanup before file deletion
+            autoreleasepool {}
+
+            // Remove HLS directory and compressed file
             try? FileManager.default.removeItem(at: tempDir)
             try? FileManager.default.removeItem(at: compressedURL)
+
+            // Final memory cleanup
+            autoreleasepool {}
+
+            print("DEBUG: [HLS UPLOAD] Temporary files cleaned up")
+            VideoConversionService.shared.logMemoryUsage("after cleanup")
             
             // Return (placeholder MimeiFileType, jobId)
             // The jobId will be used for background polling
@@ -3330,15 +3811,14 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Check if cloud drive service is available at clouddriveport
-        private func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
+        private static func checkCloudDriveServiceAvailability(appUser: User) async -> Bool {
             guard !appUser.isGuest else {
                 print("Cloud drive check skipped for guest user - using fallback")
                 return false
             }
             
             do {
-                let writableUrl = try await appUser.resolveWritableUrl()
-                guard let writableUrl = writableUrl,
+                guard let writableUrl = appUser.writableUrl,
                       let host = writableUrl.host,
                       appUser.cloudDrivePort > 0,
                       let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
@@ -3369,7 +3849,8 @@ final class HproseInstance: ObservableObject {
                     return false
                 }
             } catch {
-                print("Cloud drive service unavailable - using MP4 fallback (\(error.localizedDescription))")
+                let nsError = error as NSError
+                print("Cloud drive service unavailable - using MP4 fallback (domain: \(nsError.domain), code: \(nsError.code))")
                 return false
             }
         }
@@ -3397,8 +3878,8 @@ final class HproseInstance: ObservableObject {
             let tempFileName = (originalFileName as NSString).deletingPathExtension + ".mp4"
             let originalVideoURL = tempDir.appendingPathComponent(tempFileName)
             try data.write(to: originalVideoURL)
-            
-            let videoInfo = await HLSVideoProcessor.shared.getVideoInfoWithFFmpeg(filePath: originalVideoURL.path)
+
+            let videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: originalVideoURL.path)
             let videoAspectRatio: Float?
             let targetResolution: Int
             
@@ -3408,7 +3889,7 @@ final class HproseInstance: ObservableObject {
                 targetResolution = minDimension > 720 ? 720 : minDimension
                 print("Converting \(info.displayWidth)x\(info.displayHeight) → \(targetResolution)p (aspect: \(String(format: "%.2f", videoAspectRatio ?? 0)))")
             } else {
-                videoAspectRatio = await getVideoAspectRatioWithFallback(from: data)
+                videoAspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
                 targetResolution = 720
                 print("Using fallback settings: \(targetResolution)p")
             }
@@ -3419,10 +3900,24 @@ final class HproseInstance: ObservableObject {
             let outputVideoName = "resampled_" + (originalFileName as NSString).deletingPathExtension + ".mp4"
             let outputVideoURL = tempDir.appendingPathComponent(outputVideoName)
             
-            let conversionSuccess = await convertVideoToMp4(
+            // Get width and height for bitrate calculation
+            let videoWidth: Int
+            let videoHeight: Int
+            if let info = videoInfo {
+                videoWidth = info.displayWidth
+                videoHeight = info.displayHeight
+            } else {
+                // Fallback: assume square resolution based on targetResolution
+                videoWidth = targetResolution
+                videoHeight = targetResolution
+            }
+
+            let conversionSuccess = await MediaProcessor.convertVideoToMp4(
                 inputURL: originalVideoURL,
                 outputURL: outputVideoURL,
                 targetResolution: targetResolution,
+                width: videoWidth,
+                height: videoHeight,
                 aspectRatio: videoAspectRatio,
                 progressCallback: progressCallback
             )
@@ -3439,7 +3934,7 @@ final class HproseInstance: ObservableObject {
             let outputFileName = outputVideoName
             print("Converted: \(String(format: "%.1f", Double(convertedData.count) / (1024 * 1024)))MB → uploading to IPFS...")
             
-            let result = try await uploadRegularFile(
+            let result = try await MediaProcessor.uploadRegularFile(
                 data: convertedData,
                 typeIdentifier: "public.mpeg-4",
                 fileName: outputFileName,
@@ -3456,10 +3951,12 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Convert video to MP4 with target resolution
-        private func convertVideoToMp4(
+        private static func convertVideoToMp4(
             inputURL: URL,
             outputURL: URL,
             targetResolution: Int,
+            width: Int,
+            height: Int,
             aspectRatio: Float?,
             progressCallback: ((String, Int) -> Void)? = nil
         ) async -> Bool {
@@ -3478,28 +3975,30 @@ final class HproseInstance: ObservableObject {
                     // Fallback to height-based scaling
                     scaleFilter = "scale=-2:\(targetResolution)"
                 }
-                
-                // Calculate bitrate based on target resolution (720p = 1500k, proportional for others)
+
+                // Calculate proportional bitrate based on pixel count (720p = 921,600 pixels = 1000k base)
+                // Always use calculated bitrate (bitrate detection is unreliable)
                 let bitrateKbps: Int
+                let REFERENCE_720P_PIXELS = 921600
+
                 if targetResolution >= 720 {
-                    bitrateKbps = 1500
-                } else if targetResolution >= 480 {
-                    // 480p = 1500 * (480/720) = 1000k
-                    bitrateKbps = 1000
-                } else if targetResolution >= 360 {
-                    // 360p = 1500 * (360/720) = 750k
-                    bitrateKbps = 750
+                    // Videos scaled to 720p: use 720p pixel count for bitrate calculation
+                    bitrateKbps = Int(VideoConversionService.reference720pBitrate)
                 } else {
-                    // Lower resolutions = 1500 * (resolution/720)
-                    bitrateKbps = Int(1500.0 * Double(targetResolution) / 720.0)
+                    // Videos keeping original resolution: use actual pixel count for bitrate calculation (min minBitrate to avoid inflating low-bitrate videos)
+                    let pixelCount = width * height
+                    let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
+                    bitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
+                    print("📊 Pixel-based calculation: \(width)×\(height) (\(pixelCount) pixels) = \(calculatedBitrate)k → \(bitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
                 }
+                print("📊 Using calculated bitrate for \(targetResolution)p: \(bitrateKbps)k")
                 
                 let command = """
                     -i "\(inputURL.path)" \
                     -c:v libx264 \
                     -c:a aac \
                     -vf "\(scaleFilter)" \
-                    -preset fast \
+                    -preset veryfast \
                     -b:v \(bitrateKbps)k \
                     -b:a 128k \
                     -movflags +faststart \
@@ -3535,66 +4034,451 @@ final class HproseInstance: ObservableObject {
         }
         
         
-        /// Compress HLS directory into a zip file
-        private func compressHLSDirectory(hlsDirectory: URL, originalFileName: String) async throws -> URL {
-            let zipFileName = "\(originalFileName)_hls.zip"
-            let tempDir = hlsDirectory.deletingLastPathComponent()
-            let zipURL = tempDir.appendingPathComponent(zipFileName)
+        /// Normalize video to 720p/1000k bitrate, preserving original resolution/bitrate if lower
+        private static func normalizeTo720p1000k(
+            inputURL: URL,
+            outputURL: URL,
+            progressCallback: ((String, Int) -> Void)? = nil
+        ) async -> Bool {
             
-            print("DEBUG: Compressing HLS directory: \(hlsDirectory.path)")
-            print("DEBUG: Zip file will be created at: \(zipURL.path)")
-            
-            // Create a temporary directory to hold the zip contents (without the hls directory wrapper)
-            let tempZipDir = tempDir.appendingPathComponent("temp_zip_\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: tempZipDir, withIntermediateDirectories: true)
-            
-            defer {
-                // Clean up temp directory
-                try? FileManager.default.removeItem(at: tempZipDir)
-            }
-            
-            // Copy contents of HLS directory to temp directory (this puts master.m3u8, 720p/, 480p/ at root)
-            let contents = try FileManager.default.contentsOfDirectory(at: hlsDirectory, includingPropertiesForKeys: nil)
-            for item in contents {
-                let destination = tempZipDir.appendingPathComponent(item.lastPathComponent)
-                try FileManager.default.copyItem(at: item, to: destination)
-                print("DEBUG: Copied \(item.lastPathComponent) to temp zip directory")
-            }
-            
-            // Use FileManager to create zip archive from temp directory
-            let coordinator = NSFileCoordinator()
-            var error: NSError?
-            
-            return try await withCheckedThrowingContinuation { continuation in
-                coordinator.coordinate(readingItemAt: tempZipDir, options: [.forUploading], error: &error) { (url) in
-                    do {
-                        // Move the temporary zip file to our desired location
-                        try FileManager.default.moveItem(at: url, to: zipURL)
-                        print("DEBUG: Successfully created zip file at: \(zipURL.path)")
-                        continuation.resume(returning: zipURL)
-                    } catch {
-                        print("DEBUG: Failed to move zip file: \(error)")
-                        continuation.resume(throwing: error)
+            return await withCheckedContinuation { continuation in
+                // Get video info to check original resolution and bitrate
+                Task(priority: .high) {
+                    // Try to get video info with AVFoundation first
+                    var videoInfo = await HLSVideoProcessor.shared.getVideoInfo(filePath: inputURL.path)
+                    
+                    // If AVFoundation fails, try with a temporary file with proper extension
+                    if videoInfo == nil {
+                        print("AVFoundation probe failed, trying with temporary file...")
+                        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+                        let tempVideoURL = tempDir.appendingPathComponent("\(UUID().uuidString).mp4")
+                        
+                        do {
+                            // Copy file data to temporary location with .mp4 extension
+                            let fileData = try Data(contentsOf: inputURL)
+                            try fileData.write(to: tempVideoURL)
+                            
+                            // Try to get video info using AVFoundation
+                            let dimensions = await HLSVideoProcessor.shared.getVideoDimensions(filePath: tempVideoURL.path)
+                            if dimensions.width > 0 && dimensions.height > 0 {
+                                // Get rotation info if available
+                                let asset = AVURLAsset(url: tempVideoURL)
+                                var rotation = 0
+                                if let tracks = try? await asset.loadTracks(withMediaType: .video),
+                                   let track = tracks.first {
+                                    let transform = try? await track.load(.preferredTransform)
+                                    if let transform = transform {
+                                        // Calculate rotation from transform
+                                        let angle = atan2(transform.b, transform.a) * 180 / .pi
+                                        rotation = Int(angle)
+                                    }
+                                }
+                                
+                                var displayWidth = Int(dimensions.width)
+                                var displayHeight = Int(dimensions.height)
+                                
+                                // Apply rotation if needed
+                                if rotation == 90 || rotation == -90 {
+                                    swap(&displayWidth, &displayHeight)
+                                }
+                                
+                                videoInfo = (Int(dimensions.width), Int(dimensions.height), displayWidth, displayHeight, rotation)
+                                print("✅ Got video info via AVFoundation: \(displayWidth)x\(displayHeight) (rotation: \(rotation)°)")
+                            }
+                            
+                            // Clean up temp file
+                            try? FileManager.default.removeItem(at: tempDir)
+                        } catch {
+                            print("Failed to get video info via AVFoundation: \(error)")
+                            try? FileManager.default.removeItem(at: tempDir)
+                        }
                     }
-                }
-                
-                if let error = error {
-                    print("DEBUG: File coordinator error: \(error)")
-                    continuation.resume(throwing: error)
+                    
+                    // Note: Bitrate detection is unreliable, so we always use calculated bitrate
+                    
+                    // Get original resolution
+                    var originalWidth: Int? = nil
+                    var originalHeight: Int? = nil
+                    if let info = videoInfo {
+                        originalWidth = info.displayWidth
+                        originalHeight = info.displayHeight
+                    }
+                    
+                    // Determine if we need to scale and calculate target bitrate
+                    let needsScaling: Bool
+                    let scaleFilter: String
+                    let targetBitrateKbps: Int
+                    var videoResolution: Int = 720 // Default to 720p
+                    
+                    if let width = originalWidth, let height = originalHeight {
+                        let aspectRatio = Float(width) / Float(height)
+                        
+                        // Video resolution is defined by:
+                        // - Landscape (aspect >= 1.0): HEIGHT (e.g., 1280x720 is 720p)
+                        // - Portrait (aspect < 1.0): WIDTH (e.g., 720x1280 is 720p)
+                        if aspectRatio < 1.0 {
+                            // Portrait: resolution is width
+                            videoResolution = width
+                        } else {
+                            // Landscape: resolution is height
+                            videoResolution = height
+                        }
+                        
+                        needsScaling = videoResolution > 720
+                        
+                        if needsScaling {
+                            // Resolution > 720p: scale to 720p with 1500k bitrate
+                            if aspectRatio < 1.0 {
+                                // Portrait: scale to target width
+                                scaleFilter = "scale=720:-2"
+                            } else {
+                                // Landscape: scale to target height
+                                scaleFilter = "scale=-2:720"
+                            }
+                            // Always use 1500k bitrate for 720p normalization (bitrate detection is unreliable)
+                            targetBitrateKbps = 1500
+                            print("📊 Scaling to 720p with 1500k bitrate")
+                        } else {
+                            // Resolution ≤ 720p: keep original resolution with proportional bitrate (min minBitrate to avoid inflating low-bitrate videos)
+                            scaleFilter = ""
+                            // Calculate proportional bitrate based on pixel count
+                            // Formula: bitrate = max(minBitrate, (pixel_count / REFERENCE_720P_PIXELS) * reference720pBitrate)
+                            // REFERENCE_720P_PIXELS = 1280 × 720 = 921,600
+                            let pixelCount = width * height
+                            let REFERENCE_720P_PIXELS = 921600
+                            let calculatedBitrate = Int((Double(pixelCount) / Double(REFERENCE_720P_PIXELS)) * VideoConversionService.reference720pBitrate)
+                            targetBitrateKbps = max(VideoConversionService.minBitrate, calculatedBitrate)
+                            print("📊 Original resolution \(width)x\(height) (\(videoResolution)p), pixel-based: \(calculatedBitrate)k → \(targetBitrateKbps)k (with \(VideoConversionService.minBitrate)k min)")
+                        }
+                    } else {
+                        // Fallback: assume scaling needed
+                        needsScaling = true
+                        scaleFilter = "scale=-2:720"
+                        targetBitrateKbps = Int(VideoConversionService.reference720pBitrate)
+                        print("📊 Could not detect resolution, defaulting to 720p with \(targetBitrateKbps)k bitrate")
+                    }
+                    
+                    print("📹 [NORMALIZE] Original: \(originalWidth ?? 0)x\(originalHeight ?? 0), target bitrate: \(targetBitrateKbps)k, scaling: \(needsScaling ? "YES (to 720p)" : "NO (keep original resolution)")")
+                    
+                    // Build FFmpeg command
+                    var command: String
+                    if needsScaling && !scaleFilter.isEmpty {
+                        command = """
+                            -i "\(inputURL.path)" \
+                            -c:v libx264 \
+                            -profile:v main \
+                            -level 4.0 \
+                            -pix_fmt yuv420p \
+                            -vf "\(scaleFilter)" \
+                            -preset veryfast \
+                            -b:v \(targetBitrateKbps)k \
+                            -maxrate \(targetBitrateKbps)k \
+                            -bufsize \(targetBitrateKbps)k \
+                            -c:a aac \
+                            -ar 44100 \
+                            -b:a 128k \
+                            -movflags +faststart \
+                            -metadata:s:v:0 rotate=0 \
+                            "\(outputURL.path)"
+                            """
+                    } else {
+                        // Keep original resolution but encode with target bitrate
+                        command = """
+                            -i "\(inputURL.path)" \
+                            -c:v libx264 \
+                            -profile:v main \
+                            -level 4.0 \
+                            -pix_fmt yuv420p \
+                            -preset veryfast \
+                            -b:v \(targetBitrateKbps)k \
+                            -maxrate \(targetBitrateKbps)k \
+                            -bufsize \(targetBitrateKbps)k \
+                            -c:a aac \
+                            -ar 44100 \
+                            -b:a 128k \
+                            -movflags +faststart \
+                            -metadata:s:v:0 rotate=0 \
+                            "\(outputURL.path)"
+                            """
+                    }
+                    
+                    FFmpegKit.executeAsync(command) { session in
+                        guard let session = session else {
+                            print("ERROR: Failed to create FFmpeg session for normalization")
+                            continuation.resume(returning: false)
+                            return
+                        }
+                        
+                        let returnCode = session.getReturnCode()
+                        let success = ReturnCode.isSuccess(returnCode)
+                        
+                        if success {
+                            if FileManager.default.fileExists(atPath: outputURL.path) {
+                                let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+                                // Determine output resolution for logging
+                                let outputResolution: String
+                                if needsScaling {
+                                    outputResolution = "720p"
+                                } else if let width = originalWidth, let height = originalHeight {
+                                    outputResolution = "\(width)x\(height) (\(videoResolution)p)"
+                                } else {
+                                    outputResolution = "unknown"
+                                }
+                                print("✅ Normalized to \(outputResolution) with \(targetBitrateKbps)k bitrate - \(fileSize / 1024)KB")
+                                continuation.resume(returning: true)
+                            } else {
+                                print("ERROR: Normalized output file missing")
+                                continuation.resume(returning: false)
+                            }
+                        } else {
+                            print("ERROR: FFmpeg normalization failed (code: \(String(describing: returnCode)))")
+                            continuation.resume(returning: false)
+                        }
+                    }
                 }
             }
         }
         
+        /// Compress HLS directory into a zip file (memory-optimized streaming approach)
+        private static func compressHLSDirectory(hlsDirectory: URL, originalFileName: String, progressCallback: ((String, Int) -> Void)? = nil) async throws -> URL {
+            let zipFileName = "\(originalFileName)_hls.zip"
+            let tempDir = hlsDirectory.deletingLastPathComponent()
+            let zipURL = tempDir.appendingPathComponent(zipFileName)
+
+            print("DEBUG: [ZIP CREATION] Starting memory-optimized zip creation")
+            print("DEBUG: [ZIP CREATION] HLS directory: \(hlsDirectory.path)")
+            print("DEBUG: [ZIP CREATION] Zip file will be created at: \(zipURL.path)")
+
+            // Log initial memory usage
+            VideoConversionService.shared.logMemoryUsage("before zip creation")
+
+            // Memory-optimized streaming approach: Process files sequentially without loading into memory
+            return try await withCheckedThrowingContinuation { continuation in
+                Task(priority: .high) {
+                    do {
+                        // Calculate total size and get file list
+                        var totalSize: Int64 = 0
+                        var fileURLs: [URL] = []
+
+                        // Use FileManager enumerator to get all files without loading them
+                        let enumerator = FileManager.default.enumerator(at: hlsDirectory,
+                                                                       includingPropertiesForKeys: [.fileSizeKey],
+                                                                       options: [],
+                                                                       errorHandler: nil)
+
+                        while let fileURL = enumerator?.nextObject() as? URL {
+                            var isDirectory: ObjCBool = false
+                            if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) && !isDirectory.boolValue {
+                                if let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                                   let size = attributes[.size] as? Int64 {
+                                    totalSize += size
+                                    fileURLs.append(fileURL)
+                                }
+                            }
+                        }
+
+                        print("DEBUG: [ZIP CREATION] Found \(fileURLs.count) files, total size: \(totalSize / 1024)KB")
+                        
+                        // Log some file paths for debugging
+                        if !fileURLs.isEmpty {
+                            let samplePaths = fileURLs.prefix(3).map { $0.lastPathComponent }
+                            print("DEBUG: [ZIP CREATION] Sample files: \(samplePaths.joined(separator: ", "))")
+                        }
+
+                        // Force memory cleanup before zip creation
+                        autoreleasepool {}
+                        progressCallback?("Creating ZIP file...", 10)
+
+                        // Create ZIP file directly without copying directory
+                        // Use parent directory as base so "hls/" is included in ZIP structure
+                        let baseDirectory = hlsDirectory.deletingLastPathComponent()
+                        print("DEBUG: [ZIP CREATION] Base directory: \(baseDirectory.path)")
+                        print("DEBUG: [ZIP CREATION] HLS directory name: \(hlsDirectory.lastPathComponent)")
+                        try MediaProcessor.createZipFile(from: fileURLs, relativeTo: baseDirectory, to: zipURL, progressCallback: progressCallback)
+
+                        // Verify zip file was created and get its size
+                        if let zipAttributes = try? FileManager.default.attributesOfItem(atPath: zipURL.path),
+                           let zipSize = zipAttributes[.size] as? Int64 {
+                            print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
+                            print("DEBUG: [ZIP CREATION] Zip file size: \(zipSize / 1024)KB (original: \(totalSize / 1024)KB)")
+
+                            // Log memory usage after zip creation
+                            VideoConversionService.shared.logMemoryUsage("after zip creation")
+
+                            continuation.resume(returning: zipURL)
+                        } else {
+                            throw NSError(domain: "ZipCreation", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to verify zip file creation"])
+                        }
+
+                    } catch {
+                        print("DEBUG: [ZIP CREATION] Zip creation failed: \(error)")
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+        
+        /// Create ZIP file from array of file URLs using system ZIP functionality (memory efficient)
+        private static func createZipFile(from fileURLs: [URL], relativeTo baseURL: URL, to zipURL: URL, progressCallback: ((String, Int) -> Void)? = nil) throws {
+            let fileManager = FileManager.default
+            var processedCount = 0
+            let totalFiles = fileURLs.count
+
+            // Create a temporary directory structure for ZIP creation
+            let tempDir = zipURL.deletingLastPathComponent()
+            let tempZipDir = tempDir.appendingPathComponent("temp_zip_parts_\(UUID().uuidString)")
+            try fileManager.createDirectory(at: tempZipDir, withIntermediateDirectories: true)
+
+            defer {
+                try? fileManager.removeItem(at: tempZipDir)
+            }
+
+            // Process each file individually to minimize memory usage
+            for fileURL in fileURLs {
+                autoreleasepool {
+                    do {
+                        let relativePath = fileURL.path.replacingOccurrences(of: baseURL.path + "/", with: "")
+                        
+                        // Log first few relative paths for debugging
+                        if processedCount < 3 {
+                            print("DEBUG: [ZIP CREATION] File \(processedCount + 1): relativePath=\(relativePath), fullPath=\(fileURL.path)")
+                        }
+
+                        // Create a temporary directory structure that mirrors the relative path
+                        let tempFileDir = tempZipDir.appendingPathComponent(relativePath).deletingLastPathComponent()
+                        try fileManager.createDirectory(at: tempFileDir, withIntermediateDirectories: true)
+
+                        let tempFileURL = tempZipDir.appendingPathComponent(relativePath)
+
+                        // Copy file to temporary location with correct relative structure
+                        try fileManager.copyItem(at: fileURL, to: tempFileURL)
+                        
+                        // Verify file was copied
+                        if !fileManager.fileExists(atPath: tempFileURL.path) {
+                            print("DEBUG: [ZIP CREATION] WARNING: File copy verification failed for \(relativePath)")
+                        }
+
+                        processedCount += 1
+                        if processedCount % 5 == 0 || processedCount == totalFiles {
+                            let progressPercent = 10 + Int((Double(processedCount) / Double(totalFiles)) * 15.0)
+                            progressCallback?("Preparing files... (\(processedCount)/\(totalFiles))", progressPercent)
+                        }
+
+                    } catch {
+                        print("DEBUG: [ZIP CREATION] Error processing file \(fileURL.lastPathComponent): \(error)")
+                        // Continue with other files rather than failing completely
+                    }
+                }
+            }
+
+            progressCallback?("Creating ZIP archive...", 25)
+
+            // Verify tempZipDir structure before zipping
+            print("DEBUG: [ZIP CREATION] Verifying tempZipDir structure: \(tempZipDir.path)")
+            let contents = try? fileManager.contentsOfDirectory(at: tempZipDir, includingPropertiesForKeys: [.isDirectoryKey])
+            print("DEBUG: [ZIP CREATION] tempZipDir top-level contents: \(contents?.map { $0.lastPathComponent } ?? [])")
+            
+            // Find the "hls" subdirectory in tempZipDir
+            let hlsSubdir = tempZipDir.appendingPathComponent("hls")
+            var isDirectory: ObjCBool = false
+            let hlsExists = fileManager.fileExists(atPath: hlsSubdir.path, isDirectory: &isDirectory) && isDirectory.boolValue
+            
+            // Determine which directory to zip
+            // If hls subdirectory exists, zip it directly (ZIP will contain hls/720p/, hls/480p/, etc.)
+            // If not, zip tempZipDir (structure might be different)
+            let dirToZip = hlsExists ? hlsSubdir : tempZipDir
+            print("DEBUG: [ZIP CREATION] Zipping directory: \(dirToZip.path) (hls subdir exists: \(hlsExists))")
+
+            // Use NSFileCoordinator to create ZIP from the directory
+            // When zipping a directory with .forUploading, the ZIP will contain that directory's name
+            // So if we zip "hls", the ZIP will have "hls/" at the root, which is what the server expects
+            let coordinator = NSFileCoordinator()
+            var coordinatorError: NSError?
+            var localError: NSError?
+
+            coordinator.coordinate(readingItemAt: dirToZip, options: [.forUploading], error: &localError) { (tempZipURL) in
+                do {
+                    print("DEBUG: [ZIP CREATION] NSFileCoordinator created temporary ZIP at: \(tempZipURL.path)")
+                    
+                    // Verify temporary ZIP exists and has content
+                    if let tempAttributes = try? fileManager.attributesOfItem(atPath: tempZipURL.path),
+                       let tempSize = tempAttributes[.size] as? Int64 {
+                        print("DEBUG: [ZIP CREATION] Temporary ZIP size: \(tempSize / 1024)KB")
+                        
+                        if tempSize == 0 {
+                            throw NSError(domain: "ZipCreation", code: -1,
+                                        userInfo: [NSLocalizedDescriptionKey: "ZIP file is empty"])
+                        }
+                    }
+                    
+                    // The coordinator creates a temporary ZIP file, move it to final location
+                    if fileManager.fileExists(atPath: zipURL.path) {
+                        try fileManager.removeItem(at: zipURL)
+                    }
+                    try fileManager.moveItem(at: tempZipURL, to: zipURL)
+                    print("DEBUG: [ZIP CREATION] Successfully created zip file at: \(zipURL.path)")
+                } catch {
+                    print("DEBUG: [ZIP CREATION] Failed to create final zip file: \(error)")
+                    coordinatorError = error as NSError
+                }
+            }
+
+            // Check for errors from the coordinator itself
+            if let error = localError ?? coordinatorError {
+                // Clean up temporary directory
+                try? fileManager.removeItem(at: tempZipDir)
+                print("DEBUG: [ZIP CREATION] File coordinator error: \(error)")
+                throw error
+            }
+            
+            // Verify ZIP was created successfully
+            guard fileManager.fileExists(atPath: zipURL.path) else {
+                try? fileManager.removeItem(at: tempZipDir)
+                throw NSError(domain: "ZipCreation", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "ZIP file was not created"])
+            }
+
+            // Verify ZIP file was created
+            if !fileManager.fileExists(atPath: zipURL.path) {
+                throw NSError(domain: "ZipCreation", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "ZIP file was not created"])
+            }
+
+            // Get final ZIP size and verify it's not empty
+            if let zipAttributes = try? fileManager.attributesOfItem(atPath: zipURL.path),
+               let zipSize = zipAttributes[.size] as? Int64 {
+                print("DEBUG: [ZIP CREATION] Final ZIP size: \(zipSize / 1024)KB")
+                
+                if zipSize == 0 {
+                    throw NSError(domain: "ZipCreation", code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: "ZIP file is empty"])
+                }
+                
+                // Verify ZIP file is readable (basic validation)
+                if zipSize < 100 {
+                    print("DEBUG: [ZIP CREATION] WARNING: ZIP file seems too small (\(zipSize) bytes)")
+                }
+            } else {
+                throw NSError(domain: "ZipCreation", code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Cannot read ZIP file attributes"])
+            }
+            
+            // Log ZIP file path for server debugging
+            print("DEBUG: [ZIP CREATION] ZIP file ready for upload: \(zipURL.lastPathComponent)")
+
+            progressCallback?("ZIP creation completed", 30)
+            print("DEBUG: [ZIP CREATION] Memory-efficient zip creation completed")
+        }
+
         /// Upload compressed HLS to server via process-zip route
-        private func uploadCompressedHLS(
+        private static func uploadCompressedHLS(
             compressedURL: URL,
             fileName: String,
             referenceId: String?,
             appUser: User
         ) async throws -> String {
-            // Always resolve writableUrl to ensure we have the correct IP address
-            let writableUrl = try await appUser.resolveWritableUrl()
-            guard let writableUrl = writableUrl else {
+            guard let writableUrl = appUser.writableUrl else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
@@ -3618,54 +4502,258 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid process-zip URL"])
             }
             
-            // Read compressed file data
-            let compressedData = try Data(contentsOf: compressedURL)
+            // Verify zip file exists and has content
+            guard FileManager.default.fileExists(atPath: compressedURL.path) else {
+                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Zip file does not exist at path: \(compressedURL.path)"])
+            }
+
+            let fileAttributes = try FileManager.default.attributesOfItem(atPath: compressedURL.path)
+            let fileSize = fileAttributes[.size] as? Int64 ?? 0
+
+            guard fileSize > 0 else {
+                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Zip file is empty (size: \(fileSize) bytes)"])
+            }
+
+            // Additional validation: check if the file is actually a valid zip by checking the first few bytes
+            let fileHandle = try FileHandle(forReadingFrom: compressedURL)
+            let headerData = fileHandle.readData(ofLength: 4)
+            fileHandle.closeFile()
+
+            // ZIP files start with PK\x03\x04 or PK\x05\x06 or PK\x07\x08
+            let zipSignatures = [
+                Data([0x50, 0x4B, 0x03, 0x04]), // PK\x03\x04
+                Data([0x50, 0x4B, 0x05, 0x06]), // PK\x05\x06
+                Data([0x50, 0x4B, 0x07, 0x08])  // PK\x07\x08
+            ]
+
+            let isValidZip = zipSignatures.contains { signature in
+                headerData.starts(with: signature)
+            }
+
+            guard isValidZip else {
+                throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Zip file appears to be corrupted (invalid header: \(headerData.map { String(format: "%02x", $0) }.joined()))"])
+            }
+
+            print("DEBUG: [UPLOAD] Preparing to upload zip file, size: \(fileSize / 1024)KB")
+
+            // For very large files (>50MB), use file-based streaming to avoid memory issues
+            let maxMemoryEfficientSize = Int64(50 * 1024 * 1024) // 50MB
+            if fileSize > maxMemoryEfficientSize {
+                print("DEBUG: [UPLOAD] Large zip file (\(fileSize / (1024 * 1024))MB) - using file-based streaming upload")
+                VideoConversionService.shared.logMemoryUsage("before large file upload")
+            }
+
+            // Create multipart form data with a simple boundary
+            let boundary = "----WebKitFormBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
             
-            // Create multipart form data
-            let boundary = "Boundary-\(UUID().uuidString)"
+            // For large files, create multipart form data as a file on disk to avoid loading into memory
+            let tempMultipartFile: URL
+            let shouldUseFileBasedUpload = fileSize > maxMemoryEfficientSize
+            
+            if shouldUseFileBasedUpload {
+                // Create temporary file for multipart form data
+                let tempDir = FileManager.default.temporaryDirectory
+                tempMultipartFile = tempDir.appendingPathComponent("multipart_\(UUID().uuidString).tmp")
+                
+                // Create file handle for writing
+                guard FileManager.default.createFile(atPath: tempMultipartFile.path, contents: nil, attributes: nil) else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create temporary multipart file"])
+                }
+                
+                guard let multipartFileHandle = FileHandle(forWritingAtPath: tempMultipartFile.path) else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to open temporary multipart file for writing"])
+                }
+                
+                // Write multipart form data to file by streaming
+                // Add the compressed HLS file FIRST (some servers expect the file field first)
+                multipartFileHandle.write("--\(boundary)\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("Content-Type: application/zip\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                
+                // Stream the ZIP file content directly to the multipart file
+                let zipFileHandle = try FileHandle(forReadingFrom: compressedURL)
+                
+                // Read and write in chunks to minimize memory usage
+                let chunkSize = 1024 * 1024 // 1MB chunks
+                var bytesWritten = 0
+                var shouldContinue = true
+                while shouldContinue {
+                    autoreleasepool {
+                        let chunk = zipFileHandle.readData(ofLength: chunkSize)
+                        if chunk.isEmpty {
+                            shouldContinue = false
+                        } else {
+                            multipartFileHandle.write(chunk)
+                            bytesWritten += chunk.count
+                        }
+                    }
+                }
+                zipFileHandle.closeFile()
+                
+                multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                
+                // Add filename
+                multipartFileHandle.write("--\(boundary)\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("Content-Disposition: form-data; name=\"filename\"\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                multipartFileHandle.write("\(fileName)\r\n".data(using: .utf8)!)
+                
+                // Add reference ID if provided
+                if let referenceId = referenceId {
+                    multipartFileHandle.write("--\(boundary)\r\n".data(using: .utf8)!)
+                    multipartFileHandle.write("Content-Disposition: form-data; name=\"referenceId\"\r\n".data(using: .utf8)!)
+                    multipartFileHandle.write("\r\n".data(using: .utf8)!)
+                    multipartFileHandle.write("\(referenceId)\r\n".data(using: .utf8)!)
+                }
+                
+                // End boundary
+                multipartFileHandle.write("--\(boundary)--\r\n".data(using: .utf8)!)
+                
+                // CRITICAL: Flush and synchronize file before closing
+                multipartFileHandle.synchronizeFile()
+                multipartFileHandle.closeFile()
+                
+                // Get final file size after flushing and closing
+                let multipartFileSize = (try? FileManager.default.attributesOfItem(atPath: tempMultipartFile.path))?[.size] as? Int64 ?? 0
+                print("DEBUG: [UPLOAD] Multipart form file created, size: \(multipartFileSize / (1024 * 1024))MB")
+                print("DEBUG: [UPLOAD] ZIP file streamed in chunks, total: \(bytesWritten / (1024 * 1024))MB")
+                print("DEBUG: [UPLOAD] Expected multipart size: ~\(fileSize + 500) bytes (ZIP + headers)")
+                
+                // Verify the multipart file is valid
+                guard multipartFileSize > fileSize else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Multipart file size (\(multipartFileSize)) is smaller than ZIP file size (\(fileSize))"])
+                }
+                
+                // Lightweight validation - only read small chunks to verify file integrity
+                // Wrapped in autoreleasepool to minimize memory footprint
+                autoreleasepool {
+                    do {
+                        // Verify multipart file starts with boundary (small read: ~50 bytes)
+                        let verifyHandle = try FileHandle(forReadingFrom: tempMultipartFile)
+                        let firstBytes = verifyHandle.readData(ofLength: min(boundary.count + 4, 100))
+                        verifyHandle.closeFile()
+                        
+                        if let firstString = String(data: firstBytes, encoding: .utf8), firstString.hasPrefix("--\(boundary)") {
+                            print("DEBUG: [UPLOAD] Multipart file header verified")
+                        } else {
+                            print("DEBUG: [UPLOAD] WARNING: Multipart file header doesn't match expected boundary")
+                        }
+                        
+                        // Verify ZIP signature is present (read only first 10KB to find ZIP start, then 4 bytes for signature)
+                        let verifyHandle2 = try FileHandle(forReadingFrom: tempMultipartFile)
+                        let searchData = verifyHandle2.readData(ofLength: min(Int(multipartFileSize), 10000))
+                        verifyHandle2.closeFile()
+                        
+                        if let searchString = String(data: searchData, encoding: .utf8),
+                           let zipStartRange = searchString.range(of: "\r\n\r\n", options: []),
+                           let zipStartIndex = searchString.index(zipStartRange.upperBound, offsetBy: 0, limitedBy: searchString.endIndex) {
+                            let zipStartOffset = searchString.distance(from: searchString.startIndex, to: zipStartIndex)
+                            let verifyHandle3 = try FileHandle(forReadingFrom: tempMultipartFile)
+                            verifyHandle3.seek(toFileOffset: UInt64(zipStartOffset))
+                            let zipHeader = verifyHandle3.readData(ofLength: 4)
+                            verifyHandle3.closeFile()
+                            
+                            let zipSignatures = [
+                                Data([0x50, 0x4B, 0x03, 0x04]), // PK\x03\x04
+                                Data([0x50, 0x4B, 0x05, 0x06]), // PK\x05\x06
+                                Data([0x50, 0x4B, 0x07, 0x08])  // PK\x07\x08
+                            ]
+                            let isValidZipInMultipart = zipSignatures.contains { signature in
+                                zipHeader.starts(with: signature)
+                            }
+                            if isValidZipInMultipart {
+                                print("DEBUG: [UPLOAD] ZIP file signature verified within multipart form at offset \(zipStartOffset)")
+                            } else {
+                                print("DEBUG: [UPLOAD] ERROR: ZIP file signature NOT found in multipart form at offset \(zipStartOffset)")
+                                print("DEBUG: [UPLOAD] First 4 bytes at ZIP start: \(zipHeader.map { String(format: "%02x", $0) }.joined())")
+                            }
+                        }
+                    } catch {
+                        print("DEBUG: [UPLOAD] Validation error (non-critical): \(error)")
+                        // Don't fail upload if validation has issues - file might still be valid
+                    }
+                }
+                
+                if fileSize > maxMemoryEfficientSize {
+                    VideoConversionService.shared.logMemoryUsage("after creating multipart file (streaming)")
+                }
+            } else {
+                // For smaller files, use in-memory approach (more efficient for small files)
+                let compressedData = try Data(contentsOf: compressedURL)
+                guard compressedData.count > 0 else {
+                    throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to read zip file data"])
+                }
+                
+                var body = Data()
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+                body.append("Content-Type: application/zip\r\n".data(using: .utf8)!)
+                body.append("\r\n".data(using: .utf8)!)
+                body.append(compressedData)
+                body.append("\r\n".data(using: .utf8)!)
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"filename\"\r\n".data(using: .utf8)!)
+                body.append("\r\n".data(using: .utf8)!)
+                body.append("\(fileName)\r\n".data(using: .utf8)!)
+                
+                if let referenceId = referenceId {
+                    body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                    body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n".data(using: .utf8)!)
+                    body.append("\r\n".data(using: .utf8)!)
+                    body.append("\(referenceId)\r\n".data(using: .utf8)!)
+                }
+                
+                body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+                
+                // Write to temporary file for consistent upload path
+                let tempDir = FileManager.default.temporaryDirectory
+                tempMultipartFile = tempDir.appendingPathComponent("multipart_\(UUID().uuidString).tmp")
+                try body.write(to: tempMultipartFile)
+            }
+            
+            // Clean up temporary file after upload
+            defer {
+                try? FileManager.default.removeItem(at: tempMultipartFile)
+            }
+            
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
             
-            var body = Data()
-            
-            // Add filename
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"filename\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(fileName)\r\n".data(using: .utf8)!)
-            
-            // Add reference ID if provided
-            if let referenceId = referenceId {
-                body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"referenceId\"\r\n\r\n".data(using: .utf8)!)
-                body.append("\(referenceId)\r\n".data(using: .utf8)!)
-            }
-            
-            // Add the compressed HLS file
-            body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"zipFile\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-            body.append("Content-Type: application/zip\r\n\r\n".data(using: .utf8)!)
-            body.append(compressedData)
-            body.append("\r\n".data(using: .utf8)!)
-            
-            // End boundary
-            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
-            
-            request.httpBody = body
-            request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
+            // Get multipart file size
+            let multipartFileSize = (try? FileManager.default.attributesOfItem(atPath: tempMultipartFile.path))?[.size] as? Int64 ?? 0
+            request.setValue("\(multipartFileSize)", forHTTPHeaderField: "Content-Length")
             
             // Set timeout for large video uploads (10 minutes)
             request.timeoutInterval = 600
             
-            // Upload the file
-            let (responseData, response) = try await URLSession.shared.data(for: request)
+            print("DEBUG: [UPLOAD] Sending request to: \(url)")
+            print("DEBUG: [UPLOAD] Content-Type: \(request.value(forHTTPHeaderField: "Content-Type") ?? "nil")")
+            print("DEBUG: [UPLOAD] Content-Length: \(request.value(forHTTPHeaderField: "Content-Length") ?? "nil")")
+            print("DEBUG: [UPLOAD] Using file-based upload: \(shouldUseFileBasedUpload)")
+
+            // Upload from file using uploadTask to avoid loading entire file into memory
+            if fileSize > maxMemoryEfficientSize {
+                VideoConversionService.shared.logMemoryUsage("before file-based upload")
+            }
             
+            let (responseData, response) = try await URLSession.shared.upload(for: request, fromFile: tempMultipartFile)
+
+            if fileSize > maxMemoryEfficientSize {
+                VideoConversionService.shared.logMemoryUsage("after file-based upload")
+            }
+
+            print("DEBUG: [UPLOAD] Received response with status: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+
             if let httpResponse = response as? HTTPURLResponse {
+                print("DEBUG: [UPLOAD] Response headers: \(httpResponse.allHeaderFields)")
+
                 if httpResponse.statusCode == 200 {
                     // Parse response to get job ID
                     if let responseString = String(data: responseData, encoding: .utf8) {
                         print("DEBUG: process-zip upload response: \(responseString)")
-                        
+
                         // Parse JSON response to extract job ID
                         if let jsonData = responseString.data(using: .utf8),
                            let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
@@ -3674,12 +4762,19 @@ final class HproseInstance: ObservableObject {
                             return jobId
                         } else {
                             // Fallback: try to extract job ID from response string
-                            return responseString.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let trimmedResponse = responseString.trimmingCharacters(in: .whitespacesAndNewlines)
+                            print("DEBUG: Using fallback job ID extraction: \(trimmedResponse)")
+                            return trimmedResponse
                         }
                     } else {
+                        print("DEBUG: [UPLOAD] Could not decode response as UTF-8 string")
                         throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
                     }
                 } else {
+                    // Log the response body for debugging failed requests
+                    if let errorResponseString = String(data: responseData, encoding: .utf8) {
+                        print("DEBUG: [UPLOAD] Error response body: \(errorResponseString)")
+                    }
                     throw NSError(domain: "VideoUpload", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Upload failed with status code: \(httpResponse.statusCode)"])
                 }
             }
@@ -3688,12 +4783,10 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Poll process-zip status to get CID when processing is complete
-        private func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
+        private static func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
             print("DEBUG: Polling process-zip status for job ID: \(jobId)")
             
-            // Always resolve writableUrl to ensure we have the correct IP address
-            let writableUrl = try await appUser.resolveWritableUrl()
-            guard let writableUrl = writableUrl else {
+            guard let writableUrl = appUser.writableUrl else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
             }
             
@@ -3869,12 +4962,66 @@ final class HproseInstance: ObservableObject {
         ) async throws -> (MimeiFileType?, String?) {
             print("Uploading original video to backend for conversion, data size: \(data.count) bytes")
             
-            // Always resolve writableUrl to ensure we have the correct IP address
-            let writableUrl = try await appUser.resolveWritableUrl()
-            guard let writableUrl = writableUrl else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
+            // Retry logic: Try with cached/pooled IP first, retry with fresh IP if it fails
+            var lastError: Error?
+            let maxRetries = 2
+            
+            for attempt in 1...maxRetries {
+                do {
+                    // Resolve writableUrl (may use NodePool cache or resolve fresh)
+                    let writableUrl = try await appUser.resolveWritableUrl()
+                    print("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl?.absoluteString ?? "nil")")
+                    
+                    guard let writableUrl = writableUrl else {
+                        throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
+                    }
+                    
+                    // Try to upload with current writableUrl
+                    return try await performBackendVideoUpload(
+                        data: data,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        noResample: noResample,
+                        writableUrl: writableUrl,
+                        appUser: appUser,
+                        progressCallback: progressCallback
+                    )
+                    
+                } catch let error {
+                    lastError = error
+                    let nsError = error as NSError
+                    print("ERROR: [Backend Conversion] Attempt \(attempt)/\(maxRetries) failed - domain: \(nsError.domain), code: \(nsError.code)")
+                    
+                    if attempt >= maxRetries {
+                        print("ERROR: [Backend Conversion] All retry attempts exhausted")
+                        throw error
+                    }
+                    
+                    // Clear cached writableUrl to force fresh resolution on retry
+                    await MainActor.run {
+                        print("DEBUG: [Backend Conversion] Clearing writableUrl to force fresh IP resolution on retry")
+                        appUser.writableUrl = nil
+                    }
+                    
+                    // Small delay before retry
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                }
             }
             
+            // Should never reach here, but throw last error if we do
+            throw lastError ?? NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Backend video conversion upload failed"])
+        }
+        
+        /// Performs the actual backend video upload
+        private func performBackendVideoUpload(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            noResample: Bool,
+            writableUrl: URL,
+            appUser: User,
+            progressCallback: ((String, Int) -> Void)?
+        ) async throws -> (MimeiFileType?, String?) {
             // Get host from writableUrl - no fallback, must succeed
             guard let host = writableUrl.host else {
                 throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
@@ -3939,7 +5086,7 @@ final class HproseInstance: ObservableObject {
             request.setValue("\(body.count)", forHTTPHeaderField: "Content-Length")
             
             // Get aspect ratio from original video for metadata (with fallback)
-            let aspectRatio = await getVideoAspectRatioWithFallback(from: data)
+            let aspectRatio = await MediaProcessor.getVideoAspectRatioWithFallback(from: data)
             
             // Upload with retry mechanism
             return try await uploadWithRetry(request: request, data: data, fileName: fileName, aspectRatio: aspectRatio, progressCallback: progressCallback)
@@ -3986,7 +5133,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Get video aspect ratio with fallback to default values
-        private func getVideoAspectRatioWithFallback(from data: Data) async -> Float? {
+        private static func getVideoAspectRatioWithFallback(from data: Data) async -> Float? {
             do {
                 let aspectRatio = try await getVideoAspectRatio(from: data)
                 if let ratio = aspectRatio, ratio > 0 {
@@ -3999,8 +5146,8 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        /// Upload regular (non-video) files
-        private func uploadRegularFile(
+        /// IPFS doesn't care about file types - they're all data blobs
+        static func uploadRegularFile(
             data: Data,
             typeIdentifier: String,
             fileName: String?,
@@ -4011,10 +5158,64 @@ final class HproseInstance: ObservableObject {
         ) async throws -> MimeiFileType {
             print("Uploading \(mediaType.rawValue): \(String(format: "%.1f", Double(data.count) / (1024 * 1024)))MB")
             
-            _ = try await appUser.resolveWritableUrl()
-            guard let uploadClient = appUser.uploadClient else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
+            // Retry logic: Try with cached/pooled IP first, retry with fresh IP if it fails
+            var lastError: Error?
+            let maxRetries = 2
+            
+            for attempt in 1...maxRetries {
+                do {
+                    // Resolve writable URL (may use NodePool cache or resolve fresh)
+                    let writableUrl = try await appUser.resolveWritableUrl()
+                    print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl?.absoluteString ?? "nil")")
+                    
+                    guard let uploadClient = appUser.uploadClient else {
+                        throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
+                    }
+                    
+                    // Try to upload with current writableUrl
+                    return try await performUpload(
+                        data: data,
+                        fileName: fileName,
+                        referenceId: referenceId,
+                        mediaType: mediaType,
+                        uploadClient: uploadClient,
+                        appId: appId
+                    )
+                    
+                } catch let error as NSError {
+                    lastError = error
+                    print("ERROR: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) failed - domain: \(error.domain), code: \(error.code)")
+                    
+                    // If this was the last attempt, throw the error
+                    if attempt >= maxRetries {
+                        print("ERROR: [uploadRegularFile] All retry attempts exhausted")
+                        throw error
+                    }
+                    
+                    // On first failure, clear cached writableUrl to force fresh resolution
+                    await MainActor.run {
+                        print("DEBUG: [uploadRegularFile] Clearing cached writableUrl to force fresh IP resolution on retry")
+                        appUser.writableUrl = nil
+                    }
+                    
+                    // Small delay before retry
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                }
             }
+            
+            // Should never reach here, but throw last error if we do
+            throw lastError ?? NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload failed"])
+        }
+        
+        /// Performs the actual upload with the given client
+        private static func performUpload(
+            data: Data,
+            fileName: String?,
+            referenceId: String?,
+            mediaType: MediaType,
+            uploadClient: HproseClient,
+            appId: String
+        ) async throws -> MimeiFileType {
             
             let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try data.write(to: tempURL)
@@ -4041,7 +5242,7 @@ final class HproseInstance: ObservableObject {
                 
                 let nsData = chunkData as NSData
                 do {
-                    let response = try await uploadChunk(
+                    let response = try await MediaProcessor.uploadChunk(
                         uploadClient: uploadClient,
                         request: request,
                         data: nsData,
@@ -4067,7 +5268,8 @@ final class HproseInstance: ObservableObject {
                             print("ERROR: Chunk \(chunkCount) upload failed - timeout")
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload timed out. Please try again.", comment: "Timeout error")])
                         default:
-                            print("ERROR: Chunk \(chunkCount) upload failed - network error: \(error.localizedDescription)")
+                            let nsError = error as NSError
+                            print("ERROR: Chunk \(chunkCount) upload failed - network error: domain: \(nsError.domain), code: \(nsError.code)")
                             throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: String(format: NSLocalizedString("Network error: %@", comment: "Network error"), ErrorMessageHelper.userFriendlyMessage(from: error))])
                         }
                     } else {
@@ -4077,12 +5279,11 @@ final class HproseInstance: ObservableObject {
                 }
             }
             
-            print("Uploaded \(chunkCount) chunks, finalizing...")
-            
             request["finished"] = "true"
             if let referenceId = referenceId {
                 request["referenceid"] = referenceId
             }
+            print("Uploaded \(chunkCount) chunks, finalizing...")
             
             let rawFinalResponse = uploadClient.invoke("runMApp", withArgs: ["upload_ipfs", request])
             let finalResponse = try? HproseInstance.unwrapV2Response(rawFinalResponse)
@@ -4107,9 +5308,9 @@ final class HproseInstance: ObservableObject {
             // Get aspect ratio for videos and images
             var aspectRatio: Float?
             if mediaType == .video {
-                aspectRatio = try await getVideoAspectRatio(from: data)
+                aspectRatio = try await MediaProcessor.getVideoAspectRatio(from: data)
             } else if mediaType == .image {
-                aspectRatio = try await getImageAspectRatio(from: data)
+                aspectRatio = try await MediaProcessor.getImageAspectRatio(from: data)
             }
             
             return MimeiFileType(
@@ -4124,7 +5325,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Get video aspect ratio from data
-        private func getVideoAspectRatio(from data: Data) async throws -> Float? {
+        private static func getVideoAspectRatio(from data: Data) async throws -> Float? {
             do {
                 // Create a temporary file with a proper extension to help AVFoundation identify the format
                 let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
@@ -4163,7 +5364,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Get image aspect ratio from data
-        private func getImageAspectRatio(from data: Data) async throws -> Float? {
+        private static func getImageAspectRatio(from data: Data) async throws -> Float? {
             guard let image = UIImage(data: data) else {
                 print("Warning: Could not create UIImage from data")
                 return nil
@@ -4209,7 +5410,7 @@ final class HproseInstance: ObservableObject {
                     progressCallback?("Video uploaded, starting conversion...", 20)
                     
                     // Poll for job completion
-                    let result = try await pollVideoConversionStatus(
+                    let result = try await MediaProcessor.pollVideoConversionStatus(
                         jobId: jobId,
                         baseURL: request.url?.deletingLastPathComponent(),
                         data: data,
@@ -4269,7 +5470,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Poll video conversion status until completion
-        func pollVideoConversionStatus(
+        static func pollVideoConversionStatus(
             jobId: String,
             baseURL: URL?,
             data: Data,
@@ -4315,7 +5516,7 @@ final class HproseInstance: ObservableObject {
                     
                     if let httpResponse = response as? HTTPURLResponse {
                         if httpResponse.statusCode == 200 {
-                            let statusResult = try parseVideoStatusResponse(responseData: responseData)
+                            let statusResult = try MediaProcessor.parseVideoStatusResponse(responseData: responseData)
                             
                             switch statusResult.status {
                             case "completed":
@@ -4371,7 +5572,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Parse video status response
-        private func parseVideoStatusResponse(responseData: Data) throws -> VideoConversionStatus {
+        private static func parseVideoStatusResponse(responseData: Data) throws -> VideoConversionStatus {
             guard let responseString = String(data: responseData, encoding: .utf8) else {
                 throw NSError(domain: "VideoProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid status response encoding"])
             }
@@ -4455,7 +5656,7 @@ final class HproseInstance: ObservableObject {
         }
         
         /// Upload chunk for regular files (no retry)
-        private func uploadChunk(
+        private static func uploadChunk(
             uploadClient: HproseClient,
             request: [String: Any],
             data: NSData,
@@ -4778,15 +5979,6 @@ final class HproseInstance: ObservableObject {
                 }
                 
                 print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
-                let uploadedTweet = tweet
-                
-                // Fetch author off-main, but assign @Published properties on main.
-                let author = try? await self.fetchUser(tweet.authorId)
-                await MainActor.run {
-                    // Tweet is an ObservableObject; avoid publishing from background threads.
-                    uploadedTweet.mid = newTweetId
-                    uploadedTweet.author = author
-                }
                 
                 // Immediately update appUser tweet count (like favorites/bookmarks)
                 await MainActor.run {
@@ -4798,7 +5990,23 @@ final class HproseInstance: ObservableObject {
                 // Refresh appUser from server to get updated tweetCount and other properties
                 try? await self.refreshAppUserFromServer()
                 
-                return uploadedTweet
+                // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
+                // This ensures all server-generated fields are populated correctly
+                print("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
+                if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweet.authorId) {
+                    print("DEBUG: [uploadTweet] Successfully fetched complete tweet with all fields")
+                    return completeTweet
+                } else {
+                    print("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
+                    // Fallback: return partial tweet if fetch fails
+                    let uploadedTweet = tweet
+                    let author = try? await self.fetchUser(tweet.authorId)
+                    await MainActor.run {
+                        uploadedTweet.mid = newTweetId
+                        uploadedTweet.author = author
+                    }
+                    return uploadedTweet
+                }
             } else {
                 // Failure case: extract error message
                 print("DEBUG: [uploadTweet] Server returned success=false, full response: \(responseDict)")
@@ -4876,11 +6084,13 @@ final class HproseInstance: ObservableObject {
                 
                 // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                 await MainActor.run {
+                    print("DEBUG: [HproseInstance] Posting .newTweetCreated notification for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
                     NotificationCenter.default.post(
                         name: .newTweetCreated,
                         object: nil,
                         userInfo: ["tweet": uploadedTweet]
                     )
+                    print("DEBUG: [HproseInstance] .newTweetCreated notification posted successfully")
                 }
             } else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
@@ -5187,11 +6397,13 @@ final class HproseInstance: ObservableObject {
                     
                     // Post notification (tweetCount is updated by refreshAppUserFromServer() inside uploadTweet())
                     await MainActor.run {
+                        print("DEBUG: [HproseInstance] Posting .newTweetCreated notification (retry path) for tweet: \(uploadedTweet.mid), isPrivate: \(uploadedTweet.isPrivate ?? false)")
                         NotificationCenter.default.post(
                             name: .newTweetCreated,
                             object: nil,
                             userInfo: ["tweet": uploadedTweet]
                         )
+                        print("DEBUG: [HproseInstance] .newTweetCreated notification posted successfully (retry path)")
                     }
                 } else {
                     throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to upload tweet", comment: "Tweet upload error")])
@@ -5259,8 +6471,7 @@ final class HproseInstance: ObservableObject {
         
         // Resume polling with the stored job ID
         do {
-            let mediaProcessor = HproseInstance.MediaProcessor()
-            let result = try await mediaProcessor.pollVideoConversionStatus(
+            let result = try await HproseInstance.MediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
                 data: videoItem.data,
@@ -5423,37 +6634,73 @@ final class HproseInstance: ObservableObject {
         hostId: String? = nil,
         cloudDrivePort: Int = 0
     ) async throws -> Bool {
+        print("DEBUG: [registerUser] Starting registration")
+        print("DEBUG: [registerUser] hostId parameter: \(hostId ?? "nil")")
+        
         var hosts: [String]? = nil
         if let hostId = hostId, !hostId.isEmpty {
             hosts = [hostId]
+            print("DEBUG: [registerUser] Setting hosts to [\(hostId)]")
+        } else {
+            print("DEBUG: [registerUser] No hostId provided, hosts will be nil")
         }
+        
         let newUser = User(mid: appUser.mid, name: alias, username: username, password: password,
                            profile: profile, cloudDrivePort: cloudDrivePort, hostIds: hosts)
+        print("DEBUG: [registerUser] Created User object with hostIds: \(newUser.hostIds ?? [])")
+        
         let entry = "register"
         
         // Configure encoder to use milliseconds for timestamps
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .millisecondsSince1970
         
+        let userJsonData = try encoder.encode(newUser)
+        let userJsonString = String(data: userJsonData, encoding: .utf8) ?? ""
+        print("DEBUG: [registerUser] Encoded user JSON: \(userJsonString)")
+        
         let params: [String: Any] = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "user": String(data: try encoder.encode(newUser), encoding: .utf8) ?? ""
+            "user": userJsonString
         ]
         
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
-        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        // Use the current appUser's client for all backend calls
+        guard let client = appUser.hproseClient else {
+            print("DEBUG: [registerUser] ERROR: appUser.hproseClient is nil")
+            print("DEBUG: [registerUser] appUser.baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized. Please check your connection.", comment: "Client initialization error")])
+        }
+        let targetUrl = appUser.baseUrl?.absoluteString ?? "unknown"
+        
+        print("DEBUG: [registerUser] Sending registration request to server")
+        print("DEBUG: [registerUser] Using target URL: \(targetUrl)")
+        
+        let unwrappedResponse: Any
+        do {
+            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            unwrappedResponse = try Self.unwrapV2Response(rawResponse) as Any
+            print("DEBUG: [registerUser] Unwrapped response: \(unwrappedResponse)")
+        } catch {
+            print("DEBUG: [registerUser] ERROR: Exception during API call: \(error)")
+            print("DEBUG: [registerUser] Error details: \(error.localizedDescription)")
+            throw error
+        }
         
         guard let response = unwrappedResponse as? [String: Any] else {
+            print("DEBUG: [registerUser] ERROR: Response is not a dictionary")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
         // v2 format: {success: true, user: <parsed user object>}
         guard let success = response["success"] as? Bool else {
+            print("DEBUG: [registerUser] ERROR: 'success' field not found in response")
+            print("DEBUG: [registerUser] Response keys: \(response.keys)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Registration failed.", comment: "Registration error message")])
         }
         
+        print("DEBUG: [registerUser] Registration success status: \(success)")
         if success {
             // Extract the newly created user's ID from the response
             guard let userDict = response["user"] as? [String: Any],
@@ -5464,18 +6711,42 @@ final class HproseInstance: ObservableObject {
             }
             
             // Make the newly registered user follow each user in getAlphaIds()
+            // Run this in a detached task so we can return success immediately
             let alphaIds = Gadget.getAlphaIds()
-            for alphaId in alphaIds {
-                do {
-                    _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
-                } catch {
-                    print("DEBUG: [registerUser] Failed to follow alphaId \(alphaId): \(error.localizedDescription)")
-                    // Continue with other users even if one fails
+            print("DEBUG: [registerUser] Starting background auto-follow for \(alphaIds.count) alpha user(s): \(alphaIds)")
+            
+            Task.detached { [weak self] in
+                guard let self = self else { return }
+                
+                for alphaId in alphaIds {
+                    do {
+                        // First verify the alphaId user exists before attempting to follow
+                        print("DEBUG: [registerUser:background] Checking if alphaId user exists: \(alphaId)")
+                        guard let _ = try await self.fetchUser(alphaId, forceRefresh: false) else {
+                            print("DEBUG: [registerUser:background] AlphaId user \(alphaId) not found, skipping auto-follow")
+                            continue
+                        }
+                        
+                        print("DEBUG: [registerUser:background] AlphaId user exists, attempting to follow: \(alphaId)")
+                        _ = try await self.toggleFollowing(followingId: alphaId, userId: registeredUserId)
+                        print("DEBUG: [registerUser:background] Successfully followed alphaId: \(alphaId)")
+                    } catch {
+                        let nsError = error as NSError
+                        print("DEBUG: [registerUser:background] Failed to follow alphaId \(alphaId): domain: \(nsError.domain), code: \(nsError.code), description: \(error.localizedDescription)")
+                        // Continue with other users even if one fails
+                    }
                 }
+                
+                print("DEBUG: [registerUser:background] Auto-follow process completed")
             }
+            
+            // Return success immediately without waiting for auto-follow to complete
+            print("DEBUG: [registerUser] Returning success immediately, auto-follow running in background")
             return true
         } else {
             let message = response["message"] as? String ?? response["reason"] as? String ?? NSLocalizedString("Unknown registration error.", comment: "Unknown registration error")
+            print("DEBUG: [registerUser] ERROR: Registration failed with message: \(message)")
+            print("DEBUG: [registerUser] Full response: \(response)")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
         }
     }
@@ -5658,59 +6929,206 @@ final class HproseInstance: ObservableObject {
         throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected server response"])
     }
     
-    /// Resolves the first available IP from app initialization URLs
-    /// This is the fallback mechanism used during app initialization
-    /// - Parameter avoidInfiniteLoop: Internal flag to prevent recursive calls
-    /// - Returns: First valid IP address from app URLs, or nil if none found
-    private func resolveEntryIPFromAppUrls(avoidInfiniteLoop: Bool = false) async -> String? {
-        guard !avoidInfiniteLoop else {
-            print("DEBUG: [resolveEntryIPFromAppUrls] Avoiding infinite loop, returning nil")
-            return nil
-        }
+    /// Find IP addresses of given nodeId with retry and appUser health checking
+    /// - Parameters:
+    ///   - nodeId: The node ID to resolve IPs for
+    ///   - v4Only: Whether to request IPv4 addresses only
+    /// - Returns: A healthy IP address for the node, or nil if none found
+    func getHostIP(_ nodeId: String, v4Only: Bool = false) async -> String? {
+        print("DEBUG: [getHostIP] Resolving IPs for node \(nodeId)")
         
-        print("DEBUG: [resolveEntryIPFromAppUrls] Starting fallback IP resolution from app URLs")
-        
-        for url in preferenceHelper?.getAppUrls() ?? [] {
-            do {
-                let html = try await fetchHTML(from: url)
-                let paramData = Gadget.shared.extractParamMap(from: html)
-                
-                guard let addrs = paramData["addrs"] as? String else { continue }
-                
-                if let entryIP = Gadget.shared.filterIpAddresses(addrs) {
-                    print("DEBUG: [resolveEntryIPFromAppUrls] Successfully resolved fallback IP: \(entryIP)")
-                    return entryIP
-                }
-            } catch {
-                print("DEBUG: [resolveEntryIPFromAppUrls] Error processing URL \(url): \(error)")
-                continue
+        // Step 0: Check NodePool first for cached IP
+        if let pooledIP = NodePool.shared.getIPForNode(nodeMid: nodeId) {
+            print("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
+            
+            // Test if pooled IP is still healthy
+            let client = clientPool.getClientByIP(for: pooledIP)
+            let isHealthy = await isServerHealthyWithTimeout(client, timeout: 5.0)
+            clientPool.releaseClient(client, for: pooledIP)
+            
+            if isHealthy {
+                print("DEBUG: [getHostIP] ✅ Pooled IP \(pooledIP) is healthy, using it")
+                return pooledIP
+            } else {
+                print("DEBUG: [getHostIP] ❌ Pooled IP \(pooledIP) is unhealthy, removing from pool")
+                NodePool.shared.removeIPFromNode(nodeMid: nodeId, ip: pooledIP)
             }
         }
         
-        print("WARN: [resolveEntryIPFromAppUrls] Failed to resolve any IP from app URLs")
-        return nil
+        print("DEBUG: [getHostIP] Attempt 1: Resolving IPs from API for node \(nodeId)")
+        
+        // First attempt with current appUser client
+        if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
+            NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+            print("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP")
+            return ip
+        }
+        
+        print("DEBUG: [getHostIP] Attempt 1 failed, checking appUser health...")
+        
+        // First attempt failed - check if appUser is healthy
+        guard let appUserClient = appUser.hproseClient else {
+            print("DEBUG: [getHostIP] No appUser client available, cannot retry")
+            return nil
+        }
+        
+        let isAppUserHealthy = await isServerHealthyWithTimeout(appUserClient, timeout: 5.0)
+        
+        if isAppUserHealthy {
+            // AppUser is healthy but still couldn't get IPs - node might not exist
+            print("DEBUG: [getHostIP] AppUser is healthy but node IPs not found - node may not exist")
+            return nil
+        }
+        
+        // AppUser is unhealthy - refresh it and retry
+        print("DEBUG: [getHostIP] ⚠️ AppUser is unhealthy, refreshing via entry IP...")
+        
+        do {
+            guard let entryIP = try await findEntryIP() else {
+                print("DEBUG: [getHostIP] Failed to find entry IP for appUser refresh")
+                return nil
+            }
+            
+            print("DEBUG: [getHostIP] Using entry IP to refresh appUser: \(entryIP)")
+            
+            // Refresh appUser's IP via entry
+            if let newAppUserIP = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP)) {
+                await applyBaseUrlIfNeeded(appUser, url: URL(string: "http://\(newAppUserIP)")!, reason: "getHostIP appUser refresh")
+                print("DEBUG: [getHostIP] ✅ AppUser refreshed with new IP: \(newAppUserIP)")
+            } else {
+                print("DEBUG: [getHostIP] Failed to refresh appUser IP")
+                return nil
+            }
+            
+            // Retry with refreshed appUser
+            print("DEBUG: [getHostIP] Attempt 2: Retrying with refreshed appUser...")
+            if let ip = await _getHostIP(nodeId, v4Only: v4Only, hproseClient: appUser.hproseClient) {
+                NodePool.shared.updateNodeIP(nodeMid: nodeId, newIP: ip)
+                print("DEBUG: [getHostIP] ✅ Updated pool: node \(nodeId) now has working IP (after retry)")
+                return ip
+            }
+            
+            print("DEBUG: [getHostIP] Attempt 2 also failed, node IPs not resolvable")
+            return nil
+            
+        } catch {
+            print("DEBUG: [getHostIP] Error during appUser refresh: \(error)")
+            return nil
+        }
     }
     
-    /// Find IP addresses of given nodeId
-    func getHostIP(_ nodeId: String, v4Only: String = "false") async -> String? {
+    /// Internal helper that performs the actual IP resolution and health checking
+    /// - Parameters:
+    ///   - nodeId: The node ID to resolve IPs for
+    ///   - v4Only: Whether to request IPv4 addresses only
+    ///   - hproseClient: The Hprose client to use for the API call
+    /// - Returns: A healthy IP address for the node, or nil if none found
+    private func _getHostIP(_ nodeId: String, v4Only: Bool = false, hproseClient: HproseClient?) async -> String? {
+        let entry = "get_node_ips"
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "nodeid": nodeId,
-            "v4only": v4Only
+            "v4only": v4Only ? "true" : "false"
         ]
-        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: ["get_node_ip", params])
-        guard let unwrappedResponse = try? Self.unwrapV2Response(rawResponse) else {
+        
+        guard let hproseClient = hproseClient else {
+            print("DEBUG: [_getHostIP] No hprose client available")
             return nil
         }
         
-        if let stringResponse = unwrappedResponse as? String {
-            return stringResponse
-        } else if let dictResponse = unwrappedResponse as? [String: Any] {
-            return dictResponse["data"] as? String
+        let rawResponse = hproseClient.invoke("runMApp", withArgs: [entry, params])
+        guard let response = rawResponse else {
+            print("DEBUG: [_getHostIP] No response from server.")
+            return nil
         }
         
+        // Unwrap v2 response
+        let unwrappedResponse: Any?
+        do {
+            unwrappedResponse = try Self.unwrapV2Response(response)
+        } catch {
+            let nsError = error as NSError
+            print("DEBUG: [_getHostIP] Error unwrapping v2 response: domain: \(nsError.domain), code: \(nsError.code)")
+            return nil
+        }
+        
+        if let ipList = unwrappedResponse as? [String] {
+            // Filter and trim IP addresses
+            let ipAddresses = ipList
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            
+            print("DEBUG: [_getHostIP] Retrieved \(ipAddresses.count) IP address(es) from get_node_ips API")
+            
+            // Test IPs in batches of 4 for faster discovery during high load
+            let batchSize = 4
+            for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, ipAddresses.count)
+                let batch = Array(ipAddresses[batchStart..<batchEnd])
+                
+                print("DEBUG: [_getHostIP] Testing batch: IPs \(batchStart + 1)-\(batchEnd) of \(ipAddresses.count)")
+                
+                // Test this batch in parallel - return as soon as first IP responds successfully
+                let healthyIP: String? = await withTaskGroup(of: (String, Bool)?.self) { group in
+                    for (index, ip) in batch.enumerated() {
+                        let absoluteIndex = batchStart + index + 1
+                        group.addTask {
+                            // Check for cancellation before starting
+                            if Task.isCancelled {
+                                return nil
+                            }
+                            
+                            print("DEBUG: [_getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
+                            
+                            let client = self.clientPool.getClientByIP(for: ip)
+                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 5.0)
+                            self.clientPool.releaseClient(client, for: ip)
+                            
+                            // Check for cancellation after health check
+                            if Task.isCancelled {
+                                return nil
+                            }
+                            
+                            if isHealthy {
+                                print("DEBUG: [_getHostIP] ✅ IP test PASSED: \(ip)")
+                            } else {
+                                print("DEBUG: [_getHostIP] ❌ IP test FAILED: \(ip)")
+                            }
+                            
+                            return (ip, isHealthy)
+                        }
+                    }
+                    
+                    // Return IMMEDIATELY when first healthy IP is found
+                    for await result in group {
+                        if let (ip, isHealthy) = result, isHealthy {
+                            print("DEBUG: [_getHostIP] Found healthy node IP: \(ip) - returning immediately")
+                            group.cancelAll()  // Cancel remaining checks in this batch
+                            return ip as String?
+                        }
+                    }
+                    return nil as String?
+                }
+                
+                // If we found a healthy IP in this batch, return it
+                if let ip = healthyIP {
+                    return ip
+                }
+            }
+            
+            // If no healthy IP found in any batch, return nil
+            // The caller should handle the nil case appropriately
+            if !ipAddresses.isEmpty {
+                print("DEBUG: [_getHostIP] All health checks failed for \(ipAddresses.count) IP(s), returning nil")
+                return nil
+            }
+            
+            print("DEBUG: [_getHostIP] No IPs available in response")
+            return nil
+        }
+        print("DEBUG: [_getHostIP] Invalid IpList response format")
         return nil
     }
     
@@ -6129,17 +7547,8 @@ final class HproseInstance: ObservableObject {
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
                 if message.authorId != appUser.mid {
-                    // Update timestamp to current system time for incoming messages
-                    let updatedMessage = ChatMessage(
-                        id: message.id,
-                        authorId: message.authorId,
-                        receiptId: message.receiptId,
-                        chatSessionId: message.chatSessionId,
-                        content: message.content,
-                        timestamp: Date().timeIntervalSince1970,
-                        attachments: message.attachments
-                    )
-                    return updatedMessage
+                    // Return message with server's timestamp preserved
+                    return message
                 } else {
                     print("[fetchMessages] Filtered out outgoing message from \(message.authorId)")
                     return nil
@@ -6180,17 +7589,8 @@ final class HproseInstance: ObservableObject {
                 // Only return messages that are incoming (sent by others to current user)
                 // Filter out messages sent by the current user
                 if message.authorId != appUser.mid {
-                    // Update timestamp to current system time for incoming messages
-                    let updatedMessage = ChatMessage(
-                        id: message.id,
-                        authorId: message.authorId,
-                        receiptId: message.receiptId,
-                        chatSessionId: message.chatSessionId,
-                        content: message.content,
-                        timestamp: Date().timeIntervalSince1970,
-                        attachments: message.attachments
-                    )
-                    return updatedMessage
+                    // Return message with server's timestamp preserved
+                    return message
                 } else {
                     print("[checkNewMessages] Filtered out outgoing message from \(message.authorId)")
                     return nil
@@ -6370,3 +7770,4 @@ final class HproseInstance: ObservableObject {
 }
 
 // NOTE: Array.chunked extension is now in TweetUploadManager.swift
+

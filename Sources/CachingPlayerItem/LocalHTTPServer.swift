@@ -45,7 +45,7 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         self.lastPersistedContiguousSize = initialCachedSize
         
         if !isProbeRequest && cacheStart > initialCachedSize {
-            NSLog("DEBUG: [PROGRESSIVE CACHE] Non-contiguous request for \(mediaID) (start: \(cacheStart), contiguous: \(initialCachedSize)) - streaming only, no caching")
+            // Non-contiguous request - streaming only, no caching
         }
     }
     
@@ -122,11 +122,11 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                     sizeToPersist = cachedBytesCount
                 }
             } catch {
-                NSLog("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
+                print("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
             }
             
             if cachedBytesCount >= maxCacheSize {
-                NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
+                print("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
             }
         }
     }
@@ -157,11 +157,35 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         }
         
         if let error = error {
-            NSLog("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
+            print("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
             BlackList.shared.recordFailure(mediaID)
         } else {
-            NSLog("✅ [PROGRESSIVE STREAM] Completed for \(mediaID): \(sentBytesCount) bytes sent")
+            // Stream completed successfully
         }
+    }
+}
+
+// MARK: - Active Downloads Actor (Swift 6 Concurrency-Safe)
+private actor ActiveDownloadsActor {
+    private var activeDownloads: [String: Task<Void, Never>] = [:]
+    
+    func getTask(for key: String) -> Task<Void, Never>? {
+        return activeDownloads[key]
+    }
+    
+    func setTask(_ task: Task<Void, Never>, for key: String) {
+        activeDownloads[key] = task
+    }
+    
+    func removeTask(for key: String) {
+        activeDownloads.removeValue(forKey: key)
+    }
+
+    func cancelAllTasks() {
+        for (_, task) in activeDownloads {
+            task.cancel()
+        }
+        activeDownloads.removeAll()
     }
 }
 
@@ -178,9 +202,13 @@ public class LocalHTTPServer: @unchecked Sendable {
     public private(set) var isRunning = false   // Track if server is running (public read)
     private var isStopping = false  // Track if server is currently stopping
     
+    // Computed property for current port (returns nil if not running)
+    public var currentPort: UInt16? {
+        return isRunning ? port : nil
+    }
+    
     // DEDUPLICATION: Track active downloads to prevent duplicates
-    private var activeDownloads: [String: DispatchSemaphore] = [:]
-    private let activeDownloadsLock = NSLock()
+    private let activeDownloadsActor = ActiveDownloadsActor()
     
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
@@ -192,6 +220,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
     private let connectionPoolLock = NSLock()
+
+    // Network failure tracking for emergency cleanup
+    private var consecutiveNetworkFailures: Int = 0
+    private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
     private var connectionPool: URLSession {
         connectionPoolLock.lock()
         defer { connectionPoolLock.unlock() }
@@ -202,8 +234,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         let config = URLSessionConfiguration.default
         
-        // Connection pool settings for slow networks
-        config.httpMaximumConnectionsPerHost = 12  // Increased from 6 for better network utilization
+        // Connection pool settings for high load scenarios
+        config.httpMaximumConnectionsPerHost = 20  // Increased for better concurrent request handling
         config.timeoutIntervalForRequest = 90     // 90 seconds per request (slow network!)
         config.timeoutIntervalForResource = 300   // 5 minutes total
         
@@ -216,7 +248,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         let pool = URLSession(configuration: config)
         _connectionPool = pool
-        NSLog("DEBUG: [LocalHTTPServer] Connection pool initialized with max 12 connections per host")
         return pool
     }
     
@@ -256,7 +287,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         if let helper = preferenceHelper {
             let savedPort = helper.getLocalHTTPServerPort()
             self.port = savedPort
-            NSLog("DEBUG: [LocalHTTPServer] Loaded saved port from preferences: \(savedPort)")
         }
         
         // Setup app lifecycle listeners for screen lock resilience
@@ -287,7 +317,6 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     @objc private func handleWillResignActive() {
-        NSLog("[LocalHTTPServer] App will resign active - preparing for screen lock/background")
         didEnterBackground = false
         
         // Request background time to keep server alive during screen lock
@@ -296,19 +325,16 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // If iOS needs to end our background task, end it gracefully
                 self?.endBackgroundTask()
             }
-            NSLog("[LocalHTTPServer] Background task started: \(backgroundTaskID.rawValue)")
         }
     }
     
     @objc private func handleDidEnterBackground() {
-        NSLog("[LocalHTTPServer] App entering background")
         didEnterBackground = true
         // Keep background task active - we need the server for quick app returns
     }
     
     @objc private func handleDidBecomeActive() {
-        let isScreenLock = !didEnterBackground
-        NSLog("[LocalHTTPServer] App became active - isScreenLock: \(isScreenLock)")
+        let _ = !didEnterBackground  // Track if this was screen lock vs background
         
         // End background task - no longer needed
         endBackgroundTask()
@@ -321,7 +347,6 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func endBackgroundTask() {
         if backgroundTaskID != .invalid {
-            NSLog("[LocalHTTPServer] Ending background task: \(backgroundTaskID.rawValue)")
             UIApplication.shared.endBackgroundTask(backgroundTaskID)
             backgroundTaskID = .invalid
         }
@@ -332,52 +357,56 @@ public class LocalHTTPServer: @unchecked Sendable {
             return (isRunning, listener?.state, port)
         }
         
-        let (running, listenerState, currentPort) = serverState
+        let (running, listenerState, _) = serverState
         
         guard running else {
-            NSLog("[LocalHTTPServer] Server not running, no health check needed")
             return
         }
         
         guard let state = listenerState else {
-            NSLog("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
-            queue.async { [weak self] in self?.restart() }
+            print("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
+            queue.async { [weak self] in
+                Task {
+                    await self?.restart()
+                }
+            }
             return
         }
         
         switch state {
         case .ready:
-            NSLog("[LocalHTTPServer] ✓ Listener state is .ready – treating server as healthy (port \(currentPort))")
             return
         case .waiting(let error):
-            NSLog("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error.localizedDescription)' – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error.localizedDescription)' – restarting")
         case .failed(let error):
-            NSLog("[LocalHTTPServer] ⚠️ Listener failed with error '\(error.localizedDescription)' – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener failed with error '\(error.localizedDescription)' – restarting")
         case .cancelled:
-            NSLog("[LocalHTTPServer] ⚠️ Listener was cancelled – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener was cancelled – restarting")
         default:
-            NSLog("[LocalHTTPServer] ⚠️ Listener state \(state) – restarting for safety")
+            print("[LocalHTTPServer] ⚠️ Listener state \(state) – restarting for safety")
         }
-        
-        queue.async { [weak self] in self?.restart() }
+
+        queue.async { [weak self] in
+            Task {
+                await self?.restart()
+            }
+        }
     }
     
-    private func restart() {
-        NSLog("[LocalHTTPServer] Restarting server...")
-        
+    private func restart() async {
+
         // Stop current instance
         stop()
-        
+
         // Small delay to ensure clean shutdown
-        Thread.sleep(forTimeInterval: 0.1)
-        
+        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
         // Start fresh
-        startServer()
-        
+        await startServer()
+
         if isRunning {
-            NSLog("[LocalHTTPServer] ✓ Server restarted successfully on port \(port)")
         } else {
-            NSLog("[LocalHTTPServer] ✗ Server restart failed")
+            print("[LocalHTTPServer] ✗ Server restart failed")
         }
     }
     
@@ -387,9 +416,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     /// Start the server synchronously and WAIT until it's ready
-    /// Use this for app launch and background recovery to ensure server is ready before videos load
+    /// ⚠️ DEPRECATED: Use startAndWaitAsync() instead to avoid blocking main thread
+    /// This method is kept for backwards compatibility but should not be used
     public func startAndWait() {
-        print("[LocalHTTPServer] startAndWait() called")
+        print("[LocalHTTPServer] ⚠️ startAndWait() DEPRECATED - use startAndWaitAsync() instead!")
         
         // If already running, return immediately
         if isRunning {
@@ -397,74 +427,115 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        let semaphore = DispatchSemaphore(value: 0)
-        var didStart = false
-        
+        // DON'T block with semaphore - just start async
         queue.async { [weak self] in
-            guard let self = self else {
-                semaphore.signal()
-                return
+            Task {
+                guard let self = self else { return }
+
+                if !self.isRunning {
+                    await self.startServer()
+                }
             }
-            
-            // Wait for any stop operation (reduced wait time for faster recovery)
-            var stopWaitCount = 0
-            while self.isStopping && stopWaitCount < 20 { // Max 1 second (20 * 0.05s)
-                Thread.sleep(forTimeInterval: 0.05)
-                stopWaitCount += 1
-            }
-            if self.isStopping {
-                print("[LocalHTTPServer] Stop operation still in progress, proceeding anyway")
-            }
-            
-            if self.isRunning {
-                didStart = true
-                semaphore.signal()
-                return
-            }
-            
-            self.startServer()
-            didStart = self.isRunning
-            semaphore.signal()
         }
         
-        // OPTIMIZATION: Reduced timeout from 5s to 2s for faster recovery
-        // Server start is usually very fast (<100ms), 2s is plenty
-        let result = semaphore.wait(timeout: .now() + .seconds(2))
+        // Give it a moment to start (don't block with semaphore!)
+        // NOTE: This is still using Thread.sleep because this is a deprecated sync method
+        // Users should migrate to startAndWaitAsync() instead
+        Thread.sleep(forTimeInterval: 0.1)
         
-        if result == .timedOut {
-            print("[LocalHTTPServer] ❌ startAndWait() TIMEOUT after 2s!")
-        } else if didStart {
-            print("[LocalHTTPServer] ✅ startAndWait() SUCCESS - Server ready on port \(port)")
+        if isRunning {
+            print("[LocalHTTPServer] ✅ Server started")
         } else {
-            print("[LocalHTTPServer] ❌ startAndWait() FAILED - Server not running")
+            print("[LocalHTTPServer] ⚠️ Server starting in background...")
+        }
+    }
+    
+    /// Start the server asynchronously and WAIT until it's ready (non-blocking)
+    /// Use this instead of startAndWait() to avoid blocking the main thread
+    public func startAndWaitAsync() async {
+        print("[LocalHTTPServer] startAndWaitAsync() called")
+        
+        // If already running, return immediately
+        if isRunning {
+            print("[LocalHTTPServer] Already running on port \(port)")
+            return
+        }
+        
+        // Use async/await instead of semaphores (doesn't block thread!)
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                Task {
+                    guard let self = self else {
+                        continuation.resume()
+                        return
+                    }
+
+                    // Wait for any stop operation
+                    var stopWaitCount = 0
+                    while self.isStopping && stopWaitCount < 20 { // Max 1 second
+                        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                        stopWaitCount += 1
+                    }
+
+                    if self.isRunning {
+                        continuation.resume()
+                        return
+                    }
+
+                    await self.startServer()
+                    continuation.resume()
+                }
+            }
+        }
+        
+        if isRunning {
+            print("[LocalHTTPServer] ✅ startAndWaitAsync() SUCCESS - Server ready on port \(port)")
+        } else {
+            print("[LocalHTTPServer] ❌ startAndWaitAsync() FAILED - Server not running")
         }
     }
     
     public func start() {
+        // If already running, return immediately
+        if isRunning {
+            return
+        }
+
+        // Use a dispatch group to wait for server startup
+        let group = DispatchGroup()
+        group.enter()
+
         queue.async { [weak self] in
-            guard let self = self else { return }
-            
-            // If currently stopping, wait for it to finish
-            if self.isStopping {
-                NSLog("DEBUG: [LocalHTTPServer] Waiting for stop to complete before starting...")
-                // Wait on the same queue - stop() will finish and set isStopping=false
-                var waitCount = 0
-                while self.isStopping && waitCount < 10 {
-                    Thread.sleep(forTimeInterval: 0.1)
-                    waitCount += 1
-                }
-                if self.isStopping {
-                    NSLog("DEBUG: [LocalHTTPServer] Stop didn't complete in time, forcing start anyway")
-                }
-            }
-            
-            // Don't start if already running or starting
-            if self.isRunning || self.isStarting {
-                NSLog("DEBUG: [LocalHTTPServer] Already running/starting, skipping duplicate start")
+            guard let self = self else {
+                group.leave()
                 return
             }
-            
-            self.startServer()
+
+            Task {
+                // If currently stopping, wait for it to finish
+                if self.isStopping {
+                    var waitCount = 0
+                    while self.isStopping && waitCount < 10 {
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                        waitCount += 1
+                    }
+                }
+
+                // Don't start if already running or starting
+                if self.isRunning || self.isStarting {
+                    group.leave()
+                    return
+                }
+
+                await self.startServer()
+                group.leave()
+            }
+        }
+
+        // Wait for server to start (with timeout)
+        let result = group.wait(timeout: .now() + 2.0) // 2 second timeout
+        if result == .timedOut {
+            print("⚠️ [LocalHTTPServer] start() timed out waiting for server to start")
         }
     }
     
@@ -474,7 +545,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             if self.listener != nil {
                 self.isStopping = true
-                NSLog("DEBUG: [LocalHTTPServer] Stopping server and releasing port \(self.port)")
                 self.listener?.cancel()
                 self.listener = nil
                 self.isRunning = false
@@ -482,10 +552,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                 
                 // OPTIMIZATION: Reduced wait time for faster recovery
                 // Port release is usually fast - 0.1s is typically enough
-                Thread.sleep(forTimeInterval: 0.1)
-                
-                self.isStopping = false
-                NSLog("DEBUG: [LocalHTTPServer] Port \(self.port) released (waited for OS cleanup)")
+                Task {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    self.isStopping = false
+                }
             }
         }
     }
@@ -495,7 +565,6 @@ public class LocalHTTPServer: @unchecked Sendable {
     public func resetConnectionPool() {
         queue.async { [weak self] in
             guard let self = self else { return }
-            NSLog("DEBUG: [LocalHTTPServer] Resetting connection pool for background recovery")
             
             // Thread-safe reset with lock
             self.connectionPoolLock.lock()
@@ -504,7 +573,36 @@ public class LocalHTTPServer: @unchecked Sendable {
             self.connectionPoolLock.unlock()
             
             // Next access will create a new session
-            NSLog("DEBUG: [LocalHTTPServer] Connection pool reset complete")
+        }
+    }
+
+    /// Emergency cleanup during network failures
+    public func handleNetworkFailureCleanup() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+
+            print("DEBUG: [LocalHTTPServer] Network failure detected, performing emergency cleanup")
+
+            // Cancel all active download tasks
+            Task {
+                await self.activeDownloadsActor.cancelAllTasks()
+            }
+
+            // Reset streaming sessions
+            self.streamingSessionsLock.lock()
+            for (_, session) in self.streamingSessions {
+                session.invalidateAndCancel()
+            }
+            self.streamingSessions.removeAll()
+            self.streamingSessionsLock.unlock()
+
+            // Reset connection pool
+            self.connectionPoolLock.lock()
+            self._connectionPool?.invalidateAndCancel()
+            self._connectionPool = nil
+            self.connectionPoolLock.unlock()
+
+            print("DEBUG: [LocalHTTPServer] Emergency cleanup completed")
         }
     }
     
@@ -520,11 +618,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         queue.sync {
             mediaRealURLs[mediaID] = realURL
         }
-        
-        // Return localhost URL: http://localhost:8080/mediaID/path
+
+        // Return localhost URL: http://localhost:8080/ipfs/mediaID (clean format without redundancy)
         // AVPlayer will request this, and we'll serve from cache or fetch from realURL
-        let localhostURL = URL(string: "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(realURL.path)")!
-        // Removed repetitive registration log
+        let localhostURL = URL(string: "\(Constants.LOCAL_HOST):\(port)\(realURL.path)")!
         return localhostURL
     }
     
@@ -532,140 +629,154 @@ public class LocalHTTPServer: @unchecked Sendable {
         return URL(string: "http://localhost:\(port)/media/\(mediaID)/")
     }
     
-    private func startServer() {
+    private func startServer() async {
         // Don't start if already listening
         if listener?.state == .ready {
-            NSLog("DEBUG: [LocalHTTPServer] Already running on port \(port)")
             isRunning = true
             return
         }
-        
+
         // Extra check: if listener exists but not ready, cancel it first
         if listener != nil {
-            NSLog("DEBUG: [LocalHTTPServer] Found stale listener, cleaning up before restart")
             listener?.cancel()
             listener = nil
             isRunning = false
         }
-        
+
         isStarting = true
         defer { isStarting = false }
-        
+
         // Load saved port from preferences as starting point
         let savedPort: UInt16
         if let helper = preferenceHelper {
             savedPort = helper.getLocalHTTPServerPort()
-            NSLog("DEBUG: [LocalHTTPServer] Will try saved port first: \(savedPort)")
         } else {
             savedPort = 8080
-            NSLog("DEBUG: [LocalHTTPServer] Will try default port first: 8080")
         }
-        
+
         // FAST PATH: Try saved port first (most common case - should succeed immediately)
-        if tryBindToPort(savedPort) {
+        if await tryBindToPort(savedPort) {
             return
         }
-        
-        NSLog("DEBUG: [LocalHTTPServer] Saved port \(savedPort) unavailable, searching for alternative...")
-        
+
+
         // SLOW PATH: Saved port in use, search for available port
         let maxAttempts = 20
-        
+
         for attempt in 0..<maxAttempts {
             // Sequential search starting from saved port
             let tryPort = savedPort + UInt16(attempt) + 1
-            
+
             // Skip invalid ports
             guard tryPort <= 65535 else {
-                NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) exceeds valid range, stopping search")
                 break
             }
-            
-            if tryBindToPort(tryPort) {
+
+            if await tryBindToPort(tryPort) {
                 return
             }
         }
-        
-        NSLog("DEBUG: [LocalHTTPServer] ❌ Failed to find available port after \(maxAttempts) attempts starting from port \(savedPort)")
+
     }
     
-    /// Try to bind to a specific port - returns true if successful
-    private func tryBindToPort(_ tryPort: UInt16) -> Bool {
-        let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
-        
-        do {
-            let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
-            
-            // Use a semaphore to wait for binding result
-            let semaphore = DispatchSemaphore(value: 0)
-            var bindingSucceeded = false
-            
-            // CRITICAL: Use a separate queue for this listener to avoid deadlock
-            let listenerQueue = DispatchQueue(label: "LocalHTTPServer.listener.\(tryPort)", qos: .userInitiated)
-            
-            // CRITICAL: Update port BEFORE starting listener so URLs use correct port
-            self.port = tryPort
-            
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self = self else { return }
-                switch state {
-                case .setup:
-                    break // Silent
-                case .ready:
-                    self.isRunning = true
-                    bindingSucceeded = true
-                    semaphore.signal()
-                    NSLog("DEBUG: [LocalHTTPServer] ✅ Successfully bound to port \(tryPort)")
-                    // Save successful port to preferences
-                    self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
-                case .failed(let error):
-                    self.isRunning = false
-                    bindingSucceeded = false
-                    semaphore.signal()
-                    
-                    // Only log if it's not a simple "port in use" error
-                    let errorDesc = error.localizedDescription.lowercased()
-                    if !errorDesc.contains("address already in use") && !errorDesc.contains("address in use") && !errorDesc.contains("eaddrinuse") {
-                        NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) failed: \(error)")
+    /// Try to bind to a specific port - returns true if successful (async version)
+    private func tryBindToPort(_ tryPort: UInt16) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = true
+
+            // Use a flag to ensure continuation is only resumed once
+            var hasResumed = false
+            let resumeOnce: (Bool) -> Void = { result in
+                guard !hasResumed else { return }
+                hasResumed = true
+                continuation.resume(returning: result)
+            }
+
+            do {
+                let listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: tryPort))
+
+                // CRITICAL: Use a separate queue for this listener to avoid deadlock
+                let listenerQueue = DispatchQueue(label: "LocalHTTPServer.listener.\(tryPort)", qos: .userInitiated)
+
+                // CRITICAL: Update port BEFORE starting listener so URLs use correct port
+                self.port = tryPort
+
+                // Create a sendable wrapper for the timeout task
+                final class TimeoutTaskBox: @unchecked Sendable {
+                    private let lock = NSLock()
+                    private var task: Task<Void, Never>?
+
+                    func set(_ task: Task<Void, Never>) {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        self.task = task
                     }
-                case .waiting(let error):
-                    NSLog("DEBUG: [LocalHTTPServer] Port \(tryPort) waiting: \(error)")
-                case .cancelled:
-                    break // Silent
-                @unknown default:
-                    break
+
+                    func cancel() {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        task?.cancel()
+                        task = nil
+                    }
                 }
+
+                let timeoutTaskBox = TimeoutTaskBox()
+
+                listener.stateUpdateHandler = { [weak self] state in
+                    guard let self = self else {
+                        timeoutTaskBox.cancel()
+                        resumeOnce(false)
+                        return
+                    }
+
+                    switch state {
+                    case .ready:
+                        timeoutTaskBox.cancel()
+                        self.isRunning = true
+                        // Save successful port to preferences
+                        self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
+                        // Store the listener
+                        self.listener = listener
+                        resumeOnce(true)
+                    case .failed, .cancelled:
+                        timeoutTaskBox.cancel()
+                        self.isRunning = false
+                        listener.cancel()
+                        resumeOnce(false)
+                    case .waiting, .setup:
+                        break
+                    @unknown default:
+                        timeoutTaskBox.cancel()
+                        self.isRunning = false
+                        listener.cancel()
+                        resumeOnce(false)
+                    }
+                }
+
+                listener.newConnectionHandler = { [weak self] connection in
+                    self?.handleConnection(connection)
+                }
+
+                // Start on separate queue to avoid deadlock
+                listener.start(queue: listenerQueue)
+
+                // Set timeout using Task
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: 200_000_000) // 200ms timeout
+                        // If we get here, timeout occurred - cancel listener
+                        listener.cancel()
+                        resumeOnce(false)
+                    } catch {
+                        // Task was cancelled, ignore
+                    }
+                }
+                timeoutTaskBox.set(timeoutTask)
+
+            } catch {
+                resumeOnce(false)
             }
-            
-            listener.newConnectionHandler = { [weak self] connection in
-                self?.handleConnection(connection)
-            }
-            
-            // Start on separate queue to avoid deadlock
-            listener.start(queue: listenerQueue)
-            
-            // Wait up to 200ms for binding to succeed or fail (faster than before)
-            let result = semaphore.wait(timeout: .now() + .milliseconds(200))
-            
-            if result == .timedOut {
-                listener.cancel()
-                return false
-            }
-            
-            if bindingSucceeded {
-                // Store the listener
-                self.listener = listener
-                NSLog("DEBUG: [LocalHTTPServer] Server started successfully on port \(tryPort)")
-                return true
-            } else {
-                // Binding failed
-                listener.cancel()
-                return false
-            }
-            
-        } catch {
-            return false
         }
     }
     
@@ -674,42 +785,72 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleConnection(_ connection: NWConnection) {
         connection.start(queue: queue)
-        receiveNextRequest(connection: connection)
+        Task {
+            await receiveNextRequest(connection: connection)
+        }
     }
     
-    private func receiveNextRequest(connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                // Only log non-connection-reset errors
-                if (error as NSError).code != 54 {  // 54 = Connection reset by peer
-                    NSLog("ERROR: [LocalHTTPServer] Receive error: \(error)")
+    private func receiveNextRequest(connection: NWConnection) async {
+        await withCheckedContinuation { continuation in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+                guard let self = self else {
+                    continuation.resume()
+                    return
                 }
-            }
-            
-            if let data = data, !data.isEmpty {
-                let request = String(data: data, encoding: .utf8) ?? ""
-                
-                // Handle the request
-                self.handleRequest(request, connection: connection) {
-                    // After handling, continue listening for more requests
-                    if !isComplete && error == nil {
-                        self.receiveNextRequest(connection: connection)
-                    } else {
-                        connection.cancel()
+
+                if let error = error {
+                    // Track consecutive network failures
+                    consecutiveNetworkFailures += 1
+                    print("DEBUG: [LocalHTTPServer] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+
+                    // Trigger emergency cleanup if too many consecutive failures
+                    if consecutiveNetworkFailures >= maxConsecutiveFailures {
+                        print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
+                        handleNetworkFailureCleanup()
+                        consecutiveNetworkFailures = 0 // Reset counter after cleanup
+                    }
+
+                    // Only log non-connection-reset errors
+                    if (error as NSError).code != 54 {  // 54 = Connection reset by peer
+                        print("ERROR: [LocalHTTPServer] Receive error: \(error)")
+                    }
+                } else {
+                    // Reset network failure counter on successful receive
+                    consecutiveNetworkFailures = 0
+                }
+
+                if let data = data, !data.isEmpty {
+                    let request = String(data: data, encoding: .utf8) ?? ""
+
+                    // Handle the request
+                    Task {
+                        await self.handleRequest(request, connection: connection) {
+                            // After handling, continue listening for more requests
+                            if !isComplete && error == nil {
+                                Task {
+                                    await self.receiveNextRequest(connection: connection)
+                                }
+                            } else {
+                                connection.cancel()
+                            }
+                        }
+                        continuation.resume()
+                    }
+                } else if isComplete || error != nil {
+                    connection.cancel()
+                    continuation.resume()
+                } else {
+                    // No data yet, keep waiting
+                    Task {
+                        await self.receiveNextRequest(connection: connection)
+                        continuation.resume()
                     }
                 }
-            } else if isComplete || error != nil {
-                connection.cancel()
-            } else {
-                // No data yet, keep waiting
-                self.receiveNextRequest(connection: connection)
             }
         }
     }
     
-    private func handleRequest(_ request: String, connection: NWConnection, completion: @escaping () -> Void) {
+    private func handleRequest(_ request: String, connection: NWConnection, completion: @escaping () -> Void) async {
         let lines = request.components(separatedBy: .newlines)
         guard let firstLine = lines.first else {
             completion()
@@ -726,14 +867,14 @@ public class LocalHTTPServer: @unchecked Sendable {
         let path = components[1]
         
         if method == "GET" || method == "HEAD" {
-            handleGetRequest(path: path, method: method, requestLines: lines, connection: connection, completion: completion)
+            await handleGetRequest(path: path, method: method, requestLines: lines, connection: connection, completion: completion)
         } else {
             sendResponse(connection: connection, statusCode: 405, headers: [:], body: nil)
             completion()
         }
     }
     
-    private func handleGetRequest(path: String, method: String, requestLines: [String], connection: NWConnection, completion: @escaping () -> Void) {
+    private func handleGetRequest(path: String, method: String, requestLines: [String], connection: NWConnection, completion: @escaping () -> Void) async {
         // Health check endpoint
         if path == "/health" {
             let headers = [
@@ -745,25 +886,24 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        // NEW FORMAT: /mediaID/ipfs/hash/path (e.g., /QmAbc.../ipfs/QmAbc.../master.m3u8)
-        // Extract mediaID (first component after /)
+        // FORMAT: /ipfs/hash or /ipfs/hash/path (e.g., /ipfs/QmAbc... or /ipfs/QmAbc.../master.m3u8)
+        // Extract mediaID from /ipfs/ path
         let pathComponents = path.components(separatedBy: "/").filter { !$0.isEmpty }
-        guard pathComponents.count >= 1 else {
+        guard pathComponents.count >= 2, pathComponents[0] == "ipfs" else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
             return
         }
         
-        let mediaID = pathComponents[0]
+        let mediaID = pathComponents[1]
         
-        // Reconstruct the relative path (everything after mediaID)
-        let relativePath = "/" + pathComponents[1...].joined(separator: "/")
+        // Reconstruct relative path for real URL requests
+        let relativePath = path
         
         // Removed repetitive request log
         
         // Check if mediaID is blacklisted before attempting fetch
         if BlackList.shared.isBlacklisted(mediaID) {
-            NSLog("DEBUG: [LocalHTTPServer] MediaID \(mediaID) is blacklisted, returning 404")
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
             return
@@ -771,23 +911,58 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // CRITICAL: Check cache FIRST before requiring real URL
         // This allows cached content to be served during app startup before baseUrl is resolved
+        // Only check cache if there's a specific file requested (not just /ipfs/mediaID for progressive video)
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let mediaDir = cacheDir.appendingPathComponent(mediaID)
-        let potentialCachePath = mediaDir.appendingPathComponent(relativePath.hasPrefix("/") ? String(relativePath.dropFirst()) : relativePath)
+        
+        // Skip cache check for progressive video requests (just /ipfs/mediaID with no filename)
+        // These are handled by progressive video proxy logic below
+        guard pathComponents.count > 2 else {
+            // No filename specified - this is a progressive video request, skip cache
+            // (Progressive videos use range requests and aren't fully cached as single files)
+            // Continue to real URL handling below
+            guard let realURL = mediaRealURLs[mediaID] else {
+                sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                completion()
+                return
+            }
+            
+            // Construct full real URL
+            guard var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false) else {
+                sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                completion()
+                return
+            }
+            
+            components.path = relativePath
+            components.query = nil
+            
+            guard let fullRealURL = components.url else {
+                sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
+                completion()
+                return
+            }
+            
+            // Progressive video - proxy with Content-Type fix
+            handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
+            completion()
+            return
+        }
+        
+        // Extract file path after /ipfs/mediaID/ for cache lookup (HLS playlists/segments)
+        let filePathComponents = pathComponents[2...].joined(separator: "/")
+        let potentialCachePath = mediaDir.appendingPathComponent(filePathComponents)
         
         if FileManager.default.fileExists(atPath: potentialCachePath.path) {
-            NSLog("DEBUG: [LocalHTTPServer] Serving cached file: \(relativePath) for mediaID: \(mediaID)")
             // CACHE HIT - serve immediately without needing real URL
-            NSLog("DEBUG: [LocalHTTPServer] Found cached file at: \(potentialCachePath.path)")
             
             if relativePath.hasSuffix(".m3u8") {
                 // For playlists, rewrite URLs to localhost
                 if let data = try? Data(contentsOf: potentialCachePath),
                    let playlistString = String(data: data, encoding: .utf8) {
-                    NSLog("DEBUG: [LocalHTTPServer] Read cached playlist, size: \(data.count) bytes")
                     // Reconstruct a baseURL from the relative path for proper URL rewriting
-                    // Example: /master.m3u8 -> http://placeholder/ipfs/mediaID/master.m3u8
-                    let reconstructedBaseURL = URL(string: "http://placeholder/ipfs/\(mediaID)\(relativePath)")!
+                    // relativePath already includes /ipfs/mediaID/, so just use it directly
+                    let reconstructedBaseURL = URL(string: "http://placeholder\(relativePath)")!
                     let modifiedPlaylist = rewritePlaylistURLs(playlistString, mediaID: mediaID, baseURL: reconstructedBaseURL)
                     if let modifiedData = modifiedPlaylist.data(using: .utf8) {
                         let headers: [String: String] = [
@@ -796,19 +971,15 @@ public class LocalHTTPServer: @unchecked Sendable {
                             "Accept-Ranges": "bytes"
                         ]
                         sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
-                        NSLog("DEBUG: [LocalHTTPServer] Served cached playlist (no realURL needed)")
                         completion()
                         return
                     } else {
-                        NSLog("DEBUG: [LocalHTTPServer] Failed to convert modified playlist to data")
                     }
                 } else {
-                    NSLog("DEBUG: [LocalHTTPServer] Failed to read or decode cached playlist")
                 }
             }
             
             // For segments and other files, serve directly
-            NSLog("DEBUG: [LocalHTTPServer] Serving cached file directly: \(relativePath)")
             serveFile(path: potentialCachePath.path, connection: connection, method: method)
             completion()
             return
@@ -816,7 +987,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // CACHE MISS - need real URL to fetch from network
         guard let realURL = mediaRealURLs[mediaID] else {
-            NSLog("DEBUG: [LocalHTTPServer] No real URL found for mediaID: \(mediaID), and no cache available")
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
             return
@@ -824,7 +994,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // Construct full real URL for this specific file
         guard var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false) else {
-            NSLog("DEBUG: [LocalHTTPServer] Failed to parse URL components")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
             completion()
             return
@@ -837,7 +1006,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         components.query = nil
         
         guard let fullRealURL = components.url else {
-            NSLog("DEBUG: [LocalHTTPServer] Failed to construct URL")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
             completion()
             return
@@ -848,7 +1016,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             handlePlaylistRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else if relativePath.hasSuffix(".ts") {
-            handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
+            await handleSegmentRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method)
             completion()
         } else {
             // Progressive video - proxy with Content-Type fix
@@ -875,7 +1043,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                         "Accept-Ranges": "bytes"
                     ]
                     sendResponse(connection: connection, statusCode: 200, headers: headers, body: modifiedData)
-                    NSLog("DEBUG: [LocalHTTPServer] Served cached playlist with rewritten URLs")
                     return
                 }
             }
@@ -890,7 +1057,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
     }
     
-    private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
+    private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         
         // Check cache first
@@ -904,89 +1071,68 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
-        var shouldWait = false
-        
+
         // Extract quality level for logging (dynamic - no hardcoding!)
         let pathComponents = cachePath.components(separatedBy: "/")
         // Look for any component that ends with 'p' (e.g., "480p", "720p", "1080p", "4k", etc.)
-        let quality = pathComponents.first(where: { component in
+        let _ = pathComponents.first(where: { component in
             // Matches patterns like "480p", "720p", "1080p", etc.
             component.hasSuffix("p") && component.dropLast().allSatisfy({ $0.isNumber })
         }) ?? "unknown"
+
+        // Use actor for thread-safe access
+        let existingTask = await activeDownloadsActor.getTask(for: downloadKey)
         
-        activeDownloadsLock.lock()
-        if activeDownloads[downloadKey] != nil {
-            // Another request is already downloading this segment
-            shouldWait = true
-            activeDownloadsLock.unlock()
-            NSLog("🔄 [DEDUP] Segment already downloading (\(quality)), waiting: \(fullRealURL.lastPathComponent)")
-        } else {
-            // This is the first request for this segment - create semaphore
-            let newSemaphore = DispatchSemaphore(value: 0)
-            activeDownloads[downloadKey] = newSemaphore
-            activeDownloadsLock.unlock()
-            NSLog("📥 [DEDUP] Starting download (\(quality)): \(fullRealURL.lastPathComponent)")
+        if existingTask == nil {
+            // This is the first request for this segment - create a task placeholder
+            await activeDownloadsActor.setTask(Task {}, for: downloadKey)
         }
-        
-        if shouldWait {
-            // CRITICAL: For very slow networks, don't wait at all - AVPlayer connections timeout
-            // Instead, immediately check if file exists and serve, or start independent download
-            NSLog("🔄 [DEDUP] Segment already downloading (\(quality)), checking cache: \(fullRealURL.lastPathComponent)")
-            
-            // Check if file already exists in cache (from previous play or completed download)
+
+        // Wait for existing task if there is one
+        if let existingTask = existingTask {
+            // Another request is already downloading this segment
+            // Wait for it to complete, then serve the cached file
+            await existingTask.value
+
+            // Now check if the file exists and serve it
             if FileManager.default.fileExists(atPath: cachePath) {
-                NSLog("✅ [DEDUP] File already cached, serving immediately: \(fullRealURL.lastPathComponent)")
                 autoreleasepool {
                     serveFile(path: cachePath, connection: connection, method: method)
                 }
             } else {
-                let memoryManager = MemoryCapManager.shared
-                if memoryManager.isAboveDuplicateBlockThreshold {
-                    let percentage = memoryManager.memoryUsagePercentage * 100
-                    let threshold = memoryManager.duplicateBlockThresholdPercentage * 100
-                    NSLog("🚫 [DEDUP] Memory at \(String(format: "%.1f", percentage))%% (threshold \(String(format: "%.0f", threshold))%%) - rejecting duplicate segment download: \(fullRealURL.lastPathComponent)")
-                    
-                    let body = "Memory usage high. Retry segment later.".data(using: .utf8)
-                    self.sendResponse(
-                        connection: connection,
-                        statusCode: 503,
-                        headers: ["Retry-After": "1"],
-                        body: body
-                    )
-                } else {
-                    // File not ready yet - on slow networks (20+ second downloads), waiting would timeout the connection
-                    // Better to start an independent download for this connection
-                    NSLog("⚠️ [DEDUP] File not cached yet, starting independent download for this connection: \(fullRealURL.lastPathComponent)")
-                    fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
-                }
+                // File still doesn't exist - something went wrong with the download
+                // Start our own download as fallback
+                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
             }
             return
         }
-        
-        // This request is the downloader - fetch from server and wait for cache write
-        // Use a completion handler that signals the semaphore AFTER download completes
+
+        // This request is the downloader - fetch from server and cache
         let downloadStartTime = Date()
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
-            // This completion is called AFTER the file is written and served
-            let downloadTime = Date().timeIntervalSince(downloadStartTime)
-            
+
+        // Create the actual download task
+        let downloadTask = Task {
+            // Wait for fetchAndServe to complete
+            await withCheckedContinuation { continuation in
+                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
+                    continuation.resume()
+                }
+            }
+
+            let _ = Date().timeIntervalSince(downloadStartTime)
+
             if FileManager.default.fileExists(atPath: cachePath) {
-                let fileSize = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
-                NSLog("✅ [DEDUP] File cached successfully after \(String(format: "%.2f", downloadTime))s, size: \(fileSize) bytes: \(fullRealURL.lastPathComponent)")
+                let _ = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
             } else {
-                NSLog("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
+                print("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
             }
-            
-            // Signal all waiting requests that download is complete AND cached
-            self.activeDownloadsLock.lock()
-            if let semaphore = self.activeDownloads.removeValue(forKey: downloadKey) {
-                self.activeDownloadsLock.unlock()
-                semaphore.signal()  // Wake up all waiting requests
-                NSLog("🔔 [DEDUP] Signaled waiting requests for: \(fullRealURL.lastPathComponent)")
-            } else {
-                self.activeDownloadsLock.unlock()
-            }
+
+            // Remove the completed task from active downloads
+            await self.activeDownloadsActor.removeTask(for: downloadKey)
         }
+
+        // Store the actual download task
+        await activeDownloadsActor.setTask(downloadTask, for: downloadKey)
     }
     
     private func handleProgressiveVideoRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String, requestHeaders: [String]) {
@@ -1035,12 +1181,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
-        NSLog("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
+        print("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
         
         // CACHE MISS - fetch from real server
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
-            NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
+            print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             return
         }
@@ -1052,20 +1198,19 @@ public class LocalHTTPServer: @unchecked Sendable {
         headRequest.httpMethod = "HEAD"
         headRequest.timeoutInterval = 10
         
-        NSLog("🔍 [PROGRESSIVE HEAD] Getting total size for \(mediaID)")
         
         let headTask = connectionPool.dataTask(with: headRequest) { [weak self] _, response, error in
             guard let self = self else { return }
             
             if let error = error {
-                NSLog("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
+                print("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
                 BlackList.shared.recordFailure(mediaID)
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
             
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                NSLog("❌ [PROGRESSIVE HEAD] Bad status for \(mediaID)")
+                print("❌ [PROGRESSIVE HEAD] Bad status for \(mediaID)")
                 BlackList.shared.recordFailure(mediaID)
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
@@ -1075,10 +1220,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             var totalFileSize: Int64?
             if let contentLength = httpResponse.allHeaderFields["Content-Length"] as? String, let size = Int64(contentLength) {
                 totalFileSize = size
-                NSLog("📊 [PROGRESSIVE HEAD] \(mediaID): totalSize=\(size) bytes (\(size/1024/1024)MB)")
                 self.storeProgressiveTotalSize(mediaID: mediaID, totalSize: size)
             } else {
-                NSLog("⚠️ [PROGRESSIVE HEAD] \(mediaID): totalSize unknown")
+                print("⚠️ [PROGRESSIVE HEAD] \(mediaID): totalSize unknown")
             }
             
             // Calculate response size based on what AVPlayer actually requested
@@ -1137,11 +1281,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             connection.send(content: headerData, completion: .contentProcessed { [weak self] headerError in
                 guard let self = self else { return }
                 if let headerError = headerError {
-                    NSLog("⚠️ [PROGRESSIVE HEADERS] Failed to send headers for \(mediaID): \(headerError.localizedDescription)")
+                    print("⚠️ [PROGRESSIVE HEADERS] Failed to send headers for \(mediaID): \(headerError.localizedDescription)")
                     return
                 }
                 
-                NSLog("📤 [PROGRESSIVE HEADERS] Sent to AVPlayer: \(statusCode), range: \(requestedStart)-\(rangeEnd?.description ?? "end"), size: \(requestedSize) bytes")
                 
                 guard method.uppercased() == "GET" else { return }
                 
@@ -1167,10 +1310,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                     
                     if let rangeValue = forwardedRange {
                         streamRequest.setValue(rangeValue, forHTTPHeaderField: "Range")
-                        NSLog("📤 [PROGRESSIVE RANGE] Forwarding AVPlayer's range request: \(rangeValue)")
                     } else if let originalRange = rangeHeader {
                         streamRequest.setValue(originalRange, forHTTPHeaderField: "Range")
-                        NSLog("📤 [PROGRESSIVE RANGE] Forwarding AVPlayer's range request: \(originalRange)")
                     }
                     
                     var cacheFileHandle: FileHandle?
@@ -1197,7 +1338,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         }
                         
                         if initialCachedSize >= self.progressiveDiskCacheLimit {
-                            NSLog("⚠️ [PROGRESSIVE CACHE LIMIT] Disk cache already at 50MB for \(mediaID) - skipping additional caching")
+                            print("⚠️ [PROGRESSIVE CACHE LIMIT] Disk cache already at 50MB for \(mediaID) - skipping additional caching")
                             cacheFileHandle = nil
                             cacheFilePath = nil
                         } else {
@@ -1206,7 +1347,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                                 do {
                                     cacheFileHandle = try FileHandle(forUpdating: cacheFileURL)
                                 } catch {
-                                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to open cache file for updating (\(mediaID)): \(error.localizedDescription)")
+                                    print("⚠️ [PROGRESSIVE CACHE] Failed to open cache file for updating (\(mediaID)): \(error.localizedDescription)")
                                     cacheFileHandle = try? FileHandle(forWritingTo: cacheFileURL)
                                 }
                             } else {
@@ -1224,11 +1365,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                                 do {
                                     try fileHandle.seek(toOffset: UInt64(streamStart))
                                 } catch {
-                                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to seek cache file for \(mediaID) to \(streamStart): \(error.localizedDescription)")
+                                    print("⚠️ [PROGRESSIVE CACHE] Failed to seek cache file for \(mediaID) to \(streamStart): \(error.localizedDescription)")
                                 }
-                                NSLog("💾 [PROGRESSIVE CACHE] Prepared file handle at offset \(streamStart) (current cache: \(initialCachedSize) bytes)")
                             } else {
-                                NSLog("⚠️ [PROGRESSIVE CACHE] Could not obtain writable handle for \(mediaID) - caching disabled for this request")
+                                print("⚠️ [PROGRESSIVE CACHE] Could not obtain writable handle for \(mediaID) - caching disabled for this request")
                             }
                         }
                     }
@@ -1265,13 +1405,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let streamTask = session.dataTask(with: streamRequest)
                     streamTask.resume()
                     
-                    let remainderEndDescription = resolvedRequestedEnd.map { "\($0)" } ?? "end"
-                    NSLog("🌐 [PROGRESSIVE STREAM] Streaming remainder for \(mediaID): range \(streamStart)-\(remainderEndDescription)")
+                    _ = resolvedRequestedEnd.map { "\($0)" } ?? "end"
                 }
                 
                 if cachedSegmentLength > 0 {
-                    let cachedEnd = cachedOverlapStart + cachedSegmentLength - 1
-                    NSLog("🎯 [PROGRESSIVE CACHE STREAM] Serving cached bytes \(cachedOverlapStart)-\(cachedEnd) for \(mediaID) before fetching remainder")
+                    let _ = cachedOverlapStart + cachedSegmentLength - 1
                     self.streamFileRange(
                         connection: connection,
                         fileURL: cacheFileURL,
@@ -1280,7 +1418,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                         completion: startNetworkStreaming
                     )
                 } else {
-                    NSLog("DEBUG: [PROGRESSIVE CACHE] No cached overlap for \(mediaID) on request \(requestedStart)-\(resolvedRequestedEnd?.description ?? "end") – streaming entirely from network")
                     startNetworkStreaming()
                 }
             })
@@ -1316,7 +1453,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             let data = "\(contiguousSize)".data(using: .utf8)
             try data?.write(to: url, options: .atomic)
         } catch {
-            NSLog("⚠️ [PROGRESSIVE META] Failed to store contiguous size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE META] Failed to store contiguous size for \(mediaID): \(error.localizedDescription)")
         }
     }
     
@@ -1333,7 +1470,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             return value
         } catch {
-            NSLog("⚠️ [PROGRESSIVE META] Failed to load contiguous size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE META] Failed to load contiguous size for \(mediaID): \(error.localizedDescription)")
             return nil
         }
     }
@@ -1380,7 +1517,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 do {
                     chunk = try handle.read(upToCount: readLength) ?? Data()
                 } catch {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk for \(mediaID): \(error.localizedDescription)")
+                    print("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk for \(mediaID): \(error.localizedDescription)")
                     break
                 }
                 
@@ -1400,11 +1537,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             
             if contiguous > 0 {
-                NSLog("DEBUG: [PROGRESSIVE CACHE] Inferred contiguous size \(contiguous) for \(mediaID) (fallback)")
             }
             return contiguous
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to infer contiguous size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to infer contiguous size for \(mediaID): \(error.localizedDescription)")
             return nil
         }
     }
@@ -1417,7 +1553,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         do {
             try data?.write(to: metaURL, options: .atomic)
         } catch {
-            NSLog("⚠️ [PROGRESSIVE META] Failed to store total size for \(mediaID): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE META] Failed to store total size for \(mediaID): \(error.localizedDescription)")
         }
     }
     
@@ -1457,7 +1593,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let cappedFileSize = min(fileSize, progressiveDiskCacheLimit)
                 cachedSize = contiguousSize > 0 ? min(contiguousSize, cappedFileSize) : cappedFileSize
             } catch {
-                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
+                print("⚠️ [PROGRESSIVE CACHE] Failed to read cached file attributes for \(mediaID): \(error.localizedDescription)")
                 return false
             }
             
@@ -1475,15 +1611,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                         let prefix = try fileHandle.read(upToCount: 8192) ?? Data()
                         return prefix.contains { $0 != 0 }
                     } catch {
-                        NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache prefix for \(mediaID): \(error.localizedDescription)")
+                        print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache prefix for \(mediaID): \(error.localizedDescription)")
                         return false
                     }
                 }()
                 
                 if !hasRealDataAtStart {
-                    NSLog("DEBUG: [PROGRESSIVE CACHE] Skipping validation for sparse cache (missing leading bytes) of \(mediaID)")
                 } else if !isValidProgressiveCache(fileURL: cacheFileURL) {
-                    NSLog("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted COMPLETE cache for \(mediaID), deleting entire cache directory")
+                    print("⚠️ [PROGRESSIVE CACHE] Invalid/corrupted COMPLETE cache for \(mediaID), deleting entire cache directory")
                     // Delete the entire cache directory (including legacy per-range files)
                     let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     let mediaCacheDir = cacheDir.appendingPathComponent(mediaID)
@@ -1492,7 +1627,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                     return false
                 }
             } else if totalSize != nil {
-                NSLog("DEBUG: [PROGRESSIVE CACHE] Skipping validation for partial cache (\(cachedSize) bytes) of \(mediaID)")
             }
             
             guard start < cachedSize else {
@@ -1531,11 +1665,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                     hasRealData = probeData.contains { $0 != 0 }
                 }
                 if !hasRealData {
-                    NSLog("DEBUG: [PROGRESSIVE CACHE] Sparse data detected for \(mediaID) at range \(start)-\(actualEnd), falling back to network")
                     return false
                 }
             } catch {
-                NSLog("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
+                print("⚠️ [PROGRESSIVE CACHE] Failed to inspect cache data for \(mediaID): \(error.localizedDescription)")
                 return false
             }
             
@@ -1543,7 +1676,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             // so we can stitch cached + network bytes in a single response.
             let requestedEnd = end ?? (totalSize.map { $0 - 1 } ?? Int64.max)
             if actualEnd < requestedEnd {
-                NSLog("DEBUG: [PROGRESSIVE CACHE] Cached data ends at \(actualEnd) but request needs up to \(requestedEnd) for \(mediaID) – will mix cached prefix with network remainder")
                 return false
             }
 
@@ -1563,8 +1695,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 statusCode = 206
             }
-            let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
-            NSLog("🎯 [PROGRESSIVE CACHE HIT] mediaID: \(mediaID), range: \(rangeDescription), size: \(requestedLength) bytes, total: \(totalSize ?? -1)")
+            let _ = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
             
             if method == "HEAD" {
                 sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
@@ -1662,8 +1793,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 
                 let statusCode = rangeHeader != nil ? 206 : 200
-                let rangeDescription = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
-                NSLog("🎯 [PROGRESSIVE CACHE HIT][legacy] mediaID: \(mediaID), range: \(rangeDescription), size: \(subrange.count) bytes")
+                let _ = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
                 
                 if method == "HEAD" {
                     sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
@@ -1699,7 +1829,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     
                     if !isCancellation {
                         // Only log non-cancellation errors
-                        NSLog("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
+                        print("⚠️ [PROGRESSIVE CACHE] Failed to send headers: \(error.localizedDescription)")
                     }
                     try? fileHandle.close()
                     return
@@ -1713,7 +1843,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 )
             })
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to read cache file: \(error.localizedDescription)")
         }
     }
     
@@ -1749,7 +1879,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                         // AVPlayer often cancels requests when it has enough data or when seeking
                     } else {
                         // Actual error - log as warning
-                        NSLog("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
+                        print("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
                     }
                     try? fileHandle.close()
                     completion?()
@@ -1764,7 +1894,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 )
             })
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk: \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to read cache chunk: \(error.localizedDescription)")
             try? fileHandle.close()
             completion?()
         }
@@ -1792,7 +1922,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 completion: completion
             )
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to stream cached range (\(offset)-\(offset + length - 1)) for \(fileURL.lastPathComponent): \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to stream cached range (\(offset)-\(offset + length - 1)) for \(fileURL.lastPathComponent): \(error.localizedDescription)")
             completion?()
         }
     }
@@ -1825,18 +1955,16 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, completion: (() -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard canBypassInitialization(url: url) else {
-            NSLog("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
+            print("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             completion?()
             return
         }
         
         let startTime = Date()
-        NSLog("⏱️ [DOWNLOAD START] Fetching: \(url.lastPathComponent)")
         
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
-            let downloadTime = Date().timeIntervalSince(startTime)
-            NSLog("⏱️ [DOWNLOAD COMPLETE] \(url.lastPathComponent) took \(String(format: "%.2f", downloadTime))s")
+            let _ = Date().timeIntervalSince(startTime)
             guard let self = self else { return }
             
             // MEMORY FIX: Use autoreleasepool for large segment downloads (4-5MB each)
@@ -1845,13 +1973,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let pathComponents = cachePath.components(separatedBy: "/")
                 let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
                 
-                if let error = error {
-                    NSLog("DEBUG: [LocalHTTPServer] Fetch error: \(error.localizedDescription)")
+                if error != nil {
                     
                     // Record failure for this mediaID (attachment mid)
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
-                        NSLog("DEBUG: [LocalHTTPServer] Recorded fetch failure for mediaID: \(mediaID)")
                     }
                     
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
@@ -1861,7 +1987,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 
                 // CRITICAL: Validate HTTP response status
                 guard let httpResponse = response as? HTTPURLResponse else {
-                    NSLog("DEBUG: [LocalHTTPServer] Invalid HTTP response")
                     
                     // Record failure for invalid response
                     if !mediaID.isEmpty {
@@ -1874,7 +1999,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 
                 guard (200...299).contains(httpResponse.statusCode) else {
-                    NSLog("DEBUG: [LocalHTTPServer] Server returned error status: \(httpResponse.statusCode)")
                     
                     // Record failure for error status
                     if !mediaID.isEmpty {
@@ -1887,7 +2011,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 
                 guard let data = data, !data.isEmpty else {
-                    NSLog("DEBUG: [LocalHTTPServer] Empty data received")
                     
                     // Record failure for empty data
                     if !mediaID.isEmpty {
@@ -1907,14 +2030,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let relativePlaylist = self.stripPlaylistToRelativePaths(playlistString, baseURL: url)
                     if let relativeData = relativePlaylist.data(using: .utf8) {
                         dataToCache = relativeData
-                        NSLog("DEBUG: [LocalHTTPServer] Stripped playlist to relative paths for caching")
                     }
                     
                     // Rewrite with current port for serving
                     let modifiedPlaylist = self.rewritePlaylistURLs(relativePlaylist, mediaID: mediaID, baseURL: url)
                     if let modifiedData = modifiedPlaylist.data(using: .utf8) {
                         finalData = modifiedData
-                        NSLog("DEBUG: [LocalHTTPServer] Rewrote playlist URLs for localhost")
                     }
                 }
                 
@@ -1924,9 +2045,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let cacheURL = URL(fileURLWithPath: cachePath)
                 do {
                     try dataToCache.write(to: cacheURL)
-                    NSLog("DEBUG: [LocalHTTPServer] Cached to: \(cachePath) (size: \(dataToCache.count) bytes)")
                 } catch {
-                    NSLog("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
+                    print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
                 }
                 
                 // Record successful fetch for this mediaID
@@ -1962,7 +2082,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         let connectionState = connection.state
         switch connectionState {
         case .cancelled, .failed:
-            NSLog("⚠️ [LocalHTTPServer] Connection closed while waiting, cannot serve: \(path.components(separatedBy: "/").last ?? path)")
+            print("⚠️ [LocalHTTPServer] Connection closed while waiting, cannot serve: \(path.components(separatedBy: "/").last ?? path)")
             return
         default:
             break
@@ -1995,7 +2115,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // data released here when autoreleasepool exits
             }
         } catch {
-            NSLog("ERROR: [LocalHTTPServer] Failed to read file: \(error)")
+            print("ERROR: [LocalHTTPServer] Failed to read file: \(error)")
             sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
         }
     }
@@ -2033,6 +2153,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func rewritePlaylistURLs(_ playlistString: String, mediaID: String, baseURL: URL) -> String {
         var modified = playlistString
         
+        
         // Extract the directory path for relative URL resolution
         // For http://server/ipfs/hash/720p/playlist.m3u8 → /ipfs/hash/720p
         let playlistDirectory = baseURL.deletingLastPathComponent().path
@@ -2056,11 +2177,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let pathString = String(modified[range])
                     let localhostURL: String
                     if pathString.hasPrefix("/") {
-                        // Absolute path: /ipfs/QmHash/720p/playlist.m3u8 -> http://127.0.0.1:port/mediaID/ipfs/QmHash/720p/playlist.m3u8
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(pathString)"
+                        // Absolute path: /ipfs/QmHash/720p/playlist.m3u8 -> http://127.0.0.1:port/ipfs/QmHash/720p/playlist.m3u8
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(pathString)"
                     } else {
-                        // Relative path: 720p/playlist.m3u8 -> http://127.0.0.1:port/mediaID/playlistDirectory/720p/playlist.m3u8
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(playlistDirectory)/\(pathString)"
+                        // Relative path: 720p/playlist.m3u8 -> http://127.0.0.1:port/playlistDirectory/720p/playlist.m3u8
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(playlistDirectory)/\(pathString)"
                     }
                     modified.replaceSubrange(range, with: localhostURL)
                 }
@@ -2076,11 +2197,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let pathString = String(modified[range])
                     let localhostURL: String
                     if pathString.hasPrefix("/") {
-                        // Absolute path: /ipfs/QmHash/segment000.ts -> http://127.0.0.1:port/mediaID/ipfs/QmHash/segment000.ts
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(pathString)"
+                        // Absolute path: /ipfs/QmHash/segment000.ts -> http://127.0.0.1:port/ipfs/QmHash/segment000.ts
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(pathString)"
                     } else {
-                        // Relative path: segment000.ts -> http://127.0.0.1:port/mediaID/playlistDirectory/segment000.ts
-                        localhostURL = "\(Constants.LOCAL_HOST):\(port)/\(mediaID)\(playlistDirectory)/\(pathString)"
+                        // Relative path: segment000.ts -> http://127.0.0.1:port/playlistDirectory/segment000.ts
+                        localhostURL = "\(Constants.LOCAL_HOST):\(port)\(playlistDirectory)/\(pathString)"
                     }
                     modified.replaceSubrange(range, with: localhostURL)
                 }
@@ -2167,15 +2288,15 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             
             if buffer.range(of: Data([0x66, 0x74, 0x79, 0x70])) != nil { // "ftyp"
-                NSLog("⚠️ [PROGRESSIVE CACHE] moov atom not found within first \(buffer.count) bytes, but ftyp is present – assuming valid progressive file")
+                print("⚠️ [PROGRESSIVE CACHE] moov atom not found within first \(buffer.count) bytes, but ftyp is present – assuming valid progressive file")
                 return true
             }
             
-            NSLog("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
+            print("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
             return false
             
         } catch {
-            NSLog("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
+            print("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
             return false
         }
     }

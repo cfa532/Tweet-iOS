@@ -20,16 +20,7 @@ struct CommentItemView: View {
     @State private var isVisible = false
 
     var body: some View {
-        Group {
-            if linkToComment {
-                NavigationLink(value: comment) {
-                    commentContent
-                }
-                .buttonStyle(PlainButtonStyle())
-            } else {
-                commentContent
-            }
-        }
+        commentContent
         .task {
             isVisible = true
             comment.isVisible = true
@@ -43,8 +34,9 @@ struct CommentItemView: View {
     private var commentContent: some View {
         HStack(alignment: .top, spacing: 8) {
             if let user = comment.author {
-                if isInProfile {
-                    Avatar(user: user) // Don't navigate if we're in the same profile
+                if isInProfile || linkToComment {
+                    // Don't navigate if we're in the same profile or using NavigationLink for comment
+                    Avatar(user: user)
                 } else {
                     NavigationLink(value: user) {
                         Avatar(user: user)
@@ -57,13 +49,30 @@ struct CommentItemView: View {
                     TweetItemHeaderView(tweet: comment)
                     Spacer(minLength: 0)
                     CommentMenu(comment: comment, parentTweet: parentTweet)
-                        .padding(.trailing, -20)
+                        .padding(.trailing, -8)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 
-                TweetItemBodyView(tweet: comment, enableTap: false, isVisible: isVisible)
+                TweetItemBodyView(
+                    tweet: comment,
+                    enableTap: true, // Always enable tap for proper gesture recognition
+                    isVisible: isVisible,
+                    onTweetBodyTap: {
+                        if linkToComment {
+                            // Navigate to comment detail by posting notification
+                            NotificationCenter.default.post(
+                                name: NSNotification.Name("NavigateToCommentDetail"),
+                                object: nil,
+                                userInfo: ["comment": comment, "parentTweet": parentTweet]
+                            )
+                        } else if let callback = onTap {
+                            // Handle tap via callback when using callback approach
+                            callback(comment)
+                        }
+                    }
+                )
                 
-                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM)
+                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM, parentTweet: parentTweet)
                     .padding(.top, 8)
             }
         }
@@ -72,6 +81,17 @@ struct CommentItemView: View {
         .background(backgroundColor)
         .if(backgroundColor != Color(.systemBackground)) { view in
             view.shadow(color: Color(.sRGB, white: 0, opacity: 0.18), radius: 8, x: 0, y: 2)
+        }
+        .if(linkToComment) { view in
+            view.contentShape(Rectangle())
+                .onTapGesture {
+                    // Navigate to comment detail by posting notification
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("NavigateToCommentDetail"),
+                        object: nil,
+                        userInfo: ["comment": comment, "parentTweet": parentTweet]
+                    )
+                }
         }
     }
 }

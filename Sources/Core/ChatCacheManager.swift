@@ -101,7 +101,7 @@ extension ChatCacheManager {
     }
     
     private func convertToChatSession(_ cdSession: CDChatSession) -> ChatSession? {
-        guard let id = cdSession.id,
+        guard let _ = cdSession.id,
               let userId = cdSession.userId,
               let receiptId = cdSession.receiptId,
               let timestamp = cdSession.timestamp else {
@@ -112,7 +112,7 @@ extension ChatCacheManager {
         if let messageData = cdSession.lastMessageData,
            let lastMessage = try? JSONDecoder().decode(ChatMessage.self, from: messageData) {
             return ChatSession(
-                id: id,
+                id: receiptId,  // sessionId is the receiver's mid
                 userId: userId,
                 receiptId: receiptId,
                 lastMessage: lastMessage,
@@ -125,7 +125,7 @@ extension ChatCacheManager {
         if let lastMessageId = cdSession.lastMessageId {
             let lastMessage = fetchLastMessage(for: lastMessageId)
             return ChatSession(
-                id: id,
+                id: receiptId,  // sessionId is the receiver's mid
                 userId: userId,
                 receiptId: receiptId,
                 lastMessage: lastMessage,
@@ -193,6 +193,26 @@ extension ChatCacheManager {
                 }
             }
             
+            // IMPORTANT: Associate the message with its chat session for cascade delete to work
+            // Find the chat session and link this message to it
+            let sessionRequest: NSFetchRequest<CDChatSession> = CDChatSession.fetchRequest()
+            // The message needs to be linked to the session based on the conversation
+            // A message belongs to a session where either:
+            // - userId matches authorId and receiptId matches receiptId, OR
+            // - userId matches receiptId and receiptId matches authorId (for received messages)
+            let userId = message.authorId
+            let partnerId = message.receiptId
+            
+            // Try to find session where current user is the userId and partner is receiptId
+            sessionRequest.predicate = NSPredicate(
+                format: "(userId == %@ AND receiptId == %@) OR (userId == %@ AND receiptId == %@)",
+                userId, partnerId, partnerId, userId
+            )
+            
+            if let cdSession = try? context.fetch(sessionRequest).first {
+                cdMessage.session = cdSession
+            }
+            
             try? context.save()
         }
     }
@@ -226,6 +246,19 @@ extension ChatCacheManager {
                 for message in cdMessages {
                     context.delete(message)
                 }
+                try? context.save()
+            }
+        }
+    }
+    
+    /// Delete a single chat message
+    func deleteChatMessage(_ message: ChatMessage) {
+        context.performAndWait {
+            let request: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
+            request.predicate = NSPredicate(format: "id == %@", message.id)
+            
+            if let cdMessages = try? context.fetch(request), let cdMessage = cdMessages.first {
+                context.delete(cdMessage)
                 try? context.save()
             }
         }
@@ -298,14 +331,52 @@ extension ChatCacheManager {
         }
     }
     
+    // MARK: - Media Cleanup
+    
+    /// Delete media files associated with a chat message
+    private func deleteMediaForChatMessage(_ message: ChatMessage) {
+        guard let attachments = message.attachments else { return }
+        
+        var mediaIds: [String] = []
+        for attachment in attachments {
+            mediaIds.append(attachment.mid)
+        }
+        
+        if mediaIds.isEmpty { return }
+        
+        print("DEBUG: [ChatCacheManager] Deleting \(mediaIds.count) media files for chat message \(message.id)")
+        
+        // Delete from SharedAssetCache (videos/audio) on main actor
+        Task { @MainActor in
+            for mediaId in mediaIds {
+                SharedAssetCache.shared.clearAssetCache(for: mediaId)
+            }
+        }
+        
+        // Delete from ImageCacheManager (images)
+        for mediaId in mediaIds {
+            ImageCacheManager.shared.clearCache(for: mediaId)
+        }
+    }
+    
     // MARK: - Clear All Cache
     func clearAllCache() {
+        print("DEBUG: [ChatCacheManager] Manual cache clear - clearing all chat messages and their media")
+        
         context.performAndWait {
-            // Delete all chat messages
+            // Delete all chat messages AND their media
             let messageRequest: NSFetchRequest<CDChatMessage> = CDChatMessage.fetchRequest()
             if let allMessages = try? context.fetch(messageRequest) {
-                for message in allMessages {
-                    context.delete(message)
+                print("DEBUG: [ChatCacheManager] Clearing \(allMessages.count) chat messages and their media")
+                
+                for cdMessage in allMessages {
+                    // Delete associated media files
+                    if let chatMessage = convertToChatMessage(cdMessage) {
+                        deleteMediaForChatMessage(chatMessage)
+                    }
+                    
+                    // Delete message from CoreData
+                    context.delete(cdMessage)
                 }
             }
             
@@ -319,6 +390,8 @@ extension ChatCacheManager {
             
             try? context.save()
         }
+        
+        print("✅ [ChatCacheManager] Chat cache clear complete")
     }
     
     /// Clear only memory cache (for memory management)

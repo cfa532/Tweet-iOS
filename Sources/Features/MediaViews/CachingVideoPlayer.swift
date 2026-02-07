@@ -19,8 +19,11 @@ struct CachingVideoPlayer: View {
     let videoAspectRatio: CGFloat
     let showNativeControls: Bool
     let isMuted: Bool
+    let startTime: Double?
     let onVideoTap: (() -> Void)?
     let onVideoFinished: (() -> Void)?
+    let onManualRestart: (() -> Void)?
+    let onPlaybackStateChanged: ((Bool) -> Void)?
     
     @State private var player: AVPlayer?
     @State private var cachingPlayerItem: CachingPlayerItem?
@@ -34,6 +37,7 @@ struct CachingVideoPlayer: View {
     @State private var playerRefreshID = UUID()
     @State private var recoveryTask: Task<Void, Never>?
     @State private var isRecovering = false
+    @State private var playbackStateObserver: NSKeyValueObservation?
     
     init(
         url: URL,
@@ -45,8 +49,11 @@ struct CachingVideoPlayer: View {
         videoAspectRatio: CGFloat = 16.0/9.0,
         showNativeControls: Bool = true,
         isMuted: Bool = false,
+        startTime: Double? = nil,
         onVideoTap: (() -> Void)? = nil,
-        onVideoFinished: (() -> Void)? = nil
+        onVideoFinished: (() -> Void)? = nil,
+        onManualRestart: (() -> Void)? = nil,
+        onPlaybackStateChanged: ((Bool) -> Void)? = nil
     ) {
         self.url = url
         self.mid = mid
@@ -57,8 +64,11 @@ struct CachingVideoPlayer: View {
         self.videoAspectRatio = videoAspectRatio
         self.showNativeControls = showNativeControls
         self.isMuted = isMuted
+        self.startTime = startTime
         self.onVideoTap = onVideoTap
         self.onVideoFinished = onVideoFinished
+        self.onManualRestart = onManualRestart
+        self.onPlaybackStateChanged = onPlaybackStateChanged
     }
     
     var body: some View {
@@ -66,6 +76,7 @@ struct CachingVideoPlayer: View {
             if let player = player {
                 ZStack {
                     if showNativeControls {
+                        // Full AVPlayerViewController for fullscreen with native controls
                         VideoPlayer(player: player)
                             .aspectRatio(videoAspectRatio, contentMode: .fit)
                             .clipped()
@@ -74,7 +85,10 @@ struct CachingVideoPlayer: View {
                                 onVideoTap?()
                             }
                     } else {
-                        VideoPlayer(player: player)
+                        // Lightweight player for feed - no AVPlayerViewController overhead
+                        // Eliminates AVMobileGlassControlsViewController timers (1ms per video per fire)
+                        // Custom controls (volume button, etc.) are overlaid separately in MediaCell
+                        LightweightVideoPlayer(player: player)
                             .aspectRatio(videoAspectRatio, contentMode: .fit)
                             .clipped()
                             .id(playerRefreshID) // Force view refresh when player is recreated
@@ -101,21 +115,20 @@ struct CachingVideoPlayer: View {
                     }
                 }
             } else if isLoading {
-                Color.black.opacity(0.1)
-                    .overlay(
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle())
-                    )
-            } else if loadFailed {
+                // Show black background with white spinner while loading for first time (no text)
                 Color.black
                     .overlay(
-                        VStack {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.title)
-                                .foregroundColor(.white)
-                            Text("Failed to load video")
-                                .foregroundColor(.white)
-                        }
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(1.2)
+                    )
+            } else if loadFailed {
+                // Show broken icon only, no text
+                Color.black
+                    .overlay(
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.largeTitle)
+                            .foregroundColor(.white)
                     )
             } else {
                 Color.black
@@ -134,25 +147,66 @@ struct CachingVideoPlayer: View {
         }
         .onChange(of: isVisible) { _, visible in
             if visible {
-                // When view becomes visible, check if player needs recovery
-                if player != nil && isPlayerBroken() {
-                    print("DEBUG: [CachingVideoPlayer] Player is broken when becoming visible for \(mid), recovering...")
-                    recoverFromBackground()
-                } else if visible && autoPlay {
-                    player?.play()
+                // CRITICAL FIX: Restore buffering settings when video becomes visible again
+                // This allows videos to buffer properly when they come back into view
+                if let playerItem = player?.currentItem {
+                    if let cachingPlayerItem = playerItem as? CachingPlayerItem {
+                        cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Restore normal buffering
+                        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible video: \(mid)")
+                    } else {
+                        // For progressive videos, restore buffer duration
+                        playerItem.preferredForwardBufferDuration = 30.0
+                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible progressive video: \(mid)")
+                    }
+                }
+
+                // When view becomes visible, always attempt recovery to ensure video works properly
+                // Videos that have been scrolled out of view may need recovery even if they appear healthy
+                print("DEBUG: [CachingVideoPlayer] View became visible for \(mid), attempting recovery...")
+                recoverFromBackground()
+
+                // If autoPlay is enabled, start playing after recovery
+                if autoPlay {
+                    // Small delay to allow recovery to complete
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if self.isVisible { // Double-check we're still visible
+                            self.player?.play()
+                        }
+                    }
                 }
             } else {
                 player?.pause()
             }
         }
         .onChange(of: autoPlay) { _, shouldPlay in
-            if shouldPlay && isVisible {
+            if shouldPlay {
+                // Check if video is at the end and needs to seek to beginning first
+                if let player = player, let currentItem = player.currentItem {
+                    let duration = currentItem.duration.seconds
+                    let currentTime = player.currentTime().seconds
+                    // If duration and currentTime are valid and we're within 0.5 seconds of the end
+                    if duration.isFinite && duration > 0 && currentTime.isFinite {
+                        let timeRemaining = duration - currentTime
+                        // If we're within 0.5 seconds of the end, seek to beginning before playing
+                        if timeRemaining <= 0.5 {
+                            player.seek(to: .zero) { finished in
+                                if finished {
+                                    player.play()
+                                    onManualRestart?() // Notify that we manually restarted
+                                }
+                            }
+                            return
+                        }
+                    }
+                }
                 player?.play()
-                print("DEBUG: [CachingVideoPlayer] Started playing \(mid)")
             } else {
                 player?.pause()
-                print("DEBUG: [CachingVideoPlayer] Paused \(mid)")
             }
+        }
+        .onChange(of: isMuted) { _, muted in
+            player?.isMuted = muted
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             handleWillResignActive()
@@ -193,7 +247,15 @@ struct CachingVideoPlayer: View {
                             onReadyToPlay: { [weak newPlayer] in
                                 DispatchQueue.main.async {
                                     self.isLoading = false
-                                    if self.autoPlay && self.isVisible {
+
+                                    // Seek to start time if provided
+                                    if let startTime = self.startTime, startTime > 0 {
+                                        newPlayer?.seek(to: CMTime(seconds: startTime, preferredTimescale: 600)) { finished in
+                                            if finished && self.autoPlay && self.isVisible {
+                                                newPlayer?.play()
+                                            }
+                                        }
+                                    } else if self.autoPlay && self.isVisible {
                                         newPlayer?.play()
                                     }
                                 }
@@ -289,6 +351,9 @@ struct CachingVideoPlayer: View {
                     // Set up video completion observer
                     self.setupVideoCompletionObserver(newPlayer)
                     
+                    // Set up playback state observer
+                    self.setupPlaybackStateObserver(newPlayer)
+                    
                     // Start playback if needed - don't automatically rewind
                     if self.autoPlay && self.isVisible {
                         newPlayer.play()
@@ -365,6 +430,28 @@ struct CachingVideoPlayer: View {
         print("DEBUG: [CachingVideoPlayer] Video completion observer setup complete for \(mid)")
     }
     
+    private func setupPlaybackStateObserver(_ player: AVPlayer) {
+        // Remove existing observer if any
+        playbackStateObserver?.invalidate()
+        
+        // Capture values we need to avoid capturing self
+        let callback = self.onPlaybackStateChanged
+        
+        // Report initial state immediately to sync button with actual player state
+        DispatchQueue.main.async {
+            let initialIsPlaying = player.timeControlStatus == .playing
+            callback?(initialIsPlaying)
+        }
+        
+        // Observe the timeControlStatus to track actual playback state changes
+        playbackStateObserver = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
+            DispatchQueue.main.async {
+                let isPlaying = player.timeControlStatus == .playing
+                callback?(isPlaying)
+            }
+        }
+    }
+    
     private func cleanupPlayer() {
         // Cancel any ongoing recovery task
         recoveryTask?.cancel()
@@ -376,6 +463,10 @@ struct CachingVideoPlayer: View {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
         }
+        
+        // Remove playback state observer
+        playbackStateObserver?.invalidate()
+        playbackStateObserver = nil
         
         // Restore mute state to global state before exiting fullscreen
         // This ensures the player instance is properly muted when returning to MediaCell

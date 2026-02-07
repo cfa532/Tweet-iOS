@@ -1,29 +1,46 @@
-import Foundation
+@preconcurrency import Foundation
 import Combine
 import SwiftUI
+
+private final class ObserverHolder: @unchecked Sendable {
+    var observer: NSObjectProtocol?
+    init(_ observer: NSObjectProtocol?) { self.observer = observer }
+}
 
 // MARK: - Chat Session Manager
 @MainActor
 class ChatSessionManager: ObservableObject {
     static let shared = ChatSessionManager()
     
-    @Published var chatSessions: [ChatSession] = []
+    @Published private(set) var chatSessions: [ChatSession] = []
     @Published var unreadMessageCount: Int = 0
-    
+
     // Private property to track badge count since UNUserNotificationCenter doesn't provide a way to read it
     private var currentBadgeCount: Int = 0
+    private var sessionsLoaded: Bool = false
 
     // Track which messages have already been notified to prevent duplicates
     private var notifiedMessageIds: Set<String> = []
+    
+    // Track deleted sessions to prevent them from being recreated by checkBackendForNewMessages
+    private var deletedSessionIds: Set<String> = []
 
     private let chatCacheManager = ChatCacheManager.shared
     private let hproseInstance = HproseInstance.shared
     
     private init() {
-        // Don't load sessions immediately - wait for user to be available
-        // Sessions will be loaded when the user is properly initialized
+        // Don't load sessions immediately - sessions will be loaded lazily when first accessed
     }
-    
+
+    /// Ensure chat sessions are loaded (called lazily when sessions are first accessed)
+    private func ensureSessionsLoaded() {
+        guard !sessionsLoaded else { return }
+        loadChatSessionsFromCoreData()
+        updateUnreadMessageCount()
+        sessionsLoaded = true
+        print("[ChatSessionManager] Lazily loaded chat sessions when first accessed")
+    }
+
     // MARK: - Core Data Methods
     
     /// Load chat sessions from Core Data
@@ -69,12 +86,6 @@ class ChatSessionManager: ObservableObject {
         print("[ChatSessionManager] Force reloaded chat sessions from Core Data")
     }
     
-    /// Load sessions when user is properly initialized
-    func loadSessionsWhenUserAvailable() {
-        loadChatSessionsFromCoreData()
-        updateUnreadMessageCount()
-        print("[ChatSessionManager] Loaded sessions after user initialization")
-    }
     
     /// Check backend for new messages (for notification purposes only)
     /// - Parameter suppressNotifications: If true, only updates badge, doesn't trigger notifications
@@ -92,6 +103,12 @@ class ChatSessionManager: ObservableObject {
                 
                 // Update or create chat sessions (only add new ones, don't overwrite existing)
                 for (partnerId, messages) in messagesByPartner {
+                    // Skip if this session was explicitly deleted by the user
+                    if deletedSessionIds.contains(partnerId) {
+                        print("[ChatSessionManager] Skipping session creation for \(partnerId) - user deleted this session")
+                        continue
+                    }
+                    
                     // Use the last message from the array (newest message)
                     if let lastMessage = messages.last {
                         // Check if session already exists using the other party's ID
@@ -101,9 +118,9 @@ class ChatSessionManager: ObservableObject {
                         
                         if let existingSession = existingSession {
                             // Update session with the new last message (don't worry about duplicates)
-                            if let index = chatSessions.firstIndex(where: { $0.id == existingSession.id }) {
+                            if let index = chatSessions.firstIndex(where: { $0.receiptId == partnerId }) {
                                 let updatedSession = ChatSession(
-                                    id: existingSession.id,
+                                    id: partnerId,  // sessionId is the receiver's mid
                                     userId: existingSession.userId,
                                     receiptId: existingSession.receiptId,
                                     lastMessage: lastMessage,
@@ -143,8 +160,6 @@ class ChatSessionManager: ObservableObject {
                 
                 // Update unread message count
                 updateUnreadMessageCount()
-            } else {
-                print("[ChatSessionManager] No new messages found")
             }
         } catch {
             print("[ChatSessionManager] Error checking backend for new messages: \(error)")
@@ -182,6 +197,13 @@ class ChatSessionManager: ObservableObject {
                 otherPartyId = message.authorId
             }
             
+            // If this session was previously deleted, remove it from the deleted set
+            // since the user is now starting a new conversation
+            if deletedSessionIds.contains(otherPartyId) {
+                deletedSessionIds.remove(otherPartyId)
+                print("[ChatSessionManager] Removed \(otherPartyId) from deleted sessions - starting new conversation")
+            }
+            
             if let existingIndex = chatSessions.firstIndex(where: { session in
                 session.receiptId == otherPartyId
             }) {
@@ -197,7 +219,7 @@ class ChatSessionManager: ObservableObject {
                 // Always update the session with the new message
                 // Don't rely on timestamps as they are not trustworthy across devices
                 let updatedSession = ChatSession(
-                    id: existingSession.id,
+                    id: otherPartyId,  // sessionId is the receiver's mid
                     userId: hproseInstance.appUser.mid,
                     receiptId: otherPartyId,
                     lastMessage: displayMessage,
@@ -231,7 +253,7 @@ class ChatSessionManager: ObservableObject {
         if let index = chatSessions.firstIndex(where: { $0.receiptId == receiptId }) {
             let session = chatSessions[index]
             let updatedSession = ChatSession(
-                id: session.id,
+                id: receiptId,  // sessionId is the receiver's mid
                 userId: session.userId,
                 receiptId: session.receiptId,
                 lastMessage: session.lastMessage,
@@ -247,6 +269,7 @@ class ChatSessionManager: ObservableObject {
     
     /// Get chat session for a specific user
     func getChatSession(for receiptId: String) -> ChatSession? {
+        ensureSessionsLoaded()
         return chatSessions.first { session in
             session.receiptId == receiptId
         }
@@ -254,13 +277,26 @@ class ChatSessionManager: ObservableObject {
     
     /// Remove a chat session and all associated messages
     func removeChatSession(receiptId: MimeiId) {
-        // Remove the chat session from Core Data (this will cascade delete messages)
-        chatCacheManager.deleteChatSessionByReceiptId(userId: hproseInstance.appUser.mid, receiptId: receiptId)
+        let userId = hproseInstance.appUser.mid
+        
+        // First, explicitly delete all messages for this conversation
+        // This handles both linked and orphaned messages
+        chatCacheManager.deleteMessagesForConversation(authorId: userId, receiptId: receiptId)
+        print("[ChatSessionManager] Deleted messages for conversation between \(userId) and \(receiptId)")
+        
+        // Then remove the chat session from Core Data
+        chatCacheManager.deleteChatSessionByReceiptId(userId: userId, receiptId: receiptId)
         
         // Remove from local array
         chatSessions.removeAll { $0.receiptId == receiptId }
         
-        print("[ChatSessionManager] Removed chat session and messages for \(receiptId)")
+        // Mark this session as deleted to prevent recreation from backend messages
+        deletedSessionIds.insert(receiptId)
+        
+        // Update unread count after deletion
+        updateUnreadMessageCount()
+        
+        print("[ChatSessionManager] Removed chat session and all messages for \(receiptId), marked as deleted")
     }
     
     /// Clear all chat sessions
@@ -277,6 +313,7 @@ class ChatSessionManager: ObservableObject {
     
     /// Get unread message count
     func getUnreadMessageCount() -> Int {
+        ensureSessionsLoaded()
         return chatSessions.filter { $0.hasNews }.count
     }
     
@@ -313,6 +350,7 @@ class ChatSessionManager: ObservableObject {
     }
     
     func markAllMessagesAsRead() {
+        ensureSessionsLoaded()
         for session in chatSessions {
             if session.hasNews {
                 markSessionAsRead(receiptId: session.receiptId)
@@ -334,19 +372,8 @@ class ChatSessionManager: ObservableObject {
         let appState = UIApplication.shared.applicationState
         print("[ChatSessionManager] 📱 App state: \(appState.rawValue) (0=active, 1=inactive, 2=background)")
         guard appState == .background || appState == .inactive else {
-            print("[ChatSessionManager] ⚠️ App is in foreground, skipping notification for message: \(message.id)")
-            // Still update badge even when app is in foreground
-            currentBadgeCount += 1
-            let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
-            DispatchQueue.main.async {
-                UNUserNotificationCenter.current().setBadgeCount(newBadge) { error in
-                    if let error = error {
-                        print("[ChatSessionManager] Error setting badge count: \(error)")
-                    } else {
-                        print("[ChatSessionManager] Updated badge count to: \(newBadge > 9 ? "N" : "\(newBadge)")")
-                    }
-                }
-            }
+            print("[ChatSessionManager] ⚠️ App is in foreground, skipping notification and badge update for message: \(message.id)")
+            // Don't update badge when app is in foreground - user can already see messages
             return
         }
 
@@ -358,8 +385,8 @@ class ChatSessionManager: ObservableObject {
         let settings = await center.notificationSettings()
         print("[ChatSessionManager] 🔔 Notification permission status: \(settings.authorizationStatus.rawValue) (0=notDetermined, 1=denied, 2=authorized, 3=provisional, 4=ephemeral)")
         guard settings.authorizationStatus == .authorized else {
-            print("[ChatSessionManager] ⚠️ No notification permission, skipping notification")
-            // Still update badge even without permission
+            print("[ChatSessionManager] ⚠️ No notification permission, updating badge only")
+            // Update badge even without notification permission (app is in background)
             currentBadgeCount += 1
             let newBadge = currentBadgeCount > 9 ? -1 : currentBadgeCount
             DispatchQueue.main.async {

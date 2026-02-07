@@ -155,8 +155,7 @@ public final class CachingPlayerItem: AVPlayerItem {
             let localhostURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: url)
             finalURL = localhostURL
             useResourceLoaderDelegate = false  // LocalHTTPServer handles everything
-            NSLog("DEBUG: [CachingPlayerItem] Using LocalHTTPServer URL (no ResourceLoaderDelegate!): \(finalURL.absoluteString)")
-            NSLog("DEBUG: [CachingPlayerItem] Real URL: \(url.absoluteString)")
+            // Removed repetitive log - logged only on errors
         } else {
             // For progressive videos, use custom scheme
             guard var urlWithCustomScheme = url.withScheme(cachingPlayerItemScheme) else {
@@ -187,9 +186,9 @@ public final class CachingPlayerItem: AVPlayerItem {
         if useResourceLoaderDelegate {
             resourceLoaderDelegate = ResourceLoaderDelegate(url: url, mediaID: mediaID, saveFilePath: saveFilePath, owner: self)
             asset.resourceLoader.setDelegate(resourceLoaderDelegate, queue: DispatchQueue.main)
-            NSLog("DEBUG: [CachingPlayerItem] ResourceLoaderDelegate enabled for progressive video")
+            // Removed repetitive logs - logged only on errors
         } else {
-            NSLog("DEBUG: [CachingPlayerItem] No ResourceLoaderDelegate - LocalHTTPServer handles everything")
+            // No ResourceLoaderDelegate - LocalHTTPServer handles everything
         }
 
         addObservers()

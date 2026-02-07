@@ -24,13 +24,28 @@ class TweetUploadManager {
     // Reference to parent HproseInstance for accessing shared properties
     weak var hproseInstance: HproseInstance?
     
+    // Track current upload task for cancellation
+    private var currentUploadTask: Task<Void, Never>?
+    
     init(hproseInstance: HproseInstance) {
         self.hproseInstance = hproseInstance
+    }
+    
+    /// Cancel current upload task
+    func cancelCurrentUpload() {
+        if let task = currentUploadTask {
+            task.cancel()
+            currentUploadTask = nil
+            print("🛑 [TweetUploadManager] Current upload task cancelled")
+        }
+        // If no task exists, silently do nothing (this is normal when starting a new upload)
     }
     
     // MARK: - Public Upload Methods
     
     /// Upload data to IPFS with appropriate media processing
+    /// IPFS doesn't care about file types - they're all data blobs
+    /// resolveWritableUrl() is called where needed (uploadRegularFile, video HLS operations)
     func uploadToIPFS(
         data: Data,
         typeIdentifier: String,
@@ -43,40 +58,69 @@ class TweetUploadManager {
             throw NSError(domain: "TweetUploadManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "HproseInstance not available"])
         }
         
-        _ = try await hproseInstance.appUser.resolveWritableUrl()
         print("Starting upload to IPFS: typeIdentifier=\(typeIdentifier), fileName=\(fileName ?? "nil"), noResample=\(noResample)")
         
-        // Use MediaProcessor to determine media type and handle upload
-        let mediaProcessor = HproseInstance.MediaProcessor()
-        return try await mediaProcessor.processAndUpload(
+        // Detect media type
+        let mediaType = await HproseInstance.MediaProcessor.detectMediaType(
+            from: typeIdentifier,
+            fileName: fileName,
+            data: data
+        )
+        
+        // Video needs special processing (normalization, HLS conversion)
+        if mediaType == .video {
+            return try await HproseInstance.MediaProcessor.processVideo(
+                data: data,
+                typeIdentifier: typeIdentifier,
+                fileName: fileName,
+                referenceId: referenceId,
+                noResample: noResample,
+                appUser: hproseInstance.appUser,
+                appId: hproseInstance.appId,
+                progressCallback: progressCallback
+            )
+        }
+        
+        // All non-video files: just upload as-is (images, audio, documents)
+        let result = try await HproseInstance.MediaProcessor.uploadRegularFile(
             data: data,
             typeIdentifier: typeIdentifier,
             fileName: fileName,
             referenceId: referenceId,
-            noResample: noResample,
+            mediaType: mediaType,
             appUser: hproseInstance.appUser,
-            appId: hproseInstance.appId,
-            progressCallback: progressCallback
+            appId: hproseInstance.appId
         )
+        return (result, nil)
     }
     
     /// Schedule a tweet upload with persistence and retry
     func scheduleTweetUpload(tweet: Tweet, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
-            // Note: Upload dialog is already shown by the caller (ComposeTweetView)
-            // before prepareItemData, so we don't call startUpload here
-            await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
+        // Check if any items contain videos
+        let hasVideos = itemData.contains { item in
+            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+        }
+        
+        // Use upload queue to prevent concurrent upload conflicts
+        Task { @MainActor in
+            UploadProgressManager.shared.enqueueUpload(type: "tweet", hasVideos: hasVideos) {
+                await self.uploadTweetWithPersistenceAndRetry(tweet: tweet, itemData: itemData)
+            }
         }
     }
     
     /// Schedule a chat message upload
     func scheduleChatMessageUpload(message: ChatMessage, itemData: [PendingTweetUpload.ItemData]) {
-        Task.detached(priority: .background) {
-            // Start progress tracking on main thread
-            await MainActor.run {
-                UploadProgressManager.shared.startUpload(type: "chat")
+        // Check if any items contain videos
+        let hasVideos = itemData.contains { item in
+            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+        }
+        
+        // Use upload queue to prevent concurrent upload conflicts
+        Task { @MainActor in
+            UploadProgressManager.shared.enqueueUpload(type: "chat", hasVideos: hasVideos) {
+                await self.uploadChatMessageWithPersistenceAndRetry(message: message, itemData: itemData)
             }
-            await self.uploadChatMessageWithPersistenceAndRetry(message: message, itemData: itemData)
         }
     }
     
@@ -87,18 +131,34 @@ class TweetUploadManager {
         itemData: [PendingTweetUpload.ItemData],
         isQuoting: Bool = false
     ) {
-        Task.detached(priority: .background) {
-            // Start progress tracking on main thread
-            await MainActor.run {
-                UploadProgressManager.shared.startUpload(type: "comment")
+        // Check if any items contain videos
+        let hasVideos = itemData.contains { item in
+            item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
+        }
+        
+        // Use upload queue to prevent concurrent upload conflicts
+        Task { @MainActor in
+            UploadProgressManager.shared.enqueueUpload(type: "comment", hasVideos: hasVideos) {
+                await self.uploadCommentWithRetry(comment: comment, to: tweet, itemData: itemData, isQuoting: isQuoting)
             }
+        }
+    }
+    
+    /// Internal method to upload comment (called by queue)
+    private func uploadCommentWithRetry(
+        comment: Tweet,
+        to tweet: Tweet,
+        itemData: [PendingTweetUpload.ItemData],
+        isQuoting: Bool = false
+    ) async {
+        Task(priority: .high) {
             
             do {                
                 // Update progress: uploading attachments
                 await MainActor.run {
                     UploadProgressManager.shared.updateProgress(
                         stage: .uploadingAttachments,
-                        message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
                         progress: 0.2
                     )
                 }
@@ -419,7 +479,7 @@ extension TweetUploadManager {
             await MainActor.run {
                 UploadProgressManager.shared.updateProgress(
                     stage: .uploadingAttachments,
-                    message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
                     progress: 0.2
                 )
             }
@@ -1308,7 +1368,7 @@ extension TweetUploadManager {
             await MainActor.run {
                 UploadProgressManager.shared.updateProgress(
                     stage: .uploadingAttachments,
-                    message: NSLocalizedString("Uploading attachments...", comment: "Upload stage"),
+                        message: NSLocalizedString("Uploading attachments... Please stay on this screen", comment: "Upload stage"),
                     progress: 0.2
                 )
             }
@@ -1372,9 +1432,6 @@ extension TweetUploadManager {
                 return
             }
             
-            // No video jobs - images only, send message immediately
-            print("✅ [Chat Upload] All image attachments uploaded. Sending message...")
-            
             var finalMessage = message
             finalMessage.attachments = uploadedAttachments
             
@@ -1436,6 +1493,15 @@ extension TweetUploadManager {
                           typeIdLower.contains("avi") ||
                           typeIdLower.contains("mov")
             
+            // Determine if this is an image for local caching
+            let isImage = typeIdLower.contains("image") ||
+                          typeIdLower.contains("jpeg") ||
+                          typeIdLower.contains("jpg") ||
+                          typeIdLower.contains("png") ||
+                          typeIdLower.contains("gif") ||
+                          typeIdLower.contains("heic") ||
+                          typeIdLower.contains("heif")
+            
             do {
                 let (result, jobId) = try await uploadToIPFS(
                     data: item.data,
@@ -1449,7 +1515,7 @@ extension TweetUploadManager {
                             // Use the captured isVideo value, not message content
                             let progressMessage: String
                             if isVideo {
-                                progressMessage = String(format: NSLocalizedString("Processing video %d/%d", comment: "Upload progress"), itemNumber, totalItems)
+                                progressMessage = String(format: NSLocalizedString("Processing video %d/%d - Please stay on this screen", comment: "Upload progress for video processing"), itemNumber, totalItems)
                             } else {
                                 progressMessage = String(format: NSLocalizedString("Uploading image %d/%d", comment: "Upload progress"), itemNumber, totalItems)
                             }
@@ -1467,6 +1533,18 @@ extension TweetUploadManager {
                 if let fileType = result {
                     uploadedAttachments.append(fileType)
                     print("✅ [Upload] Item \(itemNumber)/\(totalItems) uploaded as \(fileType.type.rawValue), fileName=\(fileType.fileName ?? "nil")")
+                    
+                    // CRITICAL FIX: For images, create local cache immediately after upload
+                    // This allows ChatImageThumbnail to display from cache instead of downloading from server
+                    // This is similar to how videos work - they cache locally via LocalHTTPServer
+                    if isImage {
+                        // Cache the image immediately so it's available for display
+                        // Use Task to avoid blocking the upload flow
+                        Task.detached(priority: .userInitiated) {
+                            ImageCacheManager.shared.cacheImageData(item.data, for: fileType)
+                            print("💾 [Upload] Cached image locally for immediate display: \(fileType.mid)")
+                        }
+                    }
                 }
                 
                 if let jobId = jobId {
@@ -1536,7 +1614,7 @@ extension TweetUploadManager {
         }
     }
     
-    private func removePendingUpload() async {
+    func removePendingUpload() async {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("pendingTweetUpload.json")
         try? FileManager.default.removeItem(at: fileURL)
         print("Removed pending upload from disk")
@@ -1747,8 +1825,7 @@ extension TweetUploadManager {
         }
         
         do {
-            let mediaProcessor = HproseInstance.MediaProcessor()
-            let result = try await mediaProcessor.pollVideoConversionStatus(
+            let result = try await HproseInstance.MediaProcessor.pollVideoConversionStatus(
                 jobId: jobId,
                 baseURL: baseURL,
                 data: videoItem.data,

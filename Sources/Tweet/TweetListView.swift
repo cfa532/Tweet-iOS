@@ -1,3 +1,4 @@
+@preconcurrency import Foundation
 import SwiftUI
 
 struct TweetListNotification {
@@ -5,6 +6,19 @@ struct TweetListNotification {
     let key: String
     let shouldAccept: (Tweet) -> Bool
     let action: (Tweet) -> Void
+}
+
+// Preference key to track content height
+private struct TweetContentHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private final class ObserverHolder: @unchecked Sendable {
+    var observer: NSObjectProtocol?
+    init(_ observer: NSObjectProtocol?) { self.observer = observer }
 }
 
 @available(iOS 16.0, *)
@@ -17,7 +31,12 @@ struct TweetListView<RowView: View>: View {
     let header: (() -> AnyView)?
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
-    private let pageSize: UInt = 10
+    let leadingPadding: CGFloat  // Leading padding for cells
+    let trailingPadding: CGFloat  // Trailing padding for cells
+    let pinnedTweets: [Tweet]  // Pinned tweets for video coordination
+    let feedIdentifier: String  // Unique identifier for persistent scroll position
+    let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
+    private let pageSize: UInt = 10  // Manual load-more only
 
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var tweets: [Tweet]
@@ -33,95 +52,95 @@ struct TweetListView<RowView: View>: View {
     @State private var loadingStartTime: Date? = nil
     @State private var lastScrollOffset: CGFloat = 0
     @State private var didPrewarmSingletonFirstItem: Bool = false
+    @State private var lastVisibleTweetIdBeforeLoad: String? = nil
+    @State private var scrollProxy: ScrollViewProxy? = nil
+    @State private var contentHeight: CGFloat = 0
+    @State private var screenHeight: CGFloat = 0
+    @State private var needsMoreContent: Bool = true
+    @State private var startupTime: Date = Date()
+    @State private var foregroundObserver: NSObjectProtocol?
+    @State private var notificationObservers: [NSObjectProtocol] = []
+    @State private var videoManagerUpdateTask: Task<Void, Never>? = nil
+    @State private var hasAppearedOnce: Bool = false  // Track if view has appeared before (to detect navigation return)
+    @State private var lastCleanupTime: Date = Date()
+    private let cleanupInterval: TimeInterval = 10.0  // Cleanup every 10 seconds max
+    
+    // Memory management - limit total tweets in memory
+    private let maxTweetsInMemory: Int = 200  // Keep max 200 tweets to prevent unbounded growth
+    private let tweetsToKeepOnTrim: Int = 150  // When trimming, keep 150 most recent
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
     
-    // MARK: - Video Navigation for Fullscreen
+    // MARK: - Helper Methods
     
-    /// Find next video in tweet list starting from given SOURCE tweet (visible in feed) and video index
-    /// sourceTweetId: The visible tweet in feed (could be retweet)
-    /// currentVideoIndex: The current video index in the tweet's attachments
-    func findNextVideoInList(sourceTweetId: String, currentVideoIndex: Int) async -> (tweet: Tweet, videoIndex: Int, sourceTweetId: String)? {
-        print("DEBUG: [TweetListView] Finding next video - sourceTweetId: \(sourceTweetId), currentVideoIndex: \(currentVideoIndex)")
+    /// Update VideoLoadingManager with current tweet list
+    /// Centralized method to avoid code duplication
+    /// Debounced to prevent excessive updates during rapid scrolling
+    private func updateVideoLoadingManager(delay: TimeInterval = 0) {
+        // Cancel any pending update task
+        videoManagerUpdateTask?.cancel()
         
-        // Find source tweet (the visible tweet in feed)
-        guard let sourceTweetIdx = await MainActor.run(body: { tweets.firstIndex(where: { $0.mid == sourceTweetId }) }) else {
-            print("DEBUG: [TweetListView] Source tweet not found in feed")
-            return nil
-        }
-        
-        let sourceTweet = await MainActor.run { tweets[sourceTweetIdx] }
-        
-        // Get media tweet (handle retweets)
-        let mediaTweet: Tweet
-        if let originalTweetId = sourceTweet.originalTweetId,
-           let originalAuthorId = sourceTweet.originalAuthorId {
-            // This is a retweet - fetch original tweet
-            print("DEBUG: [TweetListView] Source tweet is retweet, fetching original tweet")
-            if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                mediaTweet = original
-            } else {
-                mediaTweet = sourceTweet
-            }
-        } else {
-            mediaTweet = sourceTweet
-        }
-        
-        // Find all video attachments in media tweet
-        if let attachments = mediaTweet.attachments {
-            let videoIndices = attachments.enumerated().compactMap { index, attachment in
-                (attachment.type == .video || attachment.type == .hls_video) ? index : nil
+        // Create new debounced task
+        videoManagerUpdateTask = Task.detached(priority: .background) {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
             
-            print("DEBUG: [TweetListView] Media tweet has \(videoIndices.count) videos at indices: \(videoIndices)")
+            // Check if task was cancelled
+            guard !Task.isCancelled else { return }
             
-            // Check if there are more videos in current media tweet
-            if let currentPosInVideoList = videoIndices.firstIndex(of: currentVideoIndex),
-               currentPosInVideoList + 1 < videoIndices.count {
-                let nextVideoIdx = videoIndices[currentPosInVideoList + 1]
-                print("DEBUG: [TweetListView] ✅ Found next video in same tweet at index \(nextVideoIdx)")
-                return (mediaTweet, nextVideoIdx, sourceTweetId) // Same source tweet
-            }
-        }
-        
-        // No more videos in current tweet, search next VISIBLE tweets in feed
-        print("DEBUG: [TweetListView] Searching next visible tweets for videos... (from index \(sourceTweetIdx + 1) to \(await MainActor.run { tweets.count - 1}))")
-        let tweetCount = await MainActor.run { tweets.count }
-        for idx in (sourceTweetIdx + 1)..<tweetCount {
-            let nextTweet = await MainActor.run { tweets[idx] }
-            print("DEBUG: [TweetListView] Checking visible tweet \(idx): \(nextTweet.mid), isRetweet: \(nextTweet.originalTweetId != nil)")
-            
-            // Get media tweet (handle retweets)
-            let nextMediaTweet: Tweet
-            if let originalTweetId = nextTweet.originalTweetId,
-               let originalAuthorId = nextTweet.originalAuthorId {
-                print("DEBUG: [TweetListView] Tweet \(idx) is retweet, fetching original")
-                if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId) {
-                    nextMediaTweet = original
-                } else {
-                    nextMediaTweet = nextTweet
-                }
-            } else {
-                nextMediaTweet = nextTweet
-            }
-            
-            if let attachments = nextMediaTweet.attachments {
-                let videoTypes = attachments.map { $0.type }
-                print("DEBUG: [TweetListView] Tweet \(idx) attachment types: \(videoTypes)")
-                
-                if let firstVideoIdx = attachments.firstIndex(where: { $0.type == .video || $0.type == .hls_video }) {
-                    print("DEBUG: [TweetListView] ✅ Found next video at visible tweet index \(idx), video index \(firstVideoIdx)")
-                    return (nextMediaTweet, firstVideoIdx, nextTweet.mid) // Return source tweet ID
-                }
-            }
-        }
-        
-        print("DEBUG: [TweetListView] ❌ No more videos found")
-        return nil
-    }
+            let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+            await self.videoLoadingManager.updateTweetList(tweetIds)
 
+            // Throttle cleanup to prevent excessive calls
+            let shouldCleanup = await MainActor.run {
+                let timeSinceLastCleanup = Date().timeIntervalSince(self.lastCleanupTime)
+                if timeSinceLastCleanup > self.cleanupInterval {
+                    self.lastCleanupTime = Date()
+                    return true
+                }
+                return false
+            }
+            
+            if shouldCleanup {
+                // Trim tweets array if it's too large
+                await self.trimTweetsIfNeeded()
+                
+                // Also cleanup old tweet instances to prevent memory growth
+                let activeTweetIds = Set(tweetIds)
+                Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
+            }
+        }
+    }
+    
+    /// Trim oldest tweets from memory if array exceeds maximum size
+    /// Keeps most recent tweets to prevent unbounded memory growth
+    private func trimTweetsIfNeeded() async {
+        await MainActor.run {
+            guard tweets.count > maxTweetsInMemory else { return }
+            
+            print("⚠️ [MEMORY] Trimming tweets array from \(tweets.count) to \(tweetsToKeepOnTrim)")
+            
+            // Keep only the most recent tweets (sorted by timestamp descending)
+            // Already sorted in descending order, so just take first N
+            let tweetsToRemove = tweets.dropFirst(tweetsToKeepOnTrim)
+            
+            // Clear Tweet singleton instances for removed tweets
+            for tweet in tweetsToRemove {
+                Tweet.clearInstance(mid: tweet.mid)
+            }
+            
+            // Trim array
+            tweets = Array(tweets.prefix(tweetsToKeepOnTrim))
+            
+            print("✅ [MEMORY] Trimmed to \(tweets.count) tweets")
+        }
+    }
+    
     // MARK: - Initialization
+    let onRefreshExtra: (() async -> Void)?  // Optional extra refresh callback
+    
     init(
         title: String,
         tweets: Binding<[Tweet]>,
@@ -129,7 +148,13 @@ struct TweetListView<RowView: View>: View {
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
         onScroll: ((CGFloat, CGFloat) -> Void)? = nil,  // (offset, delta)
+        leadingPadding: CGFloat = 8,  // Default 8pt leading padding
+        trailingPadding: CGFloat = 8,  // Default 8pt trailing padding
+        pinnedTweets: [Tweet] = [],  // Pinned tweets for video coordination
+        feedIdentifier: String = "mainFeed",  // Default to main feed
+        preserveOrder: Bool = false,  // If true, preserve server order (for bookmarks/favorites)
         header: (() -> AnyView)? = nil,
+        onRefreshExtra: (() async -> Void)? = nil,  // Extra refresh callback
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
@@ -137,7 +162,13 @@ struct TweetListView<RowView: View>: View {
         self.tweetFetcher = tweetFetcher
         self.showTitle = showTitle
         self.onScroll = onScroll
+        self.leadingPadding = leadingPadding
+        self.trailingPadding = trailingPadding
+        self.pinnedTweets = pinnedTweets
+        self.feedIdentifier = feedIdentifier
+        self.preserveOrder = preserveOrder
         self.header = header
+        self.onRefreshExtra = onRefreshExtra
         // Default: listen for newTweetCreated and insert at top
         self.notifications = notifications ?? [
             TweetListNotification(
@@ -158,52 +189,31 @@ struct TweetListView<RowView: View>: View {
 
     // MARK: - Body
     var body: some View {
-        ZStack {
-            ScrollView {
-                VStack(spacing: 0) {
-                    TweetListContentView(
-                        tweets: Binding(
-                            get: { tweets.map { Optional($0) } },
-                            set: { newValue in
-                                tweets = newValue.compactMap { $0 }
-                            }
-                        ),
-                        header: header,
-                        rowView: { tweet in
-                            rowView(tweet)
-                        },
-                        hasMoreTweets: $hasMoreTweets,
-                        isLoadingMore: isLoadingMore,
-                        isLoading: isLoading,
-                        initialLoadComplete: initialLoadComplete,
-                        loadMoreTweets: { loadMoreTweets() }
-                    )
+        GeometryReader { geometry in
+            ZStack {
+                // UIKit TABLE VIEW - Eliminates SwiftUI's GraphHost.flushTransactions() hang
+                TweetTableView(
+                    tweets: $tweets,
+                    header: header,
+                    rowView: { tweet in
+                        rowView(tweet)
+                    },
+                    hasMoreTweets: $hasMoreTweets,
+                    isLoadingMore: isLoadingMore,
+                    loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
+                    onRefresh: {
+                        await refreshTweets()
+                        await onRefreshExtra?()
+                    },
+                    onScroll: onScroll,
+                    leadingPadding: leadingPadding,
+                    trailingPadding: trailingPadding,
+                    pinnedTweets: pinnedTweets,
+                    feedIdentifier: feedIdentifier
+                )
+                .onAppear {
+                    screenHeight = geometry.size.height
                 }
-                .padding(.horizontal, 16) // Add horizontal padding to prevent content from expanding beyond screen
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .scrollBounceBehavior(.basedOnSize)
-            .safeAreaInset(edge: .top) {
-                Color.clear.frame(height: 0)
-            }
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentOffset.y
-            } action: { oldValue, newValue in
-                // Ignore negative offsets (pull-to-refresh / bounce)
-                guard newValue >= 0, oldValue >= 0 else { return }
-                
-                // Only forward significant changes to reduce jitter
-                let effectiveDelta = newValue - lastScrollOffset
-                let headerThreshold: CGFloat = 20
-                guard abs(effectiveDelta) >= headerThreshold else { return }
-                
-                lastScrollOffset = newValue
-                onScroll?(newValue, effectiveDelta)
-            }
-            .onAppear {
-                lastScrollOffset = 0
-                onScroll?(0, 0)
-            }
             
             if showToast {
                 VStack {
@@ -214,74 +224,18 @@ struct TweetListView<RowView: View>: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.3), value: showToast)
             }
-            
-            // Listen to all notifications
-            ForEach(Array(notifications.enumerated()), id: \.element.name) { idx, notification in
-                EmptyView()
-                    .onReceive(NotificationCenter.default.publisher(for: notification.name)) { notif in
-                        if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
-                            notification.action(tweet)
-                        }
-                        // Special case: tweetId notifications send String instead of Tweet
-                        if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
-                            if notification.name == .tweetDeleted {
-                                // For tweet deletion, handle directly in TweetListView
-                                let countBefore = tweets.count
-                                tweets.removeAll { $0.mid == tweetId }
-                                let countAfter = tweets.count
-                                TweetCacheManager.shared.deleteTweet(mid: tweetId)
-                                print("DEBUG: [TweetListView] Removed deleted tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
-                            } else if notification.name == .tweetPrivacyChanged {
-                                // For privacy changes, handle removal directly here
-                                // Find the tweet first before removing it
-                                let tweetToRemove = tweets.first(where: { $0.mid == tweetId })
-                                let countBefore = tweets.count
-                                tweets.removeAll { $0.mid == tweetId }
-                                let countAfter = tweets.count
-                                
-                                if countBefore != countAfter {
-                                    print("DEBUG: [TweetListView] Removed privacy-changed tweet \(tweetId) from list (title: \(title), count: \(countBefore) -> \(countAfter))")
-                                    // Also call custom handler with the tweet that was removed
-                                    if let tweet = tweetToRemove {
-                                        notification.action(tweet)
-                                    }
-                                } else {
-                                    print("DEBUG: [TweetListView] Privacy-changed tweet \(tweetId) not found in list (title: \(title))")
-                                }
-                            } else {
-                                // For other notifications, call the custom handler
-                                // Find the actual tweet in the list and pass it to the handler
-                                if let actualTweet = tweets.first(where: { $0.mid == tweetId }) {
-                                    notification.action(actualTweet)
-                                }
-                            }
-                        }
-                        // Special case: tweetPrivacyChanged sends tweetId and privacy info
-                        // This is handled by custom handlers in each view (FollowingsTweetView, ProfileTweetsSection)
-                        // No built-in handling here to avoid conflicts
-                        // Special case: blockUser may send blockedUserId to remove all tweets from that user
-                        if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
-                            let originalCount = tweets.count
-                            tweets.removeAll { $0.authorId == blockedUserId }
-                            let removedCount = originalCount - tweets.count
-                            print("[TweetListView] Removed \(removedCount) tweets from blocked user: \(blockedUserId)")
-                        }
-                    }
+            }  // Close ZStack
+            .task {
+                // Only load if tweets are empty and we haven't completed initial load
+                if tweets.isEmpty && !initialLoadComplete {
+                    await performInitialLoad()
+                } else if !tweets.isEmpty {
+                    // If we already have tweets, mark as loaded
+                    initialLoadComplete = true
+                    isLoading = false
+                }
             }
-        }
-        .refreshable {
-            await refreshTweets()
-        }
-        .task {
-            // Only load if tweets are empty and we haven't completed initial load
-            if tweets.isEmpty && !initialLoadComplete {
-                await performInitialLoad()
-            } else if !tweets.isEmpty {
-                // If we already have tweets, mark as loaded
-                initialLoadComplete = true
-                isLoading = false
-            }
-        }
+        }  // Close GeometryReader
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
             Task {
                 await refreshTweets()
@@ -290,20 +244,189 @@ struct TweetListView<RowView: View>: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Set up fullscreen video search function for auto-advance
-            // Each TweetListView overwrites the previous one's function
-            print("DEBUG: [TweetListView] Registering video search function - title: \(title), tweets count: \(tweets.count)")
-            FullScreenVideoManager.shared.setVideoSearchFunction(
-                findNextVideoInList,
-                onNavigate: { tweet, videoIndex, sourceTweetId in
-                    print("DEBUG: [TweetListView] Fullscreen navigation callback - tweet: \(tweet.mid), videoIndex: \(videoIndex), sourceTweetId: \(sourceTweetId)")
-                    // MediaBrowserView will handle the actual navigation
+            // Set up foreground observer to fetch new tweets when app returns
+            setupForegroundObserver()
+            // Set up notification observers
+            setupNotificationObservers()
+
+            // Only notify feedViewDidAppear when RETURNING from navigation, not on initial load
+            // This prevents unnecessary video stop/restart cycles that cause flickering
+            if hasAppearedOnce {
+                // Returning from navigation - notify to restart video playback
+                // Delay slightly to ensure layout is complete
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationCenter.default.post(name: .feedViewDidAppear, object: nil)
                 }
-            )
+            } else {
+                // First appearance - just mark as appeared, video will start via normal flow
+                hasAppearedOnce = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("CacheCleared"))) { _ in
+            // Refresh tweets when cache is cleared
+            print("DEBUG: [TweetListView] Received CacheCleared notification, refreshing tweets")
+            Task {
+                await refreshTweets()
+            }
+        }
+        .onDisappear {
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
+            // Clean up notification observers
+            cleanupNotificationObservers()
         }
     }
-
+    
+    // MARK: - Helper Methods
+    
     // MARK: - Methods
+    
+    /// Setup notification observers for tweet updates
+    private func setupNotificationObservers() {
+        // Remove existing observers if any
+        cleanupNotificationObservers()
+        
+        // Get unique notification names
+        let uniqueNames = Set(notifications.map { $0.name })
+        
+        // Capture binding and notification handlers by value to avoid capturing entire self
+        // This is safe because:
+        // 1. Binding is a lightweight value type (just a reference wrapper)
+        // 2. We properly clean up observers in onDisappear
+        // 3. No retain cycle since structs don't have reference semantics
+        let tweetsBinding = _tweets
+        let notificationHandlers = notifications
+        
+        // Set up one observer per unique notification name
+        for name in uniqueNames {
+            let observer = NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { notif in
+                // Find matching notification handlers for this notification name
+                for notification in notificationHandlers where notification.name == name {
+                    if let tweet = notif.userInfo?[notification.key] as? Tweet, notification.shouldAccept(tweet) {
+                        notification.action(tweet)
+                    }
+                    // Special case: tweetId notifications send String instead of Tweet
+                    if notification.key == "tweetId", let tweetId = notif.userInfo?[notification.key] as? String {
+                        // Find tweet once for efficiency (avoid multiple O(n) searches)
+                        let tweetIndex = tweetsBinding.wrappedValue.firstIndex(where: { $0.mid == tweetId })
+                        
+                        if notification.name == .tweetDeleted {
+                            // For tweet deletion, handle directly in TweetListView
+                            if let index = tweetIndex {
+                                tweetsBinding.wrappedValue.remove(at: index)
+                            }
+                            TweetCacheManager.shared.deleteTweet(mid: tweetId)
+                        } else if notification.name == .tweetPrivacyChanged {
+                            // For privacy changes, handle removal directly here
+                            if let index = tweetIndex {
+                                let tweetToRemove = tweetsBinding.wrappedValue[index]
+                                tweetsBinding.wrappedValue.remove(at: index)
+                                // Call custom handler with the tweet that was removed
+                                notification.action(tweetToRemove)
+                            }
+                        } else {
+                            // For other notifications, call the custom handler
+                            if let index = tweetIndex {
+                                notification.action(tweetsBinding.wrappedValue[index])
+                            }
+                        }
+                    }
+                }
+                // Special case: blockUser may send blockedUserId to remove all tweets from that user
+                if let blockedUserId = notif.userInfo?["blockedUserId"] as? String {
+                    tweetsBinding.wrappedValue.removeAll { $0.authorId == blockedUserId }
+                }
+            }
+            
+            notificationObservers.append(observer)
+        }
+    }
+    
+    /// Clean up notification observers
+    private func cleanupNotificationObservers() {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        notificationObservers.removeAll()
+    }
+    
+    /// Setup observer to fetch new tweets when app comes to foreground
+    private func setupForegroundObserver() {
+        // Remove existing observer if any
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
+        // Listen for app becoming active (returning from background or screen lock)
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only fetch if initial load has completed (avoid interfering with app startup)
+            guard self.initialLoadComplete else {
+                print("📱 [FOREGROUND] Skipping fetch - initial load not complete")
+                return
+            }
+            
+            // Fetch new tweets when app comes to foreground
+            print("📱 [FOREGROUND] App became active - fetching new tweets...")
+            Task {
+                await self.fetchNewTweetsOnForeground()
+            }
+        }
+        
+        print("📱 [FOREGROUND] Observer set up - will fetch tweets on app foreground")
+    }
+    
+    /// Fetch new tweets when app comes to foreground
+    /// This refreshes the first page to show any new tweets that arrived while app was in background
+    private func fetchNewTweetsOnForeground() async {
+        // Don't fetch if already loading or refreshing
+        guard !isLoading && !isLoadingMore else {
+            print("📱 [FOREGROUND] Skipping - already loading")
+            return
+        }
+        
+        print("📱 [FOREGROUND] Fetching fresh tweets from server...")
+        
+        do {
+            // Fetch fresh tweets from server (page 0, no cache)
+            let freshTweets = try await tweetFetcher(0, pageSize, false)
+            let validTweets = freshTweets.compactMap { $0 }
+            
+            await MainActor.run {
+                if !validTweets.isEmpty {
+                    // For preserveOrder lists (bookmarks/favorites), append in server order
+                    // For other lists, merge with timestamp sorting
+                    if preserveOrder {
+                        tweets.appendTweetsPreservingOrder(validTweets)
+                    } else {
+                        tweets.mergeTweets(validTweets)
+                    }
+                    currentPage = 0
+                    hasMoreTweets = freshTweets.count >= pageSize
+
+                    // Update video manager with debouncing
+                    updateVideoLoadingManager(delay: 0.2)
+
+                    print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
+                } else {
+                    print("📱 [FOREGROUND] No new tweets found")
+                }
+            }
+        } catch {
+            print("📱 [FOREGROUND] ❌ Error fetching tweets: \(error)")
+        }
+    }
+    
     func performInitialLoad() async {
         currentPage = 0
         let page: UInt = 0
@@ -323,12 +446,10 @@ struct TweetListView<RowView: View>: View {
                     
                     // Set hasMoreTweets based on cache - if we got a full page, there might be more
                     hasMoreTweets = tweetsFromCache.count >= pageSize
-                    print("[TweetListView] Initial cache load: got \(tweetsFromCache.count) tweets, hasMoreTweets=\(hasMoreTweets)")
-                    
-                    // Update VideoLoadingManager with new tweet list
-                    let tweetIds = tweets.map { $0.mid }
-                    videoLoadingManager.updateTweetList(tweetIds)
-                    
+
+                    // Update VideoLoadingManager with delay for startup
+                    updateVideoLoadingManager(delay: 1.0)
+
                     // Don't mark as loaded yet - wait for server fetch to complete
                     // This prevents "No tweet yet" from showing prematurely if cached tweets
                     // are filtered out (e.g., pinned tweets) before server fetch completes
@@ -342,73 +463,203 @@ struct TweetListView<RowView: View>: View {
             }
 
             // Prewarm singleton players based on the first available cached video (best-effort).
-            await MainActor.run {
-                self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
-            }
-            
-            // Step 2: Load from server to get the most up-to-date data
-            await loadFromServer(page: page, pageSize: pageSize) { _ in }
-            
-            // Trigger preloading after initial load completes
-            if hasMoreTweets {
-                await MainActor.run {
-                    loadNextTwoPages(startingFrom: 1)
+            // Defer during initial startup to prevent hangs
+            Task.detached(priority: .background) {
+                // Wait for startup phase to end before prewarming videos
+                if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
+                    await withCheckedContinuation { continuation in
+                        let holder = ObserverHolder(nil)
+                        holder.observer = NotificationCenter.default.addObserver(
+                            forName: .startupPhaseEnded,
+                            object: nil,
+                            queue: nil
+                        ) { _ in
+                            if let observer = holder.observer {
+                                NotificationCenter.default.removeObserver(observer)
+                            }
+                            continuation.resume()
+                        }
+                    }
+                }
+                // Defer prewarming to avoid overwhelming system when startup phase ends
+                Task.detached(priority: .background) {
+                    await MainActor.run {
+                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                    }
                 }
             }
-            
+
+            // End startup phase after 3 seconds
+            Task.detached(priority: .background) {
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                await videoLoadingManager.endStartupPhase()
+            }
         } catch {
-            print("[TweetListView] Error during initial load: \(error)")
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
             }
         }
+        
+        // CRITICAL: Let UI render cached tweets BEFORE fetching from server
+        // If we await server fetch in same function, SwiftUI batches updates and only renders once
+        // By launching server fetch in separate Task, cached tweets render immediately
+        Task {
+            // Step 2: Load from server to get the most up-to-date data (in background)
+            await loadFromServer(page: page, pageSize: pageSize) { _ in }
+            
+            // Step 3: Auto-load additional pages if there are more tweets on server
+            // This ensures all new tweets are loaded when app opens, not just first page
+            await autoLoadRemainingNewTweets()
+        }
+    }
+    
+    /// Automatically load remaining new tweets after initial load
+    /// Continues loading pages until no more tweets or reasonable limit reached
+    ///
+    /// Uses the same pagination algorithm as updateTweetsWithServerData:
+    /// - responseSize >= pageSize: keep loading (more entries might exist)
+    /// - responseSize < pageSize: stop (server depleted)
+    private func autoLoadRemainingNewTweets() async {
+        let maxAutoLoadPages: UInt = 2  // Load up to 2 additional pages (20 tweets total with pageSize=10)
+        var pagesLoaded: UInt = 0
+
+        // Check if there are more tweets to load
+        let shouldContinue = await MainActor.run { hasMoreTweets }
+        guard shouldContinue else { return }
+
+
+        while pagesLoaded < maxAutoLoadPages {
+            let currentHasMore = await MainActor.run { hasMoreTweets }
+            guard currentHasMore else {
+                print("📥 [AUTO-LOAD] No more tweets to load (completed)")
+                break
+            }
+
+            let nextPage = await MainActor.run { currentPage + 1 }
+
+            do {
+                let tweets = try await tweetFetcher(nextPage, pageSize, false)
+                let validTweets = tweets.compactMap { $0 }
+
+                await MainActor.run {
+                    if !validTweets.isEmpty {
+                        // For preserveOrder lists (bookmarks/favorites), append in server order
+                        // For other lists, merge with timestamp sorting
+                        if self.preserveOrder {
+                            self.tweets.appendTweetsPreservingOrder(validTweets)
+                        } else {
+                            self.tweets.mergeTweets(validTweets)
+                        }
+                        self.currentPage = nextPage
+
+                        // Check response size to determine if more items exist
+                        self.hasMoreTweets = tweets.count >= self.pageSize
+
+                        // Update video manager with debouncing (will batch multiple updates)
+                        self.updateVideoLoadingManager(delay: 0.2)
+                    } else {
+                        // No valid tweets - check response size
+                        self.currentPage = nextPage
+                        self.hasMoreTweets = tweets.count >= self.pageSize
+                        if !self.hasMoreTweets {
+                            print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) and partial page - stopping")
+                        } else {
+                            print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) but got full page - continuing")
+                        }
+                    }
+                }
+                
+                // Check if we got a partial page (indicates end of new tweets)
+                if tweets.count < pageSize {
+                    print("📥 [AUTO-LOAD] Received partial page (\(tweets.count) tweets) - completed")
+                    break
+                }
+                
+                pagesLoaded += 1
+                
+                // Small delay between requests to avoid overwhelming server
+                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms (increased from 100ms)
+                
+            } catch {
+                print("❌ [AUTO-LOAD] Error loading page \(nextPage): \(error)")
+                print("❌ [AUTO-LOAD] Error details: \(error.localizedDescription)")
+                // Don't set hasMoreTweets = false on error!
+                // This would prevent manual retry and show "no more tweets" incorrectly
+                // The error could be temporary (network, timeout, etc.)
+                // Just stop auto-loading and let the user retry manually via scroll
+                break
+            }
+        }
+        
+        if pagesLoaded >= maxAutoLoadPages {
+            print("📥 [AUTO-LOAD] Reached max auto-load limit (\(maxAutoLoadPages) pages)")
+        }
     }
 
+    /// Refresh tweets from server (pull-to-refresh)
+    ///
+    /// Uses the same pagination algorithm as updateTweetsWithServerData:
+    /// - responseSize >= pageSize: keep loading (more entries might exist)
+    /// - responseSize < pageSize: stop (server depleted)
     func refreshTweets() async {
-        guard !isLoading else { return }
-        
+        guard !isLoading else {
+            return
+        }
+
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
-        
+
+        // DON'T clear existing tweets - keep them while refreshing for better UX
+        // await MainActor.run {
+        //     tweets.removeAll()
+        // }
+
         do {
             // Always load fresh data from server for refresh
             let freshTweets = try await tweetFetcher(0, pageSize, false)
             let validTweets = freshTweets.compactMap { $0 }
             let hasValidTweet = !validTweets.isEmpty
-            
+
+            if validTweets.isEmpty {
+            }
+
             await MainActor.run {
-                // Update tweets with server data while preserving cached tweets for failed IDs
+                // Update tweets with server data - MERGE on refresh to keep existing content
                 if hasValidTweet {
-                    // Use mergeTweets to preserve cached tweets that weren't in server response
-                    tweets.mergeTweets(validTweets)
+                    // For preserveOrder lists (bookmarks/favorites), replace entirely on refresh to get fresh order
+                    // For other lists, merge with timestamp sorting
+                    if preserveOrder {
+                        tweets = validTweets
+                    } else {
+                        tweets.mergeTweets(validTweets)
+                    }
                     currentPage = 0
+
+                    // Check response size to determine if more items exist
                     hasMoreTweets = freshTweets.count >= pageSize
-                    
-                    // Update VideoLoadingManager with new tweet list
-                    let tweetIds = tweets.map { $0.mid }
-                    videoLoadingManager.updateTweetList(tweetIds)
+
+                    // Update VideoLoadingManager with debouncing
+                    updateVideoLoadingManager(delay: 0.2)
                 } else {
+                    // No valid tweets - check response size
+                    hasMoreTweets = freshTweets.count >= pageSize
+
                     // Only clear if server returned no valid tweets AND we have no cached tweets
                     if tweets.isEmpty {
                         tweets = []
-                        hasMoreTweets = false
-                        
-                        // Update VideoLoadingManager with empty tweet list
-                        videoLoadingManager.updateTweetList([])
-                    } else {
-                        // Keep cached tweets if server returned no valid tweets
-                        hasMoreTweets = false
+                        // Update VideoLoadingManager with empty list
+                        updateVideoLoadingManager()
                     }
+                    // Keep cached tweets if server returned no valid tweets
                 }
-                
+
                 isLoading = false
                 initialLoadComplete = true
             }
             
         } catch {
-            print("[TweetListView] Refresh failed: \(error)")
             await MainActor.run {
                 isLoading = false
                 initialLoadComplete = true
@@ -417,101 +668,113 @@ struct TweetListView<RowView: View>: View {
         }
     }
 
-    func loadMoreTweets(page: UInt? = nil) {
-        print("[TweetListView] loadMoreTweets called: hasMoreTweets=\(hasMoreTweets), isLoadingMore=\(isLoadingMore), initialLoadComplete=\(initialLoadComplete), currentPage=\(currentPage)")
-        guard hasMoreTweets, !isLoadingMore, initialLoadComplete else {
-            print("[TweetListView] loadMoreTweets guard failed - returning early")
+    func loadMoreTweets(page: UInt? = nil, forceLoad: Bool = false) {
+        // Prevent loading if we've reached memory limit
+        if tweets.count >= maxTweetsInMemory && !forceLoad {
+            print("⚠️ [MEMORY] Reached maximum tweets limit (\(maxTweetsInMemory)), stopping pagination")
+            hasMoreTweets = false
+            return
+        }
+        
+        // Allow bypassing hasMoreTweets check for manual pull-to-load
+        guard (hasMoreTweets || forceLoad), !isLoadingMore, initialLoadComplete else {
             return 
         }
         
-        let nextPage = page ?? (currentPage + 1)
-        print("[TweetListView] loadMoreTweets proceeding with page \(nextPage)")
+        // Set loading flag IMMEDIATELY to prevent duplicate calls
+        isLoadingMore = true
         
-        // Load next two pages in advance, separated by 3 seconds
-        loadNextTwoPages(startingFrom: nextPage)
+        let nextPage = page ?? (currentPage + 1)
+        
+        // Load single page only (no batch prefetch)
+        loadSinglePage(page: nextPage) { _ in }
     }
     
-    // MARK: - Batch Loading for Prefetching
-    private func loadNextTwoPages(startingFrom startPage: UInt) {
-        // Load first page immediately
-        loadSinglePage(page: startPage) { success in
-            if success && self.hasMoreTweets {
-                // Load second page after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if self.hasMoreTweets && !self.isLoadingMore {
-                        self.loadSinglePage(page: startPage + 1) { _ in }
-                    }
-                }
-            }
-        }
-    }
+    // MARK: - Batch Loading (Removed - now using single page loads only)
     
     private func loadSinglePage(page: UInt, completion: @escaping (Bool) -> Void) {
         let pageSize = self.pageSize
-        
+
         Task {
             // Record loading start time
             let startTime = Date()
-            
+
             await MainActor.run {
+                // Capture the last visible tweet before loading
+                if let lastTweet = tweets.last {
+                    lastVisibleTweetIdBeforeLoad = lastTweet.mid
+                }
+
                 isLoadingMore = true
                 loadingStartTime = startTime
             }
-            
+
+            // Step 1: Try to load from cache first for instant UX (best-effort, don't fail on cache errors)
+            var tweetsFromCache: [Tweet?] = []
             do {
-                // Step 1: Load from cache first for instant UX
-                let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
-                
-                // Calculate elapsed time
-                let elapsedTime = Date().timeIntervalSince(startTime)
-                let remainingTime = max(0, minimumLoadingDuration - elapsedTime)
-                
-                // Wait for minimum duration if needed
-                if remainingTime > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
-                }
-                
-                await MainActor.run {
-                    tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
-                    
-                    // Set hasMoreTweets based on cache - if we got a full page, there might be more
-                    // This is optimistic - server update will correct it if needed
-                    if tweetsFromCache.count >= pageSize {
-                        hasMoreTweets = true
-                        print("[TweetListView] LoadMore cache: got full page (\(tweetsFromCache.count) >= \(pageSize)), setting hasMoreTweets=true")
+                tweetsFromCache = try await tweetFetcher(page, pageSize, true)
+
+                // If we got cached tweets, show them immediately
+                if !tweetsFromCache.isEmpty {
+                    await MainActor.run {
+                        // For preserveOrder lists (bookmarks/favorites), append in server order
+                        // For other lists, merge with timestamp sorting
+                        if preserveOrder {
+                            tweets.appendTweetsPreservingOrder(tweetsFromCache.compactMap { $0 })
+                        } else {
+                            tweets.mergeTweets(tweetsFromCache.compactMap { $0 })
+                        }
+
+                        // Set hasMoreTweets based on cache - if we got a full page, there might be more
+                        // This is optimistic - server update will correct it if needed
+                        if tweetsFromCache.count >= pageSize {
+                            hasMoreTweets = true
+                        }
+
+                        // Update VideoLoadingManager with debouncing
+                        updateVideoLoadingManager(delay: 0.2)
                     }
-                    
-                    // Update VideoLoadingManager with new tweet list
-                    let tweetIds = tweets.map { $0.mid }
-                    videoLoadingManager.updateTweetList(tweetIds)
-                    
-                    // Clear loading state after minimum duration
-                    isLoadingMore = false
-                    loadingStartTime = nil
-                }
-                
-                // Step 2: Load from server to update with fresh data (non-blocking, no retry)
-                Task {
-                    await loadFromServer(page: page, pageSize: pageSize, completion: completion)
+                    print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
             } catch {
-                print("[TweetListView] Error loading page \(page): \(error)")
-                
-                // Calculate elapsed time for error case
-                let elapsedTime = Date().timeIntervalSince(startTime)
-                let remainingTime = max(0, minimumLoadingDuration - elapsedTime)
-                
-                // Wait for minimum duration even on error
-                if remainingTime > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(remainingTime * 1_000_000_000))
-                }
-                
-                await MainActor.run { 
-                    hasMoreTweets = false; 
+                // Cache fetch failed - not critical, we'll try server next
+                print("⚠️ [PAGINATION] Cache fetch failed for page \(page): \(error), will try server")
+            }
+
+            // CRITICAL: Let UI render cached tweets BEFORE continuing with server fetch
+            // By spawning the rest in a separate Task, cached tweets render immediately
+            // (Same pattern as performInitialLoad - SwiftUI batches updates within same Task)
+            let capturedLastTweetId = lastVisibleTweetIdBeforeLoad
+            let tweetCountBeforeServer = tweets.count
+
+            Task {
+                // Step 2: Load from server to get fresh data (always try, even if cache failed)
+                // Keep isLoadingMore = true until server responds so spinner stays visible
+                await loadFromServer(page: page, pageSize: pageSize, completion: completion)
+
+                // Now that server has responded, clear loading state
+                await MainActor.run {
                     isLoadingMore = false
                     loadingStartTime = nil
+
+                    // Only restore scroll position if:
+                    // 1. New tweets were actually loaded (count increased)
+                    // 2. Not at end of list (hasMoreTweets is still true)
+                    // 3. Not during startup phase
+                    let newTweetsLoaded = tweets.count > tweetCountBeforeServer
+                    if let lastTweetId = capturedLastTweetId,
+                       newTweetsLoaded,
+                       hasMoreTweets,
+                       !videoLoadingManager.isInStartupPhase {
+                        // Use a slight delay to ensure layout is complete
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                scrollProxy?.scrollTo("tweet_\(lastTweetId)", anchor: .bottom)
+                            }
+                        }
+                    }
+                    lastVisibleTweetIdBeforeLoad = nil
                 }
-                completion(false)
             }
         }
     }
@@ -532,7 +795,6 @@ struct TweetListView<RowView: View>: View {
             }
             
         } catch {
-            print("[TweetListView] Server load failed: \(error)")
             
             await MainActor.run {
                 // Mark initial load as complete even on error for page 0
@@ -547,6 +809,41 @@ struct TweetListView<RowView: View>: View {
     }
     
     // Helper function to update tweets with server data
+    //
+    // PAGINATION ALGORITHM - How It Works:
+    // ====================================
+    // This function is used by ALL tweet lists: main feed, bookmarks, favorites, user profiles
+    //
+    // Server Behavior (see TweetBackendApp/get_user_meta.js):
+    // -------------------------------------------------------
+    // 1. Server gets ALL bookmark/favorite entries from user's list
+    // 2. Sorts by timestamp (newest first)
+    // 3. **Slices to requested page range FIRST** (e.g., entries 0-9 for page 0)
+    // 4. Then calls get_tweet() for each entry in the slice
+    // 5. Returns array where:
+    //    - Array count = number of bookmark/favorite ENTRIES in the slice
+    //    - Array items can be null if the tweet was deleted (get_tweet returns null)
+    //
+    // Key Insight:
+    // -----------
+    // The array count reflects the number of bookmark/favorite ENTRIES, NOT valid tweets!
+    //
+    // Example: User has 100 bookmarks, 20 are deleted tweets, pageSize=10
+    // - Page 0: Server slices entries 0-9 → returns array of 10 items (some null)
+    // - Page 9: Server slices entries 90-99 → returns array of 10 items (some null)
+    // - Page 10: Server slices entries 100-109 → returns array of 0 items (no more entries)
+    //
+    // Pagination Rule (SIMPLE):
+    // ------------------------
+    // if responseSize >= pageSize → more entries might exist, hasMoreTweets = true
+    // if responseSize < pageSize → no more entries, hasMoreTweets = false
+    //
+    // This works because:
+    // - Full page (count >= pageSize) means server had enough entries to fill the page
+    // - Partial page (count < pageSize) means server ran out of entries
+    //
+    // NOTE: This is DIFFERENT from validCount (number of non-null tweets)
+    // We must check responseSize, not validCount!
     private func updateTweetsWithServerData(
         validServerTweets: [Tweet],
         tweetsFromServer: [Tweet?],
@@ -554,44 +851,60 @@ struct TweetListView<RowView: View>: View {
         pageSize: UInt
     ) {
         let hasValidTweet = !validServerTweets.isEmpty
-        
-        // Update tweets with server data
+
+        // BRANCH 1: Got valid tweets - check response size
         if hasValidTweet {
-            if page == 0 && tweets.isEmpty {
+            // For preserveOrder lists (bookmarks/favorites), page 0 should always REPLACE
+            // to ensure correct server order (sorted by bookmark/favorite time)
+            if page == 0 && preserveOrder {
+                tweets = validServerTweets
+            } else if page == 0 && tweets.isEmpty {
                 tweets = validServerTweets
             } else {
-                tweets.mergeTweets(validServerTweets)
+                // For preserveOrder lists (bookmarks/favorites), append in server order
+                // For other lists, merge with timestamp sorting
+                if preserveOrder {
+                    tweets.appendTweetsPreservingOrder(validServerTweets)
+                } else {
+                    tweets.mergeTweets(validServerTweets)
+                }
             }
-            
-            // Update VideoLoadingManager with new tweet list
-            let tweetIds = tweets.map { $0.mid }
-            videoLoadingManager.updateTweetList(tweetIds)
-            
+
+            // Update VideoLoadingManager with debouncing
+            updateVideoLoadingManager(delay: 0.2)
+
             currentPage = page
-            
-            // Set hasMoreTweets based on whether we got a full page
-            // If we got a full page, there might be more tweets
-            if tweetsFromServer.count >= pageSize {
-                hasMoreTweets = true
-                print("[TweetListView] Got full page (\(tweetsFromServer.count) >= \(pageSize)), setting hasMoreTweets=true")
-            } else {
-                hasMoreTweets = false
-                print("[TweetListView] Got partial page (\(tweetsFromServer.count) < \(pageSize)), setting hasMoreTweets=false")
-            }
-            
+
+            // Check response size (including nils) to determine if more items exist
+            // Server slices bookmark/favorite ENTRIES before calling get_tweet
+            // So array count reflects number of entries, not valid tweets
+            hasMoreTweets = tweetsFromServer.count >= pageSize
+            print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (\(validServerTweets.count) valid), hasMoreTweets = \(hasMoreTweets)")
+
             // Mark initial load as complete for page 0 only if we got valid tweets
             if page == 0 {
                 isLoading = false
                 initialLoadComplete = true
-                prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                // Prewarm video players in background to avoid blocking scroll gestures
+                // Defer during initial startup to prevent hangs
+                Task.detached(priority: .background) {
+                    // Wait 2 seconds after initial load before prewarming videos
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    await MainActor.run {
+                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                    }
+                }
             }
+
+        // BRANCH 2: No valid tweets AND partial page - server depleted
         } else if tweetsFromServer.count < pageSize {
+            // Partial page means server ran out of bookmark/favorite entries
             hasMoreTweets = false
-            print("[TweetListView] No valid tweets and partial page (\(tweetsFromServer.count) < \(pageSize)), setting hasMoreTweets=false")
-            // Server returned fewer than pageSize tweets (or empty), so no more pages
+            print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
             if page == 0 {
                 if tweets.isEmpty {
-                    videoLoadingManager.updateTweetList([])
+                    // Update VideoLoadingManager with empty list (no debouncing needed for empty)
+                    updateVideoLoadingManager()
                     isLoading = false
                     initialLoadComplete = true
                 } else {
@@ -599,11 +912,14 @@ struct TweetListView<RowView: View>: View {
                     initialLoadComplete = true
                 }
             }
+
+        // BRANCH 3: No valid tweets BUT full page - keep trying next page
         } else {
-            // All tweets are nil but we got a full page, continue to next page
+            // Full page (all nils) means server had enough entries, continue to next page
+            // Example: Page has 10 deleted bookmarks (all nils) - more entries might exist
             currentPage = page
             hasMoreTweets = true
-            print("[TweetListView] Full page with all nil tweets, setting hasMoreTweets=true to continue searching")
+            print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), FULL PAGE - trying next page")
         }
     }
 
@@ -640,6 +956,29 @@ struct TweetListView<RowView: View>: View {
     // MARK: - Optimistic UI Methods
     func insertTweet(_ tweet: Tweet) {
         tweets.insert(tweet, at: 0)
+    }
+    
+    // MARK: - Screen Filling
+    /// Automatically loads more tweets until the screen is filled
+    private func loadMoreToFillScreen() async {
+        guard hasMoreTweets, !isLoadingMore, !isLoading, initialLoadComplete else { return }
+        
+        
+        // Temporarily disable auto-fill to prevent infinite loop
+        await MainActor.run {
+            needsMoreContent = false
+        }
+        
+        // Load next page
+        loadMoreTweets()
+        
+        // Re-enable after a short delay to allow UI to update
+        Task {
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+            await MainActor.run {
+                needsMoreContent = true
+            }
+        }
     }
 }
 
@@ -688,27 +1027,29 @@ struct TweetListContentView<RowView: View>: View {
                 .frame(maxWidth: .infinity)
                 .padding()
             } else {
-                // Show tweets
+                // Show tweets with LazyVStack for smooth scrolling
                 // Small spacer
                 Rectangle()
                     .fill(Color.clear)
                     .frame(height: 1)
                 
-                ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
-                    VStack(spacing: 0) {
-                        if index > 0 {
-                            Rectangle()
-                                .padding(.horizontal, 2)
-                                .frame(height: 0.5)
-                                .foregroundColor(Color(.systemGray).opacity(0.4))
-                        }
-                        rowView(tweet)
-                            // Add identity for view reuse
-                            .id("tweet_\(tweet.mid)")
-                            .onAppear {
-                                // Update VideoLoadingManager when tweet becomes visible
-                                videoLoadingManager.updateVisibleTweetIndex(index)
+                LazyVStack(spacing: 0, pinnedViews: []) {
+                    ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
+                        VStack(spacing: 0) {
+                            if index > 0 {
+                                Rectangle()
+                                    .padding(.horizontal, 2)
+                                    .frame(height: 0.5)
+                                    .foregroundColor(Color(.systemGray).opacity(0.4))
                             }
+                            rowView(tweet)
+                                // Add identity for view reuse
+                                .id("tweet_\(tweet.mid)")
+                                .onAppear {
+                                    // Update VideoLoadingManager when tweet becomes visible
+                                    videoLoadingManager.updateVisibleTweetIndex(index)
+                                }
+                        }
                     }
                 }
                 
@@ -725,20 +1066,16 @@ struct TweetListContentView<RowView: View>: View {
                 
                 // Loading indicator for more tweets - shown as list item for smooth scrolling
                 if hasMoreTweets {
-                    if isLoadingMore {
-                        // Show spinner when loading
-                        VStack(spacing: 12) {
+                    // Use consistent height to prevent layout jumps
+                    ZStack {
+                        if isLoadingMore {
+                            // Show spinner when loading
                             ProgressView()
                                 .scaleEffect(1.0)
                         }
-                        .frame(height: 60)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                    } else {
-                        // Empty space when not loading to maintain consistent spacing
-                        Color.clear
-                            .frame(height: 40)
                     }
+                    .frame(height: 80)
+                    .frame(maxWidth: .infinity)
                 } else {
                     // Small spacer at bottom when no more tweets
                     Color.clear

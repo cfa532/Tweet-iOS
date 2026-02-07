@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVFoundation
+import Combine
 
 // Global video visibility manager
 class VideoVisibilityManager: ObservableObject {
@@ -25,46 +26,61 @@ class VideoVisibilityManager: ObservableObject {
 }
 
 // MARK: - MediaCell
-struct MediaCell: View, Equatable {
+struct MediaCell: View, Equatable, MediaCellDelegate {
     let parentTweet: Tweet
     let attachmentIndex: Int
     let aspectRatio: Float      // passed in by MediaGrid or MediaBrowser
+    let shouldLoadVideo: Bool
+    let onVideoFinished: (() -> Void)?
     let isEmbedded: Bool
+    let cellTweetId: String?    // ID of visible cell in feed (retweet ID for retweets, quoting tweet ID for quoted tweets)
     
     @State private var image: UIImage?
     @State private var isLoading = false
     @State private var showFullScreen = false
     @State private var isVisible = false
-    @State private var shouldLoadVideo: Bool
-    @State private var onVideoFinished: (() -> Void)?
-    @State private var preloadTask: Task<Void, Never>?
-    @State private var isPreloading = false
     @State private var isOpeningFullScreen = false
-    @State private var shouldAutoPlay = false // Track if video should autoplay
-    @ObservedObject var videoManager: VideoManager
+    @State private var shouldAutoPlay = false
+    @State private var effectiveBaseUrl: URL
+    @State private var foregroundObserver: NSObjectProtocol? = nil
+    @State private var videoReloadTrigger = false
+    @State private var videoFrame: CGRect = .zero
+    @State private var isInViewport: Bool = false
     @ObservedObject private var muteState = MuteState.shared
-    
-    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, videoManager: VideoManager, isEmbedded: Bool = false) {
+
+    init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
         self.shouldLoadVideo = shouldLoadVideo
         self.onVideoFinished = onVideoFinished
         self._isVisible = State(initialValue: isVisible)
-        self.videoManager = videoManager
         self.isEmbedded = isEmbedded
+        self.cellTweetId = cellTweetId
+        
+        // Initialize effectiveBaseUrl with fallback chain
+        let initialBaseUrl = parentTweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
+        self._effectiveBaseUrl = State(initialValue: initialBaseUrl)
         
         // Initialize shouldAutoPlay based on initial conditions
+        // Global VideoPlaybackCoordinator manages all video playback via notifications
+        // Videos will receive .shouldPlayVideo notifications when they should play
         if let attachments = parentTweet.attachments,
            attachmentIndex >= 0 && attachmentIndex < attachments.count {
             let attachment = attachments[attachmentIndex]
             let isVideo = attachment.type == .video || attachment.type == .hls_video
             if isVideo {
                 if isEmbedded {
-                    // Embedded/quoted tweet preview: allow autoplay for the first attachment only.
-                    self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible && attachmentIndex == 0)
+                    // Embedded/quoted tweet preview: autoplay when visible (like regular videos)
+                    // Note: isVisible is set via onAppear/onDisappear which may fire early
+                    // but SimpleVideoPlayer checks actual viewport visibility before playing
+                    self._shouldAutoPlay = State(initialValue: shouldLoadVideo && isVisible)
                 } else {
-                    self._shouldAutoPlay = State(initialValue: videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo && isVisible)
+                    // Regular videos and embedded videos: coordinator sends notifications to control playback
+                    // Initial state is false, coordinator will send play command when appropriate
+                    self._shouldAutoPlay = State(initialValue: false)
                 }
             } else {
                 self._shouldAutoPlay = State(initialValue: false)
@@ -84,177 +100,190 @@ struct MediaCell: View, Equatable {
         return attachments[attachmentIndex]
     }
     
-    private var baseUrl: URL {
-        // Use author's baseUrl if available, otherwise use appUser's baseUrl
-        // If both are nil, use real IP from HproseInstance (resolved at app start)
-        return parentTweet.author?.baseUrl 
-            ?? HproseInstance.shared.appUser.baseUrl 
-            ?? HproseInstance.baseUrl
-    }
-    
     private var isVideoAttachment: Bool {
         return attachment.type == .video || attachment.type == .hls_video
     }
     
+    /// Update effectiveBaseUrl based on current author's baseUrl
+    private func updateEffectiveBaseUrl() {
+        let newBaseUrl = parentTweet.author?.baseUrl 
+            ?? HproseInstance.shared.appUser.baseUrl 
+            ?? HproseInstance.baseUrl
+        
+        // Only update if changed to avoid unnecessary view updates
+        if effectiveBaseUrl != newBaseUrl {
+            effectiveBaseUrl = newBaseUrl
+        }
+    }
+    
     var body: some View {
-        Group {
-            if let url = attachment.getUrl(baseUrl) {
-                switch attachment.type {
-                case .video, .hls_video:
-                    // MediaGrid already sets fixed frame - content should fill parent naturally
-                    videoPlayerViewContent(url: url)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .audio:
-                    SimpleAudioPlayer(url: url, autoPlay: videoManager.shouldPlayVideo(for: attachment.mid) && isVisible)
-                        .environmentObject(MuteState.shared)
-                        .onTapGesture {
-                            if !isEmbedded {
-                                handleTap()
+        // CRITICAL PERFORMANCE: Use fixed layout to prevent constraint solving
+        // The trace shows massive time in Auto Layout constraint generation (103ms+)
+        // By using GeometryReader with fixed frames, we bypass constraint system entirely
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let height = geometry.size.height
+            
+            Group {
+                if let url = attachment.getUrl(effectiveBaseUrl) {
+                    switch attachment.type {
+                    case .video, .hls_video:
+                        // Video content with absolute positioning - no flexible frames
+                        videoPlayerViewContent(url: url, width: width, height: height)
+                    case .audio:
+                        // Audio autoplay controlled by visibility
+                        SimpleAudioPlayer(url: url, autoPlay: isVisible)
+                            .environmentObject(MuteState.shared)
+                            .frame(width: width, height: height, alignment: .center)
+                            .onTapGesture {
+                                if !isEmbedded {
+                                    handleTap()
+                                }
                             }
-                        }
-                case .image:
-                    // MediaGrid already sets fixed frame - content should fill parent naturally
-                    // Use .fill to maintain aspect ratio and clip overflow
-                    Group {
-                        if let image = image {
-                            Image(uiImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if isLoading {
-                            // Show cached placeholder while loading original image
-                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
-                                Image(uiImage: cachedImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            } else {
-                                // Reserve space with placeholder color
-                                Color.gray.opacity(0.3)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .image:
+                        // CRITICAL: Use absolute frames to avoid constraint updates
+                        imageViewContent(width: width, height: height)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if !isEmbedded {
+                                    handleTap()
+                                }
                             }
-                        } else {
-                            // Show cached placeholder if available, otherwise gray background
-                            if let cachedImage = imageCache.getCompressedImage(for: attachment) {
-                                Image(uiImage: cachedImage)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            } else {
-                                // Reserve space with placeholder color
-                                Color.gray.opacity(0.3)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            }
-                        }
+                    default:
+                        // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
+                        Color.clear
+                            .frame(width: width, height: height, alignment: .center)
                     }
-                    .clipped()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(
-                        // Show loading indicator only when loading and no cached image
-                        Group {
-                            if isLoading, imageCache.getCompressedImage(for: attachment) == nil {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                                    .scaleEffect(1.2)
-                            } else if isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .scaleEffect(0.8)
-                                    .background(Color.gray.opacity(0.3))
-                                    .clipShape(Circle())
-                                    .padding(4)
-                            }
-                        },
-                        alignment: isLoading && imageCache.getCompressedImage(for: attachment) != nil ? .topTrailing : .center
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if !isEmbedded {
-                            handleTap()
-                        }
-                    }
-                default:
-                    EmptyView()
+                } else {
+                    Color.clear
+                        .frame(width: width, height: height, alignment: .center)
                 }
-            } else {
-                EmptyView()
             }
         }
+        .clipped() // Prevent content overflow without expensive masking
         .onAppear {
             // Set visibility to true immediately when cell appears
             // onAppear fires when any portion of the view becomes visible
             isVisible = true
-            
-            // For video attachments, update autoplay state based on current conditions
-            if isVideoAttachment {
-                if isEmbedded {
-                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
-                    print("DEBUG: [MediaCell] onAppear (embedded) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), shouldLoadVideo=\(shouldLoadVideo)")
-                } else {
-                    let managerSays = videoManager.shouldPlayVideo(for: attachment.mid)
-                    shouldAutoPlay = managerSays && shouldLoadVideo
-                    print("DEBUG: [MediaCell] onAppear for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay), videoManager=\(managerSays), shouldLoadVideo=\(shouldLoadVideo), currentIndex=\(videoManager.currentVideoIndex), videoMids=\(videoManager.videoMids)")
-                    
-                    // CRITICAL FIX: If this is a new grid that just appeared and has videos,
-                    // ensure VideoManager knows to play the first video
-                    if !managerSays && shouldLoadVideo {
-                        // Check if this video is in the manager's list
-                        if let videoIndex = videoManager.videoMids.firstIndex(of: attachment.mid) {
-                            // This video is in the list but not set to play
-                            // If it's the current index, we should play it
-                            if videoIndex == videoManager.currentVideoIndex {
-                                print("⚠️ [MediaCell] VideoManager has video at current index but shouldPlayVideo=false. Forcing shouldAutoPlay=true")
-                                shouldAutoPlay = true
-                            }
-                        }
-                    }
-                }
+
+            // Update effectiveBaseUrl in case author's baseUrl has been resolved since init
+            updateEffectiveBaseUrl()
+
+            // MEMORY FIX: Mark video as visible to prevent eviction
+            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
+                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+                SharedAssetCache.shared.markAsVisible(mediaID)
+                VideoStateCache.shared.markAsVisible(attachment.mid)
+                print("👁️ [MediaCell] Marked video as visible: \(attachment.mid) (mediaID: \(mediaID))")
             }
-            
+
+            // For embedded videos, viewport visibility is checked via GeometryReader in videoPlayerViewContent
+            // No need to enable autoplay here - it will be enabled when the video enters the viewport
+
             // Load image if not already loaded - ONLY for image attachments
             if attachment.type == .image && image == nil {
                 loadImage()
             }
-            
+
             // Grid-level debouncing handles video preloading
             // Individual cells just track visibility for playback
+
+            // Setup foreground observer to reload resources if released during background
+            setupForegroundObserver()
+
+            // Phase 3: Register as delegate for direct video control communication
+            VideoPlaybackCoordinator.shared.registerDelegate(self, forVideoMid: attachment.mid)
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
-            // onDisappear fires when the view is scrolled completely off screen
             isVisible = false
-            
-            // Cancel any ongoing preload tasks
-            cancelPreloadTask()
-            
+
             // Cancel any pending image loads to prevent memory leaks
-            GlobalImageLoadManager.shared.cancelLoad(id: "\(attachment.mid)_\(baseUrl.absoluteString)")
+            GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
+
+            // Clean up foreground observer
+            if let observer = foregroundObserver {
+                NotificationCenter.default.removeObserver(observer)
+                foregroundObserver = nil
+            }
+
+            // Phase 3: Unregister delegate
+            VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: attachment.mid)
+
+            // MEMORY FIX: Mark video as not visible when cell disappears
+            // Cleanup is handled by background timer (every 10s) to preserve preloading
+            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
+                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
+
+                // Mark as not visible (allows cleanup after grace period)
+                SharedAssetCache.shared.markAsNotVisible(mediaID)
+                VideoStateCache.shared.markAsNotVisible(attachment.mid)
+
+                // Cancel active loading tasks to stop wasting bandwidth/memory
+                // But DON'T release the player yet - it might be in preload window
+                SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet.mid)
+
+                print("🔄 [MediaCell] Marked not visible, stopped loading for \(attachment.mid) (mediaID: \(mediaID))")
+            }
         }
         .onChange(of: isVisible) { _, newValue in
-            // Update autoplay state when visibility changes for video attachments
-            if isVideoAttachment && newValue {
-                if isEmbedded {
-                    shouldAutoPlay = shouldLoadVideo && attachmentIndex == 0
-                } else {
-                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid) && shouldLoadVideo
+            // Update effectiveBaseUrl when becoming visible (author may have been resolved)
+            if newValue {
+                updateEffectiveBaseUrl()
+            }
+            
+            // For embedded videos in detail views, enable autoplay when visible
+            // In detail views, they autoplay independently (not managed by coordinator)
+            // In feed views, embedded videos are managed by VideoPlaybackCoordinator
+            if isEmbedded && isVideoAttachment && newValue {
+                // Only autoplay embedded videos if we're actually in a detail view
+                // In feed/list views, the coordinator will manage playback
+                if NavigationStateManager.shared.isDetailViewActive {
+                    shouldAutoPlay = true
                 }
-                print("DEBUG: [MediaCell] onChange(isVisible) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
             }
         }
         
-        .onChange(of: shouldLoadVideo) { _, newValue in
-            // Update autoplay state when shouldLoadVideo changes for video attachments
-            if isVideoAttachment && isVisible && newValue {
-                if isEmbedded {
-                    shouldAutoPlay = attachmentIndex == 0
-                } else {
-                    shouldAutoPlay = videoManager.shouldPlayVideo(for: attachment.mid)
+        // Phase 3: Using delegate-based communication for pause/stop commands
+        // Keeping notification listener for play commands from SharedVideoPlayerManager
+        .onReceive(NotificationCenter.default.publisher(for: .shouldPlayVideo)) { notification in
+            // Extract notification data
+            guard let videoMid = notification.userInfo?["videoMid"] as? String,
+                  videoMid == attachment.mid else { return }
+
+            // If notification includes full videoId, validate it matches our instance
+            if let videoId = notification.userInfo?["videoId"] as? String {
+                let ourVideoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+                guard videoId == ourVideoId else {
+                    print("⚠️ [MediaCell] Ignoring play command for different instance - expected: \(ourVideoId), got: \(videoId)")
+                    return
                 }
-                print("DEBUG: [MediaCell] onChange(shouldLoadVideo) for video \(attachment.mid): shouldAutoPlay=\(shouldAutoPlay)")
             }
+
+            // Ignore duplicate notifications if already playing
+            guard !shouldAutoPlay else {
+                print("⚠️ [MediaCell] Ignoring duplicate play command for \(attachment.mid) - already set to play")
+                return
+            }
+
+            print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
+
+            // Always allow playback when we receive a direct command for this instance
+            // The SharedVideoPlayerManager has already ensured only one video plays at a time
+            shouldAutoPlay = true
         }
-        
+        .onReceive(NotificationCenter.default.publisher(for: .shouldStopAllVideos)) { _ in
+            guard isVideoAttachment else { return }
+
+            if shouldAutoPlay {
+                print("🛑 [MediaCell] Received stop all videos command for \(attachment.mid) - stopping playback")
+            }
+            shouldAutoPlay = false
+        }
         .onReceive(NotificationCenter.default.publisher(for: .appDidBecomeActive)) { _ in
+            // Update effectiveBaseUrl when app becomes active (author may have been resolved)
+            updateEffectiveBaseUrl()
+
             // Restore video state when app becomes active
             if isVideoAttachment {
                 // Note: shouldLoadVideo is controlled by VideoLoadingManager, not overridden here
@@ -262,17 +291,32 @@ struct MediaCell: View, Equatable {
                 // Individual cells just track visibility for playback
             }
         }
+
+        // CRITICAL FIX: Monitor user updates to catch when author's baseUrl is resolved
+        // This fixes the race condition where author.baseUrl is nil when cell loads,
+        // but gets resolved shortly after by background fetchUser task
+        .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
+            // Check if the updated user is this tweet's author
+            if let userId = notification.userInfo?["userId"] as? String,
+               userId == parentTweet.authorId {
+                // Author was updated, refresh effective baseUrl
+                updateEffectiveBaseUrl()
+            }
+        }
         
         .fullScreenCover(isPresented: $showFullScreen) {
             MediaBrowserView(
                 tweet: parentTweet,
                 initialIndex: attachmentIndex,
-                sourceTweetId: parentTweet.mid
+                cellTweetId: cellTweetId ?? parentTweet.mid  // Use cell tweet ID if provided, else parent tweet ID
             )
         }
         .onChange(of: showFullScreen) { _, newValue in
             if newValue {
                 // Video is going into full-screen mode
+                // Pause all MediaCell videos to avoid multiple videos playing
+                NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+                
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
                 OverlayVisibilityCoordinator.shared.beginOverlay(
                     id: "mediaBrowserFullScreen",
@@ -289,24 +333,6 @@ struct MediaCell: View, Equatable {
                 )
             }
         }
-    }
-    
-    // MARK: - Video Preloading Methods
-    
-    /// Start background preloading of video assets
-    /// DISABLED: Grid-level debouncing now handles all video preloading
-    private func startBackgroundPreloading() {
-        // This method is disabled because grid-level debouncing now handles all video preloading
-        // Individual cells no longer need to preload videos independently
-        print("DEBUG: [MediaCell] startBackgroundPreloading() called but disabled - grid-level debouncing handles preloading")
-        return
-    }
-    
-    /// Cancel ongoing preload task
-    private func cancelPreloadTask() {
-        preloadTask?.cancel()
-        preloadTask = nil
-        isPreloading = false
     }
     
     private func saveVideoPositionForFullscreen() {
@@ -357,45 +383,110 @@ struct MediaCell: View, Equatable {
             // Open full-screen for images
             showFullScreen = true
         default:
-            // Open full-screen for other types
+            // Documents are handled by DocumentAttachmentsView
             return
         }
     }
     
+    /// Setup observer to detect foreground return and reload image if released
+    private func setupForegroundObserver() {
+        // Only setup for image attachments
+        guard attachment.type == .image else { return }
+        
+        // Avoid duplicate observers
+        guard foregroundObserver == nil else { return }
+        
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            // Only reload if cell is visible and image was released
+            guard self.isVisible, self.image == nil, self.attachment.type == .image else { return }
+            
+            self.loadImage()
+        }
+    }
+    
     private func loadImage() {
-        guard let url = attachment.getUrl(baseUrl) else { 
+        guard let url = attachment.getUrl(effectiveBaseUrl) else {
             // If no URL, ensure isLoading is false
             isLoading = false
-            return 
+            return
         }
-        
-        // First, try to get cached image immediately
-        if let cachedImage = imageCache.getCompressedImage(for: attachment) {
+
+        // First, try to get cached image from memory only (fastest, no I/O)
+        if let cachedImage = imageCache.getCompressedImageFromMemory(for: attachment) {
+            print("DEBUG: [MediaCell] Found image in memory cache for \(attachment.mid)")
             self.image = cachedImage
             self.isLoading = false
             return
         }
-        
-        // If no cached image, start loading with global manager
+
+        // CRITICAL PERFORMANCE FIX: Disk I/O MUST happen on background thread
+        // The getCompressedImage() call does synchronous File I/O which blocks the main thread
+        // causing the 227ms hang in -[CALayer _display]
         isLoading = true
         
-        // Use normal priority for grid images (they're visible but not as critical as detail view)
-        GlobalImageLoadManager.shared.loadImageNormalPriority(
-            id: "\(attachment.mid)_\(baseUrl.absoluteString)",
-            url: url,
-            attachment: attachment,
-            baseUrl: baseUrl
-        ) { loadedImage in
-            // Completion is already @MainActor, so state updates will happen on main thread
-            // Use Task to ensure SwiftUI view updates properly
-            Task { @MainActor in
-                self.image = loadedImage
-                self.isLoading = false
+        // Capture necessary data before entering detached task
+        let attachmentCopy = attachment
+        let effectiveBaseUrlCopy = effectiveBaseUrl
+        
+        Task.detached(priority: .userInitiated) {
+            // ✅ CRITICAL: This runs on BACKGROUND thread, not main thread
+            // Disk I/O happens here without blocking UI rendering
+            let cachedImage = imageCache.getCompressedImage(for: attachmentCopy)
+            
+            await MainActor.run {
+                if let cachedImage = cachedImage {
+                    self.image = cachedImage
+                    self.isLoading = false
+                } else {
+                    print("DEBUG: [MediaCell] No cached image found, starting network load for \(attachmentCopy.mid)")
+                    // If no cached image at all, start loading with global manager
+                    // Use normal priority for grid images (they're visible but not as critical as detail view)
+                    GlobalImageLoadManager.shared.loadImageNormalPriority(
+                        id: attachmentCopy.mid,
+                        url: url,
+                        attachment: attachmentCopy,
+                        baseUrl: effectiveBaseUrlCopy
+                    ) { loadedImage in
+                        self.image = loadedImage
+                        self.isLoading = false
+                    }
+                }
             }
         }
     }
     
     
+    
+    // MARK: - Image View Content
+    @ViewBuilder
+    private func imageViewContent(width: CGFloat, height: CGFloat) -> some View {
+        // PERFORMANCE: Absolute positioning eliminates constraint solving
+        // No .infinity frames, no padding modifiers - just fixed positions
+        if let displayImage = image ?? imageCache.getCompressedImageFromMemory(for: attachment) {
+            // Image loaded - show it directly with minimal layers
+            Image(uiImage: displayImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: width, height: height, alignment: .center)
+                .clipped()
+        } else if isLoading {
+            // Loading - show placeholder with spinner
+            ZStack {
+                Color.gray.opacity(0.2)
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle())
+            }
+            .frame(width: width, height: height, alignment: .center)
+        } else {
+            // No image and not loading - just show placeholder
+            Color.gray.opacity(0.2)
+                .frame(width: width, height: height, alignment: .center)
+        }
+    }
     
     // MARK: - Equatable
     static func == (lhs: MediaCell, rhs: MediaCell) -> Bool {
@@ -408,15 +499,19 @@ struct MediaCell: View, Equatable {
     
     // MARK: - Video Player View
     @ViewBuilder
-    private func videoPlayerViewContent(url: URL) -> some View {
-        SimpleVideoPlayer(
+    private func videoPlayerViewContent(url: URL, width: CGFloat, height: CGFloat) -> some View {
+        // PERFORMANCE: Fixed dimensions eliminate recursive size calculations
+        ZStack(alignment: .center) {
+            Color.black // Background color
+            
+            SimpleVideoPlayer(
                 url: url,
                 mid: attachment.mid,
                 parentTweetId: parentTweet.mid,
                 isVisible: isVisible,
                 mediaType: attachment.type,
-                autoPlay: shouldAutoPlay, // Use state variable instead of computed value
-                videoManager: isEmbedded ? nil : videoManager,
+                authorId: parentTweet.authorId,
+                autoPlay: shouldAutoPlay,
                 onVideoFinished: onVideoFinished,
                 cellAspectRatio: CGFloat(aspectRatio),
                 videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
@@ -435,23 +530,41 @@ struct MediaCell: View, Equatable {
                 shouldLoadVideo: shouldLoadVideo,
                 mode: isEmbedded ? .embeddedDetail : .mediaCell
             )
-            .overlay(
-                // Invisible overlay to prevent tap propagation to parent views and add long press
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // Save current playback position before opening fullscreen
-                        saveVideoPositionForFullscreen()
-                        isOpeningFullScreen = true
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
-                            showFullScreen = true
+            .frame(width: width, height: height, alignment: .center)
+            .id("video_\(attachment.mid)_\(videoReloadTrigger)")
+        }
+        .frame(width: width, height: height, alignment: .center)
+        .frame(width: width, height: height, alignment: .center)
+        .overlay(
+            // Invisible overlay to prevent tap propagation to parent views and add long press
+            // Only apply gestures in embedded/detail views to avoid interfering with scrolling in feed
+            Group {
+                if isEmbedded {
+                    // Embedded videos in detail views should have gestures
+                    Color.clear
+                        .frame(width: width, height: height, alignment: .center)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // Save current playback position before opening fullscreen
+                            saveVideoPositionForFullscreen()
+                            isOpeningFullScreen = true
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+                                showFullScreen = true
+                            }
                         }
-                    }
-                    .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
-                        handleVideoReload()
-                    }
-            )
+                        .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 50) {
+                            handleVideoReload()
+                        }
+                } else {
+                    // Regular feed videos should NOT have gestures to avoid blocking scrolling
+                    // Use Color.clear without contentShape to avoid intercepting scroll gestures
+                    Color.clear
+                        .frame(width: width, height: height, alignment: .center)
+                        .allowsHitTesting(false)
+                }
+            }
+        )
         .overlay(
             // Loading spinner overlay when opening fullscreen
             Group {
@@ -462,11 +575,72 @@ struct MediaCell: View, Equatable {
                             .progressViewStyle(CircularProgressViewStyle(tint: .white))
                             .scaleEffect(1.5)
                     }
+                    .frame(width: width, height: height, alignment: .center)
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.2), value: isOpeningFullScreen)
                 }
             }
         )
+    }
+    
+    // Preference key to track video frame changes
+    private struct VideoFramePreferenceKey: PreferenceKey {
+        static var defaultValue: CGRect = .zero
+        static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+            value = nextValue()
+        }
+    }
+    
+    /// Check if embedded video is actually visible in the viewport
+    private func checkViewportVisibility(geometry: GeometryProxy? = nil, frame: CGRect? = nil) {
+        guard isEmbedded && isVideoAttachment else { return }
+        
+        let currentFrame: CGRect
+        if let frame = frame {
+            currentFrame = frame
+        } else if let geometry = geometry {
+            currentFrame = geometry.frame(in: .global)
+            videoFrame = currentFrame
+        } else if videoFrame != .zero {
+            currentFrame = videoFrame
+        } else {
+            return // No frame information available
+        }
+        
+        // Get screen bounds
+        let screenBounds = UIScreen.main.bounds
+        
+        // Check if video frame intersects with visible screen area
+        // Account for safe areas (status bar, navigation bar, tab bar)
+        let safeAreaTop: CGFloat = 0 // Will be adjusted if needed
+        let safeAreaBottom: CGFloat = 0 // Will be adjusted if needed
+        
+        let visibleRect = CGRect(
+            x: 0,
+            y: safeAreaTop,
+            width: screenBounds.width,
+            height: screenBounds.height - safeAreaTop - safeAreaBottom
+        )
+        
+        let intersection = currentFrame.intersection(visibleRect)
+        let isVisibleInViewport = intersection.height > 0 && currentFrame.height > 0 && intersection.height >= currentFrame.height * 0.3 // At least 30% visible
+        
+        if isVisibleInViewport != isInViewport {
+            isInViewport = isVisibleInViewport
+            
+            if isVisibleInViewport && shouldLoadVideo {
+                print("✅ [MediaCell] Embedded video \(attachment.mid) is now in viewport - enabling autoplay")
+                shouldAutoPlay = true
+            } else if !isVisibleInViewport {
+                print("❌ [MediaCell] Embedded video \(attachment.mid) is no longer in viewport - disabling autoplay")
+                shouldAutoPlay = false
+            }
+        }
+        
+        // Update stored frame
+        if geometry != nil {
+            videoFrame = currentFrame
+        }
     }
     
     private func handleVideoReload() {
@@ -477,7 +651,7 @@ struct MediaCell: View, Equatable {
         // Clear all caches and force reload by toggling shouldLoadVideo
         print("🔄 [VIDEO RELOAD] Long press reload triggered for \(attachment.mid)")
         
-        if let url = attachment.getUrl(baseUrl) {
+        if let url = attachment.getUrl(effectiveBaseUrl) {
             // Clear player cache
             SharedAssetCache.shared.removeInvalidPlayer(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
             
@@ -493,14 +667,78 @@ struct MediaCell: View, Equatable {
             }
         }
         
-        // Force reload by clearing cache and resetting state
-        // The state change will trigger proper reload through onChange observer
-        shouldLoadVideo = false
-        // Use Task to avoid blocking
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay
-            shouldLoadVideo = true
-            print("✅ [VIDEO RELOAD] Video reload initiated")
+        // Force reload by toggling the reload trigger
+        // This will force SimpleVideoPlayer to reinitialize
+        videoReloadTrigger.toggle()
+        print("✅ [VIDEO RELOAD] Video reload initiated")
+    }
+}
+
+// MARK: - MediaCellDelegate Implementation (Phase 3)
+
+extension MediaCell {
+    func shouldPlayVideo(withMid mid: String) {
+        guard mid == attachment.mid else { return }
+
+        // Ignore duplicate notifications if already playing
+        guard !shouldAutoPlay else {
+            print("⚠️ [MediaCell] Ignoring duplicate play command for \(attachment.mid) - already set to play")
+            return
+        }
+
+        print("▶️ [MediaCell] Received coordinated play command for \(attachment.mid) in tweet \(cellTweetId ?? parentTweet.mid)")
+
+        // Always allow playback when we receive a direct command for this instance
+        shouldAutoPlay = true
+    }
+
+    func shouldPauseVideo(withMid mid: String) {
+        guard mid == attachment.mid else { return }
+
+        // Ignore duplicate pause notifications if already paused
+        guard shouldAutoPlay else {
+            print("⚠️ [MediaCell] Ignoring duplicate pause command for \(attachment.mid) - already paused")
+            return
+        }
+
+        print("⏸️ [MediaCell] Received coordinated pause command for \(attachment.mid)")
+        shouldAutoPlay = false
+    }
+
+    func shouldStopVideo(withMid mid: String) {
+        guard mid == attachment.mid else { return }
+
+        // Ignore duplicate stop notifications if already stopped
+        guard shouldAutoPlay else {
+            print("⚠️ [MediaCell] Ignoring duplicate stop command for \(attachment.mid) - already stopped")
+            return
+        }
+
+        print("⏹️ [MediaCell] Received coordinated stop command for \(attachment.mid)")
+        shouldAutoPlay = false
+    }
+
+    func shouldStopAllVideos() {
+        guard isVideoAttachment else { return }
+        print("🛑 [MediaCell] Received stop all videos command for \(attachment.mid) - stopping playback")
+        shouldAutoPlay = false
+    }
+
+    func updateVideoTimer(withMid mid: String, timeRemaining: String) {
+        // This is handled by VideoTimerOverlay, which has its own notification listener
+        // The delegate method is here for completeness but VideoTimerOverlay still uses notifications
+    }
+
+    func appDidBecomeActive() {
+        // Update effectiveBaseUrl when app becomes active (author may have been resolved)
+        updateEffectiveBaseUrl()
+    }
+
+    func userDidUpdate(userId: String) {
+        // Check if the updated user is this tweet's author
+        if userId == parentTweet.authorId {
+            // Update baseUrl in case it changed
+            updateEffectiveBaseUrl()
         }
     }
 }
@@ -514,16 +752,103 @@ struct MuteButton: View {
             muteState.toggleMute()
         }) {
             Image(systemName: muteState.isMuted ? "speaker.slash" : "speaker.wave.2")
-                .font(.system(size: 14))
-                .foregroundColor(.white)
-                .frame(width: 30, height: 30)
+                .font(.system(size: 16))
+                .foregroundColor(.white.opacity(0.6))
+                .frame(width: 26, height: 26)
                 .background(
                     // Semi-transparent dark background for visibility - no shadow
                     Circle()
-                        .fill(Color.black.opacity(0.5))
+                        .fill(Color.black.opacity(0.3))
                 )
                 .contentShape(Circle())
         }
         .buttonStyle(PlainButtonStyle()) // Remove default button shadow
+    }
+}
+
+// MARK: - TimeRemainingDisplay
+struct TimeRemainingDisplay: View {
+    let timeRemaining: String
+    
+    var body: some View {
+        Text(timeRemaining)
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundColor(.white.opacity(0.6))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                // Semi-transparent dark background for visibility - similar to mute button
+                Capsule()
+                    .fill(Color.black.opacity(0.4))
+            )
+            .contentShape(Capsule())
+    }
+}
+
+// MARK: - VideoTimerOverlay
+struct VideoTimerOverlay: View, SharedDisplayLinkObserver {
+    let videoMid: String
+    @State private var timeRemaining: String = "0:00"
+    @State private var isVisible: Bool = true
+    @State private var hideTimer: Timer?
+
+    var body: some View {
+        Group {
+            if isVisible {
+                TimeRemainingDisplay(timeRemaining: timeRemaining)
+                    .transition(.opacity)
+            }
+        }
+        .onAppear {
+            isVisible = true
+            // PHASE 2: Use centralized display link instead of individual timer
+            SharedDisplayLinkManager.shared.addObserver(self)
+            startHideTimer()
+            // Request immediate update
+            requestUpdate()
+        }
+        .onDisappear {
+            // PHASE 2: Remove from centralized display link
+            SharedDisplayLinkManager.shared.removeObserver(self)
+            hideTimer?.invalidate()
+            hideTimer = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .videoTimerUpdate)) { notification in
+            guard let mid = notification.userInfo?["videoMid"] as? String,
+                  mid == self.videoMid,
+                  let time = notification.userInfo?["timeRemaining"] as? String else {
+                return
+            }
+            timeRemaining = time
+        }
+    }
+
+    // PHASE 2: Centralized timer callback - called by SharedDisplayLinkManager
+    func displayLinkDidFire(_ link: CADisplayLink) {
+        // Request update from SimpleVideoPlayer at 30fps (every display link frame)
+        requestUpdate()
+    }
+
+    private func startHideTimer() {
+        // Cancel any existing hide timer
+        hideTimer?.invalidate()
+
+        // Hide after 5 seconds
+        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated properly
+        let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+            Task { @MainActor in
+                isVisible = false
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        hideTimer = timer
+    }
+
+    private func requestUpdate() {
+        NotificationCenter.default.post(
+            name: .requestVideoTimerUpdate,
+            object: nil,
+            userInfo: ["videoMid": videoMid]
+        )
     }
 }

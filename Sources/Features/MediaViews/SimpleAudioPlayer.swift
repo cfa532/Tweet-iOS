@@ -164,8 +164,8 @@ struct SimpleAudioPlayer: View {
         timeObserver = player.addPeriodicTimeObserver(forInterval: time, queue: .main) { time in
             self.currentTime = time.seconds
             
-            // Check if playback finished
-            if time.seconds >= self.duration && self.duration > 0 {
+            // Check if playback finished using helper function
+            if self.isAudioAtEnd() {
                 self.isPlaying = false
                 self.currentTime = 0
                 self.player?.seek(to: .zero)
@@ -237,6 +237,19 @@ struct SimpleAudioPlayer: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+    
+    /// Helper function to check if audio is at the end
+    /// Uses a 0.1 second tolerance to handle timing edge cases
+    private func isAudioAtEnd() -> Bool {
+        guard let player = player else { return false }
+        guard duration > 0 else { return false }
+        
+        let currentTime = player.currentTime()
+        
+        // Check if current time is very close to the end (within 0.1 seconds)
+        let timeDifference = duration - currentTime.seconds
+        return timeDifference <= 0.1
     }
     
     private func cleanup() {

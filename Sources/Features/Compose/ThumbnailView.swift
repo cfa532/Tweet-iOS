@@ -11,16 +11,32 @@ struct ThumbnailView: View {
     @State private var isLoading = true
     @State private var error: Error?
 
-    // Static cache to avoid regenerating thumbnails for the same item
+    // Thread-safe static cache to avoid regenerating thumbnails for the same item
     // Using a more robust cache key that includes both item ID and media type
     private static var thumbnailCache: [String: UIImage] = [:]
+    private static let cacheQueue = DispatchQueue(label: "com.tweet.thumbnailcache", attributes: .concurrent)
+    
+    // Thread-safe cache access methods
+    private static func getCachedThumbnail(forKey key: String) -> UIImage? {
+        return cacheQueue.sync {
+            return thumbnailCache[key]
+        }
+    }
+    
+    private static func setCachedThumbnail(_ image: UIImage, forKey key: String) {
+        cacheQueue.async(flags: .barrier) {
+            thumbnailCache[key] = image
+        }
+    }
     
     // Method to clean up cache entries for removed items
     static func clearCacheForItem(_ itemId: String) {
-        let keysToRemove = thumbnailCache.keys.filter { $0.hasPrefix(itemId) }
-        for key in keysToRemove {
-            thumbnailCache.removeValue(forKey: key)
-            print("DEBUG: [ThumbnailView] Removed cache entry for key: \(key)")
+        cacheQueue.async(flags: .barrier) {
+            let keysToRemove = thumbnailCache.keys.filter { $0.hasPrefix(itemId) }
+            for key in keysToRemove {
+                thumbnailCache.removeValue(forKey: key)
+                print("DEBUG: [ThumbnailView] Removed cache entry for key: \(key)")
+            }
         }
     }
     
@@ -138,8 +154,8 @@ struct ThumbnailView: View {
         // Create a cache key that includes both item ID and media type
         let cacheKey = "\(itemId)_\(mediaType.rawValue)"
         
-        // Check cache first
-        if let cachedThumbnail = Self.thumbnailCache[cacheKey] {
+        // Check cache first (thread-safe)
+        if let cachedThumbnail = Self.getCachedThumbnail(forKey: cacheKey) {
             print("DEBUG: [\(itemId)] Using cached thumbnail for key: \(cacheKey)")
             await MainActor.run {
                 self.thumbnail = cachedThumbnail
@@ -176,9 +192,9 @@ struct ThumbnailView: View {
                 thumbnail = generateDefaultThumbnail()
             }
             
-            // Cache the generated thumbnail
+            // Cache the generated thumbnail (thread-safe)
             if let generatedThumbnail = thumbnail {
-                Self.thumbnailCache[cacheKey] = generatedThumbnail
+                Self.setCachedThumbnail(generatedThumbnail, forKey: cacheKey)
                 print("DEBUG: [\(itemId)] Thumbnail cached with key: \(cacheKey)")
             }
             
@@ -395,14 +411,22 @@ struct ThumbnailView: View {
                 }
                 
                 let originalImage = UIImage(cgImage: cgImage)
-                
+
+                // Validate image dimensions before processing
+                let imageSize = originalImage.size
+                guard imageSize.width.isFinite, imageSize.height.isFinite,
+                      imageSize.width > 0, imageSize.height > 0,
+                      imageSize.width < 10000, imageSize.height < 10000 else {
+                    print("DEBUG: [Thumbnail] Invalid image dimensions from video frame: \(imageSize), trying next time position")
+                    continue // Try next time position instead of failing
+                }
+
                 // Center-crop thumbnail to fill
                 let targetSize = CGSize(width: 200, height: 200)
                 let format = UIGraphicsImageRendererFormat()
                 format.scale = 1.0
                 let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
                 let thumbnail = renderer.image { context in
-                    let imageSize = originalImage.size
                     let scale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
                     let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
                     let x = (targetSize.width - scaledSize.width) / 2
@@ -416,9 +440,45 @@ struct ThumbnailView: View {
                 continue
             }
         }
-        
-        // If all time positions fail, throw error
-        throw ThumbnailError.thumbnailGenerationFailed
+
+        // If all time positions fail, return a placeholder thumbnail instead of failing
+        print("DEBUG: [Thumbnail] All time positions failed, returning placeholder thumbnail")
+        return generatePlaceholderVideoThumbnail()
+    }
+
+    private func generatePlaceholderVideoThumbnail() -> UIImage {
+        let size = CGSize(width: 200, height: 200)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+
+        return renderer.image { context in
+            // Fill with a neutral gray color
+            UIColor.systemGray4.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+
+            // Add a simple video/play icon
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let iconSize: CGFloat = 60
+
+            // Draw a rounded rectangle background
+            let backgroundRect = CGRect(x: center.x - iconSize/2, y: center.y - iconSize/2,
+                                      width: iconSize, height: iconSize)
+            let backgroundPath = UIBezierPath(roundedRect: backgroundRect, cornerRadius: 8)
+            UIColor.systemGray5.setFill()
+            backgroundPath.fill()
+
+            // Draw a play triangle
+            let triangleSize: CGFloat = iconSize * 0.4
+            let trianglePath = UIBezierPath()
+            trianglePath.move(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y - triangleSize * 0.5))
+            trianglePath.addLine(to: CGPoint(x: center.x - triangleSize * 0.3, y: center.y + triangleSize * 0.5))
+            trianglePath.addLine(to: CGPoint(x: center.x + triangleSize * 0.6, y: center.y))
+            trianglePath.close()
+
+            UIColor.white.setFill()
+            trianglePath.fill()
+        }
     }
     
     private func generateImageThumbnail() async throws -> UIImage {
@@ -433,9 +493,27 @@ struct ThumbnailView: View {
         
         print("DEBUG: Original image size: \(image.size)")
         
+        // Validate image dimensions before processing
+        let imageSize = image.size
+        guard imageSize.width.isFinite, imageSize.height.isFinite,
+              imageSize.width > 0, imageSize.height > 0,
+              imageSize.width < 50000, imageSize.height < 50000 else {
+            print("DEBUG: Invalid image dimensions: \(imageSize), cannot generate thumbnail")
+            throw ThumbnailError.thumbnailGenerationFailed
+        }
+        
         // Fix image orientation if needed
         let fixedImage = image.fixOrientation()
         print("DEBUG: Fixed image size: \(fixedImage.size)")
+        
+        // Validate fixed image dimensions
+        let fixedSize = fixedImage.size
+        guard fixedSize.width.isFinite, fixedSize.height.isFinite,
+              fixedSize.width > 0, fixedSize.height > 0,
+              fixedSize.width < 50000, fixedSize.height < 50000 else {
+            print("DEBUG: Invalid fixed image dimensions: \(fixedSize), cannot generate thumbnail")
+            throw ThumbnailError.thumbnailGenerationFailed
+        }
         
         // Center-crop thumbnail to fill
         let targetSize = CGSize(width: 200, height: 200)
@@ -443,9 +521,8 @@ struct ThumbnailView: View {
         format.scale = 1.0
         let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
         let thumbnail = renderer.image { context in
-            let imageSize = fixedImage.size
-            let scale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
-            let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+            let scale = max(targetSize.width / fixedSize.width, targetSize.height / fixedSize.height)
+            let scaledSize = CGSize(width: fixedSize.width * scale, height: fixedSize.height * scale)
             let x = (targetSize.width - scaledSize.width) / 2
             let y = (targetSize.height - scaledSize.height) / 2
             let rect = CGRect(origin: CGPoint(x: x, y: y), size: scaledSize)
@@ -456,12 +533,22 @@ struct ThumbnailView: View {
     }
     
     private func generateSimpleImageThumbnail(from image: UIImage) throws -> UIImage {
+        // Validate image dimensions
+        let imageSize = image.size
+        guard imageSize.width.isFinite, imageSize.height.isFinite,
+              imageSize.width > 0, imageSize.height > 0,
+              imageSize.width < 50000, imageSize.height < 50000 else {
+            print("DEBUG: [generateSimpleImageThumbnail] Invalid image dimensions: \(imageSize)")
+            throw ThumbnailError.thumbnailGenerationFailed
+        }
+        
         let targetSize = CGSize(width: 200, height: 200)
         
         UIGraphicsBeginImageContextWithOptions(targetSize, false, 1.0)
         defer { UIGraphicsEndImageContext() }
         
         guard let context = UIGraphicsGetCurrentContext() else {
+            print("DEBUG: [generateSimpleImageThumbnail] Failed to create graphics context")
             throw ThumbnailError.thumbnailGenerationFailed
         }
         
@@ -470,7 +557,6 @@ struct ThumbnailView: View {
         context.fill(CGRect(origin: .zero, size: targetSize))
         
         // Calculate aspect ratio preserving size
-        let imageSize = image.size
         let scale = min(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
         let scaledSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
         
@@ -483,6 +569,7 @@ struct ThumbnailView: View {
         image.draw(in: rect)
         
         guard let thumbnail = UIGraphicsGetImageFromCurrentImageContext() else {
+            print("DEBUG: [generateSimpleImageThumbnail] Failed to get image from context")
             throw ThumbnailError.thumbnailGenerationFailed
         }
         
@@ -616,11 +703,20 @@ extension UIImage {
             return self
         }
         
+        // Validate dimensions before creating graphics context
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0,
+              size.width < 50000, size.height < 50000 else {
+            print("DEBUG: [fixOrientation] Invalid image dimensions: \(size), returning original image")
+            return self
+        }
+        
         // Create a new CGContext with the correct orientation
         UIGraphicsBeginImageContextWithOptions(size, false, scale)
         defer { UIGraphicsEndImageContext() }
         
         guard let context = UIGraphicsGetCurrentContext() else {
+            print("DEBUG: [fixOrientation] Failed to create graphics context, returning original image")
             return self
         }
         
@@ -652,6 +748,11 @@ extension UIImage {
         // Draw the image
         draw(in: CGRect(origin: .zero, size: size))
         
-        return UIGraphicsGetImageFromCurrentImageContext() ?? self
+        guard let fixedImage = UIGraphicsGetImageFromCurrentImageContext() else {
+            print("DEBUG: [fixOrientation] Failed to get image from context, returning original image")
+            return self
+        }
+        
+        return fixedImage
     }
 } 

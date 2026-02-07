@@ -1,11 +1,13 @@
 # Video Playback Algorithm
 
-**Last Updated**: December 7, 2025  
-**Status**: ✅ Production (Conservative Recovery + Fullscreen Resume)
+**Last Updated**: January 5, 2026  
+**Status**: ✅ Production (Conservative Recovery + Fullscreen Resume) ⚠️ Watchdog Disabled
 
 ## Overview
 
 This document describes the algorithm for video playback in the Tweet-iOS app, specifically for sequential video playback within media grids and individual video player management. The algorithm handles video lifecycle, background/foreground transitions, fullscreen interactions, and automatic resume functionality.
+
+> **Note:** As of January 5, 2026, a new **VideoPlaybackCoordinator** system has been implemented for tweet feed videos. This provides intelligent orchestration with survey phase, primary video selection, and sequential playback. The algorithm described in this document still applies to **MediaGridView** (multi-video tweets), while feed-level orchestration is now handled by `VideoPlaybackCoordinator`. See [NEW_VIDEO_ORCHESTRATION.md](NEW_VIDEO_ORCHESTRATION.md) for details.
 
 ## Core Components
 
@@ -243,6 +245,16 @@ Exit fullscreen:
 - Autoplay works regardless of when player becomes ready
 - No dependency on view lifecycle timing
 
+### 5. Stuck Player Detection (Watchdog) - ⚠️ DISABLED
+- **Status:** Disabled as of January 4, 2026
+- **Reason:** Even optimized implementation caused scroll UX degradation
+- **Current Strategy:** Relies on existing error handling mechanisms:
+  - KVO observers detect failed/stalled items
+  - Lifecycle methods handle state transitions
+  - Conservative recovery for broken players
+  - VideoManager sequential playback approval
+- See VIDEO_SYSTEM.md "Playback Watchdog" section for historical details
+
 ## Performance Considerations
 
 ### 1. Video Player Reuse
@@ -280,9 +292,17 @@ The algorithm provides extensive debug logging at key points:
 
 Log format: `DEBUG: [COMPONENT] Message with relevant state information`
 
-## Recent Improvements (December 2025)
+## Recent Improvements
 
-### 1. Conservative Player Recreation
+### January 2026: Watchdog Disabled for Scroll Performance
+- **Problem**: Even optimized watchdog (background thread, 5s delay) caused scroll UX degradation
+- **Root Cause**: `await MainActor.run` calls for state inspection created main thread hops
+- **Solution**: Completely disabled watchdog, rely on existing error handling
+- **Trade-off**: Occasional stuck videos (rare) vs smooth scrolling (critical UX)
+- **Result**: Smooth scroll performance restored
+- **See**: `fixes/SCROLL_FRIENDLY_WATCHDOG.md` for full history of optimization attempts
+
+### December 2025: Conservative Player Recreation
 - **Before**: Aggressively recreated all players after backgrounding
 - **After**: Only recreates players that are actually broken (missing, failed status, stalled)
 - **Benefit**: Leaves healthy players alone, reducing unnecessary work and potential issues

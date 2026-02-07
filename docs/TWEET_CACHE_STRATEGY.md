@@ -222,6 +222,13 @@ fetchCachedTweets(
 - ✅ **Profile**: Direct author lookup without filtering needed
 - ✅ **No Duplication**: Tweets cached appropriately based on context
 
+### 5. Permanent Caching
+- ✅ **Private Tweets**: Never expire, media preserved forever
+- ✅ **Bookmarks**: Never expire, `bookmark_list_` prefix protection
+- ✅ **Favorites**: Never expire, `favorite_list_` prefix protection
+- ✅ **Automatic Protection**: Registered on save, no manual management
+- See [PERMANENT_CACHE_SYSTEM.md](PERMANENT_CACHE_SYSTEM.md) for details
+
 ## Implementation Details
 
 ### Cache Key Summary
@@ -256,9 +263,15 @@ fetchCachedTweets(
      - Private tweets are only visible if `appUser == visited user` (viewing your own profile)
      - Private tweets are filtered out when viewing other users' profiles
 
-3. **Original Tweets**: When fetching tweets that reference original tweets (retweets), original tweets are cached under their `authorId`, not `appUser.mid`. This ensures original tweets don't appear in main feed when their author is different.
+4. **Original Tweets**: When fetching tweets that reference original tweets (retweets), original tweets are cached under their `authorId`, not `appUser.mid`. This ensures original tweets don't appear in main feed when their author is different.
 
-4. **Persistence**: Cache persists across logout/login cycles and is cleared periodically (2 weeks) or manually by user.
+5. **Persistence & Expiration**: 
+   - Regular tweets: Expire after 14 days (metadata) or 7 days (media)
+   - Private tweets: **Never expire** - preserved permanently
+   - Bookmarks: **Never expire** - preserved permanently (prefix: `bookmark_list_`)
+   - Favorites: **Never expire** - preserved permanently (prefix: `favorite_list_`)
+   - Manual clear: Only way to delete permanent content
+   - See [PERMANENT_CACHE_SYSTEM.md](PERMANENT_CACHE_SYSTEM.md) for details
 
 ## Migration Notes
 

@@ -93,16 +93,30 @@ struct TweetMenu: View {
                 if tweet.authorId == appUser.mid {
                     Button(action: {
                         Task {
-                            if let isPinned = try? await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
-                                isCurrentlyPinned = isPinned
-                                NotificationCenter.default.post(
-                                    name: .tweetPinStatusChanged,
-                                    object: nil,
-                                    userInfo: [
-                                        "tweetId": tweet.mid,
-                                        "isPinned": isPinned
-                                    ]
-                                )
+                            do {
+                                if let isPinned = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                                    print("DEBUG: [TweetMenu] Pin toggle successful - isPinned: \(isPinned), tweetId: \(tweet.mid)")
+                                    isCurrentlyPinned = isPinned
+                                    NotificationCenter.default.post(
+                                        name: .tweetPinStatusChanged,
+                                        object: nil,
+                                        userInfo: [
+                                            "tweetId": tweet.mid,
+                                            "isPinned": isPinned
+                                        ]
+                                    )
+                                } else {
+                                    print("DEBUG: [TweetMenu] Pin toggle returned nil for tweet: \(tweet.mid)")
+                                }
+                            } catch {
+                                print("DEBUG: [TweetMenu] Pin toggle failed: \(error)")
+                                // Show error toast
+                                await MainActor.run {
+                                    NotificationCenter.default.post(
+                                        name: .errorOccurred,
+                                        object: NSError(domain: "PinToggle", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to update pin status: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                                    )
+                                }
                             }
                         }
                     }) {
@@ -207,22 +221,20 @@ struct TweetMenu: View {
                 Image(systemName: "ellipsis")
                     .foregroundColor(isPressed ? .primary : .secondary)
                     .font(.system(size: 16, weight: .medium))
-                    .frame(width: 44, height: 24, alignment: .leading) // Minimum 44x44 tap target for accessibility
+                    .frame(width: 44, height: 24, alignment: .topLeading)
                     .contentShape(Rectangle())
                     .background(
                         RoundedRectangle(cornerRadius: 8)
                             .fill(isPressed ? Color.secondary.opacity(0.2) : Color.clear)
                     )
+                    // IMPROVED: Expand touch area using background (doesn't affect layout)
+                    .background(
+                        Color.clear
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    )
                     .scaleEffect(isPressed ? 0.95 : 1.0)
                     .animation(.easeInOut(duration: 0.1), value: isPressed)
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.1)) {
-                            isPressed = true
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            isPressed = false
-                        }
-                    }
                     .accessibilityLabel("Tweet options")
                     .accessibilityHint("Double tap to open tweet menu")
             }

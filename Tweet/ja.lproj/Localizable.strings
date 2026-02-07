@@ -14,13 +14,18 @@
 "Recommendation" = "おすすめ";
 
 // MARK: - Upload Progress
-"Preparing upload..." = "アップロードを準備中...アプリを閉じないでください";
+"Preparing upload... Please stay on this screen" = "アップロードを準備中...この画面から移動しないでください";
 "Preparing attachments..." = "添付ファイルを準備中...";
 "Converting video..." = "動画を変換中...";
-"Uploading attachments..." = "添付ファイルをアップロード中...";
+"Uploading attachments... Please stay on this screen" = "添付ファイルをアップロード中...この画面から移動しないでください";
 "Submitting tweet..." = "ツイートを送信中...";
+"Submitting comment..." = "コメントを送信中...";
 "Retrying upload..." = "アップロードを再試行中...";
 "Upload completed" = "アップロード完了";
+"Upload cancelled" = "アップロードがキャンセルされました";
+"Cancel Upload" = "アップロードをキャンセル";
+"Are you sure you want to cancel this upload? This action cannot be undone." = "このアップロードをキャンセルしてもよろしいですか？この操作は元に戻せません。";
+"Continue" = "続ける";
 "Posting Tweet" = "ツイートを投稿中";
 "Posting Comment" = "コメントを投稿中";
 "Sending Message" = "メッセージを送信中";
@@ -30,9 +35,11 @@
 "Checking video status..." = "動画ステータスを確認中...";
 "Processing on server..." = "サーバーで処理中...";
 "Your tweet will be posted when ready" = "準備が整い次第ツイートが投稿されます";
+"Your comment will be posted when ready" = "準備が整い次第コメントが投稿されます";
 "Your message will be sent when ready" = "準備が整い次第メッセージが送信されます";
 "Uploading %@ %d/%d..." = "%@ %d/%d をアップロード中...";
 "Processing video %d/%d" = "動画を処理中 %d/%d";
+"Processing video %d/%d - Please stay on this screen" = "動画を処理中 %d/%d - この画面から移動しないでください";
 "Uploading image %d/%d" = "画像をアップロード中 %d/%d";
 "Tweet posted successfully" = "ツイートが正常に投稿されました";
 "Failed to check video status" = "動画ステータスの確認に失敗しました";
@@ -41,6 +48,7 @@
 "Video processing timed out" = "動画処理がタイムアウトしました";
 "Failed to prepare attachments" = "添付ファイルの準備に失敗しました";
 "Failed to post tweet" = "ツイートの投稿に失敗しました";
+"Failed to post comment after retries" = "再試行後もコメントの投稿に失敗しました";
 "Unknown video status" = "不明な動画ステータス";
 
 // MARK: - Pending Upload Dialog
@@ -122,6 +130,7 @@
 
 // MARK: - Tweet Actions
 "Show more" = "もっと見る";
+"More..." = "続きを見る...";
 "Forwarded by %@" = "%@がリツイート";
 "Forwarded by you" = "あなたがリツイート";
 "Quote Tweet" = "ツイートを引用";
@@ -153,6 +162,7 @@
 // MARK: - Tweet Detail
 "Tweet" = "ツイート";
 "Comments" = "コメント";
+"No comment yet" = "まだコメントはありません";
 
 // MARK: - Loading States
 "Loading tweets..." = "ツイートを読み込み中...";
@@ -423,6 +433,8 @@
 "Received" = "受信済み";
 "Yesterday" = "昨日";
 "%@ %@" = "%@ %@";
+"No more messages" = "これ以上メッセージはありません";
+"No more tweets" = "これ以上のツイートはありません";
 
 // MARK: - Video Player
 "Failed to load video" = "動画の読み込みに失敗しました";
@@ -530,6 +542,18 @@
 "App ID mismatch" = "アプリIDが一致しません";
 
 "Cloud Drive Port must be between 8000 and 65535." = "クラウドドライブポートは8000から65535の間である必要があります。";
+
+// MARK: - Chat Messages
+"Failed to send message" = "メッセージの送信に失敗しました";
+"Sending message in background..." = "バックグラウンドでメッセージを送信中...";
+"Sending message..." = "メッセージを送信中...";
+"Cannot resend messages with attachments. Please send the attachment again." = "添付ファイル付きメッセージは再送信できません。添付ファイルを再度送信してください。";
+"Cannot resend empty message" = "空のメッセージは再送信できません";
+"Message sent successfully" = "メッセージが正常に送信されました";
+"Please wait while the attachment is being prepared..." = "添付ファイルの準備中です。お待ちください...";
+"Attachment not ready. Please try selecting the media again." = "添付ファイルの準備ができていません。メディアを再度選択してください。";
+"Failed to create error message" = "エラーメッセージの作成に失敗しました";
+"Message cannot be empty" = "メッセージを空にすることはできません";
 
 // MARK: - Cloud Drive Limit
 "Tweet Limit Reached" = "ツイート制限に達しました";

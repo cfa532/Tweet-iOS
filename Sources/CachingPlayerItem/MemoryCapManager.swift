@@ -114,6 +114,17 @@ class MemoryCapManager {
     @objc private func handleMemoryWarning() {
         logger.warning("System memory warning received")
         
+        // CRITICAL: Check if video upload is in progress
+        // During FFmpeg video conversion, memory spikes are expected and temporary
+        if UploadProgressManager.shared.isProcessingVideo {
+            logger.warning("Video upload in progress - limiting cleanup to preserve video players")
+            print("⚠️ [MemoryCapManager] Video upload in progress - skipping aggressive video cache cleanup")
+            
+            // Perform lighter cleanup without touching video players
+            performLightCleanupDuringUpload()
+            return
+        }
+        
         // Check memory usage before cleanup (don't cleanup at low usage)
         let memoryUsageMB = currentMemoryUsage / (1024 * 1024)
         logger.info("Current memory usage: \(memoryUsageMB)MB")
@@ -149,7 +160,22 @@ class MemoryCapManager {
             logger.debug("Memory usage: \(percentage * 100, privacy: .public)% (\(self.formatBytes(self.currentMemoryUsage)))")
         }
         
-        // Only log when above warning threshold
+        // CRITICAL: During video upload, be more lenient with memory thresholds
+        // FFmpeg conversion causes temporary memory spikes that will subside after upload
+        if UploadProgressManager.shared.isProcessingVideo {
+            // During video upload, only perform emergency cleanup at extreme levels
+            if percentage >= 0.98 {
+                logger.error("EMERGENCY: Memory at \(percentage * 100, privacy: .public)% during upload - minimal cleanup")
+                print("⚠️ EMERGENCY: Memory at \(String(format: "%.1f", percentage * 100))% during upload - performing minimal cleanup")
+                performLightCleanupDuringUpload()
+            } else if percentage >= 0.9 {
+                logger.warning("HIGH: Memory at \(percentage * 100, privacy: .public)% during upload - expected from FFmpeg")
+                print("ℹ️ Memory spike during video upload is expected (FFmpeg conversion)")
+            }
+            return
+        }
+        
+        // Normal memory management (no upload in progress)
         if percentage >= emergencyThreshold {
             logger.error("EMERGENCY: Memory at \(percentage * 100, privacy: .public)% - HARD CAP enforcement")
             print("⚠️ EMERGENCY: Memory at \(String(format: "%.1f", percentage * 100))% - performing emergency cleanup")
@@ -306,6 +332,19 @@ class MemoryCapManager {
         formatter.allowedUnits = [.useGB, .useMB, .useKB]
         formatter.countStyle = .memory
         return formatter.string(fromByteCount: Int64(bytes))
+    }
+    
+    @MainActor
+    private func performLightCleanupDuringUpload() {
+        logger.info("Performing light cleanup during video upload (preserving video players)")
+        
+        // SKIP video cache clearing - would break existing players during upload
+        // Only clean non-video caches
+        ImageCacheManager.shared.cleanupOldCache()
+        TweetCacheManager.shared.releasePartialCache(percentage: 20)
+        ChatCacheManager.shared.clearMemoryCache()
+        
+        print("ℹ️ [MemoryCapManager] Light cleanup completed - video players preserved during upload")
     }
     
     deinit {

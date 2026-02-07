@@ -20,9 +20,10 @@ struct ContentView: View {
     @State private var pendingUpload: TweetUploadManager.PendingTweetUpload? = nil
     @State private var showPendingUploadDialog = false
     @State private var showCloudDriveLimitAlert = false
+    @State private var showLoginSheet = false
+    @State private var notificationObservers: [NSObjectProtocol] = []
     
     var body: some View {
-        let _ = NSLog("DEBUG: [ContentView] ContentView body is being rendered")
         ZStack(alignment: .bottom) {
             // Main content area
             VStack(spacing: 0) {
@@ -31,8 +32,7 @@ struct ContentView: View {
                         HomeView(
                             navigationPath: $navigationPath,
                             onNavigationVisibilityChanged: { isVisible in
-                                print("[ContentView] Navigation visibility changed to: \(isVisible)")
-                                isNavigationVisible = isVisible
+                                // Disabled to prevent dual updates (NotificationCenter handles this)
                             },
                             onReturnToHome: {
                                 selectedTab = 0
@@ -70,7 +70,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
                 Color.clear
-                    .frame(height: 40)
+                    .frame(height: (!isInChatScreen || isInProfileFromChat) ? 40 : 0)
             }
             
             // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
@@ -83,17 +83,23 @@ struct ContentView: View {
                     } else if !navigationPath.isEmpty {
                         navigationPath.removeLast(navigationPath.count)
                         selectedTab = 0
+                    } else {
+                        // Already on home tab at root - scroll to top
+                        NotificationCenter.default.post(name: .scrollToTop, object: nil)
                     }
                 }) {
-                    Image(systemName: "house")
+                    let isHomeActive = navigationPath.isEmpty && selectedTab == 0
+                    Image(systemName: isHomeActive ? "house.fill" : "house")
                         .font(.system(size: 24))
-                        .foregroundColor(navigationPath.isEmpty && selectedTab == 0 ? .blue : .gray)
+                        .foregroundColor(isHomeActive ? .blue : .gray)
                 }
                 .frame(maxWidth: .infinity)
                 
                 // Chat Tab
                 Button(action: {
-                    if selectedTab != 1 {
+                    if hproseInstance.appUser.isGuest {
+                        showLoginSheet = true
+                    } else if selectedTab != 1 {
                         selectedTab = 1
                     } else {
                         // Already on chat tab - navigate back to chat list
@@ -116,6 +122,10 @@ struct ContentView: View {
                 
                 // Compose Tab
                 Button(action: {
+                    if hproseInstance.appUser.isGuest {
+                        showLoginSheet = true
+                        return
+                    }
                     // Check if user has no valid cloudDrivePort and has reached tweet limit
                     let cloudDrivePort = hproseInstance.appUser.cloudDrivePort
                     let tweetCount = hproseInstance.appUser.tweetCount ?? 0
@@ -158,8 +168,12 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
         }
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showComposeSheet) {
             ComposeTweetView()
+        }
+        .sheet(isPresented: $showLoginSheet) {
+            LoginView()
         }
         .onChange(of: showComposeSheet) { _, isPresented in
             if isPresented {
@@ -185,97 +199,6 @@ struct ContentView: View {
                 OverlayVisibilityCoordinator.shared.beginOverlay(id: "tweetLimitAlert", source: "ContentView")
             } else {
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "tweetLimitAlert", source: "ContentView")
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .tweetSubmitted)) { notification in
-            if let message = notification.userInfo?["message"] as? String {
-                toastMessage = message
-                toastType = .success
-                showToast = true
-                
-                // Auto-hide toast after 2 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    withAnimation { showToast = false }
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .tweetPrivacyUpdated)) { notification in
-            if let message = notification.userInfo?["message"] as? String,
-               let typeString = notification.userInfo?["type"] as? String {
-                toastMessage = message
-                toastType = typeString == "error" ? .error : .success
-                showToast = true
-                
-                // Auto-hide toast after 2 seconds for success, 5 seconds for error
-                let delay = typeString == "error" ? 5.0 : 2.0
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    withAnimation { showToast = false }
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .navigationVisibilityChanged)) { notification in
-            if let isVisible = notification.userInfo?["isVisible"] as? Bool {
-                print("[ContentView] Navigation visibility changed to: \(isVisible)")
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isNavigationVisible = isVisible
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .newTweetCreated)) { notification in
-            if notification.userInfo?["tweet"] is Tweet {
-                toastMessage = NSLocalizedString("Tweet posted successfully", comment: "Tweet upload success")
-                toastType = .success
-                showToast = true
-                
-                // Auto-hide toast after 2 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    withAnimation { showToast = false }
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notification in
-            if notification.userInfo?["comment"] is Tweet {
-                toastMessage = NSLocalizedString("Comment posted successfully", comment: "Comment upload success")
-                toastType = .success
-                showToast = true
-                
-                // Auto-hide toast after 2 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    withAnimation { showToast = false }
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .backgroundUploadFailed)) { notification in
-            if let error = notification.userInfo?["error"] as? Error {
-                toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
-                toastType = .error
-                showToast = true
-                
-                // Auto-hide toast after 5 seconds for errors
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                    withAnimation { showToast = false }
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .memoryWarningCritical)) { notification in
-            if let memoryMB = notification.userInfo?["memoryMB"] as? UInt64,
-               let severity = notification.userInfo?["severity"] as? String {
-                
-                let memoryGB = String(format: "%.1f", Double(memoryMB) / 1024.0)
-                
-                if severity == "critical" {
-                    toastMessage = NSLocalizedString("Memory critically low (\(memoryGB)GB). Please restart the app to free resources.", comment: "Critical memory warning")
-                } else {
-                    toastMessage = NSLocalizedString("Memory is running low (\(memoryGB)GB). Consider restarting the app if issues persist.", comment: "High memory warning")
-                }
-                
-                toastType = .error
-                showToast = true
-                
-                // Keep toast visible longer for memory warnings (10 seconds)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    withAnimation { showToast = false }
-                }
             }
         }
         .overlay(
@@ -324,36 +247,234 @@ struct ContentView: View {
         )
         .onAppear {
             checkForPendingUpload()
+            setupNotificationObservers()
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-            // Check for pending uploads when app returns to foreground
-            checkForPendingUpload()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .deeplinkReceived)) { notification in
-            // Handle deeplink navigation
-            print("[ContentView] ✅ Received deeplink notification")
-            if let url = notification.userInfo?["url"] as? URL {
-                print("[ContentView] URL from notification: \(url.absoluteString)")
-                handleDeeplink(url)
-            } else {
-                print("[ContentView] ⚠️ No URL found in notification userInfo")
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .deeplinkTweetNotFound)) { notification in
-            // Show error toast when deeplink tweet is not found
-            if let message = notification.userInfo?["message"] as? String {
-                toastMessage = message
-                toastType = .error
-                showToast = true
-                
-                // Auto-hide toast after 5 seconds for errors
-                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                    withAnimation { showToast = false }
-                }
-            }
+        .onDisappear {
+            cleanupNotificationObservers()
         }
         .environmentObject(hproseInstance)
         .environmentObject(themeManager)
+    }
+    
+    // MARK: - Notification Observer Management
+    
+    private func setupNotificationObservers() {
+        cleanupNotificationObservers()
+        
+        // 1. Tweet submitted
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .tweetSubmitted,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let message = notification.userInfo?["message"] as? String {
+                    self.toastMessage = message
+                    self.toastType = .success
+                    self.showToast = true
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
+        
+        // 2. Tweet privacy updated
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .tweetPrivacyUpdated,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let message = notification.userInfo?["message"] as? String,
+                   let typeString = notification.userInfo?["type"] as? String {
+                    self.toastMessage = message
+                    self.toastType = typeString == "error" ? .error : .success
+                    self.showToast = true
+                    
+                    let delay = typeString == "error" ? 5.0 : 2.0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
+        
+        // 3. Navigation visibility changed
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .navigationVisibilityChanged,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let isVisible = notification.userInfo?["isVisible"] as? Bool {
+                    guard self.isNavigationVisible != isVisible else { return }
+                    
+                    print("[ContentView] Navigation visibility changed to: \(isVisible)")
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        self.isNavigationVisible = isVisible
+                    }
+                }
+            }
+        )
+        
+        // 4. New tweet created
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .newTweetCreated,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if notification.userInfo?["tweet"] is Tweet {
+                    self.toastMessage = NSLocalizedString("Tweet posted successfully", comment: "Tweet upload success")
+                    self.toastType = .success
+                    self.showToast = true
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
+        
+        // 5. New comment added
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .newCommentAdded,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if notification.userInfo?["comment"] is Tweet {
+                    self.toastMessage = NSLocalizedString("Comment posted successfully", comment: "Comment upload success")
+                    self.toastType = .success
+                    self.showToast = true
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
+        
+        // 6. Background upload failed
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .backgroundUploadFailed,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let error = notification.userInfo?["error"] as? Error {
+                    self.toastMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                    self.toastType = .error
+                    self.showToast = true
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
+        
+        // 7. Memory warning critical
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .memoryWarningCritical,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let memoryMB = notification.userInfo?["memoryMB"] as? UInt64,
+                   let severity = notification.userInfo?["severity"] as? String {
+                    
+                    let memoryGB = String(format: "%.1f", Double(memoryMB) / 1024.0)
+                    
+                    if severity == "critical" {
+                        self.toastMessage = NSLocalizedString("Memory critically low (\(memoryGB)GB). Please restart the app to free resources.", comment: "Critical memory warning")
+                    } else {
+                        self.toastMessage = NSLocalizedString("Memory is running low (\(memoryGB)GB). Consider restarting the app if issues persist.", comment: "High memory warning")
+                    }
+                    
+                    self.toastType = .error
+                    self.showToast = true
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
+        
+        // 8. Will enter foreground
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.willEnterForegroundNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                self.isNavigationVisible = true
+                self.checkForPendingUpload()
+            }
+        )
+        
+        // 9. Navigate guest user to alphaId profile
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .appUserReady,
+                object: nil,
+                queue: .main
+            ) { _ in
+                guard self.hproseInstance.appUser.isGuest else { return }
+                guard self.navigationPath.isEmpty else { return }
+                guard let alphaId = Gadget.getAlphaIds().first else { return }
+                let alphaUser = User.getInstance(mid: alphaId)
+                guard alphaUser.username != nil else { return }
+                self.selectedTab = 0
+                self.navigationPath.append(alphaUser)
+            }
+        )
+
+        // 10. Deeplink received
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .deeplinkReceived,
+                object: nil,
+                queue: .main
+            ) { notification in
+                print("[ContentView] ✅ Received deeplink notification")
+                if let url = notification.userInfo?["url"] as? URL {
+                    print("[ContentView] URL from notification: \(url.absoluteString)")
+                    self.handleDeeplink(url)
+                } else {
+                    print("[ContentView] ⚠️ No URL found in notification userInfo")
+                }
+            }
+        )
+        
+        // 11. Deeplink tweet not found
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .deeplinkTweetNotFound,
+                object: nil,
+                queue: .main
+            ) { notification in
+                if let message = notification.userInfo?["message"] as? String {
+                    self.toastMessage = message
+                    self.toastType = .error
+                    self.showToast = true
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                        withAnimation { self.showToast = false }
+                    }
+                }
+            }
+        )
+    }
+    
+    private func cleanupNotificationObservers() {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        notificationObservers.removeAll()
     }
     
     // MARK: - Developer Profile Navigation
@@ -399,14 +520,25 @@ struct ContentView: View {
                 
                 // Check if the pending upload is not too old (e.g., within 24 hours)
                 let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
-                if Date().timeIntervalSince(upload.timestamp) < maxAge {
+                guard Date().timeIntervalSince(upload.timestamp) < maxAge else {
+                    // Too old, remove it
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
+                
+                // Auto-resume if there are still retries left (maxRetries = 2)
+                let maxRetries = 2
+                if upload.retryCount < maxRetries {
+                    print("DEBUG: [Auto-resume] Pending upload found with retryCount=\(upload.retryCount), auto-resuming without user confirmation")
+                    // Automatically retry without showing dialog
+                    retryPendingUpload(upload)
+                } else {
+                    // Max retries reached, show dialog for user to decide
+                    print("DEBUG: [Auto-resume] Pending upload found with retryCount=\(upload.retryCount) (max reached), showing dialog")
                     await MainActor.run {
                         self.pendingUpload = upload
                         self.showPendingUploadDialog = true
                     }
-                } else {
-                    // Too old, remove it
-                    try? FileManager.default.removeItem(at: fileURL)
                 }
             } catch {
                 print("DEBUG: Failed to load pending upload: \(error)")
@@ -416,23 +548,26 @@ struct ContentView: View {
     
     private func retryPendingUpload(_ upload: TweetUploadManager.PendingTweetUpload) {
         Task {
-            // Determine upload type
+            // Determine upload type and check for videos
             let uploadType = upload.tweet.originalTweetId != nil ? "comment" : "tweet"
-            
-            // Start progress tracking (shows dialog in foreground)
-            await MainActor.run {
-                UploadProgressManager.shared.startUpload(type: uploadType)
+            let hasVideos = upload.itemData.contains { item in
+                item.typeIdentifier.contains("video") || item.typeIdentifier.contains("movie")
             }
             
-            // Retry the upload using the upload manager
-            // If there's an existing video job ID, it will check status and poll
-            // If not, it will re-upload attachments in foreground (with dialog visible)
-            await hproseInstance.uploadManager.uploadTweetWithPersistenceAndRetry(
-                tweet: upload.tweet,
-                itemData: upload.itemData,
-                retryCount: upload.retryCount,
-                videoJobId: upload.videoJobId
-            )
+            // Use upload queue for retry (prevents conflicts with other uploads)
+            await MainActor.run {
+                UploadProgressManager.shared.enqueueUpload(type: uploadType, hasVideos: hasVideos) {
+                    // Retry the upload using the upload manager
+                    // If there's an existing video job ID, it will check status and poll
+                    // If not, it will re-upload attachments in foreground (with dialog visible)
+                    await self.hproseInstance.uploadManager.uploadTweetWithPersistenceAndRetry(
+                        tweet: upload.tweet,
+                        itemData: upload.itemData,
+                        retryCount: upload.retryCount,
+                        videoJobId: upload.videoJobId
+                    )
+                }
+            }
         }
     }
     

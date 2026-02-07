@@ -1,6 +1,6 @@
 # HLS Video Implementation Guide
 
-**Last Updated:** November 8, 2025  
+**Last Updated:** December 21, 2025  
 **Status:** Production Ready
 
 ---
@@ -8,6 +8,10 @@
 ## Overview
 
 Complete HLS (HTTP Live Streaming) video playback system with local caching, automatic quality switching, playback stall recovery, and memory-optimized segment handling.
+
+**Related Documentation:**
+- [HLS Conversion Algorithm](./HLS_CONVERSION_ALGORITHM.md) - How videos are converted to HLS format
+- [Video System](./VIDEO_SYSTEM.md) - Overall video architecture
 
 ---
 

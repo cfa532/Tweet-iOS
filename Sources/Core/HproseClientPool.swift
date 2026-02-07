@@ -8,7 +8,7 @@ class HproseClientPool {
     private let maxClientsPerURL: Int
     private let lock = NSLock()
     
-    init(maxClientsPerURL: Int = 5) {
+    init(maxClientsPerURL: Int = 8) {
         self.maxClientsPerURL = maxClientsPerURL
     }
     
@@ -16,7 +16,35 @@ class HproseClientPool {
     /// - Parameter urlString: The URL string for the server endpoint
     /// - Returns: A configured HproseClient instance
     func getClientByIP(for ip: String) -> HproseClient {
-        let urlString = "http://\(ip)/webapi/"
+        // Properly format URL for IPv6 addresses
+        // IPv6 addresses come in format: [ipv6]:port or ipv6:port (without brackets)
+        let urlString: String
+        if ip.hasPrefix("[") {
+            // Already formatted with brackets: [ipv6]:port -> http://[ipv6]:port/webapi/
+            urlString = "http://\(ip)/webapi/"
+        } else if ip.contains(":") {
+            // Check if it's IPv6 (multiple colons) or IPv4 with port (single colon)
+            let colonCount = ip.filter { $0 == ":" }.count
+            if colonCount > 1 {
+                // IPv6 without brackets: ipv6:port -> http://[ipv6]:port/webapi/
+                // Extract port if present (last component after last colon)
+                if let lastColonIndex = ip.lastIndex(of: ":"),
+                   let portString = Int(ip[ip.index(after: lastColonIndex)...].trimmingCharacters(in: .whitespaces)) {
+                    // Has port: split and wrap IPv6 in brackets
+                    let ipv6 = String(ip[..<lastColonIndex])
+                    urlString = "http://[\(ipv6)]:\(portString)/webapi/"
+                } else {
+                    // No port or invalid format: wrap entire IPv6 in brackets with default port
+                    urlString = "http://[\(ip)]:8080/webapi/"
+                }
+            } else {
+                // IPv4 with port: ip:port -> http://ip:port/webapi/
+                urlString = "http://\(ip)/webapi/"
+            }
+        } else {
+            // IPv4 without port: ip -> http://ip/webapi/
+            urlString = "http://\(ip)/webapi/"
+        }
 
         lock.lock()
         defer { lock.unlock() }
@@ -30,7 +58,7 @@ class HproseClientPool {
         
         // Create a new client
         let client = HproseHttpClient()
-        client.timeout = 30  // 30 seconds timeout for health checks
+        client.timeout = 5  // 5 seconds timeout for health checks (fast fail for bad servers)
         client.uri = urlString
         return client
     }
@@ -49,7 +77,7 @@ class HproseClientPool {
         
         // Create a new client
         let client = HproseHttpClient()
-        client.timeout = 30  // 30 seconds timeout for health checks
+        client.timeout = 5  // 5 seconds timeout for health checks (fast fail for bad servers)
         client.uri = urlString
         return client
     }
@@ -59,7 +87,26 @@ class HproseClientPool {
     ///   - client: The client to return
     ///   - urlString: The URL string this client was configured for
     func releaseClient(_ client: HproseClient, for ip: String) {
-        let urlString = "http://\(ip)/webapi/"
+        // Use same URL construction logic as getClientByIP
+        let urlString: String
+        if ip.hasPrefix("[") {
+            urlString = "http://\(ip)/webapi/"
+        } else if ip.contains(":") {
+            let colonCount = ip.filter { $0 == ":" }.count
+            if colonCount > 1 {
+                if let lastColonIndex = ip.lastIndex(of: ":"),
+                   let portString = Int(ip[ip.index(after: lastColonIndex)...].trimmingCharacters(in: .whitespaces)) {
+                    let ipv6 = String(ip[..<lastColonIndex])
+                    urlString = "http://[\(ipv6)]:\(portString)/webapi/"
+                } else {
+                    urlString = "http://[\(ip)]:8080/webapi/"
+                }
+            } else {
+                urlString = "http://\(ip)/webapi/"
+            }
+        } else {
+            urlString = "http://\(ip)/webapi/"
+        }
         
         lock.lock()
         defer { lock.unlock() }

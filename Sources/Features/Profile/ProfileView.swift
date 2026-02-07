@@ -8,15 +8,15 @@ struct ProfileView: View {
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
+    /// Track users that have been resynced this app session to avoid redundant long-running operations
+    private static var resyncedUsersThisSession: Set<String> = []
+    private static let resyncLock = NSLock()
+    
     /// Navigation state
-    @State private var showTweetList = false
-    @State private var selectedTweetForNavigation: Tweet? = nil
-    @State private var selectedTweetFromBookmarksFavorites: Tweet? = nil // Separate state for tweets from bookmarks/favorites
     @State private var selectedUserForNavigation: User? = nil
     @State private var userListDestination: UserListDestination? = nil
     
     @State private var userListType: UserListType = .FOLLOWER
-    @State private var tweetListType: TweetListType = .BOOKMARKS
     
     /// UI state
     @State private var showEditSheet = false
@@ -26,15 +26,10 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
-    @State private var profileRefreshCounter = 0
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
     @State private var pinnedTweetIds: Set<String> = []
-    
-    /// Bookmarks and favorites tweets state
-    @State private var bookmarksTweets: [Tweet] = []
-    @State private var favoritesTweets: [Tweet] = []
     
     /// Indicates if avatar is currently being uploaded
     @State private var isUploadingAvatar = false
@@ -58,6 +53,170 @@ struct ProfileView: View {
     @State private var isNavigationVisible = true
     
     var body: some View {
+        contentWithNavigation
+            .sheet(isPresented: $showEditSheet, onDismiss: handleSheetDismiss) {
+                profileEditSheet
+            }
+            .fullScreenCover(isPresented: $showAvatarFullScreen) {
+                AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)
+            }
+            .fullScreenCover(isPresented: $showChatScreen) {
+                ChatScreen(receiptId: user.mid)
+            }
+            .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
+                Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
+                Button(NSLocalizedString("Logout", comment: "Logout button"), role: .destructive) {
+                    Task {
+                        await handleLogout()
+                    }
+                }
+            } message: {
+                Text(NSLocalizedString("This action cannot be undone.", comment: "Logout confirmation message"))
+            }
+            .alert(NSLocalizedString("Are you sure you want to delete your account?", comment: "Delete account confirmation alert title"), isPresented: $showDeleteAccountConfirmation) {
+                Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
+                Button(NSLocalizedString("Delete Account", comment: "Delete account button"), role: .destructive) {
+                    Task {
+                        await handleDeleteAccount()
+                    }
+                }
+            } message: {
+                Text(NSLocalizedString("This action cannot be undone.", comment: "Delete account confirmation message"))
+            }
+    }
+    
+    private var contentWithNavigation: some View {
+        mainContentView
+            .onAppear {
+                // Calculate isFollowing by checking if the user's mid is in the app user's followingList
+                isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
+            }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                toolbarContent
+            }
+            .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
+            .task(id: user.mid) {
+                // Only fetch if this is the first load for this user
+                if !didLoad {
+                await refreshProfileData()
+                    didLoad = true
+                }
+            }
+            .onChange(of: user.mid) { _, _ in
+                // Reset didLoad when user changes so the new user's data is fetched
+                didLoad = false
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
+                if let _ = notification.userInfo?["tweetId"] as? String,
+                   let _ = notification.userInfo?["isPinned"] as? Bool {
+                    Task {
+                        // Add delay to allow server to update before refreshing
+                        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                        await refreshPinnedTweets()
+                    }
+                }
+            }
+            .navigationDestination(for: Tweet.self) { tweet in
+                tweetDestinationView(for: tweet)
+            }
+            .navigationDestination(item: $selectedUserForNavigation) { user in
+                userDestinationView(for: user)
+            }
+            .onChange(of: navigationPath.count) { oldCount, newCount in
+                print("🟣 [ProfileView] navigationPath.count changed from \(oldCount) to \(newCount) - user: \(user.username ?? "nil")")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
+                handleTweetDeleted(notification: notification)
+            }
+            .onAppear {
+                handleViewAppear()
+            }
+            .onDisappear {
+                handleViewDisappear()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+                isNavigationVisible = true
+                NotificationCenter.default.post(
+                    name: .navigationVisibilityChanged,
+                    object: nil,
+                    userInfo: ["isVisible": true]
+                )
+            }
+    }
+    
+    @ViewBuilder
+    private func tweetDestinationView(for tweet: Tweet) -> some View {
+        // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
+        if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
+            // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
+            CommentDetailViewWithParent(comment: tweet)
+        } else {
+            // This is a regular tweet or quote tweet, show TweetDetailView
+            TweetDetailView(tweet: tweet)
+        }
+    }
+    
+    @ViewBuilder
+    private func userDestinationView(for user: User) -> some View {
+        // Navigate to user's profile when avatar is tapped from favorites/bookmarks
+        let _ = print("🟢 [ProfileView] navigationDestination(selectedUser) TRIGGERED - navigating to user: \(user.username ?? "nil"), mid: \(user.mid)")
+        ProfileView(user: user, onLogout: onLogout, navigationPath: $navigationPath)
+            .onAppear {
+                print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
+            }
+    }
+    
+    private func handleSheetDismiss() {
+        // CRITICAL: Reset submission state when sheet is dismissed
+        // This handles cases where user dismisses sheet during submission or clicks "Discard Changes"
+        isSubmittingProfile = false
+        print("DEBUG: [ProfileView] ProfileEditView dismissed, reset isSubmittingProfile")
+    }
+    
+    private func handleTweetDeleted(notification: Notification) {
+        if let deletedTweetId = notification.userInfo?["tweetId"] as? String {
+            // Check if the deleted tweet was in the pinned list
+            if pinnedTweetIds.contains(deletedTweetId) {
+                // Remove from pinned tweets
+                pinnedTweets.removeAll { $0.mid == deletedTweetId }
+                pinnedTweetIds.remove(deletedTweetId)
+                print("DEBUG: [ProfileView] Removed deleted tweet \(deletedTweetId) from pinned tweets")
+            } else {
+                // Tweet was in regular list, will be handled by ProfileTweetsViewModel
+                print("DEBUG: [ProfileView] Deleted tweet \(deletedTweetId) was in regular tweets list")
+            }
+        }
+    }
+    
+    private func handleViewAppear() {
+        // Ensure navigation is visible when view appears
+        isNavigationVisible = true
+        NotificationCenter.default.post(
+            name: .navigationVisibilityChanged,
+            object: nil,
+            userInfo: ["isVisible": true]
+        )
+        print("DEBUG: [ProfileView] View appeared, navigation set to visible")
+    }
+    
+    private func handleViewDisappear() {
+        // Reset navigation visibility when view disappears
+        withAnimation(.easeInOut(duration: 0.3)) {
+            isNavigationVisible = true
+        }
+        NotificationCenter.default.post(
+            name: .navigationVisibilityChanged,
+            object: nil,
+            userInfo: ["isVisible": true]
+        )
+        print("DEBUG: [ProfileView] View disappeared, navigation reset to visible")
+    }
+    
+    // MARK: - View Components
+    
+    private var mainContentView: some View {
         ZStack {
             VStack(spacing: 0) {
                 ProfileTweetsSection(
@@ -67,8 +226,9 @@ struct ProfileView: View {
                     hproseInstance: hproseInstance,
                     onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
                     onTweetTap: { tweet in
-                        // This should never be called since we'll use NavigationLink directly
-                        print("DEBUG: [ProfileView] onTweetTap called - this should not happen")
+                        // Append tweet to navigationPath to navigate to detail view
+                        // This matches the pattern used in HomeViewModel
+                        navigationPath.append(tweet)
                     },
                     onAvatarTapInProfile: { tappedUser in
                         // Check if the tapped avatar is the same as the profile user
@@ -97,6 +257,7 @@ struct ProfileView: View {
                                 },
                                 onAvatarTap: { showAvatarFullScreen = true }
                             )
+
                             ProfileStatsView(
                                 user: user,
                                 onFollowersTap: {
@@ -110,26 +271,29 @@ struct ProfileView: View {
                                     navigationPath.append(userListDestination!)
                                 },
                                 onBookmarksTap: {
-                                    tweetListType = .BOOKMARKS
-                                    bookmarksTweets.removeAll() // Clear previous data
-                                    showTweetList = true
+                                    let destination = TweetListDestination(userId: user.mid, listType: .BOOKMARKS)
+                                    navigationPath.append(destination)
                                 },
                                 onFavoritesTap: {
-                                    tweetListType = .FAVORITES
-                                    favoritesTweets.removeAll() // Clear previous data
-                                    showTweetList = true
+                                    let destination = TweetListDestination(userId: user.mid, listType: .FAVORITES)
+                                    navigationPath.append(destination)
                                 }
                             )
+                            .padding(.horizontal, -16)
                         }
-                        .padding(.top, 2)
                     }
                 )
                 .id(user.mid)
-                .padding(.leading, -4)
             }
             .allowsHitTesting(!isUploadingAvatar && !isSubmittingProfile)
             
-            // Loading overlay for avatar upload and profile submission
+            loadingOverlay
+            toastOverlay
+        }
+    }
+    
+    private var loadingOverlay: some View {
+        Group {
             if isUploadingAvatar || isSubmittingProfile {
                 VStack {
                     Spacer()
@@ -155,351 +319,180 @@ struct ProfileView: View {
                 }
                 .allowsHitTesting(true)
             }
-            
-            // Toast overlay
-            VStack {
-                Spacer()
-                if showToast {
-                    ToastView(message: toastMessage, type: toastType)
-                        .padding(.bottom, 48)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+        }
+    }
+    
+    private var toastOverlay: some View {
+        VStack {
+            Spacer()
+            if showToast {
+                ToastView(message: toastMessage, type: toastType)
+                    .padding(.bottom, 48)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .animation(.easeInOut(duration: 0.3), value: showToast)
         }
-        .onAppear {
-            // Calculate isFollowing by checking if the user's mid is in the app user's followingList
-            isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
-        }
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                HStack(spacing: 12) {
-                    if !isAppUser {
-                        Button {
-                            showChatScreen = true
-                        } label: {
-                            Image(systemName: "message")
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    
-                    Menu {
-                        if !isAppUser {
-                            Button(role: .destructive) {
-                                Task {
-                                    await handleBlockUser()
-                                }
-                            } label: {
-                                Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
-                            }
-                        }
-                        
-                        if isAppUser {
-                            Button(role: .destructive) {
-                                showLogoutConfirmation = true
-                            } label: {
-                                Label(NSLocalizedString("Logout", comment: "Logout menu item"), systemImage: "rectangle.portrait.and.arrow.right")
-                            }
-                            
-                            Button(role: .destructive) {
-                                showDeleteAccountConfirmation = true
-                            } label: {
-                                Label(NSLocalizedString("Delete Account", comment: "Delete account menu item"), systemImage: "trash")
-                            }
-                        }
+        .animation(.easeInOut(duration: 0.3), value: showToast)
+    }
+    
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarTrailing) {
+            HStack(spacing: 12) {
+                if !isAppUser {
+                    Button {
+                        showChatScreen = true
                     } label: {
-                        Image(systemName: "ellipsis")
-                            .rotationEffect(.degrees(90))
-                            .foregroundColor(.primary)
-                            .font(.system(size: 16, weight: .medium))
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
+                        Image(systemName: "message")
+                            .foregroundColor(.blue)
                     }
                 }
-            }
-        }
-        .toolbar(isNavigationVisible ? .visible : .hidden, for: .navigationBar)
-        .sheet(isPresented: $showEditSheet) {
-            ProfileEditView(
-                onSubmit: { username, password, alias, profile, hostId, cloudDrivePort, domainToShare in
-                    // Set submission state
-                    isSubmittingProfile = true
-                    print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), domainToShare: \(domainToShare ?? "nil")")
-                    
-                    let success = try await hproseInstance.updateUserCore(
-                        password: password,
-                        alias: alias,
-                        profile: profile,
-                        hostId: hostId,
-                        cloudDrivePort: cloudDrivePort,
-                        domainToShare: domainToShare
-                    )
-                    print("DEBUG: Profile update result: \(success)")
-                    
-                    if success {
-                        // Update local user data
-                        if let alias = alias, !alias.isEmpty {
-                            hproseInstance.appUser.name = alias
-                            print("DEBUG: Updated name to: \(alias)")
-                        }
-                        if let profile = profile, !profile.isEmpty {
-                            hproseInstance.appUser.profile = profile
-                            print("DEBUG: Updated profile to: \(profile)")
-                        }
-                        if let hostId = hostId, !hostId.isEmpty {
-                            hproseInstance.appUser.hostIds = [hostId]
-                            print("DEBUG: Updated hostIds to: [\(hostId)]")
-                        }
-                        hproseInstance.appUser.cloudDrivePort = cloudDrivePort
-                        print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
-                        
-                        let sanitizedDomain = domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let domain = sanitizedDomain, !domain.isEmpty {
-                            hproseInstance.appUser.domainToShare = domain
-                            print("DEBUG: Updated domainToShare to: \(domain)")
-                        } else {
-                            hproseInstance.appUser.domainToShare = nil
-                            print("DEBUG: Cleared domainToShare")
-                        }
-                        
-                        // Clear user cache to ensure fresh data is loaded on next app launch
-                        TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)
-                        print("DEBUG: Cleared user cache for: \(hproseInstance.appUser.mid)")
-                        
-                        // Save updated user to cache with fresh data
-                        TweetCacheManager.shared.saveUser(hproseInstance.appUser)
-                        print("DEBUG: Saved updated user to cache")
-                        
-                        // Reset submission state
-                        isSubmittingProfile = false
-                    } else {
-                        // Reset submission state
-                        isSubmittingProfile = false
-                        throw NSError(domain: "ProfileUpdate", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])
-                    }
-                },
-                onAvatarUploadStateChange: { isUploading in
-                    isUploadingAvatar = isUploading
-                },
-                onAvatarUploadSuccess: {
-                    showToastMessage(NSLocalizedString("Avatar updated successfully!", comment: "Avatar update success"), type: .success)
-                    // Clear all avatar cache to ensure fresh images are loaded everywhere
-                    ImageCacheManager.shared.clearAllAvatarCache()
-                    // Force refresh all avatar images immediately by triggering a UI update
-                    // Cache clear is synchronous, so we can notify immediately
-                    hproseInstance.objectWillChange.send()
-                },
-                onAvatarUploadFailure: { errorMessage in
-                    showToastMessage(errorMessage, type: .error)
-                },
-                onProfileUpdateFailure: { errorMessage in
-                    showToastMessage(errorMessage, type: .error)
-                }
-            )
-        }
-        .fullScreenCover(isPresented: $showAvatarFullScreen) {
-            AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)
-        }
-        .fullScreenCover(isPresented: $showChatScreen) {
-            ChatScreen(receiptId: user.mid)
-        }
-        .task(id: profileRefreshCounter) {
-            await refreshProfileData()
-        }
-        .onAppear {
-            if didLoad {
-                profileRefreshCounter += 1
-            }
-        }
-        .onChange(of: user.mid) { _, _ in
-            didLoad = false
-            profileRefreshCounter += 1
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .tweetPinStatusChanged)) { notification in
-            if let _ = notification.userInfo?["tweetId"] as? String,
-               let _ = notification.userInfo?["isPinned"] as? Bool {
-                Task {
-                    await refreshPinnedTweets()
-                }
-            }
-        }
-        .navigationDestination(for: UserListDestination.self) { destination in
-            UserListView(
-                title: userListTitle(for: destination),
-                userFetcher: { page, size in
-                    // Only fetch all IDs once when page is 0
-                    if page == 0 {
-                        let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
-                        // Get the user instance from destination.userId
-                        let targetUser = User.getInstance(mid: destination.userId)
-                        let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-                        // Update user properties on main thread to avoid publishing changes from background thread
-                        await MainActor.run {
-                            if destination.listType == .FOLLOWER {
-                                targetUser.fansList = ids
-                            } else {
-                                targetUser.followingList = ids
+                
+                Menu {
+                    if !isAppUser {
+                        Button(role: .destructive) {
+                            Task {
+                                await handleBlockUser()
                             }
-                        }
-                        return ids
-                    } else {
-                        let targetUser = User.getInstance(mid: destination.userId)
-                        return if destination.listType == .FOLLOWER {
-                            targetUser.fansList ?? []
-                        } else {
-                            targetUser.followingList ?? []
+                        } label: {
+                            Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                         }
                     }
-                },
-                navigationPath: $navigationPath,
-                onFollowToggle: { user in
-                    Task {
-                        await handleToggleFollowing(for: user)
+                    
+                    if isAppUser {
+                        Button(role: .destructive) {
+                            showLogoutConfirmation = true
+                        } label: {
+                            Label(NSLocalizedString("Logout", comment: "Logout menu item"), systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        
+                        Button(role: .destructive) {
+                            showDeleteAccountConfirmation = true
+                        } label: {
+                            Label(NSLocalizedString("Delete Account", comment: "Delete account menu item"), systemImage: "trash")
+                        }
                     }
-                }
-            )
-        }
-        .navigationDestination(isPresented: $showTweetList) {
-            print("🔵 [ProfileView] navigationDestination(showTweetList) TRIGGERED - type: \(tweetListType), user: \(user.username ?? "nil")")
-            return bookmarksOrFavoritesListView()
-        }
-        .navigationDestination(item: $selectedTweetForNavigation) { tweet in
-            // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-            if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-                // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-                CommentDetailViewWithParent(comment: tweet)
-            } else {
-                // This is a regular tweet or quote tweet, show TweetDetailView
-                TweetDetailView(tweet: tweet)
-            }
-        }
-        .navigationDestination(item: $selectedUserForNavigation) { user in
-            print("🟢 [ProfileView] navigationDestination(selectedUser) TRIGGERED - navigating to user: \(user.username ?? "nil"), mid: \(user.mid)")
-            print("🟢 [ProfileView] Current showTweetList value: \(showTweetList)")
-            // Navigate to user's profile when avatar is tapped from favorites/bookmarks
-            return ProfileView(user: user, onLogout: onLogout, navigationPath: $navigationPath)
-                .onAppear {
-                    print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
-                }
-        }
-        .onChange(of: selectedUserForNavigation) { oldValue, newValue in
-            print("🟡 [ProfileView] selectedUserForNavigation changed from \(oldValue?.username ?? "nil") to \(newValue?.username ?? "nil")")
-            print("🟡 [ProfileView] Current showTweetList: \(showTweetList), will set to false")
-            // When navigating to a user profile, dismiss the favorites/bookmarks list
-            if newValue != nil {
-                showTweetList = false
-                print("🟡 [ProfileView] Set showTweetList = false")
-            }
-        }
-        .onChange(of: showTweetList) { oldValue, newValue in
-            print("🟠 [ProfileView] showTweetList changed from \(oldValue) to \(newValue) - user: \(user.username ?? "nil")")
-        }
-        .onChange(of: navigationPath.count) { oldCount, newCount in
-            print("🟣 [ProfileView] navigationPath.count changed from \(oldCount) to \(newCount) - user: \(user.username ?? "nil")")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .bookmarkAdded)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Add tweet to bookmarks list if it's not already there
-                if !bookmarksTweets.contains(where: { $0.mid == tweet.mid }) {
-                    bookmarksTweets.insert(tweet, at: 0)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .rotationEffect(.degrees(90))
+                        .foregroundColor(.primary)
+                        .font(.system(size: 16, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .bookmarkRemoved)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Remove tweet from bookmarks list
-                bookmarksTweets.removeAll { $0.mid == tweet.mid }
+    }
+    
+    private var profileEditSheet: some View {
+        ProfileEditView(
+            onSubmit: handleProfileSubmit,
+            onAvatarUploadStateChange: { isUploading in
+                isUploadingAvatar = isUploading
+            },
+            onAvatarUploadSuccess: {
+                showToastMessage(NSLocalizedString("Avatar updated successfully!", comment: "Avatar update success"), type: .success)
+                // Clear all avatar cache to ensure fresh images are loaded everywhere
+                ImageCacheManager.shared.clearAllAvatarCache()
+                // Force refresh all avatar images immediately by triggering a UI update
+                // Cache clear is synchronous, so we can notify immediately
+                hproseInstance.objectWillChange.send()
+            },
+            onAvatarUploadFailure: { errorMessage in
+                showToastMessage(errorMessage, type: .error)
+            },
+            onProfileUpdateFailure: { errorMessage in
+                showToastMessage(errorMessage, type: .error)
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .favoriteAdded)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Add tweet to favorites list if it's not already there
-                if !favoritesTweets.contains(where: { $0.mid == tweet.mid }) {
-                    favoritesTweets.insert(tweet, at: 0)
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .favoriteRemoved)) { notification in
-            if let tweet = notification.userInfo?["tweet"] as? Tweet,
-               isAppUser {
-                // Remove tweet from favorites list
-                favoritesTweets.removeAll { $0.mid == tweet.mid }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
-            if let deletedTweetId = notification.userInfo?["tweetId"] as? String {
-                // Check if the deleted tweet was in the pinned list
-                if pinnedTweetIds.contains(deletedTweetId) {
-                    // Remove from pinned tweets
-                    pinnedTweets.removeAll { $0.mid == deletedTweetId }
-                    pinnedTweetIds.remove(deletedTweetId)
-                    print("DEBUG: [ProfileView] Removed deleted tweet \(deletedTweetId) from pinned tweets")
-                } else {
-                    // Tweet was in regular list, will be handled by ProfileTweetsViewModel
-                    print("DEBUG: [ProfileView] Deleted tweet \(deletedTweetId) was in regular tweets list")
-                }
-            }
-        }
-        .onAppear {
-            // Ensure navigation is visible when view appears
-            isNavigationVisible = true
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": true]
-            )
-            print("DEBUG: [ProfileView] View appeared, navigation set to visible")
-        }
-        .onDisappear {
-            // Reset navigation visibility when view disappears
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isNavigationVisible = true
-            }
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": true]
-            )
-            print("DEBUG: [ProfileView] View disappeared, navigation reset to visible")
-        }
-        .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
-            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
-            Button(NSLocalizedString("Logout", comment: "Logout button"), role: .destructive) {
-                Task {
-                    await handleLogout()
-                }
-            }
-        } message: {
-            Text(NSLocalizedString("This action cannot be undone.", comment: "Logout confirmation message"))
-        }
-        .alert(NSLocalizedString("Are you sure you want to delete your account?", comment: "Delete account confirmation alert title"), isPresented: $showDeleteAccountConfirmation) {
-            Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
-            Button(NSLocalizedString("Delete Account", comment: "Delete account button"), role: .destructive) {
-                Task {
-                    await handleDeleteAccount()
-                }
-            }
-        } message: {
-            Text(NSLocalizedString("This action cannot be undone.", comment: "Delete account confirmation message"))
-        }
+        )
+    }
+    
+    private func handleProfileSubmit(username: String, password: String?, alias: String?, profile: String?, hostId: String?, cloudDrivePort: Int, domainToShare: String?) async throws {
+        // Set submission state
+        isSubmittingProfile = true
+        print("DEBUG: Profile update - username: \(username), alias: \(alias ?? "nil"), profile: \(profile ?? "nil"), hostId: \(hostId ?? "nil"), cloudDrivePort: \(cloudDrivePort), domainToShare: \(domainToShare ?? "nil")")
         
+        let success = try await hproseInstance.updateUserCore(
+            password: password,
+            alias: alias,
+            profile: profile,
+            hostId: hostId,
+            cloudDrivePort: cloudDrivePort,
+            domainToShare: domainToShare
+        )
+        print("DEBUG: Profile update result: \(success)")
+        
+        if success {
+            // Update local user data
+            if let alias = alias, !alias.isEmpty {
+                hproseInstance.appUser.name = alias
+                print("DEBUG: Updated name to: \(alias)")
+            }
+            if let profile = profile, !profile.isEmpty {
+                hproseInstance.appUser.profile = profile
+                print("DEBUG: Updated profile to: \(profile)")
+            }
+            if let hostId = hostId, !hostId.isEmpty {
+                hproseInstance.appUser.hostIds = [hostId]
+                print("DEBUG: Updated hostIds to: [\(hostId)]")
+            }
+            hproseInstance.appUser.cloudDrivePort = cloudDrivePort
+            print("DEBUG: Updated cloudDrivePort to: \(cloudDrivePort)")
+            
+            let sanitizedDomain = domainToShare?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let domain = sanitizedDomain, !domain.isEmpty {
+                hproseInstance.appUser.domainToShare = domain
+                print("DEBUG: Updated domainToShare to: \(domain)")
+            } else {
+                hproseInstance.appUser.domainToShare = nil
+                print("DEBUG: Cleared domainToShare")
+            }
+            
+            // Clear user cache to ensure fresh data is loaded on next app launch
+            TweetCacheManager.shared.deleteUser(mid: hproseInstance.appUser.mid)
+            print("DEBUG: Cleared user cache for: \(hproseInstance.appUser.mid)")
+            
+            // Save updated user to cache with fresh data
+            TweetCacheManager.shared.saveUser(hproseInstance.appUser)
+            print("DEBUG: Saved updated user to cache")
+            
+            // Reset submission state
+            isSubmittingProfile = false
+        } else {
+            // Reset submission state
+            isSubmittingProfile = false
+            throw NSError(domain: "ProfileUpdate", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Profile update failed", comment: "Profile update error")])
+        }
     }
     
     // MARK: - Scroll Handling
     @State private var lastSignificantDelta: CGFloat = 0
+    @State private var lastNotificationTime: Date?
+    private let notificationThrottleInterval: TimeInterval = 0.1 // 100ms - prevent rapid-fire notifications
     
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
         // Threshold for detecting intentional scroll
         let scrollThreshold: CGFloat = 15
         
-        // DON'T force show based on offset - ProfileView offset is often negative
-        // Just rely on scroll direction (delta)
+        // CRITICAL: Always show toolbar when near the top
+        // Profile view has a header, so we need to account for negative offsets
+        // When scrolled to the very top, offset will be around -100 to 0 depending on header height
+        // We want to show toolbar when user is in the header area or just below it
+        if offset < 100 {
+            // Near the top - always show toolbar
+            if !isNavigationVisible {
+                // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isNavigationVisible = true
+                    }
+                    postNavigationVisibilityNotification(isVisible: true)
+                }
+            }
+            previousScrollOffset = offset
+            return
+        }
         
+        // Only process scroll direction changes when scrolled down into content
         // Ignore very small deltas (noise from rendering/layout)
         guard abs(delta) > 2 else { return }
         
@@ -512,29 +505,43 @@ struct ProfileView: View {
         // Update navigation visibility based on scroll direction
         if isScrollingDown && isNavigationVisible {
             // Scrolling down significantly - hide bottom bar
-            withAnimation(.easeInOut(duration: 0.25)) {
-                isNavigationVisible = false
+            // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = false
+                }
+                postNavigationVisibilityNotification(isVisible: false)
             }
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": false]
-            )
             lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show bottom bar
-            withAnimation(.easeInOut(duration: 0.4)) {
-                isNavigationVisible = true
+            // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isNavigationVisible = true
+                }
+                postNavigationVisibilityNotification(isVisible: true)
             }
-            NotificationCenter.default.post(
-                name: .navigationVisibilityChanged,
-                object: nil,
-                userInfo: ["isVisible": true]
-            )
             lastSignificantDelta = delta
         }
         
         previousScrollOffset = offset
+    }
+    
+    // Helper to post navigation visibility notification with throttling
+    private func postNavigationVisibilityNotification(isVisible: Bool) {
+        // Throttle notifications to prevent excessive posting during rapid scroll
+        let now = Date()
+        if let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
+            return
+        }
+        
+        lastNotificationTime = now
+        NotificationCenter.default.post(
+            name: .navigationVisibilityChanged,
+            object: nil,
+            userInfo: ["isVisible": isVisible]
+        )
     }
     
     // MARK: - Helper Methods
@@ -542,7 +549,6 @@ struct ProfileView: View {
     private func scrollToTop() {
         // Scroll to top of the profile view
         // This will be handled by the ScrollViewReader in ProfileTweetsSection
-        print("DEBUG: [ProfileView] Scroll to top requested")
         NotificationCenter.default.post(name: .scrollToTop, object: nil)
     }
     
@@ -649,7 +655,18 @@ struct ProfileView: View {
         // Fetch fresh user data from server
         do {
             let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
-            print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server")
+            if let userData = refreshedUser {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                if let jsonData = try? encoder.encode(userData),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server\n\(jsonString)")
+                } else {
+                    print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - \(userData)")
+                }
+            } else {
+                print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - returned nil")
+            }
             
             if let refreshedUser = refreshedUser {
                 TweetCacheManager.shared.saveUser(refreshedUser)
@@ -662,7 +679,17 @@ struct ProfileView: View {
         await refreshPinnedTweets()
         
         // Resync user data on server in background (long-running operation)
+        // Only run once per app session per user to avoid redundant expensive operations
         let userId = user.mid
+        let shouldResync = Self.resyncLock.withLock {
+            if Self.resyncedUsersThisSession.contains(userId) {
+                return false
+            }
+            Self.resyncedUsersThisSession.insert(userId)
+            return true
+        }
+        
+        if shouldResync {
         Task.detached {
             do {
                 let resyncedUser = try await hproseInstance.resyncUser(userId: userId)
@@ -673,6 +700,9 @@ struct ProfileView: View {
             } catch {
                 print("DEBUG: [ProfileView] Failed to resync user \(userId): \(error)")
             }
+            }
+        } else {
+            print("DEBUG: [ProfileView] Skipping resync for user \(userId) - already resynced this session")
         }
     }
     
@@ -808,144 +838,6 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Helper Methods
-    private func userListTitle(for destination: UserListDestination) -> String {
-        let isDestinationAppUser = destination.userId == hproseInstance.appUser.mid
-        if isDestinationAppUser {
-            return destination.listType == .FOLLOWER 
-                ? NSLocalizedString("Your Fans", comment: "Your fans title")
-                : NSLocalizedString("Your Followings", comment: "Your followings title")
-        } else {
-            let targetUser = User.getInstance(mid: destination.userId)
-            let displayName: String
-            if let name = targetUser.name, !name.isEmpty {
-                displayName = name
-            } else if let username = targetUser.username {
-                displayName = username
-            } else {
-                displayName = NSLocalizedString("Noone", comment: "No one")
-            }
-            let titleKey = destination.listType == .FOLLOWER ? "Fans@%@" : "Followings@%@"
-            return String(format: NSLocalizedString(titleKey, comment: "User list title"), displayName)
-        }
-    }
-    
-    @ViewBuilder
-    private func bookmarksOrFavoritesListView() -> some View {
-        if tweetListType == .BOOKMARKS {
-            TweetListView(
-                title: isAppUser 
-                    ? NSLocalizedString("Your Bookmarks", comment: "Your bookmarks title")
-                    : NSLocalizedString("Bookmarks", comment: "Bookmarks title"),
-                tweets: $bookmarksTweets,
-                tweetFetcher: { page, size, isFromCache in
-                    print("DEBUG: [ProfileView] Fetching bookmarks - page: \(page), size: \(size), isFromCache: \(isFromCache)")
-                    if isFromCache {
-                        // For bookmarks/favorites, we don't cache, so return empty array
-                        print("DEBUG: [ProfileView] Cache requested for bookmarks, returning empty array")
-                        return []
-                    } else {
-                        let tweets = try await hproseInstance.getUserTweetsByType(user: user, type: .BOOKMARKS, pageNumber: page, pageSize: size)
-                        print("DEBUG: [ProfileView] Got \(tweets.count) bookmarks tweets, valid: \(tweets.compactMap { $0 }.count)")
-                        return tweets
-                    }
-                },
-                rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        showDeleteButton: isAppUser,
-                        onAvatarTap: { tappedUser in
-                            print("🔴 [ProfileView-Bookmarks] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
-                            print("🔴 [ProfileView-Bookmarks] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
-                            selectedUserForNavigation = tappedUser
-                        },
-                        onTap: { selectedTweet in
-                            selectedTweetFromBookmarksFavorites = selectedTweet
-                        }
-                    )
-                }
-            )
-            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
-                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-                    CommentDetailViewWithParent(comment: tweet)
-                } else {
-                    // This is a regular tweet or quote tweet, show TweetDetailView
-                    TweetDetailView(tweet: tweet)
-                }
-            }
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showTweetList = false
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text(NSLocalizedString("Back", comment: "Back button"))
-                        }
-                    }
-                }
-            }
-        } else {
-            TweetListView(
-                title: isAppUser 
-                    ? NSLocalizedString("Your Favorites", comment: "Your favorites title")
-                    : NSLocalizedString("Favorites", comment: "Favorites title"),
-                tweets: $favoritesTweets,
-                tweetFetcher: { page, size, isFromCache in
-                    print("DEBUG: [ProfileView] Fetching favorites - page: \(page), size: \(size), isFromCache: \(isFromCache)")
-                    if isFromCache {
-                        // For favorites, we don't cache, so return empty array
-                        print("DEBUG: [ProfileView] Cache requested for favorites, returning empty array")
-                        return []
-                    } else {
-                        let tweets = try await hproseInstance.getUserTweetsByType(user: user, type: .FAVORITES, pageNumber: page, pageSize: size)
-                        print("DEBUG: [ProfileView] Got \(tweets.count) favorites tweets, valid: \(tweets.compactMap { $0 }.count)")
-                        return tweets
-                    }
-                },
-                rowView: { tweet in
-                    TweetItemView(
-                        tweet: tweet,
-                        showDeleteButton: isAppUser,
-                        onAvatarTap: { tappedUser in
-                            print("🔴 [ProfileView-Favorites] Avatar tapped - user: \(tappedUser.username ?? "nil"), mid: \(tappedUser.mid)")
-                            print("🔴 [ProfileView-Favorites] Current showTweetList: \(showTweetList), current user: \(user.username ?? "nil")")
-                            selectedUserForNavigation = tappedUser
-                        },
-                        onTap: { selectedTweet in
-                            selectedTweetFromBookmarksFavorites = selectedTweet
-                        }
-                    )
-                }
-            )
-            .navigationDestination(item: $selectedTweetFromBookmarksFavorites) { tweet in
-                // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-                if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-                    // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-                    CommentDetailViewWithParent(comment: tweet)
-                } else {
-                    // This is a regular tweet or quote tweet, show TweetDetailView
-                    TweetDetailView(tweet: tweet)
-                }
-            }
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showTweetList = false
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text(NSLocalizedString("Back", comment: "Back button"))
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 enum UserListType {
@@ -953,7 +845,13 @@ enum UserListType {
     case FOLLOWING
 }
 
-enum TweetListType {
+enum TweetListType: Hashable {
     case BOOKMARKS
     case FAVORITES
+}
+
+// Navigation destination for tweet lists (bookmarks/favorites)
+struct TweetListDestination: Hashable {
+    let userId: String
+    let listType: TweetListType
 } 

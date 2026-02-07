@@ -75,6 +75,17 @@ struct CameraView: UIViewControllerRepresentable {
             if let image = info[.originalImage] as? UIImage {
                 print("DEBUG: Image captured successfully: \(image.size)")
                 
+                // Validate image dimensions before processing
+                let imageSize = image.size
+                guard imageSize.width.isFinite, imageSize.height.isFinite,
+                      imageSize.width > 0, imageSize.height > 0,
+                      imageSize.width < 50000, imageSize.height < 50000 else {
+                    print("DEBUG: Invalid image dimensions from camera: \(imageSize)")
+                    parent.onMediaCaptured(nil, nil)
+                    picker.dismiss(animated: true)
+                    return
+                }
+                
                 // Save image to system album
                 saveImageToAlbum(image)
                 
