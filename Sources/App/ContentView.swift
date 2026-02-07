@@ -69,7 +69,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
                 Color.clear
-                    .frame(height: 40)
+                    .frame(height: (!isInChatScreen || isInProfileFromChat) ? 40 : 0)
             }
             
             // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
