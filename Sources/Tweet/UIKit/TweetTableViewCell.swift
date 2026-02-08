@@ -10,7 +10,7 @@ import UIKit
 class TweetTableViewCell: UITableViewCell {
     static let reuseIdentifier = "TweetTableViewCell"
 
-    private let tweetContentView = TweetCellContentView()
+    let tweetContentView = TweetCellContentView()
     private var currentTweetId: String?
 
     // Height change tracking

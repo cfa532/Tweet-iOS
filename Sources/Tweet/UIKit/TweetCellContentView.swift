@@ -231,14 +231,7 @@ class TweetCellContentView: UIView {
         // Load author if needed (background task)
         loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance)
 
-        // Force layout on next RunLoop after SwiftUI hosting controllers have rendered.
-        // UIHostingController renders SwiftUI content asynchronously (needs one RunLoop pass),
-        // but UITableView measures cells synchronously during cellForRowAt.
-        // This deferred layout ensures the cell settles to its correct size.
-        DispatchQueue.main.async { [weak self] in
-            self?.setNeedsLayout()
-            self?.layoutIfNeeded()
-        }
+        // No deferred layout needed — Phase 3 media grid is pure UIKit with synchronous sizing
     }
 
     private func configureAsRegularTweet(tweet: Tweet, hproseInstance: HproseInstance,
@@ -246,9 +239,10 @@ class TweetCellContentView: UIView {
         // Hide retweet banner
         showRetweetBanner(false)
 
-        // Hide embedded tweet wrapper
+        // Hide embedded tweet wrapper and suppress its spacing
         embeddedTweetWrapper.isHidden = true
         embeddedWrapperHeightConstraint?.isActive = true
+        contentColumn.setCustomSpacing(0, after: embeddedTweetWrapper)
 
         // Avatar
         if let author = tweet.author {
@@ -332,9 +326,10 @@ class TweetCellContentView: UIView {
             retweetLabel.text = String(format: NSLocalizedString("Forwarded by %@", comment: ""), name)
         }
 
-        // Hide embedded tweet wrapper (content shown directly)
+        // Hide embedded tweet wrapper (content shown directly) and suppress its spacing
         embeddedTweetWrapper.isHidden = true
         embeddedWrapperHeightConstraint?.isActive = true
+        contentColumn.setCustomSpacing(0, after: embeddedTweetWrapper)
 
         // Avatar from original tweet's author
         if let author = originalTweet.author {
@@ -371,9 +366,10 @@ class TweetCellContentView: UIView {
         // Hide retweet banner
         showRetweetBanner(false)
 
-        // Show embedded tweet wrapper
+        // Show embedded tweet wrapper and restore its spacing
         embeddedTweetWrapper.isHidden = false
         embeddedWrapperHeightConstraint?.isActive = false
+        contentColumn.setCustomSpacing(20, after: embeddedTweetWrapper)
 
         // Avatar from quoting tweet's author
         if let author = tweet.author {
@@ -481,6 +477,13 @@ class TweetCellContentView: UIView {
         }
 
         parentVC.present(hostingController, animated: true)
+    }
+
+    // MARK: - Visibility
+
+    /// Forward media visibility to the body's media grid and embedded tweet's media grid
+    func setMediaVisible(_ visible: Bool) {
+        bodyView.mediaGridView.isGridVisible = visible
     }
 
     // MARK: - Reuse

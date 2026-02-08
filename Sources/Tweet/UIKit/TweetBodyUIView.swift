@@ -4,8 +4,7 @@
 //
 //  Pure UIKit tweet body replacing SwiftUI TweetItemBodyView.
 //  Shows text content and media grid.
-//  Phase 1: Media grid uses a small UIHostingController for SwiftUI MediaGridView.
-//  Phase 3 will replace that with pure UIKit MediaGridUIView.
+//  Phase 3: Media grid uses pure UIKit MediaGridUIView (no UIHostingController).
 //
 import UIKit
 import SwiftUI
@@ -22,8 +21,8 @@ class TweetBodyUIView: UIView {
         return label
     }()
 
-    // Media hosting controller (Phase 1: hosts SwiftUI MediaGridView)
-    private var mediaHostingController: UIHostingController<AnyView>?
+    // Pure UIKit media grid (Phase 3)
+    let mediaGridView = MediaGridUIView()
     private var mediaContainerView: UIView = {
         let v = UIView()
         v.clipsToBounds = true
@@ -41,18 +40,17 @@ class TweetBodyUIView: UIView {
         return label
     }()
 
-    // Document attachments hosting (Phase 1: hosts SwiftUI DocumentAttachmentsView)
+    // Document attachments hosting (keeps SwiftUI — not in critical path)
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
 
     // Layout constraints that change based on content
-    private var contentLabelBottomToMedia: NSLayoutConstraint?
-    private var contentLabelBottomToSelf: NSLayoutConstraint?
     private var mediaTopToContent: NSLayoutConstraint?
     private var mediaTopToSelf: NSLayoutConstraint?
     private var mediaHeightConstraint: NSLayoutConstraint?
     private var captionTopConstraint: NSLayoutConstraint?
     private var documentTopConstraint: NSLayoutConstraint?
+    private var documentHeightConstraint: NSLayoutConstraint?
 
     var onTweetBodyTap: (() -> Void)?
     /// Whether the video caption label is currently visible (for single-video tweets with title)
@@ -75,10 +73,14 @@ class TweetBodyUIView: UIView {
         addSubview(captionLabel)
         addSubview(documentContainerView)
 
+        // Add media grid to container
+        mediaContainerView.addSubview(mediaGridView)
+
         contentLabel.translatesAutoresizingMaskIntoConstraints = false
         mediaContainerView.translatesAutoresizingMaskIntoConstraints = false
         captionLabel.translatesAutoresizingMaskIntoConstraints = false
         documentContainerView.translatesAutoresizingMaskIntoConstraints = false
+        mediaGridView.translatesAutoresizingMaskIntoConstraints = false
 
         // Content label constraints
         NSLayoutConstraint.activate([
@@ -97,6 +99,14 @@ class TweetBodyUIView: UIView {
         mediaTopToSelf = mediaContainerView.topAnchor.constraint(equalTo: topAnchor, constant: 6)
         mediaHeightConstraint = mediaContainerView.heightAnchor.constraint(equalToConstant: 0)
 
+        // Media grid fills container
+        NSLayoutConstraint.activate([
+            mediaGridView.topAnchor.constraint(equalTo: mediaContainerView.topAnchor),
+            mediaGridView.leadingAnchor.constraint(equalTo: mediaContainerView.leadingAnchor),
+            mediaGridView.trailingAnchor.constraint(equalTo: mediaContainerView.trailingAnchor),
+            mediaGridView.bottomAnchor.constraint(equalTo: mediaContainerView.bottomAnchor),
+        ])
+
         // Caption label constraints
         NSLayoutConstraint.activate([
             captionLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -111,6 +121,7 @@ class TweetBodyUIView: UIView {
             documentContainerView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         documentTopConstraint = documentContainerView.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 0)
+        documentHeightConstraint = documentContainerView.heightAnchor.constraint(equalToConstant: 0)
 
         // Tap gesture on content label
         let tap = UITapGestureRecognizer(target: self, action: #selector(bodyTapped))
@@ -136,9 +147,10 @@ class TweetBodyUIView: UIView {
         mediaHeightConstraint?.isActive = false
         captionTopConstraint?.isActive = false
         documentTopConstraint?.isActive = false
+        documentHeightConstraint?.isActive = false
 
-        // Remove old hosting controllers
-        removeMediaHosting()
+        // Clean up media grid and document hosting
+        mediaGridView.prepareForReuse()
         removeDocumentHosting()
 
         // --- Text content ---
@@ -159,7 +171,7 @@ class TweetBodyUIView: UIView {
         let hasMedia = !mediaAttachments.isEmpty
         let hasDocuments = !documentAttachments.isEmpty
 
-        // --- Media grid ---
+        // --- Media grid (Phase 3: pure UIKit) ---
         if hasMedia {
             let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, isEmbedded: isEmbedded)
 
@@ -167,7 +179,7 @@ class TweetBodyUIView: UIView {
             mediaHeightConstraint?.isActive = true
 
             if hasText {
-                mediaTopToContent?.constant = 8 // text bottom padding + media top padding
+                mediaTopToContent?.constant = 8
                 mediaTopToContent?.isActive = true
             } else {
                 mediaTopToSelf?.isActive = true
@@ -175,47 +187,15 @@ class TweetBodyUIView: UIView {
 
             mediaContainerView.isHidden = false
 
-            // Host SwiftUI MediaGridView (Phase 1 interim)
-            let mediaGridView = MediaGridView(
-                parentTweet: tweet,
+            // Configure pure UIKit media grid
+            mediaGridView.configure(
+                tweet: tweet,
                 attachments: mediaAttachments,
                 isEmbedded: isEmbedded,
-                cellTweetId: cellTweetId
+                cellTweetId: cellTweetId,
+                shouldLoadVideo: true,
+                parentViewController: parentViewController
             )
-            .environmentObject(HproseInstance.shared)
-
-            let hostingController = UIHostingController(rootView: AnyView(mediaGridView))
-            hostingController.view.backgroundColor = .clear
-            hostingController.view.insetsLayoutMarginsFromSafeArea = false
-            // Don't use sizingOptions — container has explicit height constraint;
-            // intrinsic size from SwiftUI can cause wrong sizing on first layout pass
-
-            parentViewController.addChild(hostingController)
-
-            // Set initial frame so SwiftUI content renders at the correct size immediately,
-            // preventing the first-render sizing mismatch where the video appears shorter
-            let containerWidth = mediaContainerView.bounds.width > 0
-                ? mediaContainerView.bounds.width
-                : UIScreen.main.bounds.width - 66 // fallback: screenW - cell padding(16) - leading(3) - avatar(42) - spacing(4) - trailing(1)
-            hostingController.view.frame = CGRect(x: 0, y: 0, width: containerWidth, height: mediaHeight)
-
-            mediaContainerView.addSubview(hostingController.view)
-            hostingController.didMove(toParent: parentViewController)
-
-            hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                hostingController.view.topAnchor.constraint(equalTo: mediaContainerView.topAnchor),
-                hostingController.view.leadingAnchor.constraint(equalTo: mediaContainerView.leadingAnchor),
-                hostingController.view.trailingAnchor.constraint(equalTo: mediaContainerView.trailingAnchor),
-                hostingController.view.bottomAnchor.constraint(equalTo: mediaContainerView.bottomAnchor),
-            ])
-
-            mediaHostingController = hostingController
-
-            // Force the hosting controller's SwiftUI content to lay out at the correct size
-            // before the table view measures the cell — prevents first-render sizing mismatch
-            mediaContainerView.setNeedsLayout()
-            mediaContainerView.layoutIfNeeded()
 
             // Caption for single video
             let caption = singleVideoCaption(tweet: tweet, attachments: mediaAttachments)
@@ -236,7 +216,6 @@ class TweetBodyUIView: UIView {
             captionLabel.isHidden = true
 
             if hasText {
-                // Old SwiftUI: text .padding(.bottom, 2) = 2pt gap at bottom of text-only body
                 mediaTopToContent?.constant = 2
                 mediaTopToContent?.isActive = true
             } else {
@@ -247,10 +226,10 @@ class TweetBodyUIView: UIView {
         // --- Documents ---
         if hasDocuments {
             documentContainerView.isHidden = false
+            documentHeightConstraint?.isActive = false  // Allow intrinsic sizing from content
             let topPadding: CGFloat = hasMedia ? 8 : (hasText ? 4 : 0)
 
             if captionLabel.isHidden {
-                // Connect to media container bottom
                 documentTopConstraint?.isActive = false
                 let constraint = documentContainerView.topAnchor.constraint(
                     equalTo: mediaContainerView.bottomAnchor, constant: topPadding)
@@ -261,7 +240,7 @@ class TweetBodyUIView: UIView {
                 documentTopConstraint?.isActive = true
             }
 
-            // Host SwiftUI DocumentAttachmentsView
+            // Host SwiftUI DocumentAttachmentsView (not in critical scroll path)
             let docView = DocumentAttachmentsView(
                 parentTweet: tweet,
                 documents: documentAttachments,
@@ -287,8 +266,8 @@ class TweetBodyUIView: UIView {
             documentHostingController = hostingController
         } else {
             documentContainerView.isHidden = true
+            documentHeightConstraint?.isActive = true  // Force zero height when no documents
 
-            // Connect bottom
             if captionLabel.isHidden == false {
                 documentTopConstraint?.constant = 0
                 documentTopConstraint?.isActive = true
@@ -308,17 +287,8 @@ class TweetBodyUIView: UIView {
         captionLabel.isHidden = true
         isCaptionVisible = false
         onTweetBodyTap = nil
-        removeMediaHosting()
+        mediaGridView.prepareForReuse()
         removeDocumentHosting()
-    }
-
-    private func removeMediaHosting() {
-        if let hc = mediaHostingController {
-            hc.willMove(toParent: nil)
-            hc.view.removeFromSuperview()
-            hc.removeFromParent()
-            mediaHostingController = nil
-        }
     }
 
     private func removeDocumentHosting() {

@@ -1344,6 +1344,11 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
+        // Forward media visibility to the cell
+        if let tweetCell = cell as? TweetTableViewCell {
+            tweetCell.tweetContentView.setMediaVisible(true)
+        }
+
         // Cache height ONLY if:
         // 1. Not already cached
         // 2. Cell has valid height
@@ -1363,8 +1368,15 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
+    override func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+        // Forward media invisibility to the cell
+        if let tweetCell = cell as? TweetTableViewCell {
+            tweetCell.tweetContentView.setMediaVisible(false)
+        }
+    }
+
     // MARK: - UIScrollViewDelegate
-    
+
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Track scroll direction for height caching strategy and toolbar hiding
         let currentOffset = scrollView.contentOffset.y
