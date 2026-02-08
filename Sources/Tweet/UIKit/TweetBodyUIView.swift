@@ -100,6 +100,8 @@ class TweetBodyUIView: UIView {
         mediaTopToContent = mediaContainerView.topAnchor.constraint(equalTo: contentLabel.bottomAnchor, constant: 8)
         mediaTopToSelf = mediaContainerView.topAnchor.constraint(equalTo: topAnchor, constant: 6)
         mediaHeightConstraint = mediaContainerView.heightAnchor.constraint(equalToConstant: 0)
+        // Priority 999: yields gracefully to UITableView's encapsulated layout height during initial sizing pass
+        mediaHeightConstraint?.priority = UILayoutPriority(999)
 
         // Media grid fills container
         NSLayoutConstraint.activate([
