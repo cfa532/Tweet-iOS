@@ -21,15 +21,6 @@ class TweetBodyUIView: UIView {
         return label
     }()
 
-    // Pure UIKit media grid (Phase 3)
-    let mediaGridView = MediaGridUIView()
-    private var mediaContainerView: UIView = {
-        let v = UIView()
-        v.clipsToBounds = true
-        v.layer.cornerRadius = 8
-        return v
-    }()
-
     // Video caption label (for single-video tweets with title)
     private let captionLabel: UILabel = {
         let label = UILabel()
@@ -38,6 +29,15 @@ class TweetBodyUIView: UIView {
         label.numberOfLines = 1
         label.lineBreakMode = .byTruncatingTail
         return label
+    }()
+
+    // Pure UIKit media grid (Phase 3)
+    let mediaGridView = MediaGridUIView()
+    private var mediaContainerView: UIView = {
+        let v = UIView()
+        v.clipsToBounds = true
+        v.layer.cornerRadius = 8
+        return v
     }()
 
     // Document attachments hosting (keeps SwiftUI — not in critical path)
@@ -49,7 +49,9 @@ class TweetBodyUIView: UIView {
     private var mediaTopToSelf: NSLayoutConstraint?
     private var mediaHeightConstraint: NSLayoutConstraint?
     private var captionTopConstraint: NSLayoutConstraint?
-    private var documentTopConstraint: NSLayoutConstraint?
+    // Two document-top constraints: toggle based on caption visibility (prevents reuse bug)
+    private var documentTopToCaption: NSLayoutConstraint?
+    private var documentTopToMedia: NSLayoutConstraint?
     private var documentHeightConstraint: NSLayoutConstraint?
 
     var onTweetBodyTap: (() -> Void)?
@@ -120,7 +122,8 @@ class TweetBodyUIView: UIView {
             documentContainerView.trailingAnchor.constraint(equalTo: trailingAnchor),
             documentContainerView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        documentTopConstraint = documentContainerView.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 0)
+        documentTopToCaption = documentContainerView.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 0)
+        documentTopToMedia = documentContainerView.topAnchor.constraint(equalTo: mediaContainerView.bottomAnchor, constant: 0)
         documentHeightConstraint = documentContainerView.heightAnchor.constraint(equalToConstant: 0)
 
         // Tap gesture on content label
@@ -146,7 +149,8 @@ class TweetBodyUIView: UIView {
         mediaTopToSelf?.isActive = false
         mediaHeightConstraint?.isActive = false
         captionTopConstraint?.isActive = false
-        documentTopConstraint?.isActive = false
+        documentTopToCaption?.isActive = false
+        documentTopToMedia?.isActive = false
         documentHeightConstraint?.isActive = false
 
         // Clean up media grid and document hosting
@@ -224,21 +228,19 @@ class TweetBodyUIView: UIView {
         }
 
         // --- Documents ---
+        // Choose correct document-top anchor based on caption visibility
+        if captionLabel.isHidden {
+            // No caption: document anchors to media container bottom
+            documentTopToMedia?.constant = hasDocuments ? (hasMedia ? 8 : (hasText ? 4 : 0)) : 0
+            documentTopToMedia?.isActive = true
+        } else {
+            // Caption visible: document anchors to caption label bottom
+            documentTopToCaption?.constant = hasDocuments ? (hasMedia ? 8 : (hasText ? 4 : 0)) : 0
+            documentTopToCaption?.isActive = true
+        }
+
         if hasDocuments {
             documentContainerView.isHidden = false
-            documentHeightConstraint?.isActive = false  // Allow intrinsic sizing from content
-            let topPadding: CGFloat = hasMedia ? 8 : (hasText ? 4 : 0)
-
-            if captionLabel.isHidden {
-                documentTopConstraint?.isActive = false
-                let constraint = documentContainerView.topAnchor.constraint(
-                    equalTo: mediaContainerView.bottomAnchor, constant: topPadding)
-                constraint.isActive = true
-                documentTopConstraint = constraint
-            } else {
-                documentTopConstraint?.constant = topPadding
-                documentTopConstraint?.isActive = true
-            }
 
             // Host SwiftUI DocumentAttachmentsView (not in critical scroll path)
             let docView = DocumentAttachmentsView(
@@ -267,16 +269,6 @@ class TweetBodyUIView: UIView {
         } else {
             documentContainerView.isHidden = true
             documentHeightConstraint?.isActive = true  // Force zero height when no documents
-
-            if captionLabel.isHidden == false {
-                documentTopConstraint?.constant = 0
-                documentTopConstraint?.isActive = true
-            } else {
-                let constraint = documentContainerView.topAnchor.constraint(
-                    equalTo: mediaContainerView.bottomAnchor, constant: 0)
-                constraint.isActive = true
-                documentTopConstraint = constraint
-            }
         }
     }
 

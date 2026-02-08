@@ -425,9 +425,9 @@ class TweetCellContentView: UIView {
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
     }
 
-    /// Adjust body→action spacing: more room when video caption is shown, tighter otherwise
+    /// Adjust body→action spacing
     private func updateBodyToActionSpacing() {
-        let spacing: CGFloat = bodyView.isCaptionVisible ? 20 : 10
+        let spacing: CGFloat = bodyView.isCaptionVisible ? 4 : 10
         contentColumn.setCustomSpacing(spacing, after: bodyView)
     }
 

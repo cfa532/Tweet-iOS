@@ -1247,7 +1247,7 @@ class TweetTableViewController: UITableViewController {
         height += bodyHeight
 
         // Spacing after body → action bar (matches updateBodyToActionSpacing)
-        height += hasCaptionLabel ? 20 : 10
+        height += hasCaptionLabel ? 4 : 10
 
         // Embedded/quoted tweet (only for quoted tweets, not pure retweets)
         if isRetweet && hasOwnContent {
