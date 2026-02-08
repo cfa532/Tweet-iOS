@@ -189,7 +189,7 @@ struct LoginView: View {
                 // Force fetch from server with empty baseUrl to ensure fresh data
                 // This prevents the issue where cached user with nil username is returned
                 print("DEBUG: [Login] Calling fetchUser with empty baseUrl to force IP resolution")
-                if let user = try await hproseInstance.fetchUser(userId, baseUrl: "") {
+                if let user = try await hproseInstance.fetchUser(userId, baseUrl: "", v4Only: true) {
                     print("DEBUG: [Login] fetchUser returned successfully, user.baseUrl: \(user.baseUrl?.absoluteString ?? "nil")")
                     if (user.username == nil) {
                         print("DEBUG: [Login] Cannot find user - username: \(username), userid: \(userId)")

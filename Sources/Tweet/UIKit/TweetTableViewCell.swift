@@ -17,6 +17,10 @@ class TweetTableViewCell: UITableViewCell {
     private var lastNotifiedHeight: CGFloat = 0
     var onHeightChanged: (() -> Void)?
 
+    // Padding constraints (updated per-configure to match list-level padding)
+    private var leadingConstraint: NSLayoutConstraint!
+    private var trailingConstraint: NSLayoutConstraint!
+
     /// Publicly accessible tweet ID for video orchestration
     var tweetId: String? {
         return currentTweetId
@@ -49,10 +53,13 @@ class TweetTableViewCell: UITableViewCell {
         tweetContentView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(tweetContentView)
 
+        leadingConstraint = tweetContentView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
+        trailingConstraint = tweetContentView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
+
         NSLayoutConstraint.activate([
             tweetContentView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            tweetContentView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            tweetContentView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            leadingConstraint,
+            trailingConstraint,
             tweetContentView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
     }
@@ -63,12 +70,18 @@ class TweetTableViewCell: UITableViewCell {
         isPinned: Bool,
         isLastItem: Bool,
         parentViewController: UIViewController,
+        leadingPadding: CGFloat,
+        trailingPadding: CGFloat,
         onAvatarTap: ((User) -> Void)?,
         onTweetTap: ((Tweet) -> Void)?,
         onShowLogin: (() -> Void)?,
         onShowToast: ((String, Bool) -> Void)?
     ) {
         currentTweetId = tweet.mid
+
+        // Apply list-level padding to the cell content
+        leadingConstraint.constant = leadingPadding
+        trailingConstraint.constant = -trailingPadding
 
         tweetContentView.onAvatarTap = onAvatarTap
         tweetContentView.onTweetTap = onTweetTap

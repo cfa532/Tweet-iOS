@@ -24,7 +24,7 @@ class TweetCellContentView: UIView {
         return v
     }()
 
-    // Retweet banner ("Forwarded by...")
+    // Retweet banner ("Forwarded by...") — sits ABOVE the mainStack
     private let retweetBanner: UIView = {
         let v = UIView()
         v.isHidden = true
@@ -60,9 +60,19 @@ class TweetCellContentView: UIView {
         return sv
     }()
 
+    // Wrapper for embedded tweet: provides -4pt leading offset to match old SwiftUI .padding(.leading, -4)
+    private let embeddedTweetWrapper: UIView = {
+        let v = UIView()
+        v.clipsToBounds = false
+        return v
+    }()
+
     // MARK: - Constraints managed dynamically
-    private var embeddedTweetHeightConstraint: NSLayoutConstraint?
+    private var embeddedWrapperHeightConstraint: NSLayoutConstraint?
     private var retweetBannerHeightConstraint: NSLayoutConstraint?
+    // Mutually exclusive: mainStack top when banner is hidden vs visible
+    private var mainStackTopDefault: NSLayoutConstraint!
+    private var mainStackTopAfterBanner: NSLayoutConstraint!
 
     // MARK: - State
     private var cancellables = Set<AnyCancellable>()
@@ -92,47 +102,70 @@ class TweetCellContentView: UIView {
     private func setupViews() {
         backgroundColor = .systemBackground
 
-        // Retweet banner setup
+        // Retweet banner setup — positioned above mainStack, not inside contentColumn
         retweetBanner.addSubview(retweetIcon)
         retweetBanner.addSubview(retweetLabel)
         retweetIcon.translatesAutoresizingMaskIntoConstraints = false
         retweetLabel.translatesAutoresizingMaskIntoConstraints = false
+        // Label text aligns with content column leading; icon extends left into avatar area
         NSLayoutConstraint.activate([
-            retweetIcon.leadingAnchor.constraint(equalTo: retweetBanner.leadingAnchor),
-            retweetIcon.centerYAnchor.constraint(equalTo: retweetBanner.centerYAnchor),
-            retweetIcon.widthAnchor.constraint(equalToConstant: 14),
-            retweetLabel.leadingAnchor.constraint(equalTo: retweetIcon.trailingAnchor, constant: 4),
+            retweetLabel.leadingAnchor.constraint(equalTo: retweetBanner.leadingAnchor),
             retweetLabel.centerYAnchor.constraint(equalTo: retweetBanner.centerYAnchor),
             retweetLabel.trailingAnchor.constraint(lessThanOrEqualTo: retweetBanner.trailingAnchor),
+            retweetIcon.trailingAnchor.constraint(equalTo: retweetLabel.leadingAnchor, constant: -4),
+            retweetIcon.centerYAnchor.constraint(equalTo: retweetBanner.centerYAnchor),
+            retweetIcon.widthAnchor.constraint(equalToConstant: 14),
         ])
         retweetBannerHeightConstraint = retweetBanner.heightAnchor.constraint(equalToConstant: 0)
         retweetBannerHeightConstraint?.isActive = true
 
-        // Build content column: [retweetBanner, header, body, embeddedTweet, actionBar]
-        contentColumn.addArrangedSubview(retweetBanner)
+        // Embedded tweet wrapper: offsets embedded tweet -4pt leading to match old SwiftUI .padding(.leading, -4)
+        embeddedTweetWrapper.addSubview(embeddedTweetView)
+        embeddedTweetView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            embeddedTweetView.topAnchor.constraint(equalTo: embeddedTweetWrapper.topAnchor),
+            embeddedTweetView.bottomAnchor.constraint(equalTo: embeddedTweetWrapper.bottomAnchor),
+            embeddedTweetView.leadingAnchor.constraint(equalTo: embeddedTweetWrapper.leadingAnchor, constant: -4),
+            embeddedTweetView.trailingAnchor.constraint(equalTo: embeddedTweetWrapper.trailingAnchor),
+        ])
+
+        // Build content column: [header, body, embeddedWrapper, actionBar]
+        // Note: retweetBanner is NOT in contentColumn — it's above mainStack
         contentColumn.addArrangedSubview(headerView)
         contentColumn.addArrangedSubview(bodyView)
-        contentColumn.addArrangedSubview(embeddedTweetView)
+        contentColumn.addArrangedSubview(embeddedTweetWrapper)
         contentColumn.addArrangedSubview(actionBar)
 
-        contentColumn.setCustomSpacing(2, after: retweetBanner)
         contentColumn.setCustomSpacing(0, after: headerView)
-        contentColumn.setCustomSpacing(8, after: bodyView)
-        contentColumn.setCustomSpacing(8, after: embeddedTweetView)
+        contentColumn.setCustomSpacing(12, after: bodyView)
+        contentColumn.setCustomSpacing(20, after: embeddedTweetWrapper)
 
         // Main stack: [avatar | contentColumn]
         mainStack.addArrangedSubview(avatarView)
         mainStack.addArrangedSubview(contentColumn)
 
+        addSubview(retweetBanner)
         addSubview(mainStack)
         addSubview(separatorView)
 
+        retweetBanner.translatesAutoresizingMaskIntoConstraints = false
         mainStack.translatesAutoresizingMaskIntoConstraints = false
         separatorView.translatesAutoresizingMaskIntoConstraints = false
         avatarView.translatesAutoresizingMaskIntoConstraints = false
 
+        // Retweet banner: aligned with content column (avatar 42 + spacing 4 from mainStack leading)
         NSLayoutConstraint.activate([
-            mainStack.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            retweetBanner.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            retweetBanner.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 49), // 3 + 42 + 4
+            retweetBanner.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+        ])
+
+        // MainStack top: two mutually exclusive constraints
+        mainStackTopDefault = mainStack.topAnchor.constraint(equalTo: topAnchor, constant: 16)
+        mainStackTopAfterBanner = mainStack.topAnchor.constraint(equalTo: retweetBanner.bottomAnchor, constant: 2)
+        mainStackTopDefault.isActive = true
+
+        NSLayoutConstraint.activate([
             mainStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
             mainStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             mainStack.bottomAnchor.constraint(equalTo: separatorView.topAnchor, constant: -16),
@@ -146,10 +179,26 @@ class TweetCellContentView: UIView {
             separatorView.heightAnchor.constraint(equalToConstant: 1),
         ])
 
-        // Embedded tweet starts hidden
-        embeddedTweetView.isHidden = true
-        embeddedTweetHeightConstraint = embeddedTweetView.heightAnchor.constraint(equalToConstant: 0)
+        // Embedded tweet wrapper starts hidden
+        embeddedTweetWrapper.isHidden = true
+        embeddedWrapperHeightConstraint = embeddedTweetWrapper.heightAnchor.constraint(equalToConstant: 0)
         // Don't activate - only activate when hidden
+    }
+
+    /// Show or hide retweet banner and switch mainStack top constraint accordingly
+    private func showRetweetBanner(_ show: Bool) {
+        retweetBanner.isHidden = !show
+        if show {
+            retweetBannerHeightConstraint?.constant = 18
+            retweetBannerHeightConstraint?.isActive = true
+            mainStackTopDefault.isActive = false
+            mainStackTopAfterBanner.isActive = true
+        } else {
+            retweetBannerHeightConstraint?.constant = 0
+            retweetBannerHeightConstraint?.isActive = true
+            mainStackTopAfterBanner.isActive = false
+            mainStackTopDefault.isActive = true
+        }
     }
 
     // MARK: - Configure
@@ -181,18 +230,25 @@ class TweetCellContentView: UIView {
 
         // Load author if needed (background task)
         loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance)
+
+        // Force layout on next RunLoop after SwiftUI hosting controllers have rendered.
+        // UIHostingController renders SwiftUI content asynchronously (needs one RunLoop pass),
+        // but UITableView measures cells synchronously during cellForRowAt.
+        // This deferred layout ensures the cell settles to its correct size.
+        DispatchQueue.main.async { [weak self] in
+            self?.setNeedsLayout()
+            self?.layoutIfNeeded()
+        }
     }
 
     private func configureAsRegularTweet(tweet: Tweet, hproseInstance: HproseInstance,
                                           isPinned: Bool, parentViewController: UIViewController) {
         // Hide retweet banner
-        retweetBanner.isHidden = true
-        retweetBannerHeightConstraint?.constant = 0
-        retweetBannerHeightConstraint?.isActive = true
+        showRetweetBanner(false)
 
-        // Hide embedded tweet
-        embeddedTweetView.isHidden = true
-        embeddedTweetHeightConstraint?.isActive = true
+        // Hide embedded tweet wrapper
+        embeddedTweetWrapper.isHidden = true
+        embeddedWrapperHeightConstraint?.isActive = true
 
         // Avatar
         if let author = tweet.author {
@@ -225,6 +281,7 @@ class TweetCellContentView: UIView {
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
                            parentViewController: parentViewController)
         bodyView.onTweetBodyTap = { [weak self] in self?.onTweetTap?(tweet) }
+        updateBodyToActionSpacing()
 
         // Action bar
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
@@ -265,10 +322,8 @@ class TweetCellContentView: UIView {
     private func configurePureRetweet(tweet: Tweet, originalTweet: Tweet,
                                        hproseInstance: HproseInstance, isPinned: Bool,
                                        parentViewController: UIViewController) {
-        // Show retweet banner
-        retweetBanner.isHidden = false
-        retweetBannerHeightConstraint?.constant = 18
-        retweetBannerHeightConstraint?.isActive = true
+        // Show retweet banner above the tweet
+        showRetweetBanner(true)
 
         if tweet.author?.mid == hproseInstance.appUser.mid {
             retweetLabel.text = NSLocalizedString("Forwarded by you", comment: "")
@@ -277,9 +332,9 @@ class TweetCellContentView: UIView {
             retweetLabel.text = String(format: NSLocalizedString("Forwarded by %@", comment: ""), name)
         }
 
-        // Hide embedded tweet (content shown directly)
-        embeddedTweetView.isHidden = true
-        embeddedTweetHeightConstraint?.isActive = true
+        // Hide embedded tweet wrapper (content shown directly)
+        embeddedTweetWrapper.isHidden = true
+        embeddedWrapperHeightConstraint?.isActive = true
 
         // Avatar from original tweet's author
         if let author = originalTweet.author {
@@ -299,6 +354,7 @@ class TweetCellContentView: UIView {
         bodyView.configure(tweet: originalTweet, isEmbedded: false, cellTweetId: tweet.mid,
                            parentViewController: parentViewController)
         bodyView.onTweetBodyTap = { [weak self] in self?.onTweetTap?(originalTweet) }
+        updateBodyToActionSpacing()
 
         // Action bar on original tweet
         actionBar.configure(tweet: originalTweet, hproseInstance: hproseInstance)
@@ -313,13 +369,11 @@ class TweetCellContentView: UIView {
                                        hproseInstance: HproseInstance, isPinned: Bool,
                                        parentViewController: UIViewController) {
         // Hide retweet banner
-        retweetBanner.isHidden = true
-        retweetBannerHeightConstraint?.constant = 0
-        retweetBannerHeightConstraint?.isActive = true
+        showRetweetBanner(false)
 
-        // Show embedded tweet
-        embeddedTweetView.isHidden = false
-        embeddedTweetHeightConstraint?.isActive = false
+        // Show embedded tweet wrapper
+        embeddedTweetWrapper.isHidden = false
+        embeddedWrapperHeightConstraint?.isActive = false
 
         // Avatar from quoting tweet's author
         if let author = tweet.author {
@@ -350,6 +404,7 @@ class TweetCellContentView: UIView {
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
                            parentViewController: parentViewController)
         bodyView.onTweetBodyTap = { [weak self] in self?.onTweetTap?(tweet) }
+        updateBodyToActionSpacing()
 
         // Embedded tweet
         if let embeddedTweet {
@@ -372,6 +427,12 @@ class TweetCellContentView: UIView {
         actionBar.onCommentTap = { [weak self] in self?.onTweetTap?(tweet) }
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
+    }
+
+    /// Adjust body→action spacing: more room when video caption is shown, tighter otherwise
+    private func updateBodyToActionSpacing() {
+        let spacing: CGFloat = bodyView.isCaptionVisible ? 20 : 10
+        contentColumn.setCustomSpacing(spacing, after: bodyView)
     }
 
     // MARK: - Author Loading
@@ -435,12 +496,10 @@ class TweetCellContentView: UIView {
         actionBar.prepareForReuse()
         embeddedTweetView.prepareForReuse()
 
-        retweetBanner.isHidden = true
-        retweetBannerHeightConstraint?.constant = 0
-        retweetBannerHeightConstraint?.isActive = true
+        showRetweetBanner(false)
 
-        embeddedTweetView.isHidden = true
-        embeddedTweetHeightConstraint?.isActive = true
+        embeddedTweetWrapper.isHidden = true
+        embeddedWrapperHeightConstraint?.isActive = true
 
         separatorView.isHidden = false
         onAvatarTap = nil

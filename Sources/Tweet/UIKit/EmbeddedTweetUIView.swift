@@ -75,6 +75,11 @@ class EmbeddedTweetUIView: UIView {
         return sv
     }()
 
+    // Mutually exclusive constraint groups — only one set active at a time
+    private var contentStackBottomConstraint: NSLayoutConstraint!
+    private var placeholderBottomConstraint: NSLayoutConstraint!
+    private var placeholderHeightConstraint: NSLayoutConstraint!
+
     private var cancellables = Set<AnyCancellable>()
     private var loadTask: Task<Void, Never>?
     private var currentTweetId: String?
@@ -110,11 +115,11 @@ class EmbeddedTweetUIView: UIView {
         placeholderView.translatesAutoresizingMaskIntoConstraints = false
         avatarView.translatesAutoresizingMaskIntoConstraints = false
 
+        // Content stack constraints (always active except bottom)
         NSLayoutConstraint.activate([
             contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
 
             avatarView.widthAnchor.constraint(equalToConstant: 40),
             avatarView.heightAnchor.constraint(equalToConstant: 40),
@@ -122,9 +127,22 @@ class EmbeddedTweetUIView: UIView {
             placeholderView.topAnchor.constraint(equalTo: topAnchor),
             placeholderView.leadingAnchor.constraint(equalTo: leadingAnchor),
             placeholderView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            placeholderView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            placeholderView.heightAnchor.constraint(equalToConstant: 60),
         ])
+
+        // Mutually exclusive constraints — only one group active at a time
+        contentStackBottomConstraint = contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        placeholderBottomConstraint = placeholderView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        placeholderHeightConstraint = placeholderView.heightAnchor.constraint(equalToConstant: 60)
+        // Lower priority so parent's height=0 constraint wins when hidden in stack view
+        placeholderHeightConstraint.priority = .defaultHigh
+        placeholderBottomConstraint.priority = .defaultHigh
+
+        // Start with placeholder active (content hidden)
+        contentStack.isHidden = true
+        placeholderView.isHidden = false
+        contentStackBottomConstraint.isActive = false
+        placeholderBottomConstraint.isActive = true
+        placeholderHeightConstraint.isActive = true
 
         headerView.menuButton(visible: false)
 
@@ -150,9 +168,12 @@ class EmbeddedTweetUIView: UIView {
         if currentTweetId == tweet.mid { return }
         currentTweetId = tweet.mid
 
-        // Show content, hide placeholder
+        // Show content, hide placeholder — swap constraint groups
         contentStack.isHidden = false
         placeholderView.isHidden = true
+        placeholderBottomConstraint.isActive = false
+        placeholderHeightConstraint.isActive = false
+        contentStackBottomConstraint.isActive = true
 
         // Configure subviews
         if let author = tweet.author {
@@ -165,12 +186,19 @@ class EmbeddedTweetUIView: UIView {
 
         // Mark as accessed for cache management
         TweetCacheManager.shared.markTweetAccessed(tweet.mid)
+
+        // Invalidate layout so parent stack view and table view recalculate height
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
     }
 
     /// Show loading placeholder while embedded tweet is being fetched
     func showPlaceholder() {
         contentStack.isHidden = true
         placeholderView.isHidden = false
+        contentStackBottomConstraint.isActive = false
+        placeholderBottomConstraint.isActive = true
+        placeholderHeightConstraint.isActive = true
         loadedTweet = nil
     }
 
@@ -248,8 +276,12 @@ class EmbeddedTweetUIView: UIView {
         avatarView.prepareForReuse()
         headerView.prepareForReuse()
         bodyView.prepareForReuse()
+        // Reset to placeholder state — swap constraint groups
         contentStack.isHidden = true
         placeholderView.isHidden = false
+        contentStackBottomConstraint.isActive = false
+        placeholderBottomConstraint.isActive = true
+        placeholderHeightConstraint.isActive = true
     }
 
     deinit {

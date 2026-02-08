@@ -1173,7 +1173,8 @@ final class HproseInstance: ObservableObject {
         baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? "",
         maxRetries: Int = 2,
         forceRefresh: Bool = false,
-        skipRetryAndBlacklist: Bool = false
+        skipRetryAndBlacklist: Bool = false,
+        v4Only: Bool = false
     ) async throws -> User? {
         // Guard against fetching the guest user - GUEST_ID should never make network calls
         // as it represents an unauthenticated state
@@ -1272,7 +1273,7 @@ final class HproseInstance: ObservableObject {
             
             // Perform the actual user data fetch with retry logic and error handling
             // This will handle IP resolution if baseUrl was empty
-            return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser")
+            return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser", v4Only: v4Only)
         } catch {
             // Catch and log any exceptions during the fetch process
             print("DEBUG: [fetchUser] Exception in fetchUser: userId: \(userId), error: \(error)")
@@ -1337,7 +1338,7 @@ final class HproseInstance: ObservableObject {
     /// Checks if two normalized IPs represent a redirect loop
     /// Performs the complete user update flow with retry logic
     /// This is the main workhorse method that handles retries and redirects
-    private func performUserUpdate(_ user: User, maxRetries: Int, skipRetryAndBlacklist: Bool, logPrefix: String) async throws -> User {
+    private func performUserUpdate(_ user: User, maxRetries: Int, skipRetryAndBlacklist: Bool, logPrefix: String, v4Only: Bool = false) async throws -> User {
         let originalBaseUrl = user.baseUrl?.absoluteString
         let hasExpired = await user.hasExpired()
         let userHasBaseUrl = user.baseUrl != nil && !(user.baseUrl?.absoluteString.isEmpty ?? true)
@@ -1357,7 +1358,8 @@ final class HproseInstance: ObservableObject {
                     forceFreshIP: forceFreshIP,
                     userHasBaseUrl: userHasBaseUrl,
                     hasExpired: hasExpired,
-                    originalBaseUrl: originalBaseUrl
+                    originalBaseUrl: originalBaseUrl,
+                    v4Only: v4Only
                 )
                 
                 // Prepare server request
@@ -1514,7 +1516,8 @@ final class HproseInstance: ObservableObject {
         forceFreshIP: Bool,
         userHasBaseUrl: Bool,
         hasExpired: Bool,
-        originalBaseUrl: String?
+        originalBaseUrl: String?,
+        v4Only: Bool = false
     ) async throws {
         // First attempt logic with NodePool integration
         // On first attempt, if user has baseUrl or node in pool, trust it and use directly
@@ -1550,7 +1553,7 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Resolving provider IP for userId: \(user.mid), reason: \(reason)")
         
         do {
-            guard let providerIP = try await getProviderIP(user.mid) else {
+            guard let providerIP = try await getProviderIP(user.mid, v4Only: v4Only) else {
                 // getProviderIP returned nil (not exception) - user not found or no IPs available
                 print("WARNING: [resolveAndUpdateBaseUrl] getProviderIP returned nil for userId: \(user.mid) - user not found or no IPs available")
                 // Continue with current baseUrl - calling code will handle appropriately

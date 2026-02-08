@@ -13,10 +13,10 @@ class TweetActionBarView: UIView {
 
     // MARK: - Action Buttons
 
-    private let commentButton = ActionButtonView(icon: "bubble.left")
-    private let retweetButton = ActionButtonView(icon: "arrow.2.squarepath")
-    private let likeButton = ActionButtonView(icon: "heart")
-    private let bookmarkButton = ActionButtonView(icon: "bookmark")
+    private let commentButton = ActionButtonView(icon: "bubble.left", pointSize: 16)
+    private let retweetButton = ActionButtonView(icon: "arrow.2.squarepath", pointSize: 18)
+    private let likeButton = ActionButtonView(icon: "heart", pointSize: 18)
+    private let bookmarkButton = ActionButtonView(icon: "bookmark", pointSize: 18)
     private let shareButton: UIButton = {
         let btn = UIButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 14)
@@ -28,15 +28,6 @@ class TweetActionBarView: UIView {
         let spinner = UIActivityIndicatorView(style: .medium)
         spinner.hidesWhenStopped = true
         return spinner
-    }()
-
-    private let stackView: UIStackView = {
-        let sv = UIStackView()
-        sv.axis = .horizontal
-        sv.distribution = .fill
-        sv.alignment = .center
-        sv.spacing = 0
-        return sv
     }()
 
     // MARK: - State
@@ -76,20 +67,13 @@ class TweetActionBarView: UIView {
         likeButton.tintColor = tintColor
         bookmarkButton.tintColor = tintColor
 
-        let spacer1 = UIView()
-        let spacer2 = UIView()
-        let spacer3 = UIView()
-        let spacer4 = UIView()
+        // Left group: first 4 buttons equally distributed
+        let leftStack = UIStackView(arrangedSubviews: [commentButton, retweetButton, likeButton, bookmarkButton])
+        leftStack.axis = .horizontal
+        leftStack.distribution = .fillEqually
+        leftStack.alignment = .center
 
-        stackView.addArrangedSubview(commentButton)
-        stackView.addArrangedSubview(spacer1)
-        stackView.addArrangedSubview(retweetButton)
-        stackView.addArrangedSubview(spacer2)
-        stackView.addArrangedSubview(likeButton)
-        stackView.addArrangedSubview(spacer3)
-        stackView.addArrangedSubview(bookmarkButton)
-        stackView.addArrangedSubview(spacer4)
-
+        // Share button container (alone at right)
         let shareContainer = UIView()
         shareContainer.addSubview(shareButton)
         shareContainer.addSubview(shareSpinner)
@@ -100,26 +84,26 @@ class TweetActionBarView: UIView {
             shareButton.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor),
             shareSpinner.centerYAnchor.constraint(equalTo: shareContainer.centerYAnchor),
             shareSpinner.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor),
-            shareContainer.widthAnchor.constraint(equalToConstant: 30),
         ])
-        stackView.addArrangedSubview(shareContainer)
 
-        // Equal spacers
-        for spacer in [spacer1, spacer2, spacer3, spacer4] {
-            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        }
-        spacer1.widthAnchor.constraint(equalTo: spacer2.widthAnchor).isActive = true
-        spacer2.widthAnchor.constraint(equalTo: spacer3.widthAnchor).isActive = true
-        spacer3.widthAnchor.constraint(equalTo: spacer4.widthAnchor).isActive = true
+        addSubview(leftStack)
+        addSubview(shareContainer)
 
-        addSubview(stackView)
-        stackView.translatesAutoresizingMaskIntoConstraints = false
+        leftStack.translatesAutoresizingMaskIntoConstraints = false
+        shareContainer.translatesAutoresizingMaskIntoConstraints = false
+
         NSLayoutConstraint.activate([
-            stackView.topAnchor.constraint(equalTo: topAnchor),
-            stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stackView.heightAnchor.constraint(equalToConstant: 30),
+            leftStack.topAnchor.constraint(equalTo: topAnchor),
+            leftStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            leftStack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            leftStack.trailingAnchor.constraint(equalTo: shareContainer.leadingAnchor),
+
+            shareContainer.topAnchor.constraint(equalTo: topAnchor),
+            shareContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            shareContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
+            shareContainer.widthAnchor.constraint(equalToConstant: 30),
+
+            heightAnchor.constraint(equalToConstant: 30),
         ])
 
         // Button actions
@@ -461,13 +445,12 @@ private class ActionButtonView: UIView {
     private let iconView: UIImageView = {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFit
-        iv.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 14)
         return iv
     }()
 
     private let countLabel: UILabel = {
         let label = UILabel()
-        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        label.font = .monospacedDigitSystemFont(ofSize: 14, weight: .regular)
         label.textColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
         return label
     }()
@@ -480,8 +463,10 @@ private class ActionButtonView: UIView {
         }
     }
 
-    init(icon: String) {
+    init(icon: String, pointSize: CGFloat = 16) {
         super.init(frame: .zero)
+        let config = UIImage.SymbolConfiguration(pointSize: pointSize)
+        iconView.preferredSymbolConfiguration = config
         iconView.image = UIImage(systemName: icon)
         setupViews()
     }
@@ -503,12 +488,12 @@ private class ActionButtonView: UIView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            iconView.widthAnchor.constraint(equalToConstant: 20),
-            countLabel.widthAnchor.constraint(equalToConstant: 28),
+            iconView.widthAnchor.constraint(equalToConstant: 22),
+            countLabel.widthAnchor.constraint(equalToConstant: 32),
         ])
 
         // Ensure minimum width
-        widthAnchor.constraint(greaterThanOrEqualToConstant: 52).isActive = true
+        widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
         addGestureRecognizer(tap)
@@ -537,6 +522,6 @@ private class ActionButtonView: UIView {
     }
 
     func setIcon(_ systemName: String) {
-        iconView.image = UIImage(systemName: systemName)
+        iconView.image = UIImage(systemName: systemName, withConfiguration: iconView.preferredSymbolConfiguration)
     }
 }

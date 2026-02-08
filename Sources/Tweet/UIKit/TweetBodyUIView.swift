@@ -55,6 +55,8 @@ class TweetBodyUIView: UIView {
     private var documentTopConstraint: NSLayoutConstraint?
 
     var onTweetBodyTap: (() -> Void)?
+    /// Whether the video caption label is currently visible (for single-video tweets with title)
+    private(set) var isCaptionVisible: Bool = false
     private var currentTweetId: String?
     private weak var parentViewController: UIViewController?
 
@@ -85,13 +87,14 @@ class TweetBodyUIView: UIView {
             contentLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
 
-        // Media container constraints
+        // Media container constraints (1pt right padding for media grid)
         NSLayoutConstraint.activate([
             mediaContainerView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            mediaContainerView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            mediaContainerView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
         ])
-        mediaTopToContent = mediaContainerView.topAnchor.constraint(equalTo: contentLabel.bottomAnchor, constant: 4)
-        mediaTopToSelf = mediaContainerView.topAnchor.constraint(equalTo: topAnchor)
+        // text .padding(.bottom, 2) + media .padding(.top, 6) = 8pt gap
+        mediaTopToContent = mediaContainerView.topAnchor.constraint(equalTo: contentLabel.bottomAnchor, constant: 8)
+        mediaTopToSelf = mediaContainerView.topAnchor.constraint(equalTo: topAnchor, constant: 6)
         mediaHeightConstraint = mediaContainerView.heightAnchor.constraint(equalToConstant: 0)
 
         // Caption label constraints
@@ -164,6 +167,7 @@ class TweetBodyUIView: UIView {
             mediaHeightConstraint?.isActive = true
 
             if hasText {
+                mediaTopToContent?.constant = 8 // text bottom padding + media top padding
                 mediaTopToContent?.isActive = true
             } else {
                 mediaTopToSelf?.isActive = true
@@ -183,9 +187,18 @@ class TweetBodyUIView: UIView {
             let hostingController = UIHostingController(rootView: AnyView(mediaGridView))
             hostingController.view.backgroundColor = .clear
             hostingController.view.insetsLayoutMarginsFromSafeArea = false
-            hostingController.sizingOptions = [.intrinsicContentSize]
+            // Don't use sizingOptions — container has explicit height constraint;
+            // intrinsic size from SwiftUI can cause wrong sizing on first layout pass
 
             parentViewController.addChild(hostingController)
+
+            // Set initial frame so SwiftUI content renders at the correct size immediately,
+            // preventing the first-render sizing mismatch where the video appears shorter
+            let containerWidth = mediaContainerView.bounds.width > 0
+                ? mediaContainerView.bounds.width
+                : UIScreen.main.bounds.width - 66 // fallback: screenW - cell padding(16) - leading(3) - avatar(42) - spacing(4) - trailing(1)
+            hostingController.view.frame = CGRect(x: 0, y: 0, width: containerWidth, height: mediaHeight)
+
             mediaContainerView.addSubview(hostingController.view)
             hostingController.didMove(toParent: parentViewController)
 
@@ -199,15 +212,22 @@ class TweetBodyUIView: UIView {
 
             mediaHostingController = hostingController
 
+            // Force the hosting controller's SwiftUI content to lay out at the correct size
+            // before the table view measures the cell — prevents first-render sizing mismatch
+            mediaContainerView.setNeedsLayout()
+            mediaContainerView.layoutIfNeeded()
+
             // Caption for single video
             let caption = singleVideoCaption(tweet: tweet, attachments: mediaAttachments)
             if let caption {
                 captionLabel.text = caption
                 captionLabel.isHidden = false
                 captionTopConstraint?.isActive = true
+                isCaptionVisible = true
             } else {
                 captionLabel.isHidden = true
                 captionLabel.text = nil
+                isCaptionVisible = false
             }
         } else {
             mediaContainerView.isHidden = true
@@ -216,7 +236,8 @@ class TweetBodyUIView: UIView {
             captionLabel.isHidden = true
 
             if hasText {
-                mediaTopToContent?.constant = 0
+                // Old SwiftUI: text .padding(.bottom, 2) = 2pt gap at bottom of text-only body
+                mediaTopToContent?.constant = 2
                 mediaTopToContent?.isActive = true
             } else {
                 mediaTopToSelf?.isActive = true
@@ -285,6 +306,7 @@ class TweetBodyUIView: UIView {
         contentLabel.text = nil
         captionLabel.text = nil
         captionLabel.isHidden = true
+        isCaptionVisible = false
         onTweetBodyTap = nil
         removeMediaHosting()
         removeDocumentHosting()

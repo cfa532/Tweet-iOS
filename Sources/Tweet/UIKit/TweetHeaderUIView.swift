@@ -86,10 +86,7 @@ class TweetHeaderUIView: UIView {
         stackView.addArrangedSubview(dotLabel)
         stackView.addArrangedSubview(timestampLabel)
 
-        // Reduce spacing between username and dot
-        stackView.setCustomSpacing(-2, after: nameLabel)
-        stackView.setCustomSpacing(-2, after: usernameLabel)
-        stackView.setCustomSpacing(-2, after: dotLabel)
+        // Default stackView.spacing = 2 matches old SwiftUI HStack(spacing:8) with .padding(.leading, -6)
 
         stackView.translatesAutoresizingMaskIntoConstraints = false
         menuButton.translatesAutoresizingMaskIntoConstraints = false
