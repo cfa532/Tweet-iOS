@@ -22,12 +22,11 @@ private final class ObserverHolder: @unchecked Sendable {
 }
 
 @available(iOS 16.0, *)
-struct TweetListView<RowView: View>: View {
+struct TweetListView: View {
     // MARK: - Properties
     let title: String
     let tweetFetcher: @Sendable (UInt, UInt, Bool) async throws -> [Tweet?]
     let showTitle: Bool
-    let rowView: (Tweet) -> RowView
     let header: (() -> AnyView)?
     let notifications: [TweetListNotification]
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
@@ -37,6 +36,12 @@ struct TweetListView<RowView: View>: View {
     let feedIdentifier: String  // Unique identifier for persistent scroll position
     let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
     private let pageSize: UInt = 10  // Manual load-more only
+
+    // Navigation callbacks (passed through to UIKit cells)
+    let onAvatarTap: ((User) -> Void)?
+    let onTweetTap: ((Tweet) -> Void)?
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
 
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var tweets: [Tweet]
@@ -147,15 +152,18 @@ struct TweetListView<RowView: View>: View {
         tweetFetcher: @escaping @Sendable (UInt, UInt, Bool) async throws -> [Tweet?],
         showTitle: Bool = true,
         notifications: [TweetListNotification]? = nil,
-        onScroll: ((CGFloat, CGFloat) -> Void)? = nil,  // (offset, delta)
-        leadingPadding: CGFloat = 8,  // Default 8pt leading padding
-        trailingPadding: CGFloat = 8,  // Default 8pt trailing padding
-        pinnedTweets: [Tweet] = [],  // Pinned tweets for video coordination
-        feedIdentifier: String = "mainFeed",  // Default to main feed
-        preserveOrder: Bool = false,  // If true, preserve server order (for bookmarks/favorites)
+        onScroll: ((CGFloat, CGFloat) -> Void)? = nil,
+        leadingPadding: CGFloat = 8,
+        trailingPadding: CGFloat = 8,
+        pinnedTweets: [Tweet] = [],
+        feedIdentifier: String = "mainFeed",
+        preserveOrder: Bool = false,
         header: (() -> AnyView)? = nil,
-        onRefreshExtra: (() async -> Void)? = nil,  // Extra refresh callback
-        rowView: @escaping (Tweet) -> RowView
+        onRefreshExtra: (() async -> Void)? = nil,
+        onAvatarTap: ((User) -> Void)? = nil,
+        onTweetTap: ((Tweet) -> Void)? = nil,
+        onShowLogin: (() -> Void)? = nil,
+        onShowToast: ((String, Bool) -> Void)? = nil
     ) {
         self.title = title
         self._tweets = tweets
@@ -169,7 +177,10 @@ struct TweetListView<RowView: View>: View {
         self.preserveOrder = preserveOrder
         self.header = header
         self.onRefreshExtra = onRefreshExtra
-        // Default: listen for newTweetCreated and insert at top
+        self.onAvatarTap = onAvatarTap
+        self.onTweetTap = onTweetTap
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
         self.notifications = notifications ?? [
             TweetListNotification(
                 name: .newTweetCreated,
@@ -184,20 +195,17 @@ struct TweetListView<RowView: View>: View {
                 action: { _ in }
             )
         ]
-        self.rowView = rowView
     }
 
     // MARK: - Body
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // UIKit TABLE VIEW - Eliminates SwiftUI's GraphHost.flushTransactions() hang
+                // UIKit TABLE VIEW — pure UIKit cells, no UIHostingController per cell
                 TweetTableView(
                     tweets: $tweets,
                     header: header,
-                    rowView: { tweet in
-                        rowView(tweet)
-                    },
+                    hproseInstance: hproseInstance,
                     hasMoreTweets: $hasMoreTweets,
                     isLoadingMore: isLoadingMore,
                     loadMoreTweets: { forceLoad in loadMoreTweets(forceLoad: forceLoad) },
@@ -209,7 +217,11 @@ struct TweetListView<RowView: View>: View {
                     leadingPadding: leadingPadding,
                     trailingPadding: trailingPadding,
                     pinnedTweets: pinnedTweets,
-                    feedIdentifier: feedIdentifier
+                    feedIdentifier: feedIdentifier,
+                    onAvatarTap: onAvatarTap,
+                    onTweetTap: onTweetTap,
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast
                 )
                 .onAppear {
                     screenHeight = geometry.size.height
@@ -977,110 +989,6 @@ struct TweetListView<RowView: View>: View {
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
             await MainActor.run {
                 needsMoreContent = true
-            }
-        }
-    }
-}
-
-@available(iOS 16.0, *)
-struct TweetListContentView<RowView: View>: View {
-    @Binding var tweets: [Tweet?]
-    let header: (() -> AnyView)?
-    let rowView: (Tweet) -> RowView
-    @Binding var hasMoreTweets: Bool
-    let isLoadingMore: Bool
-    let isLoading: Bool
-    let initialLoadComplete: Bool
-    let loadMoreTweets: () -> Void
-    @StateObject private var videoLoadingManager = VideoLoadingManager.shared
-    
-    var body: some View {
-        LazyVStack(spacing: 0) {
-            // Header content
-            if let header = header {
-                header()
-            }
-            
-            // Show loading state if we don't have tweets and haven't completed loading
-            // This covers both: actively loading (isLoading=true) OR waiting for initial load to start (!initialLoadComplete)
-            if tweets.compactMap({ $0 }).isEmpty && (isLoading || !initialLoadComplete) {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.2)
-                    Text(NSLocalizedString("Loading tweets...", comment: "Loading tweets message"))
-                        .foregroundColor(.secondary)
-                        .font(.subheadline)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .transition(.opacity.animation(.easeInOut(duration: 0.2)))
-            } else if initialLoadComplete && tweets.compactMap({ $0 }).isEmpty {
-                // Show empty state ONLY when loading is actually complete AND there are no tweets
-                VStack(spacing: 16) {
-                    Image(systemName: "tray")
-                        .font(.system(size: 48))
-                        .foregroundColor(.secondary)
-                    Text(NSLocalizedString("No tweet yet", comment: "No tweets available message"))
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-            } else {
-                // Show tweets with LazyVStack for smooth scrolling
-                // Small spacer
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(height: 1)
-                
-                LazyVStack(spacing: 0, pinnedViews: []) {
-                    ForEach(Array(tweets.compactMap { $0 }.enumerated()), id: \.element.mid) { index, tweet in
-                        VStack(spacing: 0) {
-                            if index > 0 {
-                                Rectangle()
-                                    .padding(.horizontal, 2)
-                                    .frame(height: 0.5)
-                                    .foregroundColor(Color(.systemGray).opacity(0.4))
-                            }
-                            rowView(tweet)
-                                // Add identity for view reuse
-                                .id("tweet_\(tweet.mid)")
-                                .onAppear {
-                                    // Update VideoLoadingManager when tweet becomes visible
-                                    videoLoadingManager.updateVisibleTweetIndex(index)
-                                }
-                        }
-                    }
-                }
-                
-                // Load-more trigger and spinner - matches working commit 9667bda5cbcbfe18a2932c6d4c31280556dba55c
-                // Always present view to detect bottom scrolling
-                Color.clear
-                    .frame(height: 40)
-                    .onAppear {
-                        if initialLoadComplete && !isLoadingMore {
-                            hasMoreTweets = true
-                            loadMoreTweets()
-                        }
-                    }
-                
-                // Loading indicator for more tweets - shown as list item for smooth scrolling
-                if hasMoreTweets {
-                    // Use consistent height to prevent layout jumps
-                    ZStack {
-                        if isLoadingMore {
-                            // Show spinner when loading
-                            ProgressView()
-                                .scaleEffect(1.0)
-                        }
-                    }
-                    .frame(height: 80)
-                    .frame(maxWidth: .infinity)
-                } else {
-                    // Small spacer at bottom when no more tweets
-                    Color.clear
-                        .frame(height: 80)
-                }
             }
         }
     }

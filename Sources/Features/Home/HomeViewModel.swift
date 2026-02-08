@@ -357,8 +357,6 @@ struct TweetListDestinationView: View {
             tweets: $tweets,
             tweetFetcher: { page, size, isFromCache in
                 if isFromCache {
-                    // Load from CoreData cache using prefixed key to avoid mixing with feed
-                    // Use format: "bookmark_list_userId" or "favorite_list_userId"
                     let tweetType: UserContentType = destination.listType == .BOOKMARKS ? .BOOKMARKS : .FAVORITES
                     let cacheKey = "\(tweetType.rawValue)_\(destination.userId)"
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
@@ -366,7 +364,7 @@ struct TweetListDestinationView: View {
                         page: page,
                         pageSize: size,
                         currentUserId: hproseInstance.appUser.mid,
-                        isProfileView: false  // Don't filter by authorId - bookmarks/favorites can be from any author
+                        isProfileView: false
                     )
                     return cachedTweets
                 } else {
@@ -375,19 +373,12 @@ struct TweetListDestinationView: View {
                     return fetchedTweets
                 }
             },
-            preserveOrder: isTargetAppUser,  // Preserve server order (bookmark/favorite time) for appUser's lists
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    showDeleteButton: isTargetAppUser,
-                    isLastItem: tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
-                    onAvatarTap: { tappedUser in
-                        navigationPath.append(tappedUser)
-                    },
-                    onTap: { tappedTweet in
-                        navigationPath.append(tappedTweet)
-                    }
-                )
+            preserveOrder: isTargetAppUser,
+            onAvatarTap: { tappedUser in
+                navigationPath.append(tappedUser)
+            },
+            onTweetTap: { tappedTweet in
+                navigationPath.append(tappedTweet)
             }
         )
     }

@@ -97,11 +97,17 @@ class TweetTableViewController: UITableViewController {
     var loadMoreTweets: ((Bool) -> Void)?  // Parameter: forceLoad
     var onRefresh: (() async -> Void)?  // Pull-to-refresh callback
     var onLoadMoreRequested: (() -> Void)?  // Callback when load more is requested programmatically
-    var rowViewBuilder: ((Tweet) -> AnyView)?
     var headerViewBuilder: (() -> AnyView)?
     var onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
     var leadingPadding: CGFloat = 8  // Configurable leading padding for cells
     var trailingPadding: CGFloat = 8  // Configurable trailing padding for cells
+
+    // Pure UIKit cell configuration (replaces rowViewBuilder)
+    var hproseInstance: HproseInstance?
+    var onAvatarTap: ((User) -> Void)?
+    var onTweetTap: ((Tweet) -> Void)?
+    var onShowLogin: (() -> Void)?
+    var onShowToast: ((String, Bool) -> Void)?
     
     // Header hosting controller
     private var headerHostingController: UIHostingController<AnyView>?
@@ -150,9 +156,6 @@ class TweetTableViewController: UITableViewController {
     // Feed identifier for persistent scroll position storage
     var feedIdentifier: String = "mainFeed"  // Default to main feed
     
-    // Counter for periodic cache cleanup during scrolling
-    private var scrollUpdateCount: Int = 0
-
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
 
@@ -198,9 +201,6 @@ class TweetTableViewController: UITableViewController {
         // Clean up timers
         noMoreTweetsMessageTimer?.invalidate()
         loadingTimeoutTimer?.invalidate()
-
-        // MEMORY FIX: Clear view cache to free memory
-        SwiftUIViewCache.shared.clearCache()
 
         // NOTE: Removed .shouldStopAllVideos notification from deinit
         // This was causing issues when navigating back from profile - it would stop
@@ -262,14 +262,11 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] _ in
             print("⚠️ [MEMORY] Memory warning received - clearing caches")
-            
-            // Clear SwiftUI view cache
-            SwiftUIViewCache.shared.clearCache()
-            
+
             // Stop all videos and clear coordinator caches via notification
             NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
-            
-            // Force reload visible cells to free up old hosting controllers
+
+            // Force reload visible cells to reclaim memory
             if let visibleIndexPaths = self?.tableView.indexPathsForVisibleRows {
                 self?.tableView.reloadRows(at: visibleIndexPaths, with: .none)
             }
@@ -1084,13 +1081,20 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
-        if let rowView = rowViewBuilder {
+        let totalRows = pinnedTweets.count + tweets.count
+        let isLastItem = indexPath.row == totalRows - 1
+
+        if let hprose = hproseInstance {
             cell.configure(
                 with: tweet,
-                rowView: rowView,
+                hproseInstance: hprose,
+                isPinned: indexPath.row < pinnedTweets.count,
+                isLastItem: isLastItem,
                 parentViewController: self,
-                leadingPadding: leadingPadding,
-                trailingPadding: trailingPadding
+                onAvatarTap: onAvatarTap,
+                onTweetTap: onTweetTap,
+                onShowLogin: onShowLogin,
+                onShowToast: onShowToast
             )
         }
 
@@ -1207,7 +1211,7 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // First render: let SwiftUI measure
+        // First render: let Auto Layout measure
         return UITableView.automaticDimension
     }
 
@@ -1267,15 +1271,6 @@ class TweetTableViewController: UITableViewController {
         if shouldUpdate {
             lastVideoVisibilityUpdate = now
             updateVisibleTweetsForVideoPlayback()
-
-            // MEMORY FIX: Periodically clean up SwiftUI view cache during long scroll sessions
-            // This prevents cache from growing unbounded during extended scrolling
-            // The cache has its own LRU eviction, but this provides an extra safety net
-            scrollUpdateCount += 1
-            if scrollUpdateCount % 50 == 0 { // Every 50 scroll updates (~20 seconds of scrolling)
-                let _ = SwiftUIViewCache.shared.clearCache()
-                print("🧹 [MEMORY] Periodic cache cleanup during scroll")
-            }
         }
 
         // Detect bottom pull-to-load gesture (always check, even before initial layout)

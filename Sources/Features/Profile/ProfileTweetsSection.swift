@@ -161,17 +161,13 @@ struct ProfileTweetsSection<Header: View>: View {
     }
     
     var body: some View {
-        TweetListView<TweetItemView>(
+        TweetListView(
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache in
                 if isFromCache {
-                    // Fetch from cache for profile tweets - always filter by authorId
-                    // This ensures we only show tweets from the profile user, even if cache contains
-                    // tweets from multiple authors (e.g., from main feed)
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid, isProfileView: true)
-                    
                     return cachedTweets
                 } else {
                     return try await viewModel.fetchTweets(page: page, pageSize: size)
@@ -199,17 +195,16 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             ],
             onScroll: onScroll,
-            leadingPadding: 5,  // Profile left padding (reduced by 3 from 8pt)
-            trailingPadding: 7,  // Profile right padding (increased by 2 from 5pt)
-            pinnedTweets: pinnedTweets,  // Pass pinned tweets - they'll be rendered as table rows
-            feedIdentifier: "profile_\(user.mid)",  // Unique identifier per user profile
+            leadingPadding: 5,
+            trailingPadding: 7,
+            pinnedTweets: pinnedTweets,
+            feedIdentifier: "profile_\(user.mid)",
             header: {
                 AnyView(
                     VStack(spacing: 0) {
                         header()
                             .id("top")
                         if !pinnedTweets.isEmpty {
-                            // Show "Pinned" label separator
                             Text(LocalizedStringKey("Pinned"))
                                 .font(.subheadline)
                                 .bold()
@@ -224,26 +219,8 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             },
             onRefreshExtra: onPinnedTweetsRefresh,
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
-                    isInProfile: true,
-                    showDeleteButton: user.mid == hproseInstance.appUser.mid,
-                    isLastItem: viewModel.tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
-                    onAvatarTap: { user in
-                        onUserSelect(user)
-                    },
-                    onTap: onTweetTap,
-                    onAvatarTapInProfile: onAvatarTapInProfile,
-                    currentProfileUser: user,
-                    onRemove: { tweetId in
-                        if let idx = viewModel.tweets.firstIndex(where: { $0.mid == tweetId }) {
-                            viewModel.tweets.remove(at: idx)
-                        }
-                    }
-                )
-            }
+            onAvatarTap: { user in onUserSelect(user) },
+            onTweetTap: onTweetTap
         )
         .frame(maxHeight: .infinity)
         .onChange(of: user.mid) { _, _ in
