@@ -200,6 +200,8 @@ class EmbeddedTweetUIView: UIView {
         placeholderBottomConstraint.isActive = true
         placeholderHeightConstraint.isActive = true
         loadedTweet = nil
+        invalidateIntrinsicContentSize()
+        setNeedsLayout()
     }
 
     /// Load embedded tweet asynchronously (cache -> server)
@@ -266,6 +268,33 @@ class EmbeddedTweetUIView: UIView {
         )
     }
 
+    // MARK: - Visibility
+
+    /// Forward media visibility to the embedded tweet's body media grid
+    func setMediaVisible(_ visible: Bool) {
+        bodyView.mediaGridView.isGridVisible = visible
+    }
+
+    // MARK: - Intrinsic Size
+
+    override var intrinsicContentSize: CGSize {
+        // Return proper intrinsic size based on content or placeholder
+        if contentStack.isHidden {
+            // Showing placeholder
+            return CGSize(width: UIView.noIntrinsicMetric, height: 60)
+        } else {
+            // Showing content - let content stack determine size
+            let contentSize = contentStack.systemLayoutSizeFitting(
+                CGSize(width: bounds.width - 16, height: UIView.layoutFittingCompressedSize.height),
+                withHorizontalFittingPriority: .required,
+                verticalFittingPriority: .fittingSizeLevel
+            )
+            return CGSize(width: UIView.noIntrinsicMetric, height: contentSize.height + 16)  // +16 for top/bottom padding
+        }
+    }
+
+    // MARK: - Reuse
+
     func prepareForReuse() {
         loadTask?.cancel()
         loadTask = nil
@@ -282,6 +311,7 @@ class EmbeddedTweetUIView: UIView {
         contentStackBottomConstraint.isActive = false
         placeholderBottomConstraint.isActive = true
         placeholderHeightConstraint.isActive = true
+        invalidateIntrinsicContentSize()
     }
 
     deinit {

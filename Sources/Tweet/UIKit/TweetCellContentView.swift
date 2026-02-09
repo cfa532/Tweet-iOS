@@ -646,6 +646,11 @@ class TweetCellContentView: UIView {
     /// Forward media visibility to the body's media grid and embedded tweet's media grid
     func setMediaVisible(_ visible: Bool) {
         bodyView.mediaGridView.isGridVisible = visible
+
+        // Also forward to embedded tweet's media grid if it's visible
+        if !embeddedTweetWrapper.isHidden {
+            embeddedTweetView.setMediaVisible(visible)
+        }
     }
 
     // MARK: - Reuse
