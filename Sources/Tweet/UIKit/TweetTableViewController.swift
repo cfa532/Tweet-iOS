@@ -1404,7 +1404,8 @@ class TweetTableViewController: UITableViewController {
         // 1. Not already cached
         // 2. Cell has valid height
         // 3. If tweet has embedded tweet, it must be fully loaded (to prevent caching placeholder height)
-        if tweet.cachedHeight == nil && cell.frame.height > 0 {
+        // 4. Layout is stable (deferred to next run loop to ensure Auto Layout completes)
+        if tweet.cachedHeight == nil {
             // Check if embedded tweet is required and loaded
             let needsEmbeddedTweet = tweet.originalTweetId != nil
             let embeddedTweetLoaded = !needsEmbeddedTweet ||
@@ -1412,8 +1413,17 @@ class TweetTableViewController: UITableViewController {
 
             // Only cache if embedded tweet doesn't exist OR is fully loaded
             if embeddedTweetLoaded {
-                tweet.cachedHeight = cell.frame.height
-                TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                // Defer height caching to ensure Auto Layout has completed and height is stable
+                DispatchQueue.main.async { [weak self, weak cell] in
+                    guard let cell = cell, cell.frame.height > 0 else { return }
+                    // Verify embedded tweet is still loaded (in case of rapid scroll)
+                    let stillLoaded = !needsEmbeddedTweet ||
+                                     (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
+                    if stillLoaded && tweet.cachedHeight == nil {
+                        tweet.cachedHeight = cell.frame.height
+                        TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                    }
+                }
             }
             // If embedded tweet not loaded, don't cache - we'll cache later when it loads
         }
