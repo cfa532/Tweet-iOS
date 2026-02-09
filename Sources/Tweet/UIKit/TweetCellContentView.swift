@@ -319,7 +319,7 @@ class TweetCellContentView: UIView {
         // Action bar
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
-        // Don't set onCommentTap - tapping blank areas navigates to detail where user can comment
+        // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
     }
@@ -392,7 +392,7 @@ class TweetCellContentView: UIView {
         // Action bar on original tweet
         actionBar.configure(tweet: originalTweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
-        // Don't set onCommentTap - tapping blank areas navigates to detail where user can comment
+        // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
     }
@@ -457,7 +457,7 @@ class TweetCellContentView: UIView {
         // Action bar on quoting tweet
         actionBar.configure(tweet: tweet, hproseInstance: hproseInstance)
         actionBar.parentViewController = parentViewController
-        // Don't set onCommentTap - tapping blank areas navigates to detail where user can comment
+        // Don't set onCommentTap - let action bar present comment composer directly
         actionBar.onShowLogin = { [weak self] in self?.onShowLogin?() }
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
     }

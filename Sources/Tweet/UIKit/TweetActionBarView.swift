@@ -7,6 +7,7 @@
 //  Business logic (optimistic updates, server sync) ported from TweetActionButtonsView.swift.
 //
 import UIKit
+import SwiftUI
 import Combine
 import AVFoundation
 
@@ -216,7 +217,35 @@ class TweetActionBarView: UIView {
             onShowLogin?()
             return
         }
-        onCommentTap?()
+
+        // If callback is set, use it; otherwise present comment composer
+        if let onCommentTap = onCommentTap {
+            onCommentTap()
+        } else if let tweet = currentTweet, let parentVC = parentViewController {
+            // Present comment composer
+            let commentsVM = CommentsViewModel(hproseInstance: hproseInstance, parentTweet: tweet)
+            let commentCompose = CommentComposeView(tweet: tweet, commentsVM: commentsVM)
+                .environmentObject(hproseInstance)
+            let hostingController = UIHostingController(rootView: commentCompose)
+
+            // Register overlay
+            OverlayVisibilityCoordinator.shared.beginOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
+
+            // Present modally
+            parentVC.present(hostingController, animated: true)
+
+            // Observe dismissal to clean up overlay
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self = self, let tweet = self.currentTweet else { return }
+                if parentVC.presentedViewController == nil {
+                    OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
+                }
+            }
+        }
     }
 
     private func handleRetweet() {
