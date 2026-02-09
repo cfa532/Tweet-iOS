@@ -5,12 +5,22 @@
 //  Pure UIKit tweet body replacing SwiftUI TweetItemBodyView.
 //  Shows text content and media grid.
 //  Phase 3: Media grid uses pure UIKit MediaGridUIView (no UIHostingController).
+//  Refactored to use internal UIStackView for robust, predictable layout.
 //
 import UIKit
 import SwiftUI
 import Combine
 
 class TweetBodyUIView: UIView {
+
+    // Internal stack view to manage all content
+    private let contentStack: UIStackView = {
+        let sv = UIStackView()
+        sv.axis = .vertical
+        sv.alignment = .fill
+        sv.spacing = 0
+        return sv
+    }()
 
     private let contentLabel: UILabel = {
         let label = UILabel()
@@ -46,15 +56,8 @@ class TweetBodyUIView: UIView {
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
 
-    // Layout constraints that change based on content
-    private var mediaTopToContent: NSLayoutConstraint?
-    private var mediaTopToSelf: NSLayoutConstraint?
+    // Height constraint for media (used for dynamic sizing)
     private var mediaHeightConstraint: NSLayoutConstraint?
-    private var captionTopConstraint: NSLayoutConstraint?
-    // Two document-top constraints: toggle based on caption visibility (prevents reuse bug)
-    private var documentTopToCaption: NSLayoutConstraint?
-    private var documentTopToMedia: NSLayoutConstraint?
-    private var documentHeightConstraint: NSLayoutConstraint?
 
     var onTweetBodyTap: (() -> Void)?
     /// Whether the video caption label is currently visible (for single-video tweets with title)
@@ -74,40 +77,9 @@ class TweetBodyUIView: UIView {
     private func setupViews() {
         backgroundColor = .clear
 
-        addSubview(contentLabel)
-        addSubview(mediaContainerView)
-        addSubview(captionLabel)
-        addSubview(documentContainerView)
-
-        // Add media grid to container
+        // Add media grid to its container
         mediaContainerView.addSubview(mediaGridView)
-
-        contentLabel.translatesAutoresizingMaskIntoConstraints = false
-        mediaContainerView.translatesAutoresizingMaskIntoConstraints = false
-        captionLabel.translatesAutoresizingMaskIntoConstraints = false
-        documentContainerView.translatesAutoresizingMaskIntoConstraints = false
         mediaGridView.translatesAutoresizingMaskIntoConstraints = false
-
-        // Content label constraints
-        NSLayoutConstraint.activate([
-            contentLabel.topAnchor.constraint(equalTo: topAnchor),
-            contentLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-            contentLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-
-        // Media container constraints (no right padding for media grid in embedded tweets)
-        NSLayoutConstraint.activate([
-            mediaContainerView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            mediaContainerView.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-        // text .padding(.bottom, 2) + media .padding(.top, 6) = 8pt gap
-        mediaTopToContent = mediaContainerView.topAnchor.constraint(equalTo: contentLabel.bottomAnchor, constant: 8)
-        mediaTopToSelf = mediaContainerView.topAnchor.constraint(equalTo: topAnchor, constant: 6)
-        mediaHeightConstraint = mediaContainerView.heightAnchor.constraint(equalToConstant: 0)
-        // Priority 999: yields gracefully to UITableView's encapsulated layout height during initial sizing pass
-        mediaHeightConstraint?.priority = UILayoutPriority(999)
-
-        // Media grid fills container
         NSLayoutConstraint.activate([
             mediaGridView.topAnchor.constraint(equalTo: mediaContainerView.topAnchor),
             mediaGridView.leadingAnchor.constraint(equalTo: mediaContainerView.leadingAnchor),
@@ -115,22 +87,32 @@ class TweetBodyUIView: UIView {
             mediaGridView.bottomAnchor.constraint(equalTo: mediaContainerView.bottomAnchor),
         ])
 
-        // Caption label constraints
-        NSLayoutConstraint.activate([
-            captionLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-            captionLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
-        captionTopConstraint = captionLabel.topAnchor.constraint(equalTo: mediaContainerView.bottomAnchor, constant: 2)
+        // Build content stack: [contentLabel, mediaContainer, captionLabel, documentContainer]
+        contentStack.addArrangedSubview(contentLabel)
+        contentStack.addArrangedSubview(mediaContainerView)
+        contentStack.addArrangedSubview(captionLabel)
+        contentStack.addArrangedSubview(documentContainerView)
 
-        // Document container constraints
+        // Set initial spacing (will be adjusted per tweet)
+        contentStack.setCustomSpacing(8, after: contentLabel)  // text → media gap
+        contentStack.setCustomSpacing(2, after: mediaContainerView)  // media → caption gap
+        contentStack.setCustomSpacing(0, after: captionLabel)  // caption → documents gap
+
+        addSubview(contentStack)
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+
+        // Anchor stack to edges with 4pt top padding
         NSLayoutConstraint.activate([
-            documentContainerView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            documentContainerView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            documentContainerView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        documentTopToCaption = documentContainerView.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 0)
-        documentTopToMedia = documentContainerView.topAnchor.constraint(equalTo: mediaContainerView.bottomAnchor, constant: 0)
-        documentHeightConstraint = documentContainerView.heightAnchor.constraint(equalToConstant: 0)
+
+        // Media height constraint (will be set dynamically)
+        mediaHeightConstraint = mediaContainerView.heightAnchor.constraint(equalToConstant: 0)
+        mediaHeightConstraint?.priority = UILayoutPriority(999)
+        mediaHeightConstraint?.isActive = true
 
         // Tap gesture on content label
         let tap = UITapGestureRecognizer(target: self, action: #selector(bodyTapped))
@@ -150,29 +132,17 @@ class TweetBodyUIView: UIView {
         if currentTweetId == tweet.mid { return }
         currentTweetId = tweet.mid
 
-        // Deactivate all dynamic constraints first
-        mediaTopToContent?.isActive = false
-        mediaTopToSelf?.isActive = false
-        mediaHeightConstraint?.isActive = false
-        captionTopConstraint?.isActive = false
-        documentTopToCaption?.isActive = false
-        documentTopToMedia?.isActive = false
-        documentHeightConstraint?.isActive = false
-
         // Clean up media grid and document hosting
         mediaGridView.prepareForReuse()
         removeDocumentHosting()
 
         // --- Text content ---
-        let hasText: Bool
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             contentLabel.text = content
             contentLabel.isHidden = false
-            hasText = true
         } else {
             contentLabel.text = nil
             contentLabel.isHidden = true
-            hasText = false
         }
 
         // --- Attachments ---
@@ -181,7 +151,7 @@ class TweetBodyUIView: UIView {
         let hasMedia = !mediaAttachments.isEmpty
         let hasDocuments = !documentAttachments.isEmpty
 
-        // --- Media grid (Phase 3: pure UIKit) ---
+        // --- Media grid ---
         if hasMedia {
             // Calculate actual available width based on context
             let screenWidth = UIScreen.main.bounds.width
@@ -195,17 +165,7 @@ class TweetBodyUIView: UIView {
             }
 
             let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, gridWidth: gridWidth)
-
             mediaHeightConstraint?.constant = mediaHeight
-            mediaHeightConstraint?.isActive = true
-
-            if hasText {
-                mediaTopToContent?.constant = 8
-                mediaTopToContent?.isActive = true
-            } else {
-                mediaTopToSelf?.isActive = true
-            }
-
             mediaContainerView.isHidden = false
 
             // Configure pure UIKit media grid
@@ -223,39 +183,32 @@ class TweetBodyUIView: UIView {
             if let caption {
                 captionLabel.text = caption
                 captionLabel.isHidden = false
-                captionTopConstraint?.isActive = true
                 isCaptionVisible = true
             } else {
                 captionLabel.isHidden = true
                 captionLabel.text = nil
                 isCaptionVisible = false
             }
+
+            // Adjust spacing based on whether there's text above media
+            if contentLabel.isHidden {
+                // No text: reduce spacing before media (media starts at 4pt from top)
+                contentStack.setCustomSpacing(0, after: contentLabel)
+            } else {
+                // Text present: normal 8pt gap
+                contentStack.setCustomSpacing(8, after: contentLabel)
+            }
         } else {
             mediaContainerView.isHidden = true
             mediaHeightConstraint?.constant = 0
-            mediaHeightConstraint?.isActive = true
             captionLabel.isHidden = true
+            isCaptionVisible = false
 
-            if hasText {
-                mediaTopToContent?.constant = 2
-                mediaTopToContent?.isActive = true
-            } else {
-                mediaTopToSelf?.isActive = true
-            }
+            // Collapse spacing after content label if no media
+            contentStack.setCustomSpacing(0, after: contentLabel)
         }
 
         // --- Documents ---
-        // Choose correct document-top anchor based on caption visibility
-        if captionLabel.isHidden {
-            // No caption: document anchors to media container bottom
-            documentTopToMedia?.constant = hasDocuments ? (hasMedia ? 8 : (hasText ? 4 : 0)) : 0
-            documentTopToMedia?.isActive = true
-        } else {
-            // Caption visible: document anchors to caption label bottom
-            documentTopToCaption?.constant = hasDocuments ? (hasMedia ? 8 : (hasText ? 4 : 0)) : 0
-            documentTopToCaption?.isActive = true
-        }
-
         if hasDocuments {
             documentContainerView.isHidden = false
 
@@ -283,9 +236,13 @@ class TweetBodyUIView: UIView {
             ])
 
             documentHostingController = hostingController
+
+            // Add spacing before documents if there's media or text
+            if hasMedia || !contentLabel.isHidden {
+                contentStack.setCustomSpacing(8, after: captionLabel.isHidden ? mediaContainerView : captionLabel)
+            }
         } else {
             documentContainerView.isHidden = true
-            documentHeightConstraint?.isActive = true  // Force zero height when no documents
         }
     }
 
@@ -298,6 +255,11 @@ class TweetBodyUIView: UIView {
         onTweetBodyTap = nil
         mediaGridView.prepareForReuse()
         removeDocumentHosting()
+
+        // Reset spacing to defaults
+        contentStack.setCustomSpacing(8, after: contentLabel)
+        contentStack.setCustomSpacing(2, after: mediaContainerView)
+        contentStack.setCustomSpacing(0, after: captionLabel)
     }
 
     private func removeDocumentHosting() {
