@@ -531,8 +531,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     func setVisible(_ visible: Bool) {
         isVisible = visible
-        // Forward to video state bridge — triggers SwiftUI re-render
-        videoStateBridge?.isVisible = visible
+        // Forward to video state bridge — deferred to avoid "Publishing changes from within view updates" warning
+        DispatchQueue.main.async { [weak self] in
+            self?.videoStateBridge?.isVisible = visible
+        }
 
         guard let attachment else { return }
 
