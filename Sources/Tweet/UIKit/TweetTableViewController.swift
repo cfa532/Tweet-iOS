@@ -159,6 +159,10 @@ class TweetTableViewController: UITableViewController {
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
 
+    // Scroll state tracking to prevent direction detection jitter during deceleration
+    private var isUserDragging: Bool = false
+    private var isDecelerating: Bool = false
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -681,6 +685,20 @@ class TweetTableViewController: UITableViewController {
         let oldTweets = tweets
         tweets = newTweets
 
+        // Pre-fetch embedded tweets for accurate height calculation (pure UIKit optimization)
+        // Load embedded tweets in background so they're available when cells are displayed
+        Task.detached(priority: .userInitiated) {
+            for tweet in newTweets {
+                if let originalTweetId = tweet.originalTweetId {
+                    // Check if already loaded
+                    if Tweet.getInstance(for: originalTweetId)?.author == nil {
+                        // Try to fetch from cache (fast, async)
+                        _ = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
+                    }
+                }
+            }
+        }
+
         // Cleanup old tweet instances to prevent memory growth
         Task.detached(priority: .background) {
             let activeTweetIds = Set(newTweets.map { $0.mid })
@@ -1147,6 +1165,20 @@ class TweetTableViewController: UITableViewController {
                     self.tableView.beginUpdates()
                     self.tableView.endUpdates()
                 }
+
+                // CRITICAL: Cache the new height immediately after re-layout
+                // willDisplay is NOT called for already-visible cells, so we must cache here
+                // to prevent scroll jumps when the cell scrolls away and back
+                if cell.frame.height > 0 {
+                    // Verify embedded tweet is still loaded (in case of rapid changes)
+                    let needsEmbeddedTweet = tweet.originalTweetId != nil
+                    let embeddedTweetLoaded = !needsEmbeddedTweet ||
+                                             (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
+                    if embeddedTweetLoaded {
+                        tweet.cachedHeight = cell.frame.height
+                        TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                    }
+                }
             }
         }
 
@@ -1173,13 +1205,13 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // Fast heuristic matching retweet/quoted tweet logic from calculateTweetHeight
+        // Determine if this is a pure retweet (no own content, shows original tweet)
         let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
         let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
             || (tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true))
         let isPureRetweet = isRetweet && !hasOwnContent
 
-        // Determine which tweet's content to measure
+        // For pure retweets, estimate based on original tweet content
         let displayTweet: Tweet
         if isPureRetweet, let originalId = tweet.originalTweetId,
            let original = Tweet.getInstance(for: originalId), original.author != nil {
@@ -1188,28 +1220,78 @@ class TweetTableViewController: UITableViewController {
             displayTweet = tweet
         }
 
-        // Base: 16(top) + 24(header) + 30(actions) + 16(bottom) + 1(separator) = 87pt
-        var height: CGFloat = 87
+        // Calculate estimate matching actual UIKit cell layout
+        var estimate: CGFloat = 0
 
-        // Retweet banner for pure retweets
+        // Top padding (16pt in TweetCellContentView)
+        estimate += 16
+
+        // Retweet banner for pure retweets (18pt + 2pt spacing)
         if isPureRetweet {
-            height += 20
+            estimate += 20
         }
 
-        // Estimate content height
+        // Header: author name + timestamp (~24pt)
+        estimate += 24
+
+        // Text content estimate (use displayTweet for pure retweets)
         if let content = displayTweet.content, !content.isEmpty {
-            height += 60 // ~3 lines average
+            // Chars per line: ~42 for 16pt font, max 7 lines
+            let estimatedLines = min(7, max(1, ceil(CGFloat(content.count) / 42.0)))
+            estimate += estimatedLines * 20 + 2  // 20pt line height + 2pt bottom padding
         }
+
+        // MediaGrid: PRECISE calculation using actual aspect ratios (use displayTweet for pure retweets)
         if let attachments = displayTweet.attachments, !attachments.isEmpty {
-            height += 300 // typical media grid
+            let mediaAttachments = attachments.filter { TweetBodyUIView.isMediaType($0.type) }
+            if !mediaAttachments.isEmpty {
+                let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, isEmbedded: false)
+                estimate += mediaHeight + 8  // +8 for spacing
+            }
         }
 
-        // Quoted tweet: add embedded tweet estimate (only if has own content)
-        if isRetweet && hasOwnContent {
-            height += 150 // embedded tweet
+        // Embedded tweet estimate (only for quoted tweets, not pure retweets)
+        // Pure retweets show the original tweet inline, not as an embedded tweet
+        if isRetweet && hasOwnContent, let originalTweetId = tweet.originalTweetId {
+            if let embeddedTweet = Tweet.getInstance(for: originalTweetId),
+               embeddedTweet.author != nil {
+                // Embedded tweet is loaded - calculate its actual height
+                var embeddedHeight: CGFloat = 60  // Border + header + padding
+
+                if let embeddedContent = embeddedTweet.content, !embeddedContent.isEmpty {
+                    let estimatedLines = max(1, ceil(CGFloat(embeddedContent.count) / 40.0))
+                    embeddedHeight += estimatedLines * 18
+                }
+
+                if let embeddedAttachments = embeddedTweet.attachments, !embeddedAttachments.isEmpty {
+                    let embeddedMedia = embeddedAttachments.filter { TweetBodyUIView.isMediaType($0.type) }
+                    if !embeddedMedia.isEmpty {
+                        embeddedHeight += MediaGridViewModel.calculateHeight(for: embeddedMedia, isEmbedded: true)
+                    }
+                }
+
+                estimate += embeddedHeight + 8
+            } else {
+                // CRITICAL: Not loaded yet - estimate PLACEHOLDER height, not final height!
+                // EmbeddedTweetUIView shows a 60pt fixed placeholder when not loaded
+                // (see EmbeddedTweetUIView.swift: placeholderHeightConstraint = 60)
+                // Estimating final loaded height (124-274pt) causes jumps when placeholder renders
+                let placeholderHeight: CGFloat = 60
+                let topPadding: CGFloat = 8  // Always 8pt spacing before embedded tweet in quoted tweets
+                estimate += placeholderHeight + topPadding
+            }
         }
 
-        return height
+        // Actions row (~30pt in TweetActionBarView)
+        estimate += 30
+
+        // Bottom padding (16pt in TweetCellContentView)
+        estimate += 16
+
+        // Separator (1pt)
+        estimate += 1
+
+        return estimate
     }
 
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
@@ -1400,12 +1482,12 @@ class TweetTableViewController: UITableViewController {
             tweetCell.tweetContentView.setMediaVisible(true)
         }
 
-        // Cache height ONLY if:
+        // Cache height immediately - deferred caching causes scroll jumps
+        // Only cache if:
         // 1. Not already cached
-        // 2. Cell has valid height
+        // 2. Cell has valid height (> 0)
         // 3. If tweet has embedded tweet, it must be fully loaded (to prevent caching placeholder height)
-        // 4. Layout is stable (deferred to next run loop to ensure Auto Layout completes)
-        if tweet.cachedHeight == nil {
+        if tweet.cachedHeight == nil && cell.frame.height > 0 {
             // Check if embedded tweet is required and loaded
             let needsEmbeddedTweet = tweet.originalTweetId != nil
             let embeddedTweetLoaded = !needsEmbeddedTweet ||
@@ -1413,17 +1495,8 @@ class TweetTableViewController: UITableViewController {
 
             // Only cache if embedded tweet doesn't exist OR is fully loaded
             if embeddedTweetLoaded {
-                // Defer height caching to ensure Auto Layout has completed and height is stable
-                DispatchQueue.main.async { [weak self, weak cell] in
-                    guard let cell = cell, cell.frame.height > 0 else { return }
-                    // Verify embedded tweet is still loaded (in case of rapid scroll)
-                    let stillLoaded = !needsEmbeddedTweet ||
-                                     (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
-                    if stillLoaded && tweet.cachedHeight == nil {
-                        tweet.cachedHeight = cell.frame.height
-                        TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
-                    }
-                }
+                tweet.cachedHeight = cell.frame.height
+                TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
             }
             // If embedded tweet not loaded, don't cache - we'll cache later when it loads
         }
@@ -1441,8 +1514,17 @@ class TweetTableViewController: UITableViewController {
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // Track scroll direction for height caching strategy and toolbar hiding
         let currentOffset = scrollView.contentOffset.y
-        isScrollingBackward = currentOffset < lastContentOffset
         let delta = currentOffset - lastContentOffset
+
+        // CRITICAL: Only update scroll direction during active user dragging
+        // During deceleration, ANY direction change (even large ones) can cause toolbar flicker
+        // Lock direction during inertia scroll to prevent unexpected show/hide
+        let minDirectionChangeThreshold: CGFloat = 2.0
+        if isUserDragging && abs(delta) >= minDirectionChangeThreshold {
+            // Only update direction when user is actively dragging
+            // This prevents direction flips during deceleration, which cause toolbar jitter
+            isScrollingBackward = delta < 0
+        }
 
         // Throttle video visibility updates to avoid expensive calculations on every scroll frame
         // Use time-based throttling: execute immediately on first call, then throttle subsequent calls
@@ -1494,7 +1576,11 @@ class TweetTableViewController: UITableViewController {
         let headerThreshold: CGFloat = 30
         let shouldThrottleByDistance = abs(delta) < headerThreshold
 
-        guard !shouldThrottleByTime && !shouldThrottleByDistance else {
+        // CRITICAL: Don't send callbacks during deceleration with small deltas
+        // This prevents toolbar from flickering when scroll comes to rest
+        let shouldThrottleWhileSettling = isDecelerating && abs(delta) < 5
+
+        guard !shouldThrottleByTime && !shouldThrottleByDistance && !shouldThrottleWhileSettling else {
             lastContentOffset = currentOffset
             return
         }
@@ -1507,15 +1593,20 @@ class TweetTableViewController: UITableViewController {
     }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        // Scroll started - video coordinator handles playback
+        // User started dragging - direction detection is now reliable
+        isUserDragging = true
+        isDecelerating = false
     }
-    
+
     override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        // Scroll ended - handled by coordinator
+        // User lifted finger
+        isUserDragging = false
+        isDecelerating = decelerate
     }
-    
+
     override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        // Deceleration ended - handled by coordinator
+        // Deceleration finished - reset state
+        isDecelerating = false
     }
     
     // MARK: - Height Estimation
