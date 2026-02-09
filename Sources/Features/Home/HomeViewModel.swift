@@ -14,6 +14,8 @@ struct HomeView: View {
     let onNavigationVisibilityChanged: ((Bool) -> Void)?
     let onNavigateToProfile: (() -> Void)?
     let onReturnToHome: (() -> Void)?
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     @State private var isLoading = false
     @State private var isRefreshing = false
     @State private var selectedTab = 0
@@ -23,19 +25,23 @@ struct HomeView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var selectedUser: User? = nil
     @State private var foregroundObserver: NSObjectProtocol? = nil
-    
+
     @EnvironmentObject private var hproseInstance: HproseInstance
-    
+
     init(
         navigationPath: Binding<NavigationPath>,
         onNavigationVisibilityChanged: ((Bool) -> Void)? = nil,
         onNavigateToProfile: (() -> Void)? = nil,
-        onReturnToHome: (() -> Void)? = nil
+        onReturnToHome: (() -> Void)? = nil,
+        onShowLogin: (() -> Void)? = nil,
+        onShowToast: ((String, Bool) -> Void)? = nil
     ) {
         self._navigationPath = navigationPath
         self.onNavigationVisibilityChanged = onNavigationVisibilityChanged
         self.onNavigateToProfile = onNavigateToProfile
         self.onReturnToHome = onReturnToHome
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
     }
 
     var body: some View {
@@ -72,7 +78,9 @@ struct HomeView: View {
                     },
                     onScroll: { offset, delta in
                         handleScroll(offset: offset, delta: delta)
-                    }
+                    },
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast
                 )
                 .tag(0)
 
@@ -89,16 +97,27 @@ struct HomeView: View {
         .toolbarBackground(.hidden, for: .navigationBar) // Hide navigation bar background
         .navigationBarTitleDisplayMode(.inline) // Inline mode to minimize height
         .navigationDestination(for: User.self) { user in
-            ProfileView(user: user, onLogout: {
-                navigationPath.removeLast(navigationPath.count)
-                onReturnToHome?()
-            }, navigationPath: $navigationPath)
+            ProfileView(
+                user: user,
+                onLogout: {
+                    navigationPath.removeLast(navigationPath.count)
+                    onReturnToHome?()
+                },
+                navigationPath: $navigationPath,
+                onShowLogin: onShowLogin,
+                onShowToast: onShowToast
+            )
         }
         .navigationDestination(for: UserListDestination.self) { destination in
             UserListDestinationView(destination: destination, navigationPath: $navigationPath)
         }
         .navigationDestination(for: TweetListDestination.self) { destination in
-            TweetListDestinationView(destination: destination, navigationPath: $navigationPath)
+            TweetListDestinationView(
+                destination: destination,
+                navigationPath: $navigationPath,
+                onShowLogin: onShowLogin,
+                onShowToast: onShowToast
+            )
         }
         .navigationDestination(for: CommentNavigation.self) { commentNav in
             CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
@@ -345,13 +364,15 @@ struct UserListDestinationView: View {
 struct TweetListDestinationView: View {
     let destination: TweetListDestination
     @Binding var navigationPath: NavigationPath
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var tweets: [Tweet] = []
-    
+
     var body: some View {
         let targetUser = User.getInstance(mid: destination.userId)
         let isTargetAppUser = destination.userId == hproseInstance.appUser.mid
-        
+
         TweetListView(
             title: listTitle(isAppUser: isTargetAppUser),
             tweets: $tweets,
@@ -379,7 +400,9 @@ struct TweetListDestinationView: View {
             },
             onTweetTap: { tappedTweet in
                 navigationPath.append(tappedTweet)
-            }
+            },
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast
         )
     }
     

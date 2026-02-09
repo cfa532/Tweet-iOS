@@ -213,8 +213,21 @@ class TweetTableViewController: UITableViewController {
             forName: .scrollToTop,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            self?.scrollToTop()
+        ) { [weak self] notification in
+            guard let self = self else { return }
+
+            // Check if this notification is for this specific feed
+            if let targetFeedId = notification.userInfo?["feedIdentifier"] as? String {
+                // Only scroll if the notification targets this feed
+                if targetFeedId == self.feedIdentifier {
+                    self.scrollToTop()
+                }
+            } else {
+                // No target specified - scroll if this is the main feed
+                if self.feedIdentifier == "mainFeed" {
+                    self.scrollToTop()
+                }
+            }
         }
     }
 
@@ -424,11 +437,20 @@ class TweetTableViewController: UITableViewController {
         savedScrollPosition = nil
         ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
         isScrollingToTop = true
-        
-        // Scroll to the top of the table view with animation
+
+        // Scroll to the absolute top of the table view with animation
+        // Use the top of the content including any table header view
+        // Calculate the proper top position accounting for content inset
         let topInset = tableView.adjustedContentInset.top
-        tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: true)
-        
+
+        // If there's a table header, we want to show it, so scroll to -topInset
+        // This positions the header at the top of the visible area (below nav bar)
+        let targetOffset = CGPoint(x: 0, y: -topInset)
+        tableView.setContentOffset(targetOffset, animated: true)
+
+        // Also ensure we're at the exact top by forcing layout
+        tableView.layoutIfNeeded()
+
         // Reset flag after animation completes
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.isScrollingToTop = false

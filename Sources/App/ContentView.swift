@@ -36,6 +36,18 @@ struct ContentView: View {
                             },
                             onReturnToHome: {
                                 selectedTab = 0
+                            },
+                            onShowLogin: {
+                                showLoginSheet = true
+                            },
+                            onShowToast: { message, isError in
+                                toastMessage = message
+                                toastType = isError ? .error : .success
+                                showToast = true
+                                let delay = isError ? 5.0 : 2.0
+                                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                    withAnimation { showToast = false }
+                                }
                             }
                         )
                     }
@@ -49,6 +61,18 @@ struct ContentView: View {
                             onChatNavigate: {
                                 isInProfileFromChat = false
                                 isInChatScreen = true
+                            },
+                            onShowLogin: {
+                                showLoginSheet = true
+                            },
+                            onShowToast: { message, isError in
+                                toastMessage = message
+                                toastType = isError ? .error : .success
+                                showToast = true
+                                let delay = isError ? 5.0 : 2.0
+                                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                    withAnimation { showToast = false }
+                                }
                             }
                         )
                     }
@@ -64,7 +88,20 @@ struct ContentView: View {
                         // If isInProfileFromChat is true, keep tab bar visible (isInChatScreen stays false)
                     }
                 } else if selectedTab == 3 {
-                    SearchScreen()
+                    SearchScreen(
+                        onShowLogin: {
+                            showLoginSheet = true
+                        },
+                        onShowToast: { message, isError in
+                            toastMessage = message
+                            toastType = isError ? .error : .success
+                            showToast = true
+                            let delay = isError ? 5.0 : 2.0
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                withAnimation { showToast = false }
+                            }
+                        }
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

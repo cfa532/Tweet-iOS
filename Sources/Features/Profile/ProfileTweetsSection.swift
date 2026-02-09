@@ -128,9 +128,11 @@ struct ProfileTweetsSection<Header: View>: View {
     let onAvatarTapInProfile: ((User) -> Void)?
     let onPinnedTweetsRefresh: () async -> Void
     let onScroll: (CGFloat, CGFloat) -> Void  // (offset, delta)
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     @StateObject private var viewModel: ProfileTweetsViewModel
     let header: () -> Header
-    
+
     init(
         pinnedTweets: [Tweet],
         pinnedTweetIds: Set<String>,
@@ -141,6 +143,8 @@ struct ProfileTweetsSection<Header: View>: View {
         onAvatarTapInProfile: ((User) -> Void)? = nil,
         onPinnedTweetsRefresh: @escaping () async -> Void,
         onScroll: @escaping (CGFloat, CGFloat) -> Void,  // (offset, delta)
+        onShowLogin: (() -> Void)? = nil,
+        onShowToast: ((String, Bool) -> Void)? = nil,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.pinnedTweets = pinnedTweets
@@ -152,6 +156,8 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onAvatarTapInProfile = onAvatarTapInProfile
         self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
         self.onScroll = onScroll
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
         self.header = header
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
             hproseInstance: hproseInstance,
@@ -219,8 +225,18 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             },
             onRefreshExtra: onPinnedTweetsRefresh,
-            onAvatarTap: { user in onUserSelect(user) },
-            onTweetTap: onTweetTap
+            onAvatarTap: { user in
+                // If onAvatarTapInProfile is provided, use it (for scroll-to-top in profile)
+                // Otherwise use onUserSelect for navigation
+                if let onAvatarTapInProfile = onAvatarTapInProfile {
+                    onAvatarTapInProfile(user)
+                } else {
+                    onUserSelect(user)
+                }
+            },
+            onTweetTap: onTweetTap,
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast
         )
         .frame(maxHeight: .infinity)
         .onChange(of: user.mid) { _, _ in

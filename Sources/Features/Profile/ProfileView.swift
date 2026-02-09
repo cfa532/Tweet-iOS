@@ -4,7 +4,9 @@ struct ProfileView: View {
     let user: User
     let onLogout: (() -> Void)?
     @Binding var navigationPath: NavigationPath
-    
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
+
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Environment(\.dismiss) private var dismiss
     
@@ -162,10 +164,16 @@ struct ProfileView: View {
     private func userDestinationView(for user: User) -> some View {
         // Navigate to user's profile when avatar is tapped from favorites/bookmarks
         let _ = print("🟢 [ProfileView] navigationDestination(selectedUser) TRIGGERED - navigating to user: \(user.username ?? "nil"), mid: \(user.mid)")
-        ProfileView(user: user, onLogout: onLogout, navigationPath: $navigationPath)
-            .onAppear {
-                print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
-            }
+        ProfileView(
+            user: user,
+            onLogout: onLogout,
+            navigationPath: $navigationPath,
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast
+        )
+        .onAppear {
+            print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
+        }
     }
     
     private func handleSheetDismiss() {
@@ -242,6 +250,8 @@ struct ProfileView: View {
                     onScroll: { offset, delta in
                         handleScroll(offset: offset, delta: delta)
                     },
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
@@ -547,9 +557,14 @@ struct ProfileView: View {
     // MARK: - Helper Methods
     
     private func scrollToTop() {
-        // Scroll to top of the profile view
-        // This will be handled by the ScrollViewReader in ProfileTweetsSection
-        NotificationCenter.default.post(name: .scrollToTop, object: nil)
+        // Scroll to top of this specific profile's feed
+        // Pass the feed identifier to target only this profile's tweet list
+        let feedIdentifier = "profile_\(user.mid)"
+        NotificationCenter.default.post(
+            name: .scrollToTop,
+            object: nil,
+            userInfo: ["feedIdentifier": feedIdentifier]
+        )
     }
     
     private func showToastMessage(_ message: String, type: ToastView.ToastType) {

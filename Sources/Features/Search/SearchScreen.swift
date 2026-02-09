@@ -1,10 +1,17 @@
 import SwiftUI
 
 struct SearchScreen: View {
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     @StateObject private var searchViewModel = SearchViewModel.shared
     @Environment(\.dismiss) private var dismiss
     @State private var navigationPath = NavigationPath()
     @FocusState private var isSearchFieldFocused: Bool
+
+    init(onShowLogin: (() -> Void)? = nil, onShowToast: ((String, Bool) -> Void)? = nil) {
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
+    }
     
     private func hideKeyboard() {
         isSearchFieldFocused = false
@@ -138,10 +145,16 @@ struct SearchScreen: View {
             .navigationTitle(LocalizedStringKey("Search"))
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: User.self) { user in
-                ProfileView(user: user, onLogout: {
-                    navigationPath.removeLast(navigationPath.count)
-                }, navigationPath: $navigationPath)
-                    .onAppear {
+                ProfileView(
+                    user: user,
+                    onLogout: {
+                        navigationPath.removeLast(navigationPath.count)
+                    },
+                    navigationPath: $navigationPath,
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast
+                )
+                .onAppear {
                         // Dismiss keyboard when navigating to profile
                         hideKeyboard()
                     }

@@ -5,6 +5,8 @@ struct FollowingsTweetView: View {
     let onAvatarTap: (User) -> Void
     let onTweetTap: (Tweet) -> Void
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     
     
     var body: some View {
@@ -62,7 +64,9 @@ struct FollowingsTweetView: View {
                 onScroll?(offset, delta)
             },
             onAvatarTap: { user in onAvatarTap(user) },
-            onTweetTap: { tweet in onTweetTap(tweet) }
+            onTweetTap: { tweet in onTweetTap(tweet) },
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast
         )
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
             // Handle blocked user tweets removal

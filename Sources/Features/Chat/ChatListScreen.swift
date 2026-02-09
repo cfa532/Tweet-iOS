@@ -4,6 +4,8 @@ struct ChatListScreen: View {
     @Binding var navigationPath: NavigationPath
     let onProfileNavigate: (() -> Void)?
     let onChatNavigate: (() -> Void)?
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messageCheckTimer: Timer?
@@ -13,11 +15,13 @@ struct ChatListScreen: View {
     @State private var isLoadingFollowings = false
     @State private var showStartNewChat = false
     @EnvironmentObject private var hproseInstance: HproseInstance
-    
-    init(navigationPath: Binding<NavigationPath>, onProfileNavigate: (() -> Void)? = nil, onChatNavigate: (() -> Void)? = nil) {
+
+    init(navigationPath: Binding<NavigationPath>, onProfileNavigate: (() -> Void)? = nil, onChatNavigate: (() -> Void)? = nil, onShowLogin: (() -> Void)? = nil, onShowToast: ((String, Bool) -> Void)? = nil) {
         self._navigationPath = navigationPath
         self.onProfileNavigate = onProfileNavigate
         self.onChatNavigate = onChatNavigate
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
     }
     
     // Computed property for filtered and sorted sessions
@@ -74,7 +78,9 @@ struct ChatListScreen: View {
                     navigationPath: $navigationPath,
                     onProfileNavigate: {
                         onProfileNavigate?()
-                    }
+                    },
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast
                 )
                 .onAppear {
                     // When ChatScreen appears, reset profile flag
@@ -82,7 +88,13 @@ struct ChatListScreen: View {
                 }
             }
             .navigationDestination(for: User.self) { user in
-                ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
+                ProfileView(
+                    user: user,
+                    onLogout: nil,
+                    navigationPath: $navigationPath,
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast
+                )
             }
             .sheet(isPresented: $showStartNewChat) {
                 NavigationStack {

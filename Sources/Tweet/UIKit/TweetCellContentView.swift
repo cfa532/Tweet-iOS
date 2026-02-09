@@ -102,6 +102,11 @@ class TweetCellContentView: UIView {
     private func setupViews() {
         backgroundColor = .systemBackground
 
+        // Add tap gesture to entire view for tweet detail navigation
+        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tapGesture.cancelsTouchesInView = false
+        addGestureRecognizer(tapGesture)
+
         // Retweet banner setup — positioned above mainStack, not inside contentColumn
         retweetBanner.addSubview(retweetIcon)
         retweetBanner.addSubview(retweetLabel)
@@ -199,6 +204,31 @@ class TweetCellContentView: UIView {
             mainStackTopAfterBanner.isActive = false
             mainStackTopDefault.isActive = true
         }
+    }
+
+    // MARK: - Tap Handling
+
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        // Only handle tap if it's not on an interactive element
+        // The body, avatar, action buttons already have their own tap handlers
+        // So we only need to handle taps on blank areas (header text, padding, etc.)
+        guard let tweet = currentTweet else { return }
+
+        // Get tap location
+        let location = gesture.location(in: self)
+
+        // Check if tap is on action bar (has its own buttons)
+        if actionBar.frame.contains(location) {
+            return
+        }
+
+        // Check if tap is on avatar (has its own tap handler)
+        if avatarView.frame.contains(location) {
+            return
+        }
+
+        // For all other taps (blank areas, header text, etc.), navigate to detail
+        onTweetTap?(tweet)
     }
 
     // MARK: - Configure
