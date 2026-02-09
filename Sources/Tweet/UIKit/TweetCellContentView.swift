@@ -209,9 +209,8 @@ class TweetCellContentView: UIView {
     // MARK: - Tap Handling
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        // Only handle tap if it's not on an interactive element
-        // The body, avatar, action buttons already have their own tap handlers
-        // So we only need to handle taps on blank areas (header text, padding, etc.)
+        // Handle taps on the entire tweet content area (like SwiftUI version)
+        // Filter out only specific interactive elements: action buttons, avatar, menu, media
         guard let tweet = currentTweet else { return }
 
         // Get tap location
@@ -237,8 +236,54 @@ class TweetCellContentView: UIView {
             return
         }
 
-        // For all other taps (blank areas, header text, etc.), navigate to detail
-        onTweetTap?(tweet)
+        // Check if tap is on embedded tweet view (quoted tweet)
+        // Note: For pure retweets, embeddedTweetWrapper is hidden; for quoted tweets it's visible
+        if !embeddedTweetWrapper.isHidden {
+            let wrapperLocation = gesture.location(in: embeddedTweetWrapper)
+            if embeddedTweetView.frame.contains(wrapperLocation) {
+                // Embedded tweet handles its own tap
+                return
+            }
+        }
+
+        // Check if tap is on body view - need to verify it's not on media
+        if bodyView.frame.contains(location) {
+            let bodyLocation = gesture.location(in: bodyView)
+            // Use hitTest to check if tap is on an interactive element in body (media grid)
+            if let hitView = bodyView.hitTest(bodyLocation, with: nil),
+               hitView !== bodyView {
+                // Tap is on a subview of body (likely media or document)
+                // Check if it's the media grid or a media cell
+                var currentView: UIView? = hitView
+                while currentView != nil && currentView !== bodyView {
+                    if String(describing: type(of: currentView!)).contains("MediaGrid") ||
+                       String(describing: type(of: currentView!)).contains("MediaCell") ||
+                       String(describing: type(of: currentView!)).contains("Document") {
+                        // Tap is on media or document - let it handle itself
+                        return
+                    }
+                    currentView = currentView?.superview
+                }
+            }
+        }
+
+        // For all other taps (header text, body content text, padding, blank areas), navigate to detail
+        // For PURE retweets (no own content), navigate to the original tweet's detail view
+        // For quoted tweets (has own content), navigate to the quoting tweet's detail view
+
+        // Check if this is a pure retweet (no own content) or quoted tweet (has own content)
+        let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
+            || (tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true))
+
+        if !hasOwnContent,
+           let originalTweetId = tweet.originalTweetId,
+           let originalTweet = Tweet.getInstance(for: originalTweetId) {
+            // Pure retweet: navigate to original tweet
+            onTweetTap?(originalTweet)
+        } else {
+            // Regular tweet or quoted tweet: navigate to current tweet
+            onTweetTap?(tweet)
+        }
     }
 
     // MARK: - Configure
