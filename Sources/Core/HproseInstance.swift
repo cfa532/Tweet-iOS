@@ -2076,7 +2076,7 @@ final class HproseInstance: ObservableObject {
         return try await retryOperation(maxRetries: 3) {
             print("DEBUG: [login] Creating client for baseUrl: \(baseUrl.absoluteString)")
             let newClient = self.clientPool.getClientByUrl(for: baseUrl.absoluteString)
-            newClient.timeout = 10.0  // 10 seconds (fast fail for slow servers)
+            newClient.timeout = 30.0  // 30 seconds (login can be slow due to remote node communication)
             
             // Release client back to pool when done (no need to close)
             defer { 

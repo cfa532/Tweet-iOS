@@ -210,34 +210,36 @@ struct TweetActionButtonsView: View {
     
     var body: some View {
         HStack(spacing: 0) {
-            // Comment button
-            DebounceButton(
-                cooldownDuration: 0.3,
-                enableAnimation: true,
-                enableHaptic: true
-            ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
-                    onCommentTap?() ?? { showCommentCompose = true }()
+            // First 4 action buttons grouped together
+            HStack(spacing: 2) {
+                // Comment button
+                DebounceButton(
+                    cooldownDuration: 0.3,
+                    enableAnimation: true,
+                    enableHaptic: true
+                ) {
+                    if hproseInstance.appUser.isGuest {
+                        handleGuestAction()
+                    } else {
+                        onCommentTap?() ?? { showCommentCompose = true }()
+                    }
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "bubble.left")
+                            .frame(width: 20)
+                        Text((tweet.commentCount ?? 0) > 0 ? formatCount(tweet.commentCount!) : "")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .frame(width: 20, alignment: .leading)
+                    }
+                    .frame(width: 44, alignment: .leading)
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: "bubble.left")
-                        .frame(width: 20)
-                    Text((tweet.commentCount ?? 0) > 0 ? formatCount(tweet.commentCount!) : "")
-                        .font(.system(.subheadline, design: .monospaced))
-                        .frame(width: 28, alignment: .leading)
-                }
-                .frame(width: 52, alignment: .leading)
-            }
-            Spacer(minLength: 12)
-            // Retweet / forward button
-            DebounceButton(
-                cooldownDuration: 0.5,
-                enableAnimation: true,
-                enableHaptic: true
-            ) {
+
+                // Retweet / forward button
+                DebounceButton(
+                    cooldownDuration: 0.5,
+                    enableAnimation: true,
+                    enableHaptic: true
+                ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
@@ -280,26 +282,26 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: "arrow.2.squarepath")
-                        .frame(width: 20)
-                    Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
-                        .font(.system(.subheadline, design: .monospaced))
-                        .frame(width: 28, alignment: .leading)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.2.squarepath")
+                            .frame(width: 24)
+                        Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .frame(width: 20, alignment: .leading)
+                    }
+                    .frame(width: 44, alignment: .leading)
                 }
-                .frame(width: 52, alignment: .leading)
-            }
-            Spacer(minLength: 12)
-            // Like button
-            DebounceButton(
-                cooldownDuration: 0.3,
-                enableAnimation: true,
-                enableHaptic: true
-            ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
+
+                // Like button
+                DebounceButton(
+                    cooldownDuration: 0.3,
+                    enableAnimation: true,
+                    enableHaptic: true
+                ) {
+                    if hproseInstance.appUser.isGuest {
+                        handleGuestAction()
+                    } else {
                     Task {
                         // Store current state before any changes
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
@@ -368,26 +370,26 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
-                        .frame(width: 20)
-                    Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
-                        .font(.system(.subheadline, design: .monospaced))
-                        .frame(width: 28, alignment: .leading)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
+                            .frame(width: 20)
+                        Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .frame(width: 20, alignment: .leading)
+                    }
+                    .frame(width: 44, alignment: .leading)
                 }
-                .frame(width: 52, alignment: .leading)
-            }
-            Spacer(minLength: 12)
-            // Bookmark button
-            DebounceButton(
-                cooldownDuration: 0.3,
-                enableAnimation: true,
-                enableHaptic: true
-            ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
+
+                // Bookmark button
+                DebounceButton(
+                    cooldownDuration: 0.3,
+                    enableAnimation: true,
+                    enableHaptic: true
+                ) {
+                    if hproseInstance.appUser.isGuest {
+                        handleGuestAction()
+                    } else {
                     Task {
                         // Store current state before any changes
                         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
@@ -456,18 +458,21 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
-                        .frame(width: 20)
-                    Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
-                        .font(.system(.subheadline, design: .monospaced))
-                        .frame(width: 28, alignment: .leading)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
+                            .frame(width: 20)
+                        Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .frame(width: 20, alignment: .leading)
+                    }
+                    .frame(width: 44, alignment: .leading)
                 }
-                .frame(width: 52, alignment: .leading)
             }
+
             // Share button
-            Spacer(minLength: 16)
+            Spacer().frame(width: 80)
+
             ZStack {
                 DebounceButton(
                     cooldownDuration: 0.3,
