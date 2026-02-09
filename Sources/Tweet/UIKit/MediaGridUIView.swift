@@ -31,7 +31,7 @@ class MediaGridUIView: UIView {
     // Cached grid dimensions
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32)
-    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 120)
+    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 80)  // Embedded: wider media for better content display
 
     var isGridVisible: Bool = false {
         didSet {

@@ -39,7 +39,7 @@ struct MediaGridView: View, Equatable {
     // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
-    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 140) // Narrower width for embedded/quoted tweets
+    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 80) // Embedded tweet: wider media for better content display
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
