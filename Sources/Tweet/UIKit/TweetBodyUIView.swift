@@ -18,6 +18,8 @@ class TweetBodyUIView: UIView {
         label.numberOfLines = 7
         label.lineBreakMode = .byTruncatingTail
         label.textColor = .label
+        label.setContentHuggingPriority(.required, for: .vertical)
+        label.setContentCompressionResistancePriority(.required, for: .vertical)
         return label
     }()
 
@@ -70,6 +72,8 @@ class TweetBodyUIView: UIView {
     }
 
     private func setupViews() {
+        backgroundColor = .clear
+
         addSubview(contentLabel)
         addSubview(mediaContainerView)
         addSubview(captionLabel)
@@ -179,7 +183,18 @@ class TweetBodyUIView: UIView {
 
         // --- Media grid (Phase 3: pure UIKit) ---
         if hasMedia {
-            let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, isEmbedded: isEmbedded)
+            // Calculate actual available width based on context
+            let screenWidth = UIScreen.main.bounds.width
+            let gridWidth: CGFloat
+            if isEmbedded {
+                // Embedded: cell padding (32+32) + embedded container (8+4) + avatar (40) + spacing (8) = 124
+                gridWidth = max(10, screenWidth - 124)
+            } else {
+                // Regular: cell padding (32+32) = 64
+                gridWidth = max(10, screenWidth - 64)
+            }
+
+            let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, gridWidth: gridWidth)
 
             mediaHeightConstraint?.constant = mediaHeight
             mediaHeightConstraint?.isActive = true

@@ -28,10 +28,9 @@ class MediaGridUIView: UIView {
     private var hasInitialized: Bool = false
     private var cancellables = Set<AnyCancellable>()
 
-    // Cached grid dimensions
-    private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
-    private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32)
-    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 80)  // Embedded: wider media for better content display
+    // Track whether layout needs recalculation
+    private var needsFrameRecalculation: Bool = false
+    private var lastLayoutWidth: CGFloat = 0
 
     var isGridVisible: Bool = false {
         didSet {
@@ -86,26 +85,19 @@ class MediaGridUIView: UIView {
 
         guard !attachments.isEmpty else { return }
 
-        // Create cells (max 4 shown)
+        // Create cells (max 4 shown) - frames will be set in layoutSubviews()
         let displayCount = min(attachments.count, 4)
-        let gridWidth = isEmbedded ? Self.cachedEmbeddedGridWidth : Self.cachedGridWidth
-        let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
-        let gridHeight = max(10, gridWidth / gridAspectRatio)
-        let frames = calculateCellFrames(
-            attachments: attachments,
-            gridWidth: gridWidth,
-            gridHeight: gridHeight
-        )
 
         for i in 0..<displayCount {
             let cellView = MediaCellUIView()
-            cellView.frame = frames[i]
+            // Frame will be set in layoutSubviews when actual width is known
+            cellView.frame = .zero
 
-            let cellAspectRatio = Float(frames[i].width / max(1, frames[i].height))
+            // Aspect ratio will be updated in layoutSubviews with correct dimensions
             cellView.configure(
                 parentTweet: tweet,
                 attachmentIndex: i,
-                aspectRatio: cellAspectRatio,
+                aspectRatio: 1.0,  // Placeholder, will be updated in layoutSubviews
                 shouldLoadVideo: shouldLoadVideo,
                 isEmbedded: isEmbedded,
                 cellTweetId: cellTweetId,
@@ -117,10 +109,9 @@ class MediaGridUIView: UIView {
             cellViews.append(cellView)
         }
 
-        // "+N more" overlay on 4th cell
-        if attachments.count > 4 {
-            addMoreOverlay(count: attachments.count - 4, frame: frames[3])
-        }
+        // Mark that we need to calculate frames in layoutSubviews
+        needsFrameRecalculation = true
+        setNeedsLayout()
 
         // Empty tap gesture to prevent propagation to parent tweet
         if gestureRecognizers?.isEmpty ?? true {
@@ -131,6 +122,60 @@ class MediaGridUIView: UIView {
 
     @objc private func gridTapped() {
         // Consume tap to prevent propagation
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+
+        // Only recalculate if width changed or if we haven't laid out yet
+        guard bounds.width > 0 &&
+              (needsFrameRecalculation || bounds.width != lastLayoutWidth) else {
+            return
+        }
+
+        lastLayoutWidth = bounds.width
+        needsFrameRecalculation = false
+
+        // Calculate frames using actual container width
+        guard let parentTweet,
+              !attachments.isEmpty,
+              !cellViews.isEmpty else { return }
+
+        let gridWidth = bounds.width
+        let gridAspectRatio = MediaGridViewModel.aspectRatio(for: attachments)
+        let gridHeight = max(10, gridWidth / gridAspectRatio)
+
+        let frames = calculateCellFrames(
+            attachments: attachments,
+            gridWidth: gridWidth,
+            gridHeight: gridHeight
+        )
+
+        // Update cell frames and aspect ratios
+        for (i, cellView) in cellViews.enumerated() where i < frames.count {
+            cellView.frame = frames[i]
+
+            // Update aspect ratio based on actual frame
+            let cellAspectRatio = Float(frames[i].width / max(1, frames[i].height))
+            if let parentVC = parentViewController {
+                cellView.configure(
+                    parentTweet: parentTweet,
+                    attachmentIndex: i,
+                    aspectRatio: cellAspectRatio,
+                    shouldLoadVideo: shouldLoadVideo,
+                    isEmbedded: isEmbedded,
+                    cellTweetId: cellTweetId,
+                    isSingleMedia: attachments.count == 1,
+                    parentViewController: parentVC
+                )
+            }
+        }
+
+        // Update "+N more" overlay position if present
+        if attachments.count > 4, frames.count >= 4 {
+            moreLabelOverlay?.frame = frames[3]
+            moreLabel?.frame = moreLabelOverlay?.bounds ?? .zero
+        }
     }
 
     // MARK: - Frame Calculations

@@ -63,6 +63,7 @@ class TweetCellContentView: UIView {
     // Wrapper for embedded tweet: provides -4pt leading offset to match old SwiftUI .padding(.leading, -4)
     private let embeddedTweetWrapper: UIView = {
         let v = UIView()
+        v.backgroundColor = .clear
         v.clipsToBounds = false
         return v
     }()
@@ -141,7 +142,7 @@ class TweetCellContentView: UIView {
         contentColumn.addArrangedSubview(embeddedTweetWrapper)
         contentColumn.addArrangedSubview(actionBar)
 
-        contentColumn.setCustomSpacing(0, after: headerView)
+        contentColumn.setCustomSpacing(2, after: headerView)  // Space between header and body content
         contentColumn.setCustomSpacing(12, after: bodyView)
         contentColumn.setCustomSpacing(20, after: embeddedTweetWrapper)
 
@@ -507,9 +508,16 @@ class TweetCellContentView: UIView {
         actionBar.onShowToast = { [weak self] msg, isError in self?.onShowToast?(msg, isError) }
     }
 
-    /// Adjust body→action spacing
+    /// Adjust body→action spacing (or body→embedded spacing for quoted tweets)
     private func updateBodyToActionSpacing() {
-        let spacing: CGFloat = bodyView.isCaptionVisible ? 4 : 10
+        let spacing: CGFloat
+        if !embeddedTweetWrapper.isHidden {
+            // Quoted tweet: body → embedded tweet needs consistent spacing
+            spacing = 12
+        } else {
+            // Regular/retweet: body → action bar spacing depends on caption
+            spacing = bodyView.isCaptionVisible ? 4 : 10
+        }
         contentColumn.setCustomSpacing(spacing, after: bodyView)
     }
 

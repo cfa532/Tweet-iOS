@@ -758,20 +758,28 @@ struct ZoomableView<Content: View>: View {
 
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {
-    /// Calculate precise height for MediaGrid given attachments and whether it's embedded
-    /// This allows height pre-calculation without rendering
-    static func calculateHeight(for attachments: [MimeiFileType], isEmbedded: Bool) -> CGFloat {
+    /// Calculate precise height for MediaGrid given attachments and actual grid width
+    /// Use this when you know the exact available width (e.g., from view bounds or constraints)
+    static func calculateHeight(for attachments: [MimeiFileType], gridWidth: CGFloat) -> CGFloat {
         guard !attachments.isEmpty else { return 0 }
-
-        let screenWidth = UIScreen.main.bounds.width
-        let gridWidth = isEmbedded
-            ? max(10, screenWidth - 140)  // Embedded width
-            : max(10, screenWidth - 32 - 32)  // Regular width
 
         let gridAspectRatio = aspectRatio(for: attachments)
         let gridHeight = max(10, gridWidth / gridAspectRatio)
 
         return gridHeight
+    }
+
+    /// Calculate precise height for MediaGrid given attachments and whether it's embedded
+    /// This uses screen-width-based estimates - prefer the gridWidth variant when actual width is known
+    static func calculateHeight(for attachments: [MimeiFileType], isEmbedded: Bool) -> CGFloat {
+        guard !attachments.isEmpty else { return 0 }
+
+        let screenWidth = UIScreen.main.bounds.width
+        let gridWidth = isEmbedded
+            ? max(10, screenWidth - 80)  // Embedded width estimate
+            : max(10, screenWidth - 32 - 32)  // Regular width
+
+        return calculateHeight(for: attachments, gridWidth: gridWidth)
     }
 
     /// Get aspect ratio for an attachment, detecting from cached image if nil
