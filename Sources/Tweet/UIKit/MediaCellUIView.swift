@@ -74,6 +74,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
+        iv.layer.cornerRadius = 8
         iv.backgroundColor = .systemGray6
         return iv
     }()
@@ -119,6 +120,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private let fullscreenOverlay: UIView = {
         let v = UIView()
         v.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        v.layer.cornerRadius = 8
+        v.clipsToBounds = true
         v.isHidden = true
         return v
     }()
@@ -165,6 +168,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func setupViews() {
         clipsToBounds = true
+        layer.cornerRadius = 8
 
         addSubview(imageView)
         addSubview(loadingSpinner)
@@ -353,6 +357,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let hostingController = UIHostingController(rootView: AnyView(wrapper))
         hostingController.view.backgroundColor = .black
         hostingController.view.insetsLayoutMarginsFromSafeArea = false
+        hostingController.view.layer.cornerRadius = 8
+        hostingController.view.clipsToBounds = true
         // Explicit frame — no sizingOptions (prevents async sizing mismatch)
         hostingController.view.frame = bounds
 
@@ -445,6 +451,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let hostingController = UIHostingController(rootView: AnyView(audioView))
         hostingController.view.backgroundColor = .clear
         hostingController.view.insetsLayoutMarginsFromSafeArea = false
+        hostingController.view.layer.cornerRadius = 8
+        hostingController.view.clipsToBounds = true
         hostingController.view.frame = bounds
 
         parentViewController?.addChild(hostingController)

@@ -91,10 +91,10 @@ class TweetBodyUIView: UIView {
             contentLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
 
-        // Media container constraints (1pt right padding for media grid)
+        // Media container constraints (no right padding for media grid in embedded tweets)
         NSLayoutConstraint.activate([
             mediaContainerView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            mediaContainerView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
+            mediaContainerView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         // text .padding(.bottom, 2) + media .padding(.top, 6) = 8pt gap
         mediaTopToContent = mediaContainerView.topAnchor.constraint(equalTo: contentLabel.bottomAnchor, constant: 8)

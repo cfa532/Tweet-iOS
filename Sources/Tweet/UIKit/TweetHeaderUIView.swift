@@ -51,6 +51,7 @@ class TweetHeaderUIView: UIView {
         let config = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         button.setImage(UIImage(systemName: "ellipsis", withConfiguration: config), for: .normal)
         button.tintColor = .secondaryLabel
+        button.showsMenuAsPrimaryAction = true
         return button
     }()
 
@@ -64,9 +65,6 @@ class TweetHeaderUIView: UIView {
 
     private var cancellables = Set<AnyCancellable>()
     private var currentTweetId: String?
-
-    /// Closure invoked when the menu button is tapped. Passes the tweet and the source view for popover anchoring.
-    var onMenuTap: ((Tweet, UIView) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -97,18 +95,21 @@ class TweetHeaderUIView: UIView {
             stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
             stackView.trailingAnchor.constraint(lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
 
-            menuButton.topAnchor.constraint(equalTo: topAnchor),
+            menuButton.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
             menuButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             menuButton.widthAnchor.constraint(equalToConstant: 44),
-            menuButton.heightAnchor.constraint(equalToConstant: 24),
+            menuButton.heightAnchor.constraint(equalToConstant: 44),
         ])
-
-        menuButton.addTarget(self, action: #selector(menuTapped), for: .touchUpInside)
     }
 
-    @objc private func menuTapped() {
-        guard let tweet = currentTweet else { return }
-        onMenuTap?(tweet, menuButton)
+    /// Set the UIMenu for the menu button
+    func setMenu(_ menu: UIMenu) {
+        menuButton.menu = menu
+    }
+
+    /// Check if a tap location (in header view's coordinate space) is within the menu button
+    func containsMenuButton(at point: CGPoint) -> Bool {
+        return menuButton.frame.contains(point)
     }
 
     private weak var currentTweet: Tweet?
@@ -178,7 +179,7 @@ class TweetHeaderUIView: UIView {
         nameLabel.text = nil
         usernameLabel.text = nil
         timestampLabel.text = nil
-        onMenuTap = nil
+        menuButton.menu = nil
     }
 
     // MARK: - Time Difference (ported from TweetItemHeaderView)

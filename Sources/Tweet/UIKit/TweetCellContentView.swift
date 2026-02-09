@@ -227,6 +227,12 @@ class TweetCellContentView: UIView {
             return
         }
 
+        // Check if tap is on menu button in header
+        let headerLocation = gesture.location(in: headerView)
+        if headerView.containsMenuButton(at: headerLocation) {
+            return
+        }
+
         // For all other taps (blank areas, header text, etc.), navigate to detail
         onTweetTap?(tweet)
     }
@@ -295,11 +301,10 @@ class TweetCellContentView: UIView {
 
         // Header
         headerView.configure(tweet: tweet)
-        headerView.onMenuTap = { [weak self] tweet, sourceView in
-            self?.presentTweetMenu(tweet: tweet, isPinned: isPinned,
-                                    showDelete: tweet.authorId == hproseInstance.appUser.mid,
-                                    sourceView: sourceView, hproseInstance: hproseInstance)
-        }
+        let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
+                                   showDelete: tweet.authorId == hproseInstance.appUser.mid,
+                                   hproseInstance: hproseInstance)
+        headerView.setMenu(menu)
 
         // Body
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
@@ -369,11 +374,10 @@ class TweetCellContentView: UIView {
 
         // Header from original tweet
         headerView.configure(tweet: originalTweet)
-        headerView.onMenuTap = { [weak self] _, sourceView in
-            self?.presentTweetMenu(tweet: tweet, isPinned: isPinned,
-                                    showDelete: tweet.authorId == hproseInstance.appUser.mid,
-                                    sourceView: sourceView, hproseInstance: hproseInstance)
-        }
+        let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
+                                   showDelete: tweet.authorId == hproseInstance.appUser.mid,
+                                   hproseInstance: hproseInstance)
+        headerView.setMenu(menu)
 
         // Body from original tweet
         bodyView.configure(tweet: originalTweet, isEmbedded: false, cellTweetId: tweet.mid,
@@ -420,11 +424,10 @@ class TweetCellContentView: UIView {
 
         // Header from quoting tweet
         headerView.configure(tweet: tweet)
-        headerView.onMenuTap = { [weak self] _, sourceView in
-            self?.presentTweetMenu(tweet: tweet, isPinned: isPinned,
-                                    showDelete: tweet.authorId == hproseInstance.appUser.mid,
-                                    sourceView: sourceView, hproseInstance: hproseInstance)
-        }
+        let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
+                                   showDelete: tweet.authorId == hproseInstance.appUser.mid,
+                                   hproseInstance: hproseInstance)
+        headerView.setMenu(menu)
 
         // Body from quoting tweet
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
@@ -486,27 +489,107 @@ class TweetCellContentView: UIView {
         }
     }
 
-    // MARK: - Menu Presentation
+    // MARK: - Menu Creation
 
-    private func presentTweetMenu(tweet: Tweet, isPinned: Bool, showDelete: Bool,
-                                   sourceView: UIView, hproseInstance: HproseInstance) {
-        guard let parentVC = parentViewController else { return }
+    private func createTweetMenu(tweet: Tweet, isPinned: Bool, showDelete: Bool,
+                                  hproseInstance: HproseInstance) -> UIMenu {
+        var actions: [UIAction] = []
 
-        // Use SwiftUI TweetMenu hosted in a popover for Phase 1
-        let menuView = TweetMenu(tweet: tweet, isPinned: isPinned, showDeleteButton: showDelete)
-            .environmentObject(hproseInstance)
+        // Copy Tweet ID
+        let truncatedId = String(tweet.mid.prefix(8)) + "..."
+        let copyAction = UIAction(title: truncatedId, image: UIImage(systemName: "doc.on.clipboard")) { _ in
+            UIPasteboard.general.string = tweet.mid
+        }
+        actions.append(copyAction)
 
-        let hostingController = UIHostingController(rootView: menuView)
-        hostingController.modalPresentationStyle = .popover
-        hostingController.preferredContentSize = CGSize(width: 250, height: 200)
+        // Filter Content
+        let filterAction = UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"),
+                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { [weak self] _ in
+            // TODO: Show filter sheet
+            print("Filter content tapped")
+        }
+        actions.append(filterAction)
 
-        if let popover = hostingController.popoverPresentationController {
-            popover.sourceView = sourceView
-            popover.sourceRect = sourceView.bounds
-            popover.permittedArrowDirections = .up
+        // Report (only for others' tweets)
+        if tweet.authorId != hproseInstance.appUser.mid {
+            let reportAction = UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"),
+                                        image: UIImage(systemName: "flag"),
+                                        attributes: .destructive) { [weak self] _ in
+                // TODO: Show report sheet
+                print("Report tapped")
+            }
+            actions.append(reportAction)
         }
 
-        parentVC.present(hostingController, animated: true)
+        // Pin/Unpin (only for own tweets)
+        if tweet.authorId == hproseInstance.appUser.mid {
+            let pinTitle = isPinned ? NSLocalizedString("Unpin", comment: "Menu item") : NSLocalizedString("Pin", comment: "Menu item")
+            let pinIcon = isPinned ? "pin.slash" : "pin"
+            let pinAction = UIAction(title: pinTitle, image: UIImage(systemName: pinIcon)) { _ in
+                Task {
+                    do {
+                        if let newPinStatus = try await hproseInstance.togglePinnedTweet(tweetId: tweet.mid) {
+                            NotificationCenter.default.post(
+                                name: .tweetPinStatusChanged,
+                                object: nil,
+                                userInfo: ["tweetId": tweet.mid, "isPinned": newPinStatus]
+                            )
+                        }
+                    } catch {
+                        print("Pin toggle failed: \(error)")
+                    }
+                }
+            }
+            actions.append(pinAction)
+
+            // Privacy Toggle
+            let privacyTitle = tweet.isPrivate == true ?
+                NSLocalizedString("Make Public", comment: "Menu item") :
+                NSLocalizedString("Make Private", comment: "Menu item")
+            let privacyIcon = tweet.isPrivate == true ? "globe" : "lock"
+            let privacyAction = UIAction(title: privacyTitle, image: UIImage(systemName: privacyIcon)) { _ in
+                Task {
+                    do {
+                        let newPrivacy = try await hproseInstance.updateTweetPrivacy(tweetId: tweet.mid)
+                        await MainActor.run {
+                            tweet.isPrivate = newPrivacy
+                            TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                            NotificationCenter.default.post(
+                                name: .tweetPrivacyChanged,
+                                object: nil,
+                                userInfo: ["tweetId": tweet.mid]
+                            )
+                        }
+                    } catch {
+                        print("Privacy toggle failed: \(error)")
+                    }
+                }
+            }
+            actions.append(privacyAction)
+
+            // Delete (only for own tweets if showDelete is true)
+            if showDelete {
+                let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: "Menu item"),
+                                            image: UIImage(systemName: "trash"),
+                                            attributes: .destructive) { _ in
+                    Task {
+                        do {
+                            try await hproseInstance.deleteTweet(tweet.mid)
+                            NotificationCenter.default.post(
+                                name: .tweetDeleted,
+                                object: nil,
+                                userInfo: ["tweetId": tweet.mid]
+                            )
+                        } catch {
+                            print("Delete failed: \(error)")
+                        }
+                    }
+                }
+                actions.append(deleteAction)
+            }
+        }
+
+        return UIMenu(title: "", children: actions)
     }
 
     // MARK: - Visibility

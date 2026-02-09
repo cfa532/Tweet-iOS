@@ -119,7 +119,7 @@ class EmbeddedTweetUIView: UIView {
         NSLayoutConstraint.activate([
             contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
 
             avatarView.widthAnchor.constraint(equalToConstant: 40),
             avatarView.heightAnchor.constraint(equalToConstant: 40),
