@@ -1173,27 +1173,43 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // Return a fast heuristic estimate without expensive text layout calculations.
-        // The actual height will be measured by Auto Layout when the cell is displayed.
+        // Fast heuristic matching retweet/quoted tweet logic from calculateTweetHeight
+        let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
+        let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
+            || (tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true))
+        let isPureRetweet = isRetweet && !hasOwnContent
+
+        // Determine which tweet's content to measure
+        let displayTweet: Tweet
+        if isPureRetweet, let originalId = tweet.originalTweetId,
+           let original = Tweet.getInstance(for: originalId), original.author != nil {
+            displayTweet = original
+        } else {
+            displayTweet = tweet
+        }
+
         // Base: 16(top) + 24(header) + 30(actions) + 16(bottom) + 1(separator) = 87pt
-        let baseHeight: CGFloat = 87
+        var height: CGFloat = 87
 
-        // Add estimated content height based on presence of content/media
-        var contentEstimate: CGFloat = 0
-        if let content = tweet.content, !content.isEmpty {
-            // Estimate ~3 lines of text on average (16pt font * 1.2 lineHeight * 3)
-            contentEstimate += 60
-        }
-        if let attachments = tweet.attachments, !attachments.isEmpty {
-            // Estimate media grid (~300pt for typical aspect ratio)
-            contentEstimate += 300
-        }
-        if tweet.originalTweetId != nil {
-            // Embedded tweet adds ~150pt
-            contentEstimate += 150
+        // Retweet banner for pure retweets
+        if isPureRetweet {
+            height += 20
         }
 
-        return baseHeight + contentEstimate
+        // Estimate content height
+        if let content = displayTweet.content, !content.isEmpty {
+            height += 60 // ~3 lines average
+        }
+        if let attachments = displayTweet.attachments, !attachments.isEmpty {
+            height += 300 // typical media grid
+        }
+
+        // Quoted tweet: add embedded tweet estimate (only if has own content)
+        if isRetweet && hasOwnContent {
+            height += 150 // embedded tweet
+        }
+
+        return height
     }
 
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
