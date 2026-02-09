@@ -210,36 +210,34 @@ struct TweetActionButtonsView: View {
     
     var body: some View {
         HStack(spacing: 0) {
-            // First 4 action buttons grouped together
-            HStack(spacing: 2) {
-                // Comment button
-                DebounceButton(
-                    cooldownDuration: 0.3,
-                    enableAnimation: true,
-                    enableHaptic: true
-                ) {
-                    if hproseInstance.appUser.isGuest {
-                        handleGuestAction()
-                    } else {
-                        onCommentTap?() ?? { showCommentCompose = true }()
-                    }
-                } label: {
-                    HStack(spacing: 2) {
-                        Image(systemName: "bubble.left")
-                            .frame(width: 20)
-                        Text((tweet.commentCount ?? 0) > 0 ? formatCount(tweet.commentCount!) : "")
-                            .font(.system(.subheadline, design: .monospaced))
-                            .frame(width: 20, alignment: .leading)
-                    }
-                    .frame(width: 44, alignment: .leading)
+            // Comment button
+            DebounceButton(
+                cooldownDuration: 0.3,
+                enableAnimation: true,
+                enableHaptic: true
+            ) {
+                if hproseInstance.appUser.isGuest {
+                    handleGuestAction()
+                } else {
+                    onCommentTap?() ?? { showCommentCompose = true }()
                 }
-
-                // Retweet / forward button
-                DebounceButton(
-                    cooldownDuration: 0.5,
-                    enableAnimation: true,
-                    enableHaptic: true
-                ) {
+            } label: {
+                HStack(spacing: 2) {
+                    Image(systemName: "bubble.left")
+                        .frame(width: 20)
+                    Text((tweet.commentCount ?? 0) > 0 ? formatCount(tweet.commentCount!) : "")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .frame(width: 28, alignment: .leading)
+                }
+                .frame(width: 52, alignment: .leading)
+            }
+            Spacer(minLength: 12)
+            // Retweet / forward button
+            DebounceButton(
+                cooldownDuration: 0.5,
+                enableAnimation: true,
+                enableHaptic: true
+            ) {
                 if hproseInstance.appUser.isGuest {
                     handleGuestAction()
                 } else {
@@ -288,17 +286,17 @@ struct TweetActionButtonsView: View {
                             .frame(width: 24)
                         Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
-                            .frame(width: 20, alignment: .leading)
+                            .frame(width: 28, alignment: .leading)
                     }
-                    .frame(width: 44, alignment: .leading)
+                    .frame(width: 52, alignment: .leading)
                 }
-
-                // Like button
-                DebounceButton(
-                    cooldownDuration: 0.3,
-                    enableAnimation: true,
-                    enableHaptic: true
-                ) {
+            Spacer(minLength: 12)
+            // Like button
+            DebounceButton(
+                cooldownDuration: 0.3,
+                enableAnimation: true,
+                enableHaptic: true
+            ) {
                     if hproseInstance.appUser.isGuest {
                         handleGuestAction()
                     } else {
@@ -376,17 +374,17 @@ struct TweetActionButtonsView: View {
                             .frame(width: 20)
                         Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
-                            .frame(width: 20, alignment: .leading)
+                            .frame(width: 28, alignment: .leading)
                     }
-                    .frame(width: 44, alignment: .leading)
+                    .frame(width: 52, alignment: .leading)
                 }
-
-                // Bookmark button
-                DebounceButton(
-                    cooldownDuration: 0.3,
-                    enableAnimation: true,
-                    enableHaptic: true
-                ) {
+            Spacer(minLength: 12)
+            // Bookmark button
+            DebounceButton(
+                cooldownDuration: 0.3,
+                enableAnimation: true,
+                enableHaptic: true
+            ) {
                     if hproseInstance.appUser.isGuest {
                         handleGuestAction()
                     } else {
@@ -464,14 +462,12 @@ struct TweetActionButtonsView: View {
                             .frame(width: 20)
                         Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
-                            .frame(width: 20, alignment: .leading)
+                            .frame(width: 28, alignment: .leading)
                     }
-                    .frame(width: 44, alignment: .leading)
+                    .frame(width: 52, alignment: .leading)
                 }
-            }
-
             // Share button
-            Spacer().frame(width: 80)
+            Spacer(minLength: 16)
 
             ZStack {
                 DebounceButton(
@@ -554,7 +550,9 @@ struct TweetActionButtonsView: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
+            .padding(.trailing, 4)
         }
+        .frame(height: 30)
         .foregroundColor(.themeSecondaryText)
         .sheet(isPresented: $showCommentCompose) {
             if let commentsVM = commentsVM {
@@ -570,31 +568,28 @@ struct TweetActionButtonsView: View {
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
             }
         }
-        .background(
-            ShareSheet(
-                shareData: $shareSheetItems,
-                onPresented: {
+        .sheet(item: $shareSheetItems, onDismiss: {
+            attachmentPreviewImage = nil
+            isPreparingShare = false
+            print("DEBUG: [SHARE] Sheet dismissed, state cleared")
+            onShareVisibilityChange?(false)
+
+            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
+            }
+        }) { sheetData in
+            ShareSheetView(items: sheetData.items)
+                .onAppear {
                     isPreparingShare = false
                     onShareVisibilityChange?(true)
                     print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
-                },
-                onDismiss: {
-                    attachmentPreviewImage = nil
-                    isPreparingShare = false
-                    print("DEBUG: [SHARE] Sheet dismissed, state cleared")
-                    onShareVisibilityChange?(false)
-
-                    OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
-
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 300_000_000)
-                        OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
-                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                        print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
-                    }
                 }
-            )
-        )
+        }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
@@ -1560,70 +1555,20 @@ struct TweetActionButtonsView: View {
     }
 }
 
-/// Presents UIActivityViewController directly via UIKit to avoid
-/// SwiftUI .sheet safe-area corruption that causes blank space under the tab bar.
-struct ShareSheet: UIViewControllerRepresentable {
-    @Binding var shareData: ShareSheetData?
-    let onPresented: () -> Void
-    let onDismiss: () -> Void
+/// SwiftUI wrapper for UIActivityViewController
+struct ShareSheetView: UIViewControllerRepresentable {
+    let items: [Any]
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        let vc = UIViewController()
-        vc.view.isHidden = true
-        vc.view.frame = .zero
-        return vc
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: items,
+            applicationActivities: nil
+        )
+        return controller
     }
 
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        context.coordinator.onPresented = onPresented
-        context.coordinator.onDismiss = onDismiss
-        context.coordinator.dataBinding = $shareData
-
-        if shareData != nil, !context.coordinator.isPresenting {
-            context.coordinator.present(items: shareData!.items)
-        }
-    }
-
-    class Coordinator {
-        var isPresenting = false
-        var dataBinding: Binding<ShareSheetData?>?
-        var onPresented: (() -> Void)?
-        var onDismiss: (() -> Void)?
-
-        func present(items: [Any]) {
-            isPresenting = true
-
-            let activityVC = UIActivityViewController(
-                activityItems: items,
-                applicationActivities: nil
-            )
-
-            activityVC.completionWithItemsHandler = { [weak self] _, _, _, _ in
-                guard let self else { return }
-                self.isPresenting = false
-                DispatchQueue.main.async {
-                    self.dataBinding?.wrappedValue = nil
-                    self.onDismiss?()
-                }
-            }
-
-            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                  let rootVC = windowScene.windows.first?.rootViewController else {
-                isPresenting = false
-                return
-            }
-
-            var topVC = rootVC
-            while let presented = topVC.presentedViewController {
-                topVC = presented
-            }
-
-            topVC.present(activityVC, animated: true) { [weak self] in
-                self?.onPresented?()
-            }
-        }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        // No updates needed
     }
 }
 

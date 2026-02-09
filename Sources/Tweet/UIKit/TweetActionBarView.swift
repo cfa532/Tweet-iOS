@@ -104,9 +104,11 @@ class TweetActionBarView: UIView {
             leftStack.trailingAnchor.constraint(equalTo: shareContainer.leadingAnchor),
 
             shareContainer.topAnchor.constraint(equalTo: topAnchor),
-            shareContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            shareContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             shareContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
-            shareContainer.widthAnchor.constraint(equalToConstant: 30),
+
+            // First 4 buttons take more space, share button gets less
+            leftStack.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.75),
 
             heightAnchor.constraint(equalToConstant: 30),
         ])
