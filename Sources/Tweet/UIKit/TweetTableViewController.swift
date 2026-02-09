@@ -1173,14 +1173,27 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // Compute height from known UIKit Auto Layout constants.
-        // TweetCellContentView layout:
-        //   topPadding(16) + contentColumn + bottomPadding(16) + separator(1)
-        //   contentColumn = header + body + (optional embeddedTweet + 16pt spacing) + actionBar(30)
-        //   mainStack.spacing = 4 (horizontal, doesn't affect height)
-        //   contentColumn.spacing: 0 after header, 8 after body, 16 after embeddedTweet
+        // Return a fast heuristic estimate without expensive text layout calculations.
+        // The actual height will be measured by Auto Layout when the cell is displayed.
+        // Base: 16(top) + 24(header) + 30(actions) + 16(bottom) + 1(separator) = 87pt
+        let baseHeight: CGFloat = 87
 
-        return Self.calculateTweetHeight(for: tweet)
+        // Add estimated content height based on presence of content/media
+        var contentEstimate: CGFloat = 0
+        if let content = tweet.content, !content.isEmpty {
+            // Estimate ~3 lines of text on average (16pt font * 1.2 lineHeight * 3)
+            contentEstimate += 60
+        }
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            // Estimate media grid (~300pt for typical aspect ratio)
+            contentEstimate += 300
+        }
+        if tweet.originalTweetId != nil {
+            // Embedded tweet adds ~150pt
+            contentEstimate += 150
+        }
+
+        return baseHeight + contentEstimate
     }
 
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
