@@ -8,6 +8,7 @@
 //
 import UIKit
 import Combine
+import AVFoundation
 
 class TweetActionBarView: UIView {
 
@@ -51,6 +52,10 @@ class TweetActionBarView: UIView {
     var onShowToast: ((String, Bool) -> Void)? // (message, isError)
     weak var parentViewController: UIViewController?
 
+    // Share state
+    private var attachmentPreviewImage: UIImage?
+    private var isPreparingShare = false
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setupViews()
@@ -81,9 +86,9 @@ class TweetActionBarView: UIView {
         shareSpinner.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             shareButton.centerYAnchor.constraint(equalTo: shareContainer.centerYAnchor),
-            shareButton.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor),
+            shareButton.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor, constant: -4),
             shareSpinner.centerYAnchor.constraint(equalTo: shareContainer.centerYAnchor),
-            shareSpinner.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor),
+            shareSpinner.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor, constant: -4),
         ])
 
         addSubview(leftStack)
@@ -373,17 +378,47 @@ class TweetActionBarView: UIView {
         guard debounce(&lastShareTime) else { return }
         guard let tweet = currentTweet, let hprose = hproseInstance else { return }
 
+        isPreparingShare = true
         shareSpinner.startAnimating()
         shareButton.alpha = 0.3
 
+        // Register overlay for video coordination
+        OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet_\(tweet.mid)", source: "TweetActionBarView")
+
         Task {
-            let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hprose)
+            print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
+
+            // Load attachment preview if available
+            if attachmentPreviewImage == nil {
+                print("DEBUG: [SHARE] Loading attachment preview...")
+                let preview = await loadAttachmentPreviewImage(for: tweet, hproseInstance: hprose)
+                await MainActor.run {
+                    self.attachmentPreviewImage = preview
+                    print("DEBUG: [SHARE] Preview image loaded: \(preview != nil ? "YES" : "NO")")
+                }
+            }
+
+            // Create share items with preview
+            let shareItems = await buildShareItems(for: tweet, hproseInstance: hprose)
 
             await MainActor.run {
+                self.isPreparingShare = false
                 self.shareSpinner.stopAnimating()
                 self.shareButton.alpha = 1.0
 
-                let activityVC = UIActivityViewController(activityItems: [shareText], applicationActivities: nil)
+                let activityVC = UIActivityViewController(activityItems: shareItems, applicationActivities: nil)
+
+                activityVC.completionWithItemsHandler = { [weak self] _, _, _, _ in
+                    guard let self = self else { return }
+                    // Clean up
+                    self.attachmentPreviewImage = nil
+                    OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet_\(tweet.mid)", source: "TweetActionBarView")
+
+                    // Reload visible videos after share sheet dismisses
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                    }
+                }
 
                 if let vc = self.parentViewController {
                     if let popover = activityVC.popoverPresentationController {
@@ -394,6 +429,24 @@ class TweetActionBarView: UIView {
                 }
             }
         }
+    }
+
+    /// Build share items with rich preview (feed context — not detail or comment view)
+    private func buildShareItems(for tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
+        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance)
+        let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
+
+        var items: [Any] = [customItem]
+
+        if let previewImage = attachmentPreviewImage {
+            items.append(CustomShareImage(image: previewImage))
+            print("DEBUG: [SHARE] Added preview image to share items")
+        } else if let appIcon = UIImage(named: "ic_splash") {
+            items.append(CustomShareImage(image: appIcon))
+            print("DEBUG: [SHARE] Added app icon as default image")
+        }
+
+        return items
     }
 
     /// Build share text for a tweet (feed context — not detail or comment view)
@@ -424,6 +477,156 @@ class TweetActionBarView: UIView {
         return shareText
     }
 
+    /// Load attachment preview image (first image or video thumbnail)
+    private func loadAttachmentPreviewImage(for tweet: Tweet, hproseInstance: HproseInstance) async -> UIImage? {
+        // Get source tweet (if this is a retweet, get the original)
+        let sourceTweet: Tweet
+        if let originalId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
+            if let original = Tweet.getInstance(for: originalId) {
+                sourceTweet = original
+            } else if let original = try? await hproseInstance.getTweet(tweetId: originalId, authorId: originalAuthorId) {
+                sourceTweet = original
+            } else {
+                sourceTweet = tweet
+            }
+        } else {
+            sourceTweet = tweet
+        }
+
+        guard let attachments = sourceTweet.attachments, !attachments.isEmpty else {
+            return nil
+        }
+
+        let firstAttachment = attachments[0]
+
+        // Get baseURL for this tweet's author
+        var baseURL: URL?
+        if let authorBaseUrl = sourceTweet.author?.baseUrl {
+            baseURL = authorBaseUrl
+        } else if let author = try? await hproseInstance.fetchUser(sourceTweet.authorId) {
+            baseURL = author.baseUrl
+        }
+
+        switch firstAttachment.type {
+        case .image:
+            // Try to get cached image first
+            if let cached = ImageCacheManager.shared.getCachedCompressedImage(forMid: firstAttachment.mid) {
+                return cropToCenter(image: cached)
+            }
+
+            // Load image from URL
+            if let url = resolvedAttachmentURL(for: firstAttachment, baseURL: baseURL) {
+                if let image = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: firstAttachment) {
+                    return cropToCenter(image: image)
+                }
+            }
+
+        case .video, .hls_video:
+            // Try to capture from cached player first
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: firstAttachment.mid) {
+                if let preview = await captureFrameFromPlayer(cachedPlayer) {
+                    return preview
+                }
+            }
+
+        default:
+            break
+        }
+
+        return nil
+    }
+
+    /// Resolve attachment URL with baseURL
+    private func resolvedAttachmentURL(for attachment: MimeiFileType, baseURL: URL?) -> URL? {
+        if let urlString = attachment.url, let url = URL(string: urlString), url.scheme != nil {
+            return url
+        }
+        if let urlString = attachment.url, let base = baseURL {
+            return URL(string: urlString, relativeTo: base) ?? base.appendingPathComponent(urlString)
+        }
+        if let baseURL = baseURL {
+            return attachment.getUrl(baseURL)
+        }
+        return nil
+    }
+
+    /// Capture frame from video player
+    private func captureFrameFromPlayer(_ player: AVPlayer) async -> UIImage? {
+        guard let playerItem = player.currentItem else { return nil }
+
+        let videoOutput = await MainActor.run { () -> AVPlayerItemVideoOutput in
+            let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ])
+            playerItem.add(output)
+            return output
+        }
+
+        defer {
+            Task { @MainActor in
+                playerItem.remove(videoOutput)
+            }
+        }
+
+        let currentTime = await MainActor.run { playerItem.currentTime() }
+
+        let image = await MainActor.run { () -> UIImage? in
+            guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else { return nil }
+            guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
+                return nil
+            }
+
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext(options: [.useSoftwareRenderer: false])
+            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+            return UIImage(cgImage: cgImage)
+        }
+
+        if let image = image {
+            return cropToCenter(image: image)
+        }
+
+        return nil
+    }
+
+    /// Crop image to center square and resize to 270x270
+    private func cropToCenter(image: UIImage, targetSize: CGFloat = 270) -> UIImage {
+        let size = image.size
+        let scale = image.scale
+        let cropSize = min(size.width, size.height)
+
+        let cropRect = CGRect(
+            x: (size.width - cropSize) / 2,
+            y: (size.height - cropSize) / 2,
+            width: cropSize,
+            height: cropSize
+        )
+
+        let scaledCropRect = CGRect(
+            x: cropRect.origin.x * scale,
+            y: cropRect.origin.y * scale,
+            width: cropRect.size.width * scale,
+            height: cropRect.size.height * scale
+        )
+
+        guard let cgImage = image.cgImage?.cropping(to: scaledCropRect) else {
+            return image
+        }
+
+        let croppedImage = UIImage(cgImage: cgImage, scale: scale, orientation: image.imageOrientation)
+
+        // Resize to target size
+        UIGraphicsBeginImageContextWithOptions(CGSize(width: targetSize, height: targetSize), true, 1.0)
+        defer { UIGraphicsEndImageContext() }
+
+        croppedImage.draw(in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
+        guard let resized = UIGraphicsGetImageFromCurrentImageContext() else {
+            return croppedImage
+        }
+
+        return resized
+    }
+
     func prepareForReuse() {
         cancellables.removeAll()
         currentTweetId = nil
@@ -435,6 +638,8 @@ class TweetActionBarView: UIView {
         parentViewController = nil
         shareSpinner.stopAnimating()
         shareButton.alpha = 1.0
+        attachmentPreviewImage = nil
+        isPreparingShare = false
     }
 }
 
