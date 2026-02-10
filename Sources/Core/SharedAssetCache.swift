@@ -22,6 +22,9 @@ class SharedAssetCache: ObservableObject {
     
     // CRITICAL: Track visible videos to prevent their players from being removed
     private var visibleVideoMids: Set<String> = []
+
+    // Track app foreground state — when foreground, protect visible + nearby videos from eviction
+    private var isAppInForeground: Bool = true
     
     // MARK: - CachingPlayerItem Delegate
     private class CachingPlayerItemDelegateImpl: NSObject, CachingPlayerItemDelegate {
@@ -136,7 +139,9 @@ class SharedAssetCache: ObservableObject {
         print("🔄 [MEMORY] Periodic cleanup starting (memory: \(memoryBefore), cache: \(cacheSizeBefore) players)")
 
         let now = Date()
-        let expiredKeys = cacheTimestamps.filter { now.timeIntervalSince($0.value) > cacheExpirationInterval }.map { $0.key }
+        // CRITICAL: Never evict visible or near-visible videos while app is in foreground
+        let protected = foregroundProtectedMids
+        let expiredKeys = cacheTimestamps.filter { !protected.contains($0.key) && now.timeIntervalSince($0.value) > cacheExpirationInterval }.map { $0.key }
         
         for key in expiredKeys {
             // CRITICAL: Properly release player using releasePlayer() method
@@ -653,12 +658,25 @@ class SharedAssetCache: ObservableObject {
         visibleVideoMids.remove(mediaID)
     }
 
+    /// Media IDs that must not be evicted while app is in foreground.
+    /// Includes visible videos plus videos belonging to nearby tweets (preload window).
+    private var foregroundProtectedMids: Set<String> {
+        guard isAppInForeground else { return [] }
+        var protected = visibleVideoMids
+        // Also protect media belonging to tweets in the VideoLoadingManager visible window
+        for tweetId in VideoLoadingManager.shared.visibleTweetIds {
+            let mediaIDs = getMediaIDsForTweet(tweetId)
+            protected.formUnion(mediaIDs)
+        }
+        return protected
+    }
+
     /// MEMORY FIX: Immediately release player and all video data when video goes out of sight
     /// This is called when MediaCell disappears to free memory immediately (not wait for 30-60s timer)
     @MainActor func releasePlayerImmediately(for mediaID: String) {
-        // Don't release visible videos (safety check)
-        guard !visibleVideoMids.contains(mediaID) else {
-            print("⚠️ [IMMEDIATE RELEASE] Refusing to release visible video \(mediaID)")
+        // Don't release visible or near-visible videos while in foreground
+        guard !foregroundProtectedMids.contains(mediaID) else {
+            print("⚠️ [IMMEDIATE RELEASE] Refusing to release protected video \(mediaID)")
             return
         }
 
@@ -708,8 +726,8 @@ class SharedAssetCache: ObservableObject {
     }
 
     func removeInvalidPlayer(for mediaID: String, force: Bool = false) {
-        // CRITICAL: Never remove players for visible videos (unless forced for error recovery)
-        if !force && visibleVideoMids.contains(mediaID) {
+        // CRITICAL: Never remove players for protected videos (unless forced for error recovery)
+        if !force && foregroundProtectedMids.contains(mediaID) {
             return
         }
         playerCache.removeValue(forKey: mediaID)
@@ -1765,12 +1783,13 @@ class SharedAssetCache: ObservableObject {
             ageThreshold = 60  // Normal: 60 seconds during moderate memory
         }
 
-        // CRITICAL: Find players that haven't been accessed within the threshold, but NEVER evict visible videos
+        // CRITICAL: Never evict visible or near-visible videos while app is in foreground
+        let protected = foregroundProtectedMids
         let oldKeys = cacheTimestamps
-            .filter { !visibleVideoMids.contains($0.key) && now.timeIntervalSince($0.value) > ageThreshold }
+            .filter { !protected.contains($0.key) && now.timeIntervalSince($0.value) > ageThreshold }
             .map { $0.key }
 
-        print("📊 [MEMORY] Using age threshold: \(Int(ageThreshold))s (memory: \(memoryUsage)MB, visible videos: \(visibleVideoMids.count))")
+        print("📊 [MEMORY] Using age threshold: \(Int(ageThreshold))s (memory: \(memoryUsage)MB, protected videos: \(protected.count))")
 
         if !oldKeys.isEmpty {
             print("🗑️ [MEMORY] Found \(oldKeys.count) old players to remove")
@@ -1801,9 +1820,10 @@ class SharedAssetCache: ObservableObject {
             let memoryBefore = getMemoryUsageString()
             print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - evicting oldest (memory: \(memoryBefore))")
 
-            // CRITICAL: Never evict visible videos - only remove least recently used NON-VISIBLE players
+            // CRITICAL: Never evict visible or near-visible videos while app is in foreground
+            let protected = foregroundProtectedMids
             let sortedKeys = cacheTimestamps
-                .filter { !visibleVideoMids.contains($0.key) } // Skip visible videos
+                .filter { !protected.contains($0.key) } // Skip protected videos
                 .sorted { $0.value < $1.value }
                 .map { $0.key }
             let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)
@@ -1997,16 +2017,28 @@ class SharedAssetCache: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.isAppInForeground = true
                 self?.handleAppWillEnterForeground()
             }
         }
-        
+
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isAppInForeground = false
+            }
+        }
+
         NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.isAppInForeground = true
                 self?.handleAppDidBecomeActive()
             }
         }

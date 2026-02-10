@@ -3434,12 +3434,14 @@ struct SimpleVideoPlayer: View {
                 }
             }
         } else {
-            // No player yet - ONLY show last frame during background recovery; otherwise black placeholder.
+            // No player yet - show cached last frame if available (prevents black flash on cell reuse).
+            // UIKit cell reuse destroys the UIHostingController, so SimpleVideoPlayer restarts with
+            // player=nil. The VideoLastFrameCache stores frames from the previous incarnation.
             ZStack {
                 // Tap-through cover: let MediaCell's overlay / parent tap gestures still work
                 // even while the player is being created.
                 Group {
-                    if mode == .mediaCell, isHoldingRecoveryCover, let frame = cachedLastFrame {
+                    if mode == .mediaCell, let frame = cachedLastFrame {
                         Image(uiImage: frame)
                             .resizable()
                             .scaledToFill()
@@ -3448,7 +3450,7 @@ struct SimpleVideoPlayer: View {
                     } else {
                         Color.black.opacity(0.9)
                     }
-                    
+
                     // Always show spinner when no player (loading or retrying)
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
