@@ -65,6 +65,8 @@ class TweetCellContentView: UIView {
         let v = UIView()
         v.backgroundColor = .clear
         v.clipsToBounds = false
+        // Prevent contentColumn (.fill distribution) from stretching the wrapper
+        v.setContentHuggingPriority(.required, for: .vertical)
         return v
     }()
 
@@ -144,7 +146,7 @@ class TweetCellContentView: UIView {
 
         contentColumn.setCustomSpacing(0, after: headerView)  // Space between header and body content
         contentColumn.setCustomSpacing(12, after: bodyView)
-        contentColumn.setCustomSpacing(20, after: embeddedTweetWrapper)
+        contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
 
         // Main stack: [avatar | contentColumn]
         mainStack.addArrangedSubview(avatarView)
@@ -453,7 +455,7 @@ class TweetCellContentView: UIView {
         // Show embedded tweet wrapper and restore its spacing
         embeddedTweetWrapper.isHidden = false
         embeddedWrapperHeightConstraint?.isActive = false
-        contentColumn.setCustomSpacing(20, after: embeddedTweetWrapper)
+        contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
 
         // Avatar from quoting tweet's author
         if let author = tweet.author {

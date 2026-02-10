@@ -1263,14 +1263,17 @@ class TweetTableViewController: UITableViewController {
                     embeddedHeight += estimatedLines * 18
                 }
 
+                var hasEmbeddedMedia = false
                 if let embeddedAttachments = embeddedTweet.attachments, !embeddedAttachments.isEmpty {
                     let embeddedMedia = embeddedAttachments.filter { TweetBodyUIView.isMediaType($0.type) }
                     if !embeddedMedia.isEmpty {
+                        hasEmbeddedMedia = true
                         embeddedHeight += MediaGridViewModel.calculateHeight(for: embeddedMedia, isEmbedded: true)
                     }
                 }
 
-                estimate += embeddedHeight + 8
+                // Reduce spacing when media has no caption (image attachments)
+                estimate += embeddedHeight + (hasEmbeddedMedia ? 0 : 8)
             } else {
                 // CRITICAL: Not loaded yet - estimate PLACEHOLDER height, not final height!
                 // EmbeddedTweetUIView shows a 60pt fixed placeholder when not loaded
@@ -1411,8 +1414,26 @@ class TweetTableViewController: UITableViewController {
 
                 // Media (filter to media-only, matching TweetBodyUIView)
                 let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
+                var hasEmbeddedCaption = false
                 if !embeddedMedia.isEmpty {
                     embeddedHeight += MediaGridViewModel.calculateHeight(for: embeddedMedia, isEmbedded: true) + 8
+
+                    // Check if embedded tweet has a video caption
+                    if embeddedMedia.count == 1 {
+                        let att = embeddedMedia[0]
+                        if att.type == .video || att.type == .hls_video {
+                            let hasTitle = embeddedTweet.title != nil &&
+                                !(embeddedTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                            let hasFileName = att.fileName != nil &&
+                                !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                            hasEmbeddedCaption = hasTitle || hasFileName
+                        }
+                    }
+
+                    // Reduce bottom padding when media has no caption (image: 0pt vs video caption: -8pt)
+                    if !hasEmbeddedCaption {
+                        embeddedHeight -= 8 // bottom padding reduced from 8 to 0
+                    }
                 }
 
                 height += embeddedHeight
@@ -1421,7 +1442,7 @@ class TweetTableViewController: UITableViewController {
                 height += 60
             }
 
-            height += 20 // contentColumn.setCustomSpacing(20, after: embeddedTweetWrapper)
+            height += 10 // contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
         }
 
         // Action bar (fixed 30pt)

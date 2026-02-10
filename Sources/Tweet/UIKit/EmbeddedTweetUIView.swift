@@ -101,6 +101,9 @@ class EmbeddedTweetUIView: UIView {
         layer.cornerRadius = 8
         clipsToBounds = true
 
+        // Prevent parent stack from stretching this view
+        setContentHuggingPriority(.required, for: .vertical)
+
         // Content layout: [Avatar | [Header, Body]]
         textStack.addArrangedSubview(headerView)
         textStack.addArrangedSubview(bodyView)
@@ -183,6 +186,12 @@ class EmbeddedTweetUIView: UIView {
         bodyView.configure(tweet: tweet, isEmbedded: true,
                            cellTweetId: quotingTweetId,
                            parentViewController: parentViewController)
+
+        // Reduce bottom padding when media is present but no caption
+        // (image attachments have no caption, so the gap looks excessive)
+        let hasMedia = tweet.attachments?.contains(where: { TweetBodyUIView.isMediaType($0.type) }) ?? false
+        let reduceBottom = hasMedia && !bodyView.isCaptionVisible
+        contentStackBottomConstraint.constant = reduceBottom ? 0 : -8
 
         // Mark as accessed for cache management
         TweetCacheManager.shared.markTweetAccessed(tweet.mid)
@@ -278,19 +287,12 @@ class EmbeddedTweetUIView: UIView {
     // MARK: - Intrinsic Size
 
     override var intrinsicContentSize: CGSize {
-        // Return proper intrinsic size based on content or placeholder
+        // Placeholder needs an explicit height; content relies on constraints
         if contentStack.isHidden {
-            // Showing placeholder
             return CGSize(width: UIView.noIntrinsicMetric, height: 60)
-        } else {
-            // Showing content - let content stack determine size
-            let contentSize = contentStack.systemLayoutSizeFitting(
-                CGSize(width: bounds.width - 16, height: UIView.layoutFittingCompressedSize.height),
-                withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel
-            )
-            return CGSize(width: UIView.noIntrinsicMetric, height: contentSize.height + 16)  // +16 for top/bottom padding
         }
+        // Let auto-layout constraints determine the height (top/bottom pinned to contentStack)
+        return CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
     }
 
     // MARK: - Reuse
@@ -308,6 +310,7 @@ class EmbeddedTweetUIView: UIView {
         // Reset to placeholder state — swap constraint groups
         contentStack.isHidden = true
         placeholderView.isHidden = false
+        contentStackBottomConstraint.constant = -8  // Reset to default
         contentStackBottomConstraint.isActive = false
         placeholderBottomConstraint.isActive = true
         placeholderHeightConstraint.isActive = true
