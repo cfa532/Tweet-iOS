@@ -952,7 +952,7 @@ class TweetActionBarView: UIView {
     }
 
     /// Crop image to center square and resize to 270x270
-    private func cropToCenter(image: UIImage, targetSize: CGFloat = 270) -> UIImage {
+    private nonisolated func cropToCenter(image: UIImage, targetSize: CGFloat = 270) -> UIImage {
         let size = image.size
         let scale = image.scale
         let cropSize = min(size.width, size.height)
