@@ -72,8 +72,13 @@ struct CommentItemView: View {
                     }
                 )
                 
-                TweetActionButtonsView(tweet: comment, commentsVM: commentsVM, parentTweet: parentTweet)
-                    .padding(.top, 8)
+                TweetActionBarRepresentable(
+                    tweet: comment,
+                    parentTweet: parentTweet,
+                    commentsVMParentTweet: commentsVM?.parentTweet
+                )
+                .frame(height: 30)
+                .padding(.top, 8)
             }
         }
         .padding(.vertical)

@@ -254,14 +254,15 @@ struct CommentDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(
+        TweetActionBarRepresentable(
             tweet: comment,
-            parentTweet: parentTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
             },
-            isInDetailView: true
+            isInDetailView: true,
+            parentTweet: parentTweet
         )
+        .frame(height: 30)
         .padding(.horizontal)
         .padding(.top, 8)
         .padding(.bottom, 4)

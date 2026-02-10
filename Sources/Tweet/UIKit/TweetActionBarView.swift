@@ -51,10 +51,13 @@ class TweetActionBarView: UIView {
     var onCommentTap: (() -> Void)?
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)? // (message, isError)
+    var onShareVisibilityChange: ((Bool) -> Void)?
     weak var parentViewController: UIViewController?
 
     // Context
     var isInDetailView = false
+    weak var parentTweet: Tweet?       // For comments: the parent tweet this is a comment on
+    weak var commentsVMParentTweet: Tweet?  // Fallback: commentsVM?.parentTweet
 
     // Share state
     private var attachmentPreviewImage: UIImage?
@@ -458,20 +461,31 @@ class TweetActionBarView: UIView {
                     guard let self = self else { return }
                     // Clean up
                     self.attachmentPreviewImage = nil
+                    self.onShareVisibilityChange?(false)
                     OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet_\(tweet.mid)", source: "TweetActionBarView")
 
-                    // Reload visible videos after share sheet dismisses
+                    // Reload visible videos after share sheet dismisses (with delay for overlay state to propagate)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionBarView share dismiss")
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                        print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
                     }
                 }
 
-                if let vc = self.parentViewController {
+                // Re-resolve parentViewController if it became nil (weak reference)
+                let vc = self.parentViewController ?? self.findViewController()
+                if let vc = vc {
+                    self.parentViewController = vc
                     if let popover = activityVC.popoverPresentationController {
                         popover.sourceView = self.shareButton
                         popover.sourceRect = self.shareButton.bounds
                     }
                     vc.present(activityVC, animated: true)
+                    self.onShareVisibilityChange?(true)
+                } else {
+                    // Presentation failed - clean up overlay
+                    print("DEBUG: [SHARE] No parentViewController found, cannot present share sheet")
+                    OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet_\(tweet.mid)", source: "TweetActionBarView (no VC)")
                 }
             }
         }
@@ -479,7 +493,8 @@ class TweetActionBarView: UIView {
 
     /// Build share items with rich preview
     private func buildShareItems(for tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
-        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, isInDetailView: isInDetailView)
+        let effectiveParentTweet = parentTweet ?? commentsVMParentTweet
+        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, isInDetailView: isInDetailView, parentTweet: effectiveParentTweet)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
         var items: [Any] = [customItem]
@@ -496,9 +511,10 @@ class TweetActionBarView: UIView {
     }
 
     /// Build share text for a tweet
-    private static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false) -> String {
+    private static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
 
+        // Priority: title > content > attachment types
         if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let maxLength = 40
             shareText += title.count > maxLength ? String(title.prefix(maxLength)) + "..." : title
@@ -510,21 +526,42 @@ class TweetActionBarView: UIView {
             shareText += composeAttachmentTypeText(for: tweet)
         }
 
+        // Add two newlines after text if there is text
         if !shareText.isEmpty {
             shareText += "\n\n"
         }
 
-        if isInDetailView {
-            // Detail view: use author's baseUrl with entry format
+        // Add URL - compose based on context (comment vs regular tweet, detail view vs feed)
+        let urlText: String
+
+        if let parent = parentTweet, isInDetailView {
+            // Comment in detail view: use entry format with query params in hash fragment
             let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
-            shareText += "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
-        } else {
-            // Feed: use traditional format
+            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
+        } else if let parent = parentTweet {
+            // Comment in feed/list: use traditional format with query parameters
             var domain = hproseInstance.domainToShare
             if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
                 domain = "http://" + domain
             }
-            shareText += "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)"
+            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)?fromComment=true&parentTweetId=\(parent.mid)&parentAuthorId=\(parent.authorId)"
+        } else if isInDetailView {
+            // Regular tweet in detail view: use author's baseUrl with entry format
+            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
+            urlText = "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
+        } else {
+            // Regular tweet in feed/grid: use traditional format
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            urlText = "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)"
+        }
+
+        if !shareText.isEmpty {
+            shareText += urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            shareText += urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         return shareText
@@ -561,33 +598,15 @@ class TweetActionBarView: UIView {
 
     /// Load attachment preview image (first image or video thumbnail)
     private func loadAttachmentPreviewImage(for tweet: Tweet, hproseInstance: HproseInstance) async -> UIImage? {
-        // Get source tweet (if this is a retweet, get the original)
-        let sourceTweet: Tweet
-        if let originalId = tweet.originalTweetId, let originalAuthorId = tweet.originalAuthorId {
-            if let original = Tweet.getInstance(for: originalId) {
-                sourceTweet = original
-            } else if let original = try? await hproseInstance.getTweet(tweetId: originalId, authorId: originalAuthorId) {
-                sourceTweet = original
-            } else {
-                sourceTweet = tweet
-            }
-        } else {
-            sourceTweet = tweet
-        }
-
-        guard let attachments = sourceTweet.attachments, !attachments.isEmpty else {
+        guard let sourceTweet = await resolveSourceTweetWithAttachments(tweet: tweet, hproseInstance: hproseInstance) else {
             return nil
         }
 
-        let firstAttachment = attachments[0]
-
-        // Get baseURL for this tweet's author
-        var baseURL: URL?
-        if let authorBaseUrl = sourceTweet.author?.baseUrl {
-            baseURL = authorBaseUrl
-        } else if let author = try? await hproseInstance.fetchUser(sourceTweet.authorId) {
-            baseURL = author.baseUrl
+        guard let firstAttachment = sourceTweet.attachments?.first else {
+            return nil
         }
+
+        let baseURL = await resolveAttachmentBaseURL(for: sourceTweet, hproseInstance: hproseInstance)
 
         switch firstAttachment.type {
         case .image:
@@ -604,19 +623,9 @@ class TweetActionBarView: UIView {
             }
 
         case .video, .hls_video:
-            // In detail view, try DetailVideoManager first
-            if isInDetailView,
-               let detailPlayer = DetailVideoManager.shared.currentPlayer,
-               DetailVideoManager.shared.currentVideoMid == firstAttachment.mid {
-                if let preview = await captureFrameFromPlayer(detailPlayer) {
-                    return preview
-                }
-            }
-            // Try to capture from cached player
-            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: firstAttachment.mid) {
-                if let preview = await captureFrameFromPlayer(cachedPlayer) {
-                    return preview
-                }
+            if let url = resolvedAttachmentURL(for: firstAttachment, baseURL: baseURL) {
+                let isHLS = firstAttachment.type == .hls_video
+                return await generateVideoPreviewImage(for: url, mediaID: firstAttachment.mid, isHLS: isHLS, tweet: tweet)
             }
 
         default:
@@ -624,6 +633,43 @@ class TweetActionBarView: UIView {
         }
 
         return nil
+    }
+
+    private func resolveSourceTweetWithAttachments(tweet: Tweet, hproseInstance: HproseInstance) async -> Tweet? {
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            return tweet
+        }
+        if let originalTweetId = tweet.originalTweetId,
+           let originalAuthorId = tweet.originalAuthorId {
+            if let original = Tweet.getInstance(for: originalTweetId),
+               let attachments = original.attachments,
+               !attachments.isEmpty {
+                return original
+            }
+            if let original = try? await hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId),
+               let attachments = original.attachments,
+               !attachments.isEmpty {
+                return original
+            }
+        }
+        return nil
+    }
+
+    private func resolveAttachmentBaseURL(for sourceTweet: Tweet, hproseInstance: HproseInstance) async -> URL? {
+        if let base = sourceTweet.author?.baseUrl {
+            return base
+        }
+        let author = User.getInstance(mid: sourceTweet.authorId)
+        if let base = author.baseUrl {
+            return base
+        }
+        if let user = try? await hproseInstance.fetchUser(sourceTweet.authorId),
+           let base = user.baseUrl {
+            return base
+        }
+        return await MainActor.run {
+            hproseInstance.appUser.baseUrl
+        } ?? URL(string: AppConfig.baseUrl)
     }
 
     /// Resolve attachment URL with baseURL
@@ -640,9 +686,125 @@ class TweetActionBarView: UIView {
         return nil
     }
 
-    /// Capture frame from video player
-    private func captureFrameFromPlayer(_ player: AVPlayer) async -> UIImage? {
+    // MARK: - Video Preview Generation
+
+    private func generateVideoPreviewImage(for url: URL, mediaID: String, isHLS: Bool = false, tweet: Tweet) async -> UIImage? {
+
+        // Check DetailVideoManager when in detail view
+        if isInDetailView,
+           let detailPlayer = DetailVideoManager.shared.currentPlayer,
+           DetailVideoManager.shared.currentVideoMid == mediaID,
+           let playerItem = detailPlayer.currentItem {
+            let duration = try? await playerItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    if let image = await captureFrameFromPlayer(detailPlayer, at: captureTime) {
+                        return image
+                    }
+                }
+            }
+        }
+
+        // For HLS videos, try cached player
+        if isHLS {
+            if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID),
+               let playerItem = cachedPlayer.currentItem {
+                let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
+                if hasBufferedData && playerItem.status == .readyToPlay {
+                    let duration = try? await playerItem.asset.load(.duration)
+                    if let duration = duration {
+                        let durationSeconds = CMTimeGetSeconds(duration)
+                        if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                            let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+                            let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                            if let image = await captureFrameFromPlayer(cachedPlayer, at: captureTime) {
+                                return image
+                            }
+                        }
+                    }
+                }
+            }
+            return nil
+        }
+
+        // For regular videos, try cached player
+        if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mediaID),
+           let playerItem = cachedPlayer.currentItem {
+            let currentTime = CMTimeGetSeconds(playerItem.currentTime())
+            let duration = try? await playerItem.asset.load(.duration)
+            if let duration = duration {
+                let durationSeconds = CMTimeGetSeconds(duration)
+                if durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite {
+                    let captureTime = currentTime > 0.1 ? currentTime : min(1.0, durationSeconds * 0.1)
+                    if let image = await captureFrameFromPlayer(cachedPlayer, at: captureTime) {
+                        return image
+                    }
+                }
+            }
+        }
+
+        // Fallback: use asset loading
+        do {
+            let mediaType: MediaType = isHLS ? .hls_video : .video
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid, mediaType: mediaType)
+
+            async let durationLoad = asset.load(.duration)
+            async let tracksLoad = asset.load(.tracks)
+            let (duration, tracks) = try await (durationLoad, tracksLoad)
+            let durationSeconds = CMTimeGetSeconds(duration)
+
+            guard durationSeconds > 0 && !durationSeconds.isNaN && !durationSeconds.isInfinite else { return nil }
+            guard !tracks.isEmpty else { return nil }
+
+            let captureTime = min(1.0, durationSeconds * 0.1)
+            if let image = try? await captureFrame(from: asset, at: captureTime) {
+                return image
+            }
+        } catch {}
+
+        return nil
+    }
+
+    // MARK: - Frame Capture
+
+    // Track active captures per player to prevent concurrent captures
+    private static var activeCaptures: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private static let captureLock = NSLock()
+
+    private func captureFrameFromPlayer(_ player: AVPlayer, at seconds: Double) async -> UIImage? {
         guard let playerItem = player.currentItem else { return nil }
+
+        // Serialize captures per player to prevent concurrent interference
+        let playerId = ObjectIdentifier(player)
+
+        let existingTask = Self.captureLock.withLock { () -> Task<Void, Never>? in
+            return Self.activeCaptures[playerId]
+        }
+        if let existingTask = existingTask {
+            _ = await existingTask.value
+        }
+
+        let captureTask = Task<Void, Never> {}
+        Self.captureLock.withLock {
+            Self.activeCaptures[playerId] = captureTask
+        }
+        defer {
+            Self.captureLock.withLock {
+                _ = Self.activeCaptures.removeValue(forKey: playerId)
+            }
+        }
+
+        // Save playback state before modifying player
+        let savedState = await MainActor.run { () -> (wasPlaying: Bool, originalTime: CMTime, originalRate: Float) in
+            let wasPlaying = player.rate > 0
+            let originalTime = player.currentTime()
+            let originalRate = player.rate
+            if wasPlaying { player.pause() }
+            return (wasPlaying: wasPlaying, originalTime: originalTime, originalRate: originalRate)
+        }
 
         let videoOutput = await MainActor.run { () -> AVPlayerItemVideoOutput in
             let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
@@ -654,29 +816,139 @@ class TweetActionBarView: UIView {
 
         defer {
             Task { @MainActor in
+                guard player.currentItem === playerItem else {
+                    playerItem.remove(videoOutput)
+                    return
+                }
+                let restoreTime = savedState.originalTime
+                player.seek(to: restoreTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    if finished && savedState.wasPlaying {
+                        Task { @MainActor in
+                            if player.currentItem === playerItem {
+                                player.rate = savedState.originalRate
+                            }
+                        }
+                    }
+                }
                 playerItem.remove(videoOutput)
             }
         }
 
-        let currentTime = await MainActor.run { playerItem.currentTime() }
+        // Try capturing at different time positions
+        let retryTimes = [0.1, 0.3, 0.5]
 
-        let image = await MainActor.run { () -> UIImage? in
-            guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else { return nil }
-            guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else {
-                return nil
+        for retryOffset in retryTimes {
+            let currentItem = await MainActor.run { player.currentItem }
+            guard currentItem === playerItem else { return nil }
+
+            let targetTime = seconds + retryOffset
+            let tolerance = CMTime(seconds: 0.1, preferredTimescale: 600)
+            let targetCMTime = CMTime(seconds: targetTime, preferredTimescale: 600)
+
+            let seekCompleted = await MainActor.run { () -> Task<Bool, Never> in
+                guard player.currentItem === playerItem else { return Task { false } }
+                return Task {
+                    await withCheckedContinuation { continuation in
+                        player.seek(to: targetCMTime, toleranceBefore: tolerance, toleranceAfter: tolerance) { finished in
+                            continuation.resume(returning: finished)
+                        }
+                    }
+                }
             }
 
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let context = CIContext(options: [.useSoftwareRenderer: false])
-            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-            return UIImage(cgImage: cgImage)
-        }
+            let didSeek = await seekCompleted.value
+            guard didSeek else { continue }
 
-        if let image = image {
-            return cropToCenter(image: image)
+            // Wait for segment to load
+            var attempts = 0
+            let maxAttempts = 50
+            var hasDataAtTime = false
+
+            while attempts < maxAttempts {
+                hasDataAtTime = await MainActor.run { () -> Bool in
+                    guard player.currentItem === playerItem else { return false }
+                    let currentTime = playerItem.currentTime()
+                    for timeRangeValue in playerItem.loadedTimeRanges {
+                        let range = timeRangeValue.timeRangeValue
+                        let start = range.start
+                        let end = CMTimeAdd(start, range.duration)
+                        if CMTimeCompare(currentTime, start) >= 0 && CMTimeCompare(currentTime, end) < 0 {
+                            return true
+                        }
+                    }
+                    return false
+                }
+                if hasDataAtTime { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                attempts += 1
+            }
+
+            if !hasDataAtTime { continue }
+
+            try? await Task.sleep(nanoseconds: 200_000_000)
+
+            let initialImage = await MainActor.run { () -> UIImage? in
+                guard player.currentItem === playerItem else { return nil }
+                let currentTime = playerItem.currentTime()
+                guard videoOutput.hasNewPixelBuffer(forItemTime: currentTime) else { return nil }
+                guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else { return nil }
+                let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+                let context = CIContext(options: [.useSoftwareRenderer: false])
+                guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+                return UIImage(cgImage: cgImage)
+            }
+
+            if let initialImage = initialImage {
+                return await Task.detached(priority: .userInitiated) { [initialImage] in
+                    let renderer = UIGraphicsImageRenderer(size: initialImage.size)
+                    let cleanImage = renderer.image { _ in
+                        initialImage.draw(in: CGRect(origin: .zero, size: initialImage.size))
+                    }
+                    return self.cropToCenter(image: cleanImage, targetSize: 270)
+                }.value
+            }
         }
 
         return nil
+    }
+
+    private func captureFrame(from asset: AVAsset, at seconds: Double) async throws -> UIImage {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 480, height: 480)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+
+        let cgImage = try await withCheckedThrowingContinuation { continuation in
+            generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, image, _, result, error in
+                switch result {
+                case .succeeded:
+                    if let image = image {
+                        continuation.resume(returning: image)
+                    } else {
+                        continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -2))
+                    }
+                case .failed:
+                    continuation.resume(throwing: error ?? NSError(domain: "AttachmentPreview", code: -3))
+                case .cancelled:
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -4))
+                @unknown default:
+                    continuation.resume(throwing: NSError(domain: "AttachmentPreview", code: -5))
+                }
+            }
+        }
+
+        let image = UIImage(cgImage: cgImage)
+
+        // Re-render without alpha channel, then crop
+        UIGraphicsBeginImageContextWithOptions(image.size, true, image.scale)
+        image.draw(in: CGRect(origin: .zero, size: image.size))
+        let cleanImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+
+        return cropToCenter(image: cleanImage ?? image, targetSize: 270)
     }
 
     /// Crop image to center square and resize to 270x270
@@ -725,7 +997,10 @@ class TweetActionBarView: UIView {
         onCommentTap = nil
         onShowLogin = nil
         onShowToast = nil
+        onShareVisibilityChange = nil
         parentViewController = nil
+        parentTweet = nil
+        commentsVMParentTweet = nil
         shareSpinner.stopAnimating()
         shareButton.alpha = 1.0
         attachmentPreviewImage = nil
@@ -830,6 +1105,9 @@ struct TweetActionBarRepresentable: UIViewRepresentable {
     var onCommentTap: (() -> Void)? = nil
     var onShowLogin: (() -> Void)? = nil
     var isInDetailView: Bool = false
+    var parentTweet: Tweet? = nil
+    var commentsVMParentTweet: Tweet? = nil
+    var onShareVisibilityChange: ((Bool) -> Void)? = nil
 
     func makeUIView(context: Context) -> TweetActionBarView {
         let bar = TweetActionBarView()
@@ -841,7 +1119,10 @@ struct TweetActionBarRepresentable: UIViewRepresentable {
         bar.configure(tweet: tweet, hproseInstance: hproseInstance)
         bar.onCommentTap = onCommentTap
         bar.onShowLogin = onShowLogin
+        bar.onShareVisibilityChange = onShareVisibilityChange
         bar.isInDetailView = isInDetailView
+        bar.parentTweet = parentTweet
+        bar.commentsVMParentTweet = commentsVMParentTweet
 
         // Find the hosting controller's parent to use as parentViewController
         if bar.parentViewController == nil, let vc = bar.findViewController() {
