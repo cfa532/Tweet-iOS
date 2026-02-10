@@ -135,6 +135,7 @@ class TweetTableViewController: UITableViewController {
     // Cached main content rect to avoid recalculating on every visibility check
     private var cachedMainContentRect: CGRect?
     private var lastContentOffset: CGFloat = 0
+    private var lastCallbackOffset: CGFloat = 0  // Only updated when onScroll fires — gives accumulated delta
     private var lastHeaderHeight: CGFloat = 0
     private var lastFooterHeight: CGFloat = 0
     
@@ -369,6 +370,7 @@ class TweetTableViewController: UITableViewController {
                 // Set lastContentOffset before restoring so scrollViewDidScroll sees zero delta
                 // This prevents the restoration from triggering toolbar hiding
                 self.lastContentOffset = savedPosition
+                self.lastCallbackOffset = savedPosition
                 self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
                 self.scrollPositionBeforeBackground = nil
 
@@ -472,6 +474,7 @@ class TweetTableViewController: UITableViewController {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self, !self.isScrollingToTop else { return }
                     self.lastContentOffset = savedPosition
+                    self.lastCallbackOffset = savedPosition
                     self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
                     self.lastScrollOffset = savedPosition
                     self.savedScrollPosition = nil
@@ -484,6 +487,7 @@ class TweetTableViewController: UITableViewController {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                         guard let self = self, !self.isScrollingToTop else { return }
                         self.lastContentOffset = persistentPosition
+                        self.lastCallbackOffset = persistentPosition
                         self.tableView.setContentOffset(CGPoint(x: 0, y: persistentPosition), animated: false)
                         self.lastScrollOffset = persistentPosition
                         // Keep position in storage until we scroll away or scroll to top
@@ -1533,30 +1537,22 @@ class TweetTableViewController: UITableViewController {
     // MARK: - UIScrollViewDelegate
 
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // Track scroll direction for height caching strategy and toolbar hiding
         let currentOffset = scrollView.contentOffset.y
-        let delta = currentOffset - lastContentOffset
+        let frameDelta = currentOffset - lastContentOffset
+        lastContentOffset = currentOffset  // always update for frame-level tracking
 
-        // CRITICAL: Only update scroll direction during active user dragging
-        // During deceleration, ANY direction change (even large ones) can cause toolbar flicker
-        // Lock direction during inertia scroll to prevent unexpected show/hide
-        let minDirectionChangeThreshold: CGFloat = 2.0
-        if isUserDragging && abs(delta) >= minDirectionChangeThreshold {
-            // Only update direction when user is actively dragging
-            // This prevents direction flips during deceleration, which cause toolbar jitter
-            isScrollingBackward = delta < 0
+        // Update scroll direction only during active user dragging
+        if isUserDragging && abs(frameDelta) >= 2.0 {
+            isScrollingBackward = frameDelta < 0
         }
 
-        // Throttle video visibility updates to avoid expensive calculations on every scroll frame
-        // Use time-based throttling: execute immediately on first call, then throttle subsequent calls
+        // Throttle video visibility updates
         let now = Date()
         let shouldUpdate: Bool
 
         if let lastUpdate = lastVideoVisibilityUpdate {
-            // Check if enough time has passed since last update
             shouldUpdate = now.timeIntervalSince(lastUpdate) >= videoVisibilityThrottleInterval
         } else {
-            // First update - execute immediately
             shouldUpdate = true
         }
 
@@ -1571,52 +1567,50 @@ class TweetTableViewController: UITableViewController {
         let contentInsetBottom = scrollView.contentInset.bottom
         let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight + contentInsetBottom
 
-        // Only allow pull-to-load if we have at least a few tweets
         if tweets.count >= 4 && bottomOffset > bottomPullThreshold && !isLoadingMore && !isBottomPullActive {
-            // User pulled down past threshold
             print("📱 [BOTTOM PULL] Threshold reached, triggering loadMore (hasMoreTweets: \(hasMoreTweets))")
             isBottomPullActive = true
             triggerBottomPullLoadMore()
         } else if bottomOffset <= 0 {
-            // User released or scrolled back up
             isBottomPullActive = false
         }
 
         // Don't trigger toolbar hiding until initial layout is complete
-        // This prevents incorrect hiding when view first loads
         guard hasCompletedInitialLayout else {
-            lastContentOffset = currentOffset
+            lastCallbackOffset = currentOffset
             return
         }
+
+        // Accumulated delta since last callback fire — represents net scroll direction
+        let accumulatedDelta = currentOffset - lastCallbackOffset
 
         // Time-based throttling: don't send callbacks too frequently
         let shouldThrottleByTime = lastScrollCallbackTime.map { now.timeIntervalSince($0) < scrollCallbackThrottleInterval } ?? false
 
-        // Only forward significant changes to reduce jitter (matching old SwiftUI implementation)
-        // Increased threshold to reduce CPU usage during rapid scrolling
+        // Distance throttle using accumulated delta — only fire after 30+ pts of net scroll
         let headerThreshold: CGFloat = 30
-        let shouldThrottleByDistance = abs(delta) < headerThreshold
+        let shouldThrottleByDistance = abs(accumulatedDelta) < headerThreshold
 
-        // CRITICAL: Don't send callbacks during deceleration with small deltas
-        // This prevents toolbar from flickering when scroll comes to rest
-        let shouldThrottleWhileSettling = isDecelerating && abs(delta) < 5
+        // Don't fire during deceleration settling (use per-frame delta for settling detection)
+        let shouldThrottleWhileSettling = isDecelerating && abs(frameDelta) < 5
 
         guard !shouldThrottleByTime && !shouldThrottleByDistance && !shouldThrottleWhileSettling else {
-            lastContentOffset = currentOffset
             return
         }
 
-        // Call the onScroll callback with accumulated delta
-        onScroll?(currentOffset, delta)
+        // Fire callback with accumulated delta — stable net direction, not per-frame jitter
+        onScroll?(currentOffset, accumulatedDelta)
 
-        lastContentOffset = currentOffset
+        lastCallbackOffset = currentOffset
         lastScrollCallbackTime = now
     }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        // User started dragging - direction detection is now reliable
+        // User started dragging - reset callback baseline to current position
+        // so accumulated delta starts fresh from the new drag gesture
         isUserDragging = true
         isDecelerating = false
+        lastCallbackOffset = scrollView.contentOffset.y
     }
 
     override func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
