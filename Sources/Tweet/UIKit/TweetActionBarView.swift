@@ -242,7 +242,9 @@ class TweetActionBarView: UIView {
             ) { [weak self] _ in
                 guard let self = self, let tweet = self.currentTweet else { return }
                 if parentVC.presentedViewController == nil {
-                    OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
+                    Task { @MainActor in
+                        OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
+                    }
                 }
             }
         }

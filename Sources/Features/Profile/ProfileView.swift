@@ -491,14 +491,17 @@ struct ProfileView: View {
             // Near the top - always show toolbar
             if !isNavigationVisible {
                 // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [self] in
                     withAnimation(.easeInOut(duration: 0.25)) {
                         isNavigationVisible = true
                     }
                     postNavigationVisibilityNotification(isVisible: true)
                 }
             }
-            previousScrollOffset = offset
+            // Defer state update to avoid modifying during view update
+            DispatchQueue.main.async { [self] in
+                previousScrollOffset = offset
+            }
             return
         }
         
@@ -516,26 +519,29 @@ struct ProfileView: View {
         if isScrollingDown && isNavigationVisible {
             // Scrolling down significantly - hide bottom bar
             // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [self] in
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = false
                 }
                 postNavigationVisibilityNotification(isVisible: false)
+                lastSignificantDelta = delta
             }
-            lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show bottom bar
             // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [self] in
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = true
                 }
                 postNavigationVisibilityNotification(isVisible: true)
+                lastSignificantDelta = delta
             }
-            lastSignificantDelta = delta
         }
-        
-        previousScrollOffset = offset
+
+        // Defer state update to avoid modifying during view update
+        DispatchQueue.main.async { [self] in
+            previousScrollOffset = offset
+        }
     }
     
     // Helper to post navigation visibility notification with throttling

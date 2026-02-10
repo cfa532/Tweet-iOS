@@ -629,7 +629,6 @@ class ImageCacheManager: @unchecked Sendable {
                 print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate image request for \(cacheKey)")
                 return nil
             }
-            print("DEBUG: [ImageCacheManager] Reusing existing request for \(cacheKey)")
             return await existingTask.value
         }
         
@@ -713,7 +712,7 @@ class ImageCacheManager: @unchecked Sendable {
                 print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate original image request for \(cacheKey)")
                 return nil
             }
-            print("DEBUG: [ImageCacheManager] Reusing existing request for original image \(cacheKey)")
+            
             let result = await existingTask.value
             // Replace compressed cache if requested
             if replaceCompressedCache, let originalImage = result {

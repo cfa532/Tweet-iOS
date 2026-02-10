@@ -1273,7 +1273,7 @@ final class HproseInstance: ObservableObject {
             
             // Perform the actual user data fetch with retry logic and error handling
             // This will handle IP resolution if baseUrl was empty
-            return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser", v4Only: v4Only)
+            return try await performUserUpdate(user, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist, logPrefix: "fetchUser")
         } catch {
             // Catch and log any exceptions during the fetch process
             print("DEBUG: [fetchUser] Exception in fetchUser: userId: \(userId), error: \(error)")

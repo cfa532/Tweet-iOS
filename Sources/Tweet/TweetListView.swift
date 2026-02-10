@@ -287,8 +287,11 @@ struct TweetListView: View {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
             }
-            // Clean up notification observers
-            cleanupNotificationObservers()
+            // NOTE: Do NOT clean up notification observers here.
+            // onDisappear fires when navigating to detail view, but we still need
+            // to handle .tweetDeleted (and other notifications) while the detail view
+            // is shown. setupNotificationObservers() already cleans up before re-creating
+            // when onAppear fires again, so there's no risk of duplicate observers.
         }
     }
     
@@ -359,8 +362,23 @@ struct TweetListView: View {
             
             notificationObservers.append(observer)
         }
+
+        // Always observe .tweetRestored to re-insert optimistically deleted tweets on failure
+        let restoredObserver = NotificationCenter.default.addObserver(
+            forName: .tweetRestored,
+            object: nil,
+            queue: .main
+        ) { notif in
+            guard let tweetId = notif.userInfo?["tweetId"] as? String else { return }
+            // Only restore if not already in the list
+            guard !tweetsBinding.wrappedValue.contains(where: { $0.mid == tweetId }) else { return }
+            if let tweet = Tweet.getInstance(for: tweetId) {
+                tweetsBinding.wrappedValue.mergeTweets([tweet])
+            }
+        }
+        notificationObservers.append(restoredObserver)
     }
-    
+
     /// Clean up notification observers
     private func cleanupNotificationObservers() {
         for observer in notificationObservers {

@@ -142,7 +142,7 @@ class TweetCellContentView: UIView {
         contentColumn.addArrangedSubview(embeddedTweetWrapper)
         contentColumn.addArrangedSubview(actionBar)
 
-        contentColumn.setCustomSpacing(2, after: headerView)  // Space between header and body content
+        contentColumn.setCustomSpacing(0, after: headerView)  // Space between header and body content
         contentColumn.setCustomSpacing(12, after: bodyView)
         contentColumn.setCustomSpacing(20, after: embeddedTweetWrapper)
 
@@ -561,7 +561,7 @@ class TweetCellContentView: UIView {
 
         // Filter Content
         let filterAction = UIAction(title: NSLocalizedString("Filter Content", comment: "Menu item"),
-                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { [weak self] _ in
+                                     image: UIImage(systemName: "line.3.horizontal.decrease.circle")) { _ in
             // TODO: Show filter sheet
             print("Filter content tapped")
         }
@@ -571,7 +571,7 @@ class TweetCellContentView: UIView {
         if tweet.authorId != hproseInstance.appUser.mid {
             let reportAction = UIAction(title: NSLocalizedString("Report Tweet", comment: "Menu item"),
                                         image: UIImage(systemName: "flag"),
-                                        attributes: .destructive) { [weak self] _ in
+                                        attributes: .destructive) { _ in
                 // TODO: Show report sheet
                 print("Report tapped")
             }
@@ -629,16 +629,26 @@ class TweetCellContentView: UIView {
                 let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: "Menu item"),
                                             image: UIImage(systemName: "trash"),
                                             attributes: .destructive) { _ in
+                    // Optimistic UI update — remove immediately
+                    NotificationCenter.default.post(
+                        name: .tweetDeleted,
+                        object: nil,
+                        userInfo: ["tweetId": tweet.mid]
+                    )
                     Task {
                         do {
-                            try await hproseInstance.deleteTweet(tweet.mid)
+                            _ = try await hproseInstance.deleteTweet(tweet.mid)
+                        } catch {
+                            // Restore tweet on failure
                             NotificationCenter.default.post(
-                                name: .tweetDeleted,
+                                name: .tweetRestored,
                                 object: nil,
                                 userInfo: ["tweetId": tweet.mid]
                             )
-                        } catch {
-                            print("Delete failed: \(error)")
+                            NotificationCenter.default.post(
+                                name: .errorOccurred,
+                                object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                            )
                         }
                     }
                 }

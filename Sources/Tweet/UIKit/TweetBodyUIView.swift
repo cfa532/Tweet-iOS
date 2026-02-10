@@ -94,16 +94,16 @@ class TweetBodyUIView: UIView {
         contentStack.addArrangedSubview(documentContainerView)
 
         // Set initial spacing (will be adjusted per tweet)
-        contentStack.setCustomSpacing(8, after: contentLabel)  // text → media gap
+        contentStack.setCustomSpacing(4, after: contentLabel)  // text → media gap
         contentStack.setCustomSpacing(2, after: mediaContainerView)  // media → caption gap
         contentStack.setCustomSpacing(0, after: captionLabel)  // caption → documents gap
 
         addSubview(contentStack)
         contentStack.translatesAutoresizingMaskIntoConstraints = false
 
-        // Anchor stack to edges with 4pt top padding
+        // Anchor stack to edges with 2pt top padding
         NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor),
             contentStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             contentStack.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -138,10 +138,23 @@ class TweetBodyUIView: UIView {
 
         // --- Text content ---
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            contentLabel.text = content
+            // Create attributed string with line spacing
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.lineSpacing = 1  // 1pt extra spacing between lines
+            paragraphStyle.lineBreakMode = .byTruncatingTail
+
+            let attributedString = NSAttributedString(
+                string: content,
+                attributes: [
+                    .font: UIFont.systemFont(ofSize: 16),
+                    .foregroundColor: UIColor.label,
+                    .paragraphStyle: paragraphStyle
+                ]
+            )
+            contentLabel.attributedText = attributedString
             contentLabel.isHidden = false
         } else {
-            contentLabel.text = nil
+            contentLabel.attributedText = nil
             contentLabel.isHidden = true
         }
 
@@ -192,11 +205,11 @@ class TweetBodyUIView: UIView {
 
             // Adjust spacing based on whether there's text above media
             if contentLabel.isHidden {
-                // No text: reduce spacing before media (media starts at 4pt from top)
+                // No text: reduce spacing before media (media starts at 2pt from top)
                 contentStack.setCustomSpacing(0, after: contentLabel)
             } else {
-                // Text present: normal 8pt gap
-                contentStack.setCustomSpacing(8, after: contentLabel)
+                // Text present: 4pt gap
+                contentStack.setCustomSpacing(4, after: contentLabel)
             }
         } else {
             mediaContainerView.isHidden = true
@@ -248,7 +261,7 @@ class TweetBodyUIView: UIView {
 
     func prepareForReuse() {
         currentTweetId = nil
-        contentLabel.text = nil
+        contentLabel.attributedText = nil
         captionLabel.text = nil
         captionLabel.isHidden = true
         isCaptionVisible = false
@@ -257,7 +270,7 @@ class TweetBodyUIView: UIView {
         removeDocumentHosting()
 
         // Reset spacing to defaults
-        contentStack.setCustomSpacing(8, after: contentLabel)
+        contentStack.setCustomSpacing(4, after: contentLabel)
         contentStack.setCustomSpacing(2, after: mediaContainerView)
         contentStack.setCustomSpacing(0, after: captionLabel)
     }

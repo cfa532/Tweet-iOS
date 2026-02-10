@@ -21,7 +21,9 @@ class TweetHeightCache {
     }
 
     func getHeight(for mid: String) -> CGFloat? {
-        heights[mid]
+        // TESTING: Disabled height caching to force fresh calculations
+        return nil
+        // heights[mid]
     }
 
     func setHeight(_ height: CGFloat, for mid: String) {
