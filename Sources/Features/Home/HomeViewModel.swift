@@ -201,49 +201,55 @@ struct HomeView: View {
     @State private var lastSignificantDelta: CGFloat = 0
     @State private var lastNotificationTime: Date?
     private let notificationThrottleInterval: TimeInterval = 0.1 // 100ms - prevent rapid-fire notifications
-    
+    @State private var lastVisibilityChangeTime: Date?
+    private let visibilityChangeCooldown: TimeInterval = 0.35 // Cooldown after show/hide to prevent feedback loop
+
     private func handleScroll(offset: CGFloat, delta: CGFloat) {
+        // Cooldown after toolbar visibility change — the header resize animation
+        // causes layout-induced contentOffset changes that would trigger the opposite
+        // direction, creating a show/hide feedback loop.
+        if let lastChange = lastVisibilityChangeTime,
+           Date().timeIntervalSince(lastChange) < visibilityChangeCooldown {
+            return
+        }
+
         // Threshold for detecting intentional scroll
         let scrollThreshold: CGFloat = 15
-        
+
         // Always show when at or near the top
         if offset <= 10 {
             if !isNavigationVisible {
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = true
                 }
-                // Post notification for bottom tab bar (with state change check)
                 postNavigationVisibilityNotification(isVisible: true)
+                lastVisibilityChangeTime = Date()
             }
             return
         }
-        
+
         // Ignore very small deltas (noise from rendering/layout)
         guard abs(delta) > 2 else { return }
-        
-        // Detect significant scroll direction changes
+
         // Positive delta = scrolling down (content moves up)
         // Negative delta = scrolling up (content moves down)
         let isScrollingDown = delta > scrollThreshold
         let isScrollingUp = delta < -scrollThreshold
-        
-        // Update navigation visibility based on scroll direction
+
         if isScrollingDown && isNavigationVisible {
-            // Scrolling down significantly - hide header and bottom bar
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = false
             }
-            // Post notification for bottom tab bar (with state change check)
             postNavigationVisibilityNotification(isVisible: false)
             lastSignificantDelta = delta
+            lastVisibilityChangeTime = Date()
         } else if isScrollingUp && !isNavigationVisible {
-            // Scrolling up significantly - show header and bottom bar
             withAnimation(.easeInOut(duration: 0.25)) {
                 isNavigationVisible = true
             }
-            // Post notification for bottom tab bar (with state change check)
             postNavigationVisibilityNotification(isVisible: true)
             lastSignificantDelta = delta
+            lastVisibilityChangeTime = Date()
         }
     }
     

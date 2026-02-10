@@ -1576,30 +1576,32 @@ class TweetTableViewController: UITableViewController {
         }
 
         // Don't trigger toolbar hiding until initial layout is complete
-        guard hasCompletedInitialLayout else {
-            lastCallbackOffset = currentOffset
-            return
-        }
+        guard hasCompletedInitialLayout else { return }
 
-        // Accumulated delta since last callback fire — represents net scroll direction
-        let accumulatedDelta = currentOffset - lastCallbackOffset
+        // Only fire toolbar callbacks during active user dragging.
+        // During deceleration and layout-induced scrolls, lock toolbar state.
+        guard isUserDragging else { return }
 
-        // Time-based throttling: don't send callbacks too frequently
+        // Use pan gesture VELOCITY for direction — immune to layout-induced offset jumps.
+        // contentOffset delta is contaminated when toolbar show/hide changes the table view
+        // frame, but velocity purely reflects the user's finger movement.
+        let velocity = scrollView.panGestureRecognizer.velocity(in: scrollView).y
+        // velocity > 0 = finger moving down = content down = "scrolling up" (show toolbar)
+        // velocity < 0 = finger moving up = content up = "scrolling down" (hide toolbar)
+        guard abs(velocity) > 100 else { return }  // ignore ambiguous / near-zero velocity
+
+        // Time-based throttling
         let shouldThrottleByTime = lastScrollCallbackTime.map { now.timeIntervalSince($0) < scrollCallbackThrottleInterval } ?? false
 
-        // Distance throttle using accumulated delta — only fire after 30+ pts of net scroll
+        // Distance throttle — enough scroll distance since last callback
+        let distanceSinceLastCallback = abs(currentOffset - lastCallbackOffset)
         let headerThreshold: CGFloat = 30
-        let shouldThrottleByDistance = abs(accumulatedDelta) < headerThreshold
+        guard !shouldThrottleByTime && distanceSinceLastCallback >= headerThreshold else { return }
 
-        // Don't fire during deceleration settling (use per-frame delta for settling detection)
-        let shouldThrottleWhileSettling = isDecelerating && abs(frameDelta) < 5
+        // Convert velocity to delta convention: positive = scrolling down, negative = scrolling up
+        let delta: CGFloat = velocity > 0 ? -headerThreshold : headerThreshold
 
-        guard !shouldThrottleByTime && !shouldThrottleByDistance && !shouldThrottleWhileSettling else {
-            return
-        }
-
-        // Fire callback with accumulated delta — stable net direction, not per-frame jitter
-        onScroll?(currentOffset, accumulatedDelta)
+        onScroll?(currentOffset, delta)
 
         lastCallbackOffset = currentOffset
         lastScrollCallbackTime = now
@@ -1620,8 +1622,12 @@ class TweetTableViewController: UITableViewController {
     }
 
     override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        // Deceleration finished - reset state
         isDecelerating = false
+        // If decelerated to near the top, signal "scroll up" so toolbar shows
+        let topInset = scrollView.adjustedContentInset.top
+        if scrollView.contentOffset.y <= -topInset + 10 {
+            onScroll?(scrollView.contentOffset.y, -50)
+        }
     }
     
     // MARK: - Height Estimation
