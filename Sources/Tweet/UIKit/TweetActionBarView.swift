@@ -53,6 +53,9 @@ class TweetActionBarView: UIView {
     var onShowToast: ((String, Bool) -> Void)? // (message, isError)
     weak var parentViewController: UIViewController?
 
+    // Context
+    var isInDetailView = false
+
     // Share state
     private var attachmentPreviewImage: UIImage?
     private var isPreparingShare = false
@@ -418,8 +421,18 @@ class TweetActionBarView: UIView {
         // Register overlay for video coordination
         OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet_\(tweet.mid)", source: "TweetActionBarView")
 
+        // If in detail view, pause the video explicitly
+        if isInDetailView {
+            DetailVideoManager.shared.pausePlayer()
+        }
+
         Task {
             print("DEBUG: [SHARE] Share button tapped for tweet: \(tweet.mid)")
+
+            // If sharing from detail view, resolve IPv4 for better compatibility
+            if isInDetailView {
+                _ = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hprose)
+            }
 
             // Load attachment preview if available
             if attachmentPreviewImage == nil {
@@ -464,9 +477,9 @@ class TweetActionBarView: UIView {
         }
     }
 
-    /// Build share items with rich preview (feed context — not detail or comment view)
+    /// Build share items with rich preview
     private func buildShareItems(for tweet: Tweet, hproseInstance: HproseInstance) async -> [Any] {
-        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance)
+        let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, isInDetailView: isInDetailView)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
         var items: [Any] = [customItem]
@@ -482,8 +495,8 @@ class TweetActionBarView: UIView {
         return items
     }
 
-    /// Build share text for a tweet (feed context — not detail or comment view)
-    private static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance) -> String {
+    /// Build share text for a tweet
+    private static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false) -> String {
         var shareText = ""
 
         if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -501,13 +514,49 @@ class TweetActionBarView: UIView {
             shareText += "\n\n"
         }
 
-        var domain = hproseInstance.domainToShare
-        if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
-            domain = "http://" + domain
+        if isInDetailView {
+            // Detail view: use author's baseUrl with entry format
+            let baseUrlString = tweet.author?.baseUrl?.absoluteString ?? AppConfig.baseUrl
+            shareText += "\(baseUrlString)/entry?aid=\(AppConfig.appIdHash)&ver=last#/tweet/\(tweet.mid)/\(tweet.authorId)"
+        } else {
+            // Feed: use traditional format
+            var domain = hproseInstance.domainToShare
+            if !domain.hasPrefix("http://") && !domain.hasPrefix("https://") {
+                domain = "http://" + domain
+            }
+            shareText += "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)"
         }
-        shareText += "\(domain)/tweet/\(tweet.mid)/\(tweet.authorId)"
 
         return shareText
+    }
+
+    /// Get an IPv4-preferred baseUrl for sharing from detail view
+    private static func getIPv4PreferredBaseUrl(for tweet: Tweet, hproseInstance: HproseInstance) async -> String {
+        guard let author = tweet.author else {
+            return AppConfig.baseUrl
+        }
+
+        let currentBaseUrl = author.baseUrl?.absoluteString ?? AppConfig.baseUrl
+
+        // Quick check: if already IPv4, use it
+        if !currentBaseUrl.contains("[") && currentBaseUrl.filter({ $0 == ":" }).count <= 1 {
+            return currentBaseUrl
+        }
+
+        // IPv6 detected - resolve IPv4 via getProviderIP
+        do {
+            if let ipv4 = try await hproseInstance.getProviderIP(author.mid, v4Only: true) {
+                let ipv4BaseUrl = "http://\(ipv4)"
+                if let ipv4URL = URL(string: ipv4BaseUrl) {
+                    await MainActor.run {
+                        author.baseUrl = ipv4URL
+                    }
+                }
+                return ipv4BaseUrl
+            }
+        } catch {}
+
+        return currentBaseUrl
     }
 
     /// Load attachment preview image (first image or video thumbnail)
@@ -555,7 +604,15 @@ class TweetActionBarView: UIView {
             }
 
         case .video, .hls_video:
-            // Try to capture from cached player first
+            // In detail view, try DetailVideoManager first
+            if isInDetailView,
+               let detailPlayer = DetailVideoManager.shared.currentPlayer,
+               DetailVideoManager.shared.currentVideoMid == firstAttachment.mid {
+                if let preview = await captureFrameFromPlayer(detailPlayer) {
+                    return preview
+                }
+            }
+            // Try to capture from cached player
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: firstAttachment.mid) {
                 if let preview = await captureFrameFromPlayer(cachedPlayer) {
                     return preview
@@ -761,5 +818,48 @@ private class ActionButtonView: UIView {
 
     func setIcon(_ systemName: String) {
         iconView.image = UIImage(systemName: systemName, withConfiguration: iconView.preferredSymbolConfiguration)
+    }
+}
+
+// MARK: - SwiftUI wrapper for using TweetActionBarView in SwiftUI views
+
+@available(iOS 16.0, *)
+struct TweetActionBarRepresentable: UIViewRepresentable {
+    @ObservedObject var tweet: Tweet
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    var onCommentTap: (() -> Void)? = nil
+    var onShowLogin: (() -> Void)? = nil
+    var isInDetailView: Bool = false
+
+    func makeUIView(context: Context) -> TweetActionBarView {
+        let bar = TweetActionBarView()
+        bar.isInDetailView = isInDetailView
+        return bar
+    }
+
+    func updateUIView(_ bar: TweetActionBarView, context: Context) {
+        bar.configure(tweet: tweet, hproseInstance: hproseInstance)
+        bar.onCommentTap = onCommentTap
+        bar.onShowLogin = onShowLogin
+        bar.isInDetailView = isInDetailView
+
+        // Find the hosting controller's parent to use as parentViewController
+        if bar.parentViewController == nil, let vc = bar.findViewController() {
+            bar.parentViewController = vc
+        }
+    }
+}
+
+// Helper to find the UIViewController from a UIView
+private extension UIView {
+    func findViewController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let next = responder?.next {
+            if let vc = next as? UIViewController {
+                return vc
+            }
+            responder = next
+        }
+        return nil
     }
 }
