@@ -22,7 +22,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let iv = UIImageView()
         iv.contentMode = .scaleAspectFill
         iv.clipsToBounds = true
-        iv.layer.cornerRadius = 8
         iv.backgroundColor = .systemGray6
         return iv
     }()
@@ -31,7 +30,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private let videoPlayerView: LightweightVideoPlayerView = {
         let v = LightweightVideoPlayerView()
         v.backgroundColor = .black
-        v.layer.cornerRadius = 8
         v.clipsToBounds = true
         v.isHidden = true
         // Fill container (clip overflow) — matches SimpleVideoPlayer's .resizeAspectFill for feed cells
@@ -80,7 +78,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private let fullscreenOverlay: UIView = {
         let v = UIView()
         v.backgroundColor = UIColor.black.withAlphaComponent(0.4)
-        v.layer.cornerRadius = 8
         v.clipsToBounds = true
         v.isHidden = true
         return v
@@ -170,7 +167,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func setupViews() {
         clipsToBounds = true
-        layer.cornerRadius = 8
 
         addSubview(imageView)
         addSubview(videoPlayerView)
@@ -286,12 +282,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func setupImageCell(attachment: MimeiFileType, url: URL) {
         imageView.isHidden = false
 
-        // Tap gesture
-        if !isEmbedded {
-            let tap = UITapGestureRecognizer(target: self, action: #selector(imageTapped))
-            imageView.addGestureRecognizer(tap)
-            imageView.isUserInteractionEnabled = true
-        }
+        // Tap gesture (all media — including embedded tweets — opens fullscreen)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(imageTapped))
+        imageView.addGestureRecognizer(tap)
+        imageView.isUserInteractionEnabled = true
 
         loadImage(attachment: attachment, url: url)
     }
@@ -350,12 +344,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Show the player view container (black background until player delivers frames)
         videoPlayerView.isHidden = false
 
-        // Tap gesture for fullscreen
-        if !isEmbedded {
-            let tap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
-            videoPlayerView.addGestureRecognizer(tap)
-            videoPlayerView.isUserInteractionEnabled = true
-        }
+        // Tap gesture for fullscreen (all media — including embedded tweets — opens fullscreen)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
+        videoPlayerView.addGestureRecognizer(tap)
+        videoPlayerView.isUserInteractionEnabled = true
 
         // Listen for .stopAllVideos (posted by non-coordinator code like handleVideoTap)
         stopAllObserver = NotificationCenter.default.addObserver(
