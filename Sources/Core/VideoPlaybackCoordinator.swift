@@ -143,7 +143,9 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     // MARK: - Delegate-Based Communication (Phase 3)
 
-    /// Registered MediaCell delegates for direct communication (keyed by videoMid)
+    /// Registered MediaCell delegates for direct communication (keyed by video identifier:
+    /// cellTweetId_videoMid_attachmentIndex). This allows the same videoMid to have separate
+    /// delegates when it appears in both a tweet and its retweet.
     private var mediaCellDelegates: [String: MediaCellDelegate] = [:]
 
     /// When true, the feed is covered by an overlay (fullscreen cover/sheet/login/etc).
@@ -418,14 +420,14 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     // MARK: - Delegate Management (Phase 3)
 
-    /// Register a MediaCell delegate for video control
-    func registerDelegate(_ delegate: MediaCellDelegate, forVideoMid videoMid: String) {
-        mediaCellDelegates[videoMid] = delegate
+    /// Register a MediaCell delegate for video control (keyed by video identifier)
+    func registerDelegate(_ delegate: MediaCellDelegate, forIdentifier identifier: String) {
+        mediaCellDelegates[identifier] = delegate
     }
 
-    /// Unregister a MediaCell delegate
-    func unregisterDelegate(forVideoMid videoMid: String) {
-        mediaCellDelegates.removeValue(forKey: videoMid)
+    /// Unregister a MediaCell delegate (keyed by video identifier)
+    func unregisterDelegate(forIdentifier identifier: String) {
+        mediaCellDelegates.removeValue(forKey: identifier)
     }
 
     // MARK: - Public API
@@ -748,8 +750,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         return videos
     }
     
-    /// Previously visible video IDs (to detect actual video changes, not just tweet changes)
-    private var previousVisibleVideoIds: Set<String> = []
+    /// Previously visible video identifiers (cellTweetId_videoMid_attachmentIndex).
+    /// Using full identifiers (not bare videoMids) ensures the same video in a tweet
+    /// and its retweet are tracked independently.
+    private var previousVisibleIdentifiers: Set<String> = []
     
     /// Update visible tweets (called during scrolling)
     func updateVisibleTweets(_ tweetIds: Set<String>) {
@@ -778,70 +782,76 @@ class VideoPlaybackCoordinator: ObservableObject {
         self.invalidateVisibleVideoCache()
         self.isScrolling = true
 
-        let currentVisibleVideoIds = Set(visibleVideos.map { $0.videoMid })
-        let videoVisibilityChanged = previousVisibleVideoIds != currentVisibleVideoIds
+        // Track by full identifier (cellTweetId_videoMid_attachmentIndex) so the same
+        // video appearing in both a tweet and its retweet is handled independently.
+        let currentVisibleIdentifiers = Set(visibleVideos.map { $0.identifier })
+        let visibilityChanged = previousVisibleIdentifiers != currentVisibleIdentifiers
 
         // Stop all videos if none are visible
-        if currentVisibleVideoIds.isEmpty {
-            previousVisibleVideoIds.removeAll()
+        if currentVisibleIdentifiers.isEmpty {
+            previousVisibleIdentifiers.removeAll()
             stopAllVideos()
             return
         }
 
         // If the feed is covered by an overlay, do not start playback
         if isPlaybackSuppressedByOverlay {
-            previousVisibleVideoIds = currentVisibleVideoIds
+            previousVisibleIdentifiers = currentVisibleIdentifiers
             return
         }
 
-        // Stop videos that are no longer visible
-        if videoVisibilityChanged {
-            let videosToStop = previousVisibleVideoIds.subtracting(currentVisibleVideoIds)
-            if !videosToStop.isEmpty {
-                if videosToStop.count >= 3 || scrollDirection == false {
+        // Stop videos whose cell left the visible area
+        if visibilityChanged {
+            let identifiersToStop = previousVisibleIdentifiers.subtracting(currentVisibleIdentifiers)
+            if !identifiersToStop.isEmpty {
+                if identifiersToStop.count >= 3 || scrollDirection == false {
                     SharedAssetCache.shared.forceMemoryCleanup()
                 }
-            }
 
-            for videoMid in videosToStop {
-                if allVideos.first(where: { $0.videoMid == videoMid }) != nil {
-                    if SharedVideoPlayerManager.shared.currentVideoMid == videoMid {
-                        SharedVideoPlayerManager.shared.stopCurrentVideo()
+                // Collect videoMids that still have at least one visible instance
+                // (same video may appear in tweet + retweet — don't stop if another cell is showing it)
+                let stillVisibleMids = Set(visibleVideos.map { $0.videoMid })
+
+                for identifier in identifiersToStop {
+                    cachedVisibilityRatios.removeValue(forKey: identifier)
+
+                    guard let video = allVideos.first(where: { $0.identifier == identifier }) else { continue }
+
+                    // Only stop the actual player if no other visible cell shows the same videoMid
+                    if !stillVisibleMids.contains(video.videoMid) {
+                        if SharedVideoPlayerManager.shared.currentVideoMid == video.videoMid {
+                            SharedVideoPlayerManager.shared.stopCurrentVideo()
+                        }
                     }
-                }
-            }
-
-            // Clear visibility ratios for videos that are no longer visible
-            for videoMid in videosToStop {
-                for video in allVideos where video.videoMid == videoMid {
-                    cachedVisibilityRatios.removeValue(forKey: video.identifier)
                 }
             }
         }
 
-        // Decide whether to start/switch playback using a single debounce timer
-        if videoVisibilityChanged && !currentVisibleVideoIds.isEmpty {
+        // Decide whether to start/switch playback — act immediately to avoid black screens.
+        // State is set synchronously in startPrimaryVideoPlayback/checkAndSwitchVideoIfNeeded
+        // (only the actual play command is delayed by 50ms), so rapid calls are safe.
+        if visibilityChanged && !currentVisibleIdentifiers.isEmpty {
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
-               currentVisibleVideoIds.contains(where: { primaryId.contains($0) }) {
-                // Primary still visible — check if we should switch based on position
+               currentVisibleIdentifiers.contains(primaryId) {
+                // Primary's cell still visible — check if we should switch based on position
                 checkAndSwitchVideoIfNeeded()
-                previousVisibleVideoIds = currentVisibleVideoIds
+                previousVisibleIdentifiers = currentVisibleIdentifiers
             } else {
-                // Primary gone or idle — reset and schedule batched update
+                // Primary's cell gone or idle — reset and start new primary immediately
                 phase = .idle
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil
                 playbackDebounceTimer?.invalidate()
                 playbackDebounceTimer = nil
-                scheduleBatchedVisibilityUpdate()
-                previousVisibleVideoIds = currentVisibleVideoIds
+                startPrimaryVideoPlayback()
+                previousVisibleIdentifiers = currentVisibleIdentifiers
             }
-        } else if phase == .idle && !currentVisibleVideoIds.isEmpty {
-            scheduleBatchedVisibilityUpdate()
-            previousVisibleVideoIds = currentVisibleVideoIds
+        } else if phase == .idle && !currentVisibleIdentifiers.isEmpty {
+            startPrimaryVideoPlayback()
+            previousVisibleIdentifiers = currentVisibleIdentifiers
         } else {
-            previousVisibleVideoIds = currentVisibleVideoIds
+            previousVisibleIdentifiers = currentVisibleIdentifiers
         }
 
         // Clear preserve flag when user explicitly scrolls
@@ -891,8 +901,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
         phase = .idle
-        // Clear previous visible video IDs so next updateVisibleTweets sees a change
-        previousVisibleVideoIds.removeAll()
+        // Clear previous visible identifiers so next updateVisibleTweets sees a change
+        previousVisibleIdentifiers.removeAll()
 
         // PHASE 2: Use SharedVideoPlayerManager to stop all videos
         SharedVideoPlayerManager.shared.stopCurrentVideo()
@@ -1120,6 +1130,8 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Start primary video playback — play topmost video immediately.
     /// Fully synchronous: visibility calculations use direct UITableView access.
+    /// State (phase, primaryVideoId) is set **immediately** to prevent duplicate calls;
+    /// only the actual play command is delayed by 50ms to let stop/pause propagate.
     private func startPrimaryVideoPlayback() {
         guard !isPlaybackSuppressedByOverlay else { return }
         guard phase == .idle else { return }
@@ -1142,14 +1154,16 @@ class VideoPlaybackCoordinator: ObservableObject {
             pauseVideo(video)
         }
 
-        // Small delay to ensure pause/stop commands are processed before starting new video
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            self.phase = .primaryPlaying
-            self.primaryVideoId = primary.identifier
-            self.currentlyPlayingVideoIds = [primary.identifier]
-            self.cachedVisibilityRatios[primary.identifier] = 0.7
-            self.lastPrimarySwitchTime = Date()
+        // Set state immediately to prevent duplicate calls from rapid scroll updates
+        phase = .primaryPlaying
+        primaryVideoId = primary.identifier
+        currentlyPlayingVideoIds = [primary.identifier]
+        cachedVisibilityRatios[primary.identifier] = 0.7
+        lastPrimarySwitchTime = Date()
 
+        // Small delay to ensure pause/stop commands are processed before starting new video
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
             SharedVideoPlayerManager.shared.playVideo(
                 videoId: primary.identifier,
                 videoMid: primary.videoMid,
@@ -1227,18 +1241,20 @@ class VideoPlaybackCoordinator: ObservableObject {
 
             // Pause all other visible videos
             for video in visibleVideos where video.identifier != newPrimary.identifier {
-                if let delegate = mediaCellDelegates[video.videoMid] {
+                if let delegate = mediaCellDelegates[video.identifier] {
                     delegate.shouldPauseVideo(withMid: video.videoMid)
                 }
             }
 
-            // Small delay then start new primary
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                self.primaryVideoId = newPrimary.identifier
-                self.currentlyPlayingVideoIds = [newPrimary.identifier]
-                self.cachedVisibilityRatios[newPrimary.identifier] = 0.7
-                self.lastPrimarySwitchTime = Date()
+            // Set state immediately to prevent duplicate calls
+            primaryVideoId = newPrimary.identifier
+            currentlyPlayingVideoIds = [newPrimary.identifier]
+            cachedVisibilityRatios[newPrimary.identifier] = 0.7
+            lastPrimarySwitchTime = Date()
 
+            // Small delay to let stop/pause propagate before starting new video
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self else { return }
                 SharedVideoPlayerManager.shared.playVideo(
                     videoId: newPrimary.identifier,
                     videoMid: newPrimary.videoMid,
@@ -1276,9 +1292,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         if SharedVideoPlayerManager.shared.currentVideoMid == video.videoMid {
             SharedVideoPlayerManager.shared.pauseCurrentVideo()
         } else {
-            // For non-current videos, send direct notification (they're not managed by SharedVideoPlayerManager)
-            // Phase 3: Use delegate instead of notification
-            if let delegate = mediaCellDelegates[video.videoMid] {
+            // For non-current videos, send direct delegate call
+            if let delegate = mediaCellDelegates[video.identifier] {
                 delegate.shouldPauseVideo(withMid: video.videoMid)
             }
         }
@@ -1368,10 +1383,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         
 
         // CRITICAL: Clear coordinatorWantsToPlay flag for finished video
-        // This prevents it from auto-playing on next foreground recovery
-        // PHASE 2: Pause finished video (not managed by SharedVideoPlayerManager anymore)
-        // Phase 3: Use delegate instead of notification
-        if let delegate = mediaCellDelegates[currentVideo.videoMid] {
+        if let delegate = mediaCellDelegates[currentVideo.identifier] {
             delegate.shouldPauseVideo(withMid: currentVideo.videoMid)
         }
 
@@ -1435,8 +1447,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                         // Send pause commands to all videos except the first one
                         // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
                         for (index, video) in visibleVideos.enumerated() where index > 0 {
-                            // Phase 3: Use delegate instead of notification
-                            if let delegate = mediaCellDelegates[video.videoMid] {
+                            if let delegate = mediaCellDelegates[video.identifier] {
                                 delegate.shouldPauseVideo(withMid: video.videoMid)
                             }
                         }

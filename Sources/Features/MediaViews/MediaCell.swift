@@ -192,7 +192,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             setupForegroundObserver()
 
             // Phase 3: Register as delegate for direct video control communication
-            VideoPlaybackCoordinator.shared.registerDelegate(self, forVideoMid: attachment.mid)
+            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+            VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: videoId)
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
@@ -208,7 +209,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             }
 
             // Phase 3: Unregister delegate
-            VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: attachment.mid)
+            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+            VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: videoId)
 
             // MEMORY FIX: Mark video as not visible when cell disappears
             // Cleanup is handled by background timer (every 10s) to preserve preloading

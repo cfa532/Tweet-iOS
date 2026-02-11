@@ -147,6 +147,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var isSingleMedia: Bool = false
     private weak var parentViewController: UIViewController?
 
+    /// Matches VideoPlaybackInfo.identifier format: cellTweetId_videoMid_attachmentIndex.
+    /// Used to register/unregister delegate independently per feed cell, so the same video
+    /// appearing in both a tweet and its retweet gets separate delegates.
+    private var videoIdentifier: String? {
+        guard let attachment else { return nil }
+        let cell = cellTweetId ?? parentTweet?.mid ?? ""
+        return "\(cell)_\(attachment.mid)_\(attachmentIndex)"
+    }
+
     private var imageLoadTask: Task<Void, Never>?
     private var foregroundObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
@@ -223,6 +232,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         isSingleMedia: Bool,
         parentViewController: UIViewController
     ) {
+        // Skip full teardown/rebuild if same attachment — just update aspect ratio.
+        // MediaGridUIView.layoutSubviews() re-calls configure() to pass the real aspect ratio
+        // after the placeholder 1.0; without this guard, removeVideoHosting() + setupVideoCell()
+        // destroys and recreates the UIHostingController, causing a visible black flash.
+        if self.parentTweet?.mid == parentTweet.mid,
+           self.attachmentIndex == attachmentIndex,
+           self.attachment != nil {
+            self.aspectRatio = aspectRatio
+            self.parentViewController = parentViewController
+            return
+        }
+
         self.parentTweet = parentTweet
         self.attachmentIndex = attachmentIndex
         self.aspectRatio = aspectRatio
@@ -565,8 +586,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
             }
 
-            // Register delegate for video coordination
-            VideoPlaybackCoordinator.shared.registerDelegate(self, forVideoMid: attachment.mid)
+            // Register delegate for video coordination (keyed by identifier so
+            // the same video in a tweet + retweet gets separate delegates)
+            if let id = videoIdentifier {
+                VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: id)
+            }
 
             // Setup foreground observer for images
             if attachment.type == .image {
@@ -582,8 +606,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 foregroundObserver = nil
             }
 
-            // Unregister delegate
-            VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: attachment.mid)
+            // Unregister delegate (by identifier — won't accidentally remove another cell's delegate)
+            if let id = videoIdentifier {
+                VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: id)
+            }
 
             // Mark video as not visible
             if isVideoAttachment {
@@ -700,7 +726,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         if let att = attachment {
             GlobalImageLoadManager.shared.cancelLoad(id: att.mid)
-            VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: att.mid)
+            if let id = videoIdentifier {
+                VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: id)
+            }
         }
 
         if let observer = foregroundObserver {
