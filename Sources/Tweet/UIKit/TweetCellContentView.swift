@@ -146,7 +146,7 @@ class TweetCellContentView: UIView {
 
         contentColumn.setCustomSpacing(0, after: headerView)  // Space between header and body content
         contentColumn.setCustomSpacing(12, after: bodyView)
-        contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
+        contentColumn.setCustomSpacing(4, after: embeddedTweetWrapper)
 
         // Main stack: [avatar | contentColumn]
         mainStack.addArrangedSubview(avatarView)
@@ -176,7 +176,7 @@ class TweetCellContentView: UIView {
         NSLayoutConstraint.activate([
             mainStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
             mainStack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            mainStack.bottomAnchor.constraint(equalTo: separatorView.topAnchor, constant: -16),
+            mainStack.bottomAnchor.constraint(equalTo: separatorView.topAnchor, constant: -6),
 
             avatarView.widthAnchor.constraint(equalToConstant: 42),
             avatarView.heightAnchor.constraint(equalToConstant: 42),
@@ -319,6 +319,13 @@ class TweetCellContentView: UIView {
         // Load author if needed (background task)
         loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance)
 
+        // Also load original tweet's author for retweets/quoted tweets
+        if isRetweet, let originalId = tweet.originalTweetId,
+           let originalTweet = Tweet.getInstance(for: originalId),
+           originalTweet.author == nil || originalTweet.author?.username == nil {
+            loadAuthorIfNeeded(tweet: originalTweet, hproseInstance: hproseInstance)
+        }
+
         // No deferred layout needed — Phase 3 media grid is pure UIKit with synchronous sizing
     }
 
@@ -424,6 +431,17 @@ class TweetCellContentView: UIView {
             avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
         }
 
+        // Subscribe to original tweet's author appearing (may load async)
+        originalTweet.$author
+            .compactMap { $0 }
+            .first()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] author in
+                self?.avatarView.configure(user: author, size: 42)
+                self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
+            }
+            .store(in: &cancellables)
+
         // Header from original tweet
         headerView.configure(tweet: originalTweet)
         let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
@@ -455,7 +473,7 @@ class TweetCellContentView: UIView {
         // Show embedded tweet wrapper and restore its spacing
         embeddedTweetWrapper.isHidden = false
         embeddedWrapperHeightConstraint?.isActive = false
-        contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
+        contentColumn.setCustomSpacing(4, after: embeddedTweetWrapper)
 
         // Avatar from quoting tweet's author
         if let author = tweet.author {

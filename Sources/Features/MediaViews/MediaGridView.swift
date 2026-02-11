@@ -776,7 +776,7 @@ struct MediaGridViewModel {
 
         let screenWidth = UIScreen.main.bounds.width
         let gridWidth = isEmbedded
-            ? max(10, screenWidth - 80)  // Embedded width estimate
+            ? max(10, screenWidth - 124)  // Match TweetBodyUIView embedded: cell(16) + leading(3) + avatar(42) + spacing(4) + embedded(8+4) + embAvatar(40) + embSpacing(8) - wrapper(-4)
             : max(10, screenWidth - 32 - 32)  // Regular width
 
         return calculateHeight(for: attachments, gridWidth: gridWidth)
