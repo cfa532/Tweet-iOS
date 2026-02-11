@@ -847,6 +847,20 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
+                    // For retweets/quoted tweets, ensure the original tweet is available
+                    if let originalTweetId = tweet.originalTweetId,
+                       let originalAuthorId = tweet.originalAuthorId {
+                        if Tweet.getInstance(for: originalTweetId) == nil {
+                            // Original tweet not in cache — try fetching from server
+                            let fetched = try? await self.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+                            if fetched == nil {
+                                print("[fetchTweetFeed] Skipping tweet \(tweet.mid) - original tweet \(originalTweetId) not available")
+                                tweets.append(nil)
+                                continue
+                            }
+                        }
+                    }
+
                     // Cache main feed tweets under appUser.mid for efficient main feed loading
                     TweetCacheManager.shared.saveTweet(tweet, userId: appUser.mid)
                     tweets.append(tweet)
@@ -858,7 +872,7 @@ final class HproseInstance: ObservableObject {
                 tweets.append(nil)
             }
         }
-        
+
         print("[fetchTweetFeed] Returning \(tweets.count) tweets")
         return tweets
     }
@@ -963,6 +977,20 @@ final class HproseInstance: ObservableObject {
                         continue
                     }
                     
+                    // For retweets/quoted tweets, ensure the original tweet is available
+                    if let originalTweetId = tweet.originalTweetId,
+                       let originalAuthorId = tweet.originalAuthorId {
+                        if Tweet.getInstance(for: originalTweetId) == nil {
+                            // Original tweet not in cache — try fetching from server
+                            let fetched = try? await self.getTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+                            if fetched == nil {
+                                print("[fetchUserTweets] Skipping tweet \(tweet.mid) - original tweet \(originalTweetId) not available")
+                                tweets.append(nil)
+                                continue
+                            }
+                        }
+                    }
+
                     // Cache tweet under its authorId
                     TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
                     tweets.append(tweet)
@@ -973,7 +1001,7 @@ final class HproseInstance: ObservableObject {
                 tweets.append(nil)
             }
         }
-        
+
         return tweets
     }
     

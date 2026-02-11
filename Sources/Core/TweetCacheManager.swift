@@ -246,6 +246,20 @@ extension TweetCacheManager {
                             
                             // NOTE: baseUrl will be assigned on MainActor after all tweets are collected
                             
+                            // Skip retweets/quoted tweets whose original tweet is not available
+                            if let originalTweetId = tweet.originalTweetId, tweet.originalAuthorId != nil {
+                                if Tweet.getInstance(for: originalTweetId) == nil {
+                                    // Also check Core Data cache
+                                    let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                                    origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
+                                    origRequest.fetchLimit = 1
+                                    let origCount = (try? self.context.count(for: origRequest)) ?? 0
+                                    if origCount == 0 {
+                                        continue
+                                    }
+                                }
+                            }
+
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
                                 print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
