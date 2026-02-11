@@ -148,7 +148,15 @@ class TweetBodyUIView: UIView {
                 // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4)
                 textWidth = screenWidth - 65
             }
-            contentLabel.attributedText = Self.makeContentAttributedString(content: content, availableWidth: textWidth)
+            if let cached = tweet.cachedContentAttributedString,
+               tweet.cachedContentWidth == textWidth {
+                contentLabel.attributedText = cached
+            } else {
+                let attrString = Self.makeContentAttributedString(content: content, availableWidth: textWidth)
+                tweet.cachedContentAttributedString = attrString
+                tweet.cachedContentWidth = textWidth
+                contentLabel.attributedText = attrString
+            }
             contentLabel.isHidden = false
         } else {
             contentLabel.attributedText = nil
@@ -384,16 +392,20 @@ class TweetBodyUIView: UIView {
         let moreWidth = NSAttributedString(string: moreString, attributes: [.font: font]).size().width
         let targetWidth = availableWidth - moreWidth - 2 // 2px safety margin
 
-        // Trim last line text until there's room for "… More>>"
-        var trimEnd = NSMaxRange(lastLineCharRange)
-        while trimEnd > lastLineStart {
-            let lastLineText = (content as NSString).substring(with: NSRange(location: lastLineStart, length: trimEnd - lastLineStart))
+        // Binary search for the longest substring that fits within targetWidth
+        var lo = lastLineStart
+        var hi = NSMaxRange(lastLineCharRange)
+        while lo < hi {
+            let mid = lo + (hi - lo + 1) / 2
+            let lastLineText = (content as NSString).substring(with: NSRange(location: lastLineStart, length: mid - lastLineStart))
             let lineWidth = NSAttributedString(string: lastLineText, attributes: [.font: font]).size().width
             if lineWidth <= targetWidth {
-                break
+                lo = mid
+            } else {
+                hi = mid - 1
             }
-            trimEnd -= 1
         }
+        var trimEnd = lo
 
         // Build body text: everything up to trimEnd, strip trailing whitespace
         var bodyText = (content as NSString).substring(to: trimEnd)

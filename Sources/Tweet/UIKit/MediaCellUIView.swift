@@ -1075,10 +1075,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: id)
             }
 
-            // Setup foreground observer for images
-            if attachment.type == .image {
-                setupForegroundObserver()
-            }
+            // Setup foreground observer for images and videos
+            setupForegroundObserver()
         } else {
             // Cancel image loads
             GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
@@ -1143,11 +1141,37 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self, self.isVisible,
-                  self.imageView.image == nil,
-                  let att = self.attachment, att.type == .image,
-                  let url = att.getUrl(self.effectiveBaseUrl) else { return }
-            self.loadImage(attachment: att, url: url)
+            guard let self, self.isVisible, let att = self.attachment else { return }
+
+            if att.type == .image {
+                // Reload image if it was purged during background
+                if self.imageView.image == nil, let url = att.getUrl(self.effectiveBaseUrl) {
+                    self.loadImage(attachment: att, url: url)
+                }
+            } else if self.isVideoAttachment {
+                // During backgrounding, clearVideoPlayersForBackgroundRecovery() calls
+                // replaceCurrentItem(with: nil) on all players and clears the cache.
+                // Our self.player still references the now-dead player (no currentItem).
+                // We must discard it and let the coordinator re-acquire a fresh player.
+                if let player = self.player, player.currentItem == nil {
+                    self.cleanupVideoPlayer()
+                    self.isPlayerLoaded = false
+                    // Show cached last frame so the cell isn't black while a new player loads
+                    if let cachedFrame = VideoLastFrameCache.shared.image(for: att.mid) {
+                        self.imageView.image = cachedFrame
+                        self.imageView.isHidden = false
+                    }
+                    // Re-acquire a fresh player and auto-play once ready
+                    if let url = att.getUrl(self.effectiveBaseUrl), let parentTweet = self.parentTweet {
+                        self.setupVideoCell(attachment: att, url: url, parentTweet: parentTweet)
+                        self.handleCoordinatorPlayCommand()
+                    }
+                } else if let player = self.player {
+                    // Player is still valid — just re-attach to force AVPlayerLayer to re-render
+                    self.videoPlayerView.setPlayer(nil)
+                    self.videoPlayerView.setPlayer(player)
+                }
+            }
         }
     }
 

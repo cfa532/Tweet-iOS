@@ -1263,19 +1263,26 @@ class TweetTableViewController: UITableViewController {
         var bodyHeight: CGFloat = 0
 
         if let content = displayTweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Measure text precisely using the actual font and available width
-            let font = UIFont.systemFont(ofSize: 16)
+            // Build (or retrieve cached) attributed string — single typesetting pass
+            let attrString: NSAttributedString
+            if let cached = displayTweet.cachedContentAttributedString,
+               displayTweet.cachedContentWidth == contentWidth {
+                attrString = cached
+            } else {
+                attrString = TweetBodyUIView.makeContentAttributedString(
+                    content: content, availableWidth: contentWidth
+                )
+                displayTweet.cachedContentAttributedString = attrString
+                displayTweet.cachedContentWidth = contentWidth
+            }
+            // Measure the already-truncated attributed string (no 7-line clamp needed)
             let maxSize = CGSize(width: contentWidth, height: .greatestFiniteMagnitude)
-            let textRect = (content as NSString).boundingRect(
+            let textRect = attrString.boundingRect(
                 with: maxSize,
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
-                attributes: [.font: font],
                 context: nil
             )
-            // Clamp to 7 lines (numberOfLines = 7)
-            let lineHeight = font.lineHeight
-            let maxTextHeight = lineHeight * 7
-            bodyHeight += min(ceil(textRect.height), maxTextHeight)
+            bodyHeight += ceil(textRect.height)
         }
 
         // Media attachments (filter to media-only, matching TweetBodyUIView)
@@ -1357,17 +1364,25 @@ class TweetTableViewController: UITableViewController {
 
                 if hasEmbeddedText {
                     let embeddedWidth = contentWidth - 16 - 40 - 8 // embedded padding + avatar + spacing
-                    let font = UIFont.systemFont(ofSize: 16)
+                    // Build (or retrieve cached) attributed string for embedded tweet
+                    let attrString: NSAttributedString
+                    if let cached = embeddedTweet.cachedContentAttributedString,
+                       embeddedTweet.cachedContentWidth == embeddedWidth {
+                        attrString = cached
+                    } else {
+                        attrString = TweetBodyUIView.makeContentAttributedString(
+                            content: embeddedTweet.content!, availableWidth: embeddedWidth
+                        )
+                        embeddedTweet.cachedContentAttributedString = attrString
+                        embeddedTweet.cachedContentWidth = embeddedWidth
+                    }
                     let maxSize = CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude)
-                    let textRect = (embeddedTweet.content! as NSString).boundingRect(
+                    let textRect = attrString.boundingRect(
                         with: maxSize,
                         options: [.usesLineFragmentOrigin, .usesFontLeading],
-                        attributes: [.font: font],
                         context: nil
                     )
-                    let lineHeight = font.lineHeight
-                    let maxTextHeight = lineHeight * 7
-                    embeddedBodyH += min(ceil(textRect.height), maxTextHeight)
+                    embeddedBodyH += ceil(textRect.height)
                     embeddedBodyH += 4 // spacing after contentLabel to mediaContainer
                 }
 
