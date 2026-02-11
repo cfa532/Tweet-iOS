@@ -341,7 +341,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Video
 
     private func setupVideoCell(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        imageView.isHidden = true
+        // Show cached last frame as instant placeholder (pure UIKit, no SwiftUI render delay)
+        if let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid) {
+            imageView.image = cachedFrame
+            imageView.isHidden = false
+        } else {
+            imageView.isHidden = true
+        }
         removeVideoHosting()
 
         // Create reactive state bridge
@@ -384,11 +390,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         hostingController.view.frame = bounds
 
         parentViewController?.addChild(hostingController)
-        addSubview(hostingController.view)
+        // Insert above imageView (placeholder) but below overlays (mute, timer, fullscreen)
+        insertSubview(hostingController.view, aboveSubview: imageView)
         hostingController.didMove(toParent: parentViewController)
-
-        // Ensure video view is behind overlays
-        sendSubviewToBack(hostingController.view)
 
         videoHostingController = hostingController
 
@@ -560,7 +564,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     func setVisible(_ visible: Bool) {
         isVisible = visible
-        // Forward to video state bridge — deferred to avoid "Publishing changes from within view updates" warning
+        // Forward to video state bridge — deferred to avoid SwiftUI re-render conflicts
+        // during UIKit layout passes (willDisplay/didEndDisplaying).
         DispatchQueue.main.async { [weak self] in
             self?.videoStateBridge?.isVisible = visible
         }
