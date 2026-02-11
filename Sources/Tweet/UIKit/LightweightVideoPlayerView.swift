@@ -78,6 +78,10 @@ class LightweightVideoPlayerView: UIView {
     func setPlayer(_ player: AVPlayer?) {
         self.player = player
     }
+
+    func setVideoGravity(_ gravity: AVLayerVideoGravity) {
+        playerLayer?.videoGravity = gravity
+    }
 }
 
 /// SwiftUI wrapper for LightweightVideoPlayerView

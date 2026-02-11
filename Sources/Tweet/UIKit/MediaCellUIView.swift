@@ -4,65 +4,13 @@
 //
 //  Pure UIKit media cell replacing SwiftUI MediaCell in the feed.
 //  Handles image, video, and audio attachments.
-//  Video uses SimpleVideoPlayer hosted in a small UIHostingController with explicit frame.
-//  A VideoStateBridge (ObservableObject) passes reactive state from UIKit to SwiftUI.
+//  Video uses LightweightVideoPlayerView (pure UIKit AVPlayerLayer) — no UIHostingController.
+//  Coordinator commands arrive via MediaCellDelegate and .stopAllVideos notification.
 //
 import UIKit
 import SwiftUI
 import Combine
 import AVFoundation
-
-// MARK: - Video State Bridge (UIKit → SwiftUI)
-
-/// Bridges reactive state from UIKit MediaCellUIView to SwiftUI SimpleVideoPlayer.
-/// SimpleVideoPlayer reads these as plain values but uses `.onChange(of:)` internally,
-/// which fires when this ObservableObject's published properties cause the parent
-/// VideoPlayerWrapper to re-render with new values.
-class VideoStateBridge: ObservableObject {
-    @Published var isVisible: Bool = false
-    @Published var shouldAutoPlay: Bool = false
-    @Published var shouldLoadVideo: Bool = true
-    @Published var isMuted: Bool = true
-}
-
-/// Thin SwiftUI wrapper that observes VideoStateBridge and forwards changing values
-/// to SimpleVideoPlayer, ensuring `.onChange(of:)` fires when UIKit updates state.
-struct VideoPlayerWrapper: View {
-    @ObservedObject var state: VideoStateBridge
-    let url: URL
-    let mid: String
-    let parentTweetId: String
-    let mediaType: MediaType
-    let authorId: String?
-    let cellAspectRatio: CGFloat
-    let videoAspectRatio: CGFloat
-    let isEmbedded: Bool
-    let onVideoTap: (() -> Void)?
-
-    var body: some View {
-        ZStack {
-            Color.black
-            SimpleVideoPlayer(
-                url: url,
-                mid: mid,
-                parentTweetId: parentTweetId,
-                isVisible: state.isVisible,
-                mediaType: mediaType,
-                authorId: authorId,
-                autoPlay: state.shouldAutoPlay,
-                onVideoFinished: nil,
-                cellAspectRatio: cellAspectRatio,
-                videoAspectRatio: videoAspectRatio,
-                showNativeControls: false,
-                isMuted: state.isMuted,
-                onVideoTap: onVideoTap,
-                disableAutoRestart: true,
-                shouldLoadVideo: state.shouldLoadVideo,
-                mode: isEmbedded ? .embeddedDetail : .mediaCell
-            )
-        }
-    }
-}
 
 // MARK: - MediaCellUIView
 
@@ -77,6 +25,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         iv.layer.cornerRadius = 8
         iv.backgroundColor = .systemGray6
         return iv
+    }()
+
+    /// Pure UIKit video player (AVPlayerLayer) — replaces UIHostingController<SimpleVideoPlayer>
+    private let videoPlayerView: LightweightVideoPlayerView = {
+        let v = LightweightVideoPlayerView()
+        v.backgroundColor = .black
+        v.layer.cornerRadius = 8
+        v.clipsToBounds = true
+        v.isHidden = true
+        // Fill container (clip overflow) — matches SimpleVideoPlayer's .resizeAspectFill for feed cells
+        v.setVideoGravity(.resizeAspectFill)
+        return v
     }()
 
     private let loadingSpinner: UIActivityIndicatorView = {
@@ -126,13 +86,47 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return v
     }()
 
-    // Video hosting controller (hosts VideoPlayerWrapper)
-    private var videoHostingController: UIHostingController<AnyView>?
-    private var videoStateBridge: VideoStateBridge?
-    // Audio hosting controller (hosts SimpleAudioPlayer)
+    // Audio hosting controller (hosts SimpleAudioPlayer — still SwiftUI)
     private var audioHostingController: UIHostingController<AnyView>?
 
-    // MARK: - State
+    // MARK: - Video Player State
+
+    /// The AVPlayer instance for this cell's video
+    private var player: AVPlayer?
+
+    /// Whether the coordinator wants this video to play
+    private var coordinatorWantsToPlay: Bool = false
+
+    /// AVPlayerItemVideoOutput for last-frame capture
+    private var videoOutput: AVPlayerItemVideoOutput?
+    private weak var videoOutputAttachedItem: AVPlayerItem?
+
+    /// KVO observers
+    private var playerItemStatusObserver: NSKeyValueObservation?
+    private var resumeObserver: NSKeyValueObservation?
+
+    /// Notification observers
+    private var videoCompletionObserver: NSObjectProtocol?
+    private var stopAllObserver: NSObjectProtocol?
+    private var shouldPlayObserver: NSObjectProtocol?
+    private var shouldPauseObserver: NSObjectProtocol?
+    private var shouldStopObserver: NSObjectProtocol?
+
+    /// Async player acquisition / wait tasks
+    private var setupPlayerTask: Task<Void, Never>?
+    private var waitingForPlayerTask: Task<Void, Never>?
+    private var isWaitingForPlayerReady: Bool = false
+
+    /// Frame capture throttle
+    private var lastFrameCaptureAt: Date = .distantPast
+
+    /// Whether the player item is loaded and ready to play
+    private var isPlayerLoaded: Bool = false
+
+    /// Prevent duplicate finish handling
+    private var isHandlingFinishEvent: Bool = false
+
+    // MARK: - General State
 
     private var attachment: MimeiFileType?
     private weak var parentTweet: Tweet?
@@ -141,7 +135,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var isEmbedded: Bool = false
     private var cellTweetId: String?
     private var shouldLoadVideo: Bool = true
-    private var shouldAutoPlay: Bool = false
     private var isVisible: Bool = false
     private var effectiveBaseUrl: URL = HproseInstance.baseUrl
     private var isSingleMedia: Bool = false
@@ -180,6 +173,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         layer.cornerRadius = 8
 
         addSubview(imageView)
+        addSubview(videoPlayerView)
         addSubview(loadingSpinner)
         addSubview(fullscreenOverlay)
         fullscreenOverlay.addSubview(fullscreenSpinner)
@@ -191,6 +185,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         super.layoutSubviews()
         let b = bounds
         imageView.frame = b
+        videoPlayerView.frame = b
         loadingSpinner.center = CGPoint(x: b.midX, y: b.midY)
         fullscreenOverlay.frame = b
         fullscreenSpinner.center = CGPoint(x: b.midX, y: b.midY)
@@ -215,8 +210,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             )
         }
 
-        // Video hosting controller fills bounds
-        videoHostingController?.view.frame = b
         audioHostingController?.view.frame = b
     }
 
@@ -234,8 +227,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     ) {
         // Skip full teardown/rebuild if same attachment — just update aspect ratio.
         // MediaGridUIView.layoutSubviews() re-calls configure() to pass the real aspect ratio
-        // after the placeholder 1.0; without this guard, removeVideoHosting() + setupVideoCell()
-        // destroys and recreates the UIHostingController, causing a visible black flash.
+        // after the placeholder 1.0; without this guard we'd destroy and recreate the player.
         if self.parentTweet?.mid == parentTweet.mid,
            self.attachmentIndex == attachmentIndex,
            self.attachment != nil {
@@ -267,6 +259,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Reset UI
         imageView.image = nil
         imageView.isHidden = true
+        videoPlayerView.isHidden = true
         muteButton.isHidden = true
         timerLabel.isHidden = true
         loadingSpinner.stopAnimating()
@@ -341,60 +334,70 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Video
 
     private func setupVideoCell(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        // Show cached last frame as instant placeholder (pure UIKit, no SwiftUI render delay)
+        // Show cached last frame as instant placeholder (pure UIKit, no render delay)
         if let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid) {
             imageView.image = cachedFrame
             imageView.isHidden = false
         } else {
             imageView.isHidden = true
         }
-        removeVideoHosting()
 
-        // Create reactive state bridge
-        let bridge = VideoStateBridge()
-        bridge.isVisible = isVisible
-        bridge.shouldAutoPlay = false
-        bridge.shouldLoadVideo = shouldLoadVideo
-        bridge.isMuted = MuteState.shared.isMuted
-        self.videoStateBridge = bridge
+        // Reset any previous video state
+        cleanupVideoPlayer()
 
-        // Observe MuteState changes and forward to bridge
+        // Show the player view container (black background until player delivers frames)
+        videoPlayerView.isHidden = false
+
+        // Tap gesture for fullscreen
+        if !isEmbedded {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
+            videoPlayerView.addGestureRecognizer(tap)
+            videoPlayerView.isUserInteractionEnabled = true
+        }
+
+        // Listen for .stopAllVideos (posted by non-coordinator code like handleVideoTap)
+        stopAllObserver = NotificationCenter.default.addObserver(
+            forName: .stopAllVideos, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.handleStopAllVideos()
+        }
+
+        // Listen for coordinator commands via SharedVideoPlayerManager notifications
+        let videoMid = attachment.mid
+        shouldPlayObserver = NotificationCenter.default.addObserver(
+            forName: .shouldPlayVideo, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let mid = notification.userInfo?["videoMid"] as? String,
+                  mid == videoMid else { return }
+            self?.handleCoordinatorPlayCommand()
+        }
+
+        shouldPauseObserver = NotificationCenter.default.addObserver(
+            forName: .shouldPauseVideo, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let mid = notification.userInfo?["videoMid"] as? String,
+                  mid == videoMid else { return }
+            self?.handleCoordinatorPauseCommand()
+        }
+
+        shouldStopObserver = NotificationCenter.default.addObserver(
+            forName: .shouldStopVideo, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let mid = notification.userInfo?["videoMid"] as? String,
+                  mid == videoMid else { return }
+            self?.handleCoordinatorStopCommand()
+        }
+
+        // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
             .receive(on: DispatchQueue.main)
-            .sink { [weak bridge] muted in
-                bridge?.isMuted = muted
+            .sink { [weak self] muted in
+                self?.player?.isMuted = muted
             }
             .store(in: &cancellables)
 
-        let wrapper = VideoPlayerWrapper(
-            state: bridge,
-            url: url,
-            mid: attachment.mid,
-            parentTweetId: parentTweet.mid,
-            mediaType: attachment.type,
-            authorId: parentTweet.authorId,
-            cellAspectRatio: CGFloat(aspectRatio),
-            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-            isEmbedded: isEmbedded,
-            onVideoTap: isEmbedded ? nil : { [weak self] in
-                self?.handleVideoTap()
-            }
-        )
-
-        let hostingController = UIHostingController(rootView: AnyView(wrapper))
-        hostingController.view.backgroundColor = .black
-        hostingController.view.insetsLayoutMarginsFromSafeArea = false
-        hostingController.view.layer.cornerRadius = 8
-        hostingController.view.clipsToBounds = true
-        // Explicit frame — no sizingOptions (prevents async sizing mismatch)
-        hostingController.view.frame = bounds
-
-        parentViewController?.addChild(hostingController)
-        // Insert above imageView (placeholder) but below overlays (mute, timer, fullscreen)
-        insertSubview(hostingController.view, aboveSubview: imageView)
-        hostingController.didMove(toParent: parentViewController)
-
-        videoHostingController = hostingController
+        // Acquire player (sync from cache or async from SharedAssetCache)
+        acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
 
         // Mute button and timer for single video
         if isSingleMedia {
@@ -402,6 +405,434 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             setupVideoTimer(videoMid: attachment.mid)
         }
     }
+
+    // MARK: - Player Acquisition
+
+    private func acquirePlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        let mid = attachment.mid
+
+        // TIER 1: Synchronous cache hit (VideoStateCache)
+        if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+            let cachedPlayer = cachedState.player
+            cachedPlayer.isMuted = MuteState.shared.isMuted
+
+            // Validate cached player
+            guard cachedPlayer.currentItem != nil else {
+                SharedAssetCache.shared.removeInvalidPlayer(for: mid, force: true)
+                VideoStateCache.shared.clearCachedState(for: mid)
+                acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
+                return
+            }
+
+            // Reset finished videos to beginning
+            if isVideoAtEnd(cachedPlayer) {
+                VideoStateCache.shared.clearCachedState(for: mid)
+                cachedPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
+            }
+
+            // Pause if playing (prevent audio bleed in feed)
+            if cachedPlayer.rate > 0 { cachedPlayer.pause() }
+
+            configurePlayer(cachedPlayer)
+            return
+        }
+
+        // TIER 2: Async loading
+        acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
+    }
+
+    private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        guard shouldLoadVideo else { return }
+        isPlayerLoaded = false
+        loadingSpinner.startAnimating()
+
+        let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
+        let tweetId = parentTweet.mid
+        let mediaType = attachment.type
+
+        setupPlayerTask?.cancel()
+        setupPlayerTask = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try Task.checkCancellation()
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
+                    for: uniqueURL, tweetId: tweetId, mediaType: mediaType
+                )
+                try Task.checkCancellation()
+
+                // Apply mute state immediately after creation
+                let muteState = await MainActor.run { MuteState.shared.isMuted }
+                newPlayer.isMuted = muteState
+
+                await MainActor.run { [weak self] in
+                    guard !Task.isCancelled, let self else { return }
+                    newPlayer.isMuted = MuteState.shared.isMuted
+                    self.configurePlayer(newPlayer)
+                    self.setupPlayerTask = nil
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run { [weak self] in
+                    self?.loadingSpinner.stopAnimating()
+                    self?.setupPlayerTask = nil
+                }
+            }
+        }
+    }
+
+    private func buildUniquePlayerURL(url: URL, parentTweetId: String) -> URL {
+        let tweetHash = abs(parentTweetId.hashValue) % 10000
+        if var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = [URLQueryItem(name: "dig", value: String(tweetHash))]
+            return components.url ?? url
+        }
+        return url
+    }
+
+    // MARK: - Player Configuration
+
+    private func configurePlayer(_ newPlayer: AVPlayer) {
+        // Configure automatic waiting based on type
+        if attachment?.type == .video {
+            newPlayer.automaticallyWaitsToMinimizeStalling = true
+        } else {
+            newPlayer.automaticallyWaitsToMinimizeStalling = false
+        }
+
+        // Pause if playing (prevent audio bleed in feed)
+        if newPlayer.rate > 0 { newPlayer.pause() }
+
+        // Apply mute state
+        newPlayer.isMuted = MuteState.shared.isMuted
+
+        // Attach video output for frame capture
+        ensureVideoOutputAttached(for: newPlayer)
+
+        // Clean up old observers before setting new player
+        removePlayerObservers()
+
+        // Assign to player view
+        self.player = newPlayer
+        videoPlayerView.setPlayer(newPlayer)
+
+        // Set up KVO + notification observers
+        setupPlayerObservers(newPlayer)
+
+        // Check if player is already ready with buffered data
+        if let item = newPlayer.currentItem,
+           item.status == .readyToPlay,
+           !item.loadedTimeRanges.isEmpty {
+            isPlayerLoaded = true
+            loadingSpinner.stopAnimating()
+        }
+    }
+
+    // MARK: - Coordinator Command Handlers
+
+    private func handleCoordinatorPlayCommand() {
+        guard let mid = attachment?.mid else { return }
+
+        isHandlingFinishEvent = false
+        VideoStateCache.shared.clearStoppedByCoordinator(mid)
+        coordinatorWantsToPlay = true
+
+        // If player not ready, wait for it
+        guard let player = player, isPlayerLoaded else {
+            // Trigger player setup if needed
+            if player == nil, shouldLoadVideo, isVisible,
+               let att = attachment, let url = att.getUrl(effectiveBaseUrl),
+               let parentTweet = parentTweet {
+                acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+            }
+
+            // Wait for player to become ready (max 3s)
+            guard !isWaitingForPlayerReady else { return }
+            isWaitingForPlayerReady = true
+            waitingForPlayerTask = Task { @MainActor [weak self] in
+                defer {
+                    self?.isWaitingForPlayerReady = false
+                    self?.waitingForPlayerTask = nil
+                }
+                var attempts = 0
+                while (self?.player == nil || self?.isPlayerLoaded != true) && attempts < 30 {
+                    do {
+                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                    } catch { return }
+                    attempts += 1
+                }
+                guard let self, self.coordinatorWantsToPlay else { return }
+                if self.isPlayerLoaded, let player = self.player, player.currentItem != nil {
+                    self.playWithVolumeFadeIn(player)
+                }
+            }
+            return
+        }
+
+        // Player is ready — play
+        playWithVolumeFadeIn(player)
+    }
+
+    private func handleCoordinatorPauseCommand() {
+        guard let mid = attachment?.mid else { return }
+        coordinatorWantsToPlay = false
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        isWaitingForPlayerReady = false
+
+        if let player = player {
+            if player.rate > 0 {
+                saveCurrentPosition(player: player, wasPlaying: true)
+            }
+            captureLastFrameIfPossible(reason: "coordinatorPause")
+            // Volume fade-out then pause
+            UIView.animate(withDuration: 0.2, animations: {
+                player.volume = 0
+            }, completion: { _ in
+                player.pause()
+            })
+        }
+        VideoStateCache.shared.markAsStoppedByCoordinator(mid)
+    }
+
+    private func handleCoordinatorStopCommand() {
+        guard let mid = attachment?.mid else { return }
+        coordinatorWantsToPlay = false
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        isWaitingForPlayerReady = false
+
+        if let player = player {
+            if player.rate > 0 {
+                saveCurrentPosition(player: player, wasPlaying: true)
+            }
+            captureLastFrameIfPossible(reason: "coordinatorStop")
+            player.pause()
+        }
+        VideoStateCache.shared.markAsStoppedByCoordinator(mid)
+    }
+
+    private func handleStopAllVideos() {
+        guard isVideoAttachment else { return }
+        coordinatorWantsToPlay = false
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        isWaitingForPlayerReady = false
+
+        if let player = player {
+            if player.rate > 0 {
+                saveCurrentPosition(player: player, wasPlaying: true)
+            }
+            captureLastFrameIfPossible(reason: "stopAllVideos")
+            player.pause()
+            player.isMuted = MuteState.shared.isMuted
+        }
+    }
+
+    // MARK: - Playback
+
+    private func playWithVolumeFadeIn(_ player: AVPlayer) {
+        guard let mid = attachment?.mid else { return }
+
+        // Check for cached position to resume from
+        if let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
+            let targetSeconds = info.time.seconds
+            if targetSeconds.isFinite, targetSeconds > 0.25 {
+                let currentSeconds = player.currentTime().seconds
+                if currentSeconds.isFinite, abs(currentSeconds - targetSeconds) > 0.25 {
+                    player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        self?.startPlaybackWithFade(player)
+                    }
+                    return
+                }
+            }
+        }
+
+        startPlaybackWithFade(player)
+    }
+
+    private func startPlaybackWithFade(_ player: AVPlayer) {
+        player.isMuted = MuteState.shared.isMuted
+        player.volume = 0
+        player.play()
+        UIView.animate(withDuration: 0.3) {
+            player.volume = 1.0
+        }
+    }
+
+    // MARK: - Frame Capture
+
+    private func ensureVideoOutputAttached(for player: AVPlayer) {
+        guard isVideoAttachment else { return }
+        guard let item = player.currentItem else { return }
+
+        // Already attached to this item
+        if videoOutputAttachedItem === item, videoOutput != nil { return }
+
+        // Detach from previous item
+        if let previousItem = videoOutputAttachedItem, let existingOutput = videoOutput {
+            previousItem.remove(existingOutput)
+        }
+
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ])
+        item.add(output)
+        videoOutput = output
+        videoOutputAttachedItem = item
+    }
+
+    private func captureLastFrameIfPossible(reason: String) {
+        guard isVideoAttachment else { return }
+        guard let player = player, let item = player.currentItem else { return }
+
+        ensureVideoOutputAttached(for: player)
+        guard let output = videoOutput else { return }
+        guard item.status == .readyToPlay, !item.loadedTimeRanges.isEmpty else { return }
+
+        // Throttle: 0.75s minimum between captures
+        let now = Date()
+        guard now.timeIntervalSince(lastFrameCaptureAt) >= 0.75 else { return }
+        lastFrameCaptureAt = now
+
+        guard let mid = attachment?.mid else { return }
+        let playerTimeNow = player.currentTime()
+        let hostTimeNow = CACurrentMediaTime()
+        let hostItemTimeNow = output.itemTime(forHostTime: hostTimeNow)
+
+        Task.detached(priority: .utility) {
+            // Build candidate times with backoffs
+            let base = playerTimeNow
+            let backoffs: [Double] = [0.0, -0.08, -0.20, -0.40]
+            var candidateTimes: [CMTime] = []
+            for d in backoffs {
+                let t = CMTime(seconds: max(0, base.seconds + d), preferredTimescale: 600)
+                if t.isValid { candidateTimes.append(t) }
+            }
+            if hostItemTimeNow.isValid { candidateTimes.append(hostItemTimeNow) }
+
+            var pixelBuffer: CVPixelBuffer? = nil
+            var displayTime = CMTime.zero
+            for t in candidateTimes {
+                if let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) {
+                    pixelBuffer = pb
+                    break
+                }
+            }
+
+            guard let pixelBuffer else { return }
+
+            let width = CVPixelBufferGetWidth(pixelBuffer)
+            let height = CVPixelBufferGetHeight(pixelBuffer)
+            guard width > 0, height > 0, width < 10000, height < 10000 else { return }
+
+            guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else { return }
+            if VideoFrameExtractor.isMostlyBlack(image) { return }
+
+            await MainActor.run {
+                VideoLastFrameCache.shared.set(image, for: mid)
+            }
+        }
+    }
+
+    // MARK: - Player Observers
+
+    private func setupPlayerObservers(_ player: AVPlayer) {
+        guard let playerItem = player.currentItem else { return }
+        removePlayerObservers()
+
+        ensureVideoOutputAttached(for: player)
+
+        // Video finished
+        videoCompletionObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.handleVideoFinished()
+            }
+        }
+
+        // KVO: player item status
+        playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if item.status == .readyToPlay, !item.loadedTimeRanges.isEmpty {
+                    self.isPlayerLoaded = true
+                    self.loadingSpinner.stopAnimating()
+                } else if item.status == .failed {
+                    self.loadingSpinner.stopAnimating()
+                }
+            }
+        }
+    }
+
+    private func removePlayerObservers() {
+        if let o = videoCompletionObserver { NotificationCenter.default.removeObserver(o) }
+        videoCompletionObserver = nil
+        playerItemStatusObserver?.invalidate()
+        playerItemStatusObserver = nil
+        resumeObserver?.invalidate()
+        resumeObserver = nil
+    }
+
+    // MARK: - Video Finished
+
+    private func handleVideoFinished() async {
+        guard !isHandlingFinishEvent else { return }
+        isHandlingFinishEvent = true
+        defer { isHandlingFinishEvent = false }
+
+        guard let player = player, let item = player.currentItem,
+              let mid = attachment?.mid else { return }
+
+        let duration = item.duration
+        guard duration.isValid, duration.seconds > 0 else { return }
+
+        let timeUntilEnd = duration.seconds - player.currentTime().seconds
+        guard timeUntilEnd < 0.5 else { return }
+
+        // Pause immediately
+        player.pause()
+        player.isMuted = MuteState.shared.isMuted
+        VideoStateCache.shared.clearCachedState(for: mid)
+        captureLastFrameIfPossible(reason: "videoFinished")
+
+        // Notify coordinator to advance to next video
+        NotificationCenter.default.post(
+            name: .videoDidFinishPlaying,
+            object: nil,
+            userInfo: ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
+        )
+
+        VideoStateCache.shared.clearCache(for: mid, force: true)
+    }
+
+    // MARK: - Utilities
+
+    private func saveCurrentPosition(player: AVPlayer, wasPlaying: Bool) {
+        guard let mid = attachment?.mid else { return }
+        guard player.currentItem != nil else { return }
+        let currentTime = player.currentTime()
+        guard currentTime.seconds.isFinite, currentTime.seconds > 0.25 else { return }
+        guard !isVideoAtEnd(player) else { return }
+
+        VideoStateCache.shared.cacheVideoState(
+            for: mid,
+            player: player,
+            time: currentTime,
+            wasPlaying: wasPlaying,
+            originalMuteState: player.isMuted
+        )
+    }
+
+    private func isVideoAtEnd(_ player: AVPlayer, tolerance: Double = 0.5) -> Bool {
+        guard let item = player.currentItem else { return false }
+        let duration = item.duration
+        guard duration.isValid, !duration.isIndefinite else { return false }
+        let diff = CMTimeSubtract(duration, player.currentTime())
+        return CMTimeCompare(diff, CMTime(seconds: tolerance, preferredTimescale: duration.timescale)) <= 0
+    }
+
+    // MARK: - Mute Button
 
     private func setupMuteButton() {
         muteButton.isHidden = false
@@ -426,6 +857,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     @objc private func muteTapped() {
         MuteState.shared.toggleMute()
     }
+
+    // MARK: - Video Timer
 
     private func setupVideoTimer(videoMid: String) {
         timerLabel.isHidden = false
@@ -501,6 +934,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         parentVC.present(hostingVC, animated: true)
     }
 
+    @objc private func videoTapped() {
+        handleVideoTap()
+    }
+
     private func handleVideoTap() {
         guard let parentTweet, let parentVC = parentViewController else { return }
 
@@ -541,7 +978,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func saveVideoPositionForFullscreen() {
         guard let attachment else { return }
 
-        if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid) {
+        // Try to save directly from our player first
+        if let player = player, player.currentItem != nil {
+            let currentTime = player.currentTime()
+            let wasPlaying = player.rate > 0
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: attachment.mid,
+                currentTime: currentTime,
+                wasPlaying: wasPlaying,
+                context: .fullScreen
+            )
+        } else if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid) {
             let currentTime = cachedState.player.currentTime()
             let wasPlaying = cachedState.player.rate > 0
             PersistentVideoStateManager.shared.saveState(
@@ -564,11 +1011,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     func setVisible(_ visible: Bool) {
         isVisible = visible
-        // Forward to video state bridge — deferred to avoid SwiftUI re-render conflicts
-        // during UIKit layout passes (willDisplay/didEndDisplaying).
-        DispatchQueue.main.async { [weak self] in
-            self?.videoStateBridge?.isVisible = visible
-        }
 
         guard let attachment else { return }
 
@@ -616,7 +1058,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: id)
             }
 
-            // Mark video as not visible
+            // Video-specific invisible handling
             if isVideoAttachment {
                 if let url = attachment.getUrl(effectiveBaseUrl) {
                     let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
@@ -624,6 +1066,22 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     VideoStateCache.shared.markAsNotVisible(attachment.mid)
                     SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet?.mid ?? "")
                 }
+
+                // Capture frame, save position, pause, stop buffering
+                if let player = player {
+                    captureLastFrameIfPossible(reason: "becameInvisible")
+                    if player.rate > 0 || coordinatorWantsToPlay {
+                        saveCurrentPosition(player: player, wasPlaying: player.rate > 0)
+                    }
+                    player.pause()
+                    player.isMuted = MuteState.shared.isMuted
+
+                    // Stop buffering to prevent background network usage
+                    if let playerItem = player.currentItem {
+                        playerItem.preferredForwardBufferDuration = 0.0
+                    }
+                }
+                coordinatorWantsToPlay = false
             }
         }
     }
@@ -661,29 +1119,22 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     func shouldPlayVideo(withMid mid: String) {
         guard mid == attachment?.mid else { return }
-        guard !shouldAutoPlay else { return }
-        shouldAutoPlay = true
-        videoStateBridge?.shouldAutoPlay = true
+        handleCoordinatorPlayCommand()
     }
 
     func shouldPauseVideo(withMid mid: String) {
         guard mid == attachment?.mid else { return }
-        guard shouldAutoPlay else { return }
-        shouldAutoPlay = false
-        videoStateBridge?.shouldAutoPlay = false
+        handleCoordinatorPauseCommand()
     }
 
     func shouldStopVideo(withMid mid: String) {
         guard mid == attachment?.mid else { return }
-        guard shouldAutoPlay else { return }
-        shouldAutoPlay = false
-        videoStateBridge?.shouldAutoPlay = false
+        handleCoordinatorStopCommand()
     }
 
     func shouldStopAllVideos() {
         guard isVideoAttachment else { return }
-        shouldAutoPlay = false
-        videoStateBridge?.shouldAutoPlay = false
+        handleStopAllVideos()
     }
 
     func updateVideoTimer(withMid mid: String, timeRemaining: String) {
@@ -702,14 +1153,44 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     // MARK: - Cleanup
 
-    private func removeVideoHosting() {
-        if let hc = videoHostingController {
-            hc.willMove(toParent: nil)
-            hc.view.removeFromSuperview()
-            hc.removeFromParent()
-            videoHostingController = nil
+    private func cleanupVideoPlayer() {
+        // Cancel async tasks
+        setupPlayerTask?.cancel()
+        setupPlayerTask = nil
+        waitingForPlayerTask?.cancel()
+        waitingForPlayerTask = nil
+        isWaitingForPlayerReady = false
+
+        // Remove observers
+        removePlayerObservers()
+
+        if let o = stopAllObserver { NotificationCenter.default.removeObserver(o) }
+        stopAllObserver = nil
+        if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
+        shouldPlayObserver = nil
+        if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }
+        shouldPauseObserver = nil
+        if let o = shouldStopObserver { NotificationCenter.default.removeObserver(o) }
+        shouldStopObserver = nil
+
+        // Detach video output
+        if let item = videoOutputAttachedItem, let output = videoOutput {
+            item.remove(output)
         }
-        videoStateBridge = nil
+        videoOutput = nil
+        videoOutputAttachedItem = nil
+
+        // Detach player from view
+        videoPlayerView.setPlayer(nil)
+        videoPlayerView.isHidden = true
+        videoPlayerView.gestureRecognizers?.forEach { videoPlayerView.removeGestureRecognizer($0) }
+        player = nil
+
+        // Reset state
+        coordinatorWantsToPlay = false
+        isPlayerLoaded = false
+        isHandlingFinishEvent = false
+        lastFrameCaptureAt = .distantPast
     }
 
     private func removeAudioHosting() {
@@ -751,13 +1232,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         fullscreenOverlay.isHidden = true
         fullscreenSpinner.stopAnimating()
 
-        removeVideoHosting()
+        cleanupVideoPlayer()
         removeAudioHosting()
 
         // Reset state
         attachment = nil
         parentTweet = nil
-        shouldAutoPlay = false
         isVisible = false
         isShowingFullscreen = false
     }
@@ -766,6 +1246,25 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let observer = foregroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let o = stopAllObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        if let o = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        if let o = shouldPlayObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        if let o = shouldPauseObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        if let o = shouldStopObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        playerItemStatusObserver?.invalidate()
+        resumeObserver?.invalidate()
         timerHideTask?.cancel()
+        setupPlayerTask?.cancel()
+        waitingForPlayerTask?.cancel()
     }
 }
