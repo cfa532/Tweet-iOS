@@ -1133,23 +1133,29 @@ final class HproseInstance: ObservableObject {
                 "version": "v2",
                 "username": username,
             ]
-            guard let client = appUser.hproseClient else {
-                print("[getUserId] Invalid hproseClient")
-                return nil
+            // get_userid is a discovery operation — always use the entry node,
+            // not appUser.hproseClient which may point to a provider node after logout
+            guard let entryIP = try await findEntryIP() else {
+                print("[getUserId] Cannot resolve entry IP - will retry")
+                throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Entry IP not available"])
             }
+            let client = clientPool.getClientByIP(for: entryIP)
+
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
+
             if let stringResponse = unwrappedResponse as? String {
                 return stringResponse
             }
-            
-            // If unwrapped response is a dict, extract data or return nil
+
             if let dictResponse = unwrappedResponse as? [String: Any] {
-                return dictResponse["data"] as? String
+                if let data = dictResponse["data"] as? String {
+                    return data
+                }
             }
-            
-            return nil
+
+            print("[getUserId] Unexpected response format for username: \(username)")
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unexpected response format from get_userid"])
         }
     }
     
@@ -2183,22 +2189,25 @@ final class HproseInstance: ObservableObject {
     
     func logout() async {
         preferenceHelper?.setUserId(nil as String?)
-        
+
         // Don't clear tweet cache on logout - cache persists per user and is cleared periodically or manually
         // Clear chat cache on signout
         ChatCacheManager.shared.clearAllCache()
-        
+
         // Clear all video cache files from disk
         // await CachingPlayerItem.clearAllCache()
-        
-        // Reset appUser to guest user
+
+        // Clear stale HTTP clients from previous user session
+        clientPool.clear()
+
+        // Reset appUser to guest user with entry baseUrl (not the old user's node)
         let guestUser = User.getInstance(mid: Constants.GUEST_ID)
         await MainActor.run {
-            guestUser.baseUrl = appUser.baseUrl
+            guestUser.baseUrl = HproseInstance.baseUrl
             guestUser.followingList = Gadget.getAlphaIds()
             self.appUser = guestUser
         }
-        
+
         // Fetch alphaId user for guest and notify FollowingsTweetView
         await fetchAlphaIdUserForGuest()
     }
