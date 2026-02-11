@@ -503,9 +503,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Apply mute state
         newPlayer.isMuted = MuteState.shared.isMuted
 
-        // Attach video output for frame capture
-        ensureVideoOutputAttached(for: newPlayer)
-
         // Clean up old observers before setting new player
         removePlayerObservers()
 
@@ -517,7 +514,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoPlayerView.onReadyForDisplay = { [weak self] in
             self?.loadingSpinner.stopAnimating()
         }
+
+        // Disable implicit CALayer animations during player attachment to avoid main-thread hitch
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         videoPlayerView.setPlayer(newPlayer)
+        CATransaction.commit()
 
         // Set up KVO + notification observers
         setupPlayerObservers(newPlayer)
@@ -527,6 +529,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
            item.status == .readyToPlay,
            !item.loadedTimeRanges.isEmpty {
             isPlayerLoaded = true
+        }
+
+        // Defer video output attachment — AVPlayerItemVideoOutput creation causes
+        // expensive AVFoundation pipeline reconfiguration that blocks the main thread
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.player === newPlayer else { return }
+            self.ensureVideoOutputAttached(for: newPlayer)
         }
     }
 
@@ -743,8 +752,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard let playerItem = player.currentItem else { return }
         removePlayerObservers()
 
-        ensureVideoOutputAttached(for: player)
-
         // Video finished
         videoCompletionObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -757,7 +764,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // KVO: player item status — tracks logical readiness (for coordinator play commands)
         // Spinner is stopped by onReadyForDisplay (first rendered frame), not here.
-        playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+        // NOTE: .initial removed — it fires the callback synchronously during observe() setup,
+        // causing a main-thread hitch. Initial state is checked manually in configurePlayer().
+        playerItemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if item.status == .readyToPlay, !item.loadedTimeRanges.isEmpty {
@@ -1181,9 +1190,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let o = shouldStopObserver { NotificationCenter.default.removeObserver(o) }
         shouldStopObserver = nil
 
-        // Detach video output
+        // Detach video output on background queue to avoid blocking main thread
         if let item = videoOutputAttachedItem, let output = videoOutput {
-            item.remove(output)
+            DispatchQueue.global(qos: .utility).async {
+                item.remove(output)
+            }
         }
         videoOutput = nil
         videoOutputAttachedItem = nil
