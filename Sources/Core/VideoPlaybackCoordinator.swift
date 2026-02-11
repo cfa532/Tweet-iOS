@@ -107,60 +107,32 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Timer for debouncing video playback (0.2s delay)
     private var playbackDebounceTimer: Timer?
-    
+
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
-    
-    /// PERF FIX: Cache for cell lookups to avoid repeated expensive operations
-    /// Memory: ~200 bytes per cell reference × 200 = ~40KB (negligible)
-    private var cellCache: [String: UITableViewCell] = [:]
-    private var lastCacheClearTime: Date = Date()
-    private let cellCacheClearInterval: TimeInterval = 15.0 // Clear cache every 15 seconds (increased for better performance)
-    private let maxCellCacheSize = 200 // Limit cache to 200 entries (~40KB, allows caching ~2-3 screens of cells)
-    
+
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
-    
+
     /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
 
-
     /// Store current tweet list for embedded tweet lookup
     private var currentTweets: [Tweet] = []
-    
-    /// PERF FIX: Cache for visibility ratios to avoid redundant calculations
-    /// Memory: ~100 bytes per ratio × 500 = ~50KB (negligible)
+
+    /// Cached visibility ratios for hysteresis (only tracks primary video)
     private var cachedVisibilityRatios: [String: CGFloat] = [:]
-    private let visibilityRatioThreshold: CGFloat = 0.10 // Only update if ratio changes by 10% (more responsive, reduced from 15%)
-    private let maxVisibilityRatioCacheSize = 500 // Limit cache to 500 entries (~50KB, allows tracking many videos during long scrolls)
-    
-    /// PERF FIX: Debounce timer for visibility checks to reduce expensive calculations
-    private var visibilityCheckDebounceTimer: Timer?
-    private let visibilityCheckDebounceInterval: TimeInterval = 0.10 // 100ms debounce (reduced from 150ms for better responsiveness)
+    private let visibilityRatioThreshold: CGFloat = 0.10
 
-    /// PERF FIX: Batch visibility updates to reduce expensive filtering/sorting operations
-    /// Reduced to 150ms for more responsive playback during scrolling
+    /// Single debounce timer for batched visibility updates during scroll
     private var visibilityUpdateDebounceTimer: Timer?
-    private let visibilityUpdateDebounceInterval: TimeInterval = 0.05 // Reduced from 150ms for faster video starts
-    
-    /// Timer for scroll stop detection
-    private var scrollStopTimer: Timer?
-    
-    /// Timer for survey phase (kept for compatibility)
-    private var surveyTimer: Timer?
-
-    /// Throttle timer for immediate primary video checks during scroll (50ms throttle)
-    private var immediateCheckThrottleTimer: Timer?
 
     /// Last time we preloaded videos during scroll (for throttling)
     private var lastScrollPreloadTime: Date?
-    private let scrollPreloadThrottleInterval: TimeInterval = 0.3 // Preload at most every 300ms during scroll
+    private let scrollPreloadThrottleInterval: TimeInterval = 0.3
 
     /// Track which videos have been preloaded to avoid duplicate preloads
     private var preloadedVideoMids: Set<String> = []
-
-    /// Background queue for expensive visibility calculations to avoid blocking main thread
-    private let visibilityCalculationQueue = DispatchQueue(label: "com.tweet.VideoPlaybackCoordinator.visibility", qos: .userInitiated)
 
     /// Track async tasks to prevent leaks
     /// MEMORY FIX: Use UUID-based tracking so tasks can remove themselves on completion
@@ -280,57 +252,31 @@ class VideoPlaybackCoordinator: ObservableObject {
         _cachedVisibleVideos.removeAll()
     }
 
-    /// PERF FIX: Async cell visibility calculation to avoid blocking main thread
-    /// Captures UI state on main thread, then calculates visibility ratios in background
-    private func calculateCellVisibilityAsync() async -> [String: CGFloat] {
-        guard let tableView = tableView, tableView.window != nil else {
-            return [:]
+    /// Compute the user-visible rect using adjustedContentInset (accounts for nav bar, toolbar, tab bar).
+    /// This is the single source of truth for visibility calculations across the coordinator.
+    private func computeVisibleRect() -> CGRect? {
+        guard let tableView = tableView, tableView.window != nil else { return nil }
+        let insets = tableView.adjustedContentInset
+        let top = tableView.contentOffset.y + insets.top
+        let bottom = tableView.contentOffset.y + tableView.bounds.height - insets.bottom
+        return CGRect(x: 0, y: top, width: tableView.bounds.width, height: max(0, bottom - top))
+    }
+
+    /// Synchronous cell visibility calculation.
+    /// With pure UIKit cells, iterating visibleCells and computing CGRect intersection
+    /// for ~5-8 cells is trivial (nanosecond-level) — no need for background dispatch.
+    private func calculateCellVisibility() -> [String: CGFloat] {
+        guard let tableView = tableView, tableView.window != nil,
+              let visibleRect = computeVisibleRect() else { return [:] }
+
+        var ratios: [String: CGFloat] = [:]
+        for cell in tableView.visibleCells {
+            guard let tweetCell = cell as? TweetTableViewCell,
+                  let tweetId = tweetCell.tweetId else { continue }
+            let intersection = cell.frame.intersection(visibleRect)
+            ratios[tweetId] = cell.frame.height > 0 ? intersection.height / cell.frame.height : 0
         }
-
-        // Capture UI state on main thread to avoid Main Thread Checker violations
-        let uiState = await MainActor.run {
-            // Update cell cache with fresh cell references
-            for cell in tableView.visibleCells {
-                guard let tweetCell = cell as? TweetTableViewCell,
-                      let tweetId = tweetCell.tweetId else { continue }
-                self.cellCache[tweetId] = cell
-            }
-
-            // Use safeAreaInsets (not adjustedContentInset) to get actual visible area
-            // adjustedContentInset includes custom contentInset which would be wrong
-            let topInset = tableView.safeAreaInsets.top
-            let bottomInset = tableView.safeAreaInsets.bottom
-
-            return (
-                visibleRect: CGRect(
-                    x: 0,
-                    y: tableView.contentOffset.y + topInset,
-                    width: tableView.bounds.width,
-                    height: tableView.bounds.height - topInset - bottomInset
-                ),
-                cellFrames: tableView.visibleCells.compactMap { cell -> (tweetId: String, frame: CGRect)? in
-                    guard let tweetCell = cell as? TweetTableViewCell,
-                          let tweetId = tweetCell.tweetId else { return nil }
-                    return (tweetId: tweetId, frame: cell.frame)
-                }
-            )
-        }
-
-        // Perform calculations on background thread
-        return await withCheckedContinuation { continuation in
-            visibilityCalculationQueue.async {
-                var visibilityRatios: [String: CGFloat] = [:]
-
-                // Calculate visibility for all captured cells
-                for (tweetId, cellFrame) in uiState.cellFrames {
-                    let intersection = cellFrame.intersection(uiState.visibleRect)
-                    let ratio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
-                    visibilityRatios[tweetId] = ratio
-                }
-
-                continuation.resume(returning: visibilityRatios)
-            }
-        }
+        return ratios
     }
     
     /// Stored observer tokens for proper cleanup
@@ -411,12 +357,8 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Invalidate all timers
         playbackDebounceTimer?.invalidate()
-        scrollStopTimer?.invalidate()
-        surveyTimer?.invalidate()
-        visibilityCheckDebounceTimer?.invalidate()
         visibilityUpdateDebounceTimer?.invalidate()
         overlayUncoverPlaybackTimer?.invalidate()
-        immediateCheckThrottleTimer?.invalidate()
     }
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
@@ -464,43 +406,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     // MARK: - Cache Management
-    
-    /// Clear stale caches to prevent unbounded growth during fast scrolling
-    /// 
-    /// Memory targets (for 1GB normal usage, 2GB max):
-    /// - cellCache: ~40KB (200 entries × 200 bytes)
-    /// - cachedVisibilityRatios: ~50KB (500 entries × 100 bytes)
-    /// - Total coordinator cache overhead: ~90KB (negligible)
-    ///
-    /// The real memory usage comes from:
-    /// - Video player buffers: ~50-100MB per active video
-    /// - Image caches: ~200-500MB
-    /// - Tweet data: ~50-100MB
-    /// Total typical: ~400-700MB, leaves comfortable headroom under 1GB target
+
+    /// Clear stale visibility ratio cache to prevent unbounded growth
     private func clearStaleCache() {
-        let now = Date()
-        
-        // Time-based clearing: Every 15 seconds to allow better caching during normal scrolling
-        // This balances memory vs performance - cells stay cached longer for smoother re-renders
-        if now.timeIntervalSince(lastCacheClearTime) > cellCacheClearInterval {
-            cellCache.removeAll()
-            lastCacheClearTime = now
-        }
-        
-        // Size-based clearing for cell cache
-        // At 200 entries, we're only using ~40KB - this is a safety limit, not a memory concern
-        if cellCache.count > maxCellCacheSize {
-            // Remove oldest entries (simple approach: clear all when limit exceeded)
-            // This rarely happens in practice since time-based clearing occurs first
-            cellCache.removeAll()
-            lastCacheClearTime = now
-        }
-        
-        // Smart clearing for visibility ratios (keep only visible videos)
-        // At 500 entries (~50KB), this is still negligible memory
-        // But we prune to keep the cache relevant and lookup performance fast
-        if cachedVisibilityRatios.count > maxVisibilityRatioCacheSize {
-            // Keep only entries for currently visible videos
+        // Only keep ratios for currently visible videos
+        if cachedVisibilityRatios.count > 50 {
             let visibleVideoIds = Set(visibleVideos.map { $0.identifier })
             cachedVisibilityRatios = cachedVisibilityRatios.filter { visibleVideoIds.contains($0.key) }
         }
@@ -683,12 +593,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             await MainActor.run {
                 self.allVideos = videos
 
-                // PERF FIX: Clear caches when video list is rebuilt to prevent stale data
-                self.cellCache.removeAll()
+                // Clear caches when video list is rebuilt
                 self.cachedVisibilityRatios.removeAll()
-                self.invalidateVisibleVideoCache() // Clear visible videos cache
-                self.clearPreloadedTracking() // Clear preload tracking for fresh list
-                self.lastCacheClearTime = Date()
+                self.invalidateVisibleVideoCache()
+                self.clearPreloadedTracking()
 
                 // Store tweet list for embedded tweet lookup
                 self.currentTweets = pinnedTweets + tweets
@@ -845,245 +753,137 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Update visible tweets (called during scrolling)
     func updateVisibleTweets(_ tweetIds: Set<String>) {
-        // Safety check: Verify overlay coordinator consistency
-        // This helps detect and fix stuck overlay state
         OverlayVisibilityCoordinator.shared.verifyConsistency(source: "VideoPlaybackCoordinator.updateVisibleTweets")
-        
+
         // Track scroll direction based on content offset
         if let tableView = tableView, tableView.window != nil {
             let currentOffset = tableView.contentOffset.y
             if previousContentOffset != 0 {
-                // Determine scroll direction: true = scrolling down, false = scrolling up
                 let newDirection = currentOffset > previousContentOffset
                 let directionChanged = newDirection != scrollDirection
                 scrollDirection = newDirection
 
-                // Preload videos in scroll direction when direction changes or periodically
                 if directionChanged || shouldTriggerScrollPreload() {
                     preloadVideosInScrollDirection()
                 }
             }
             previousContentOffset = currentOffset
         }
-        // CRITICAL: Only consider feed-visible video entries (MediaGrid only shows first 4 attachments).
-        // The canonical list can include attachmentIndex > 3 for fullscreen, but those must not affect feed playback.
+
+        // Only consider feed-visible video entries (MediaGrid only shows first 4 attachments)
         let tweetsWithFeedVideos = Set(allVideos.filter { $0.isInVisibleMediaRange }.map { $0.cellTweetId })
         let filteredTweetIds = tweetIds.intersection(tweetsWithFeedVideos)
-        
+
         self.visibleTweetIds = filteredTweetIds
-        self.invalidateVisibleVideoCache() // Invalidate cache when visible tweets change
+        self.invalidateVisibleVideoCache()
         self.isScrolling = true
-        
-        // Get current visible video IDs
+
         let currentVisibleVideoIds = Set(visibleVideos.map { $0.videoMid })
         let videoVisibilityChanged = previousVisibleVideoIds != currentVisibleVideoIds
 
-        // Check for visibility threshold crossings to trigger immediate primary video checks
-        // This makes playback responsive even during scrolling
-        var thresholdCrossed = false
-        for video in visibleVideos {
-            let currentRatio = cachedVisibilityRatios[video.identifier] ?? 1.0
-            let previousRatio = previousVisibleVideoIds.contains(video.videoMid) ? (cachedVisibilityRatios[video.identifier] ?? 0.0) : 0.0
-
-            // Check if this video crossed the 50% threshold
-            let crossedThreshold = (previousRatio < 0.5 && currentRatio >= 0.5) ||
-                                   (previousRatio >= 0.5 && currentRatio < 0.5)
-            if crossedThreshold {
-                thresholdCrossed = true
-                break
-            }
-        }
-
-        // Android-style immediate scroll responses (50ms throttle)
-        if thresholdCrossed {
-            // Throttle immediate checks to avoid expensive operations on every update during fast scrolling
-            // This keeps scrolling smooth while still being responsive
-            immediateCheckThrottleTimer?.invalidate()
-            immediateCheckThrottleTimer = Timer(timeInterval: 0.05, repeats: false) { [weak self] _ in
-                DispatchQueue.main.async {
-                    self?.checkPrimaryVideoDuringScroll()
-                }
-            }
-            RunLoop.main.add(immediateCheckThrottleTimer!, forMode: .common)
-        }
-        
         // Stop all videos if none are visible
         if currentVisibleVideoIds.isEmpty {
             previousVisibleVideoIds.removeAll()
             stopAllVideos()
             return
         }
-        
-        // If the feed is covered by an overlay (fullscreen cover/sheet/login/etc), do not start playback.
-        // Keep the "previous" snapshot up to date so we don't treat uncover as a visibility change spike.
+
+        // If the feed is covered by an overlay, do not start playback
         if isPlaybackSuppressedByOverlay {
             previousVisibleVideoIds = currentVisibleVideoIds
             return
         }
-        
+
         // Stop videos that are no longer visible
         if videoVisibilityChanged {
             let videosToStop = previousVisibleVideoIds.subtracting(currentVisibleVideoIds)
             if !videosToStop.isEmpty {
-                // MEMORY MONITOR: Log when videos are stopped (scrolled out of view)
-
-                // SMART CLEANUP: Only trigger cleanup if we've stopped several videos
-                // This prevents excessive cleanup during normal scrolling while still
-                // preventing memory accumulation during fast scrolling
                 if videosToStop.count >= 3 || scrollDirection == false {
-                    // Trigger cleanup when: 3+ videos stopped, or scrolling up (reappearing videos)
                     SharedAssetCache.shared.forceMemoryCleanup()
                 }
             }
 
             for videoMid in videosToStop {
-                // PHASE 2: Use SharedVideoPlayerManager for coordinated video control
                 if allVideos.first(where: { $0.videoMid == videoMid }) != nil {
-                    // Only stop if this video instance is currently managed by SharedVideoPlayerManager
                     if SharedVideoPlayerManager.shared.currentVideoMid == videoMid {
                         SharedVideoPlayerManager.shared.stopCurrentVideo()
                     }
                 }
             }
 
-            // PERF FIX: Clear caches for videos that are no longer visible
-            // This prevents stale cell references and visibility ratios
-            let cellsToRemove = Set(allVideos.filter { videosToStop.contains($0.videoMid) }.map { $0.cellTweetId })
-            for cellTweetId in cellsToRemove {
-                cellCache.removeValue(forKey: cellTweetId)
-                // Clear visibility ratios for all videos in this cell
-                for video in allVideos where video.cellTweetId == cellTweetId {
+            // Clear visibility ratios for videos that are no longer visible
+            for videoMid in videosToStop {
+                for video in allVideos where video.videoMid == videoMid {
                     cachedVisibilityRatios.removeValue(forKey: video.identifier)
                 }
             }
         }
-        
-        // Start playback when videos become visible OR when in idle phase with videos
-        // This handles both "new videos" and "coming back to idle with videos present"
+
+        // Decide whether to start/switch playback using a single debounce timer
         if videoVisibilityChanged && !currentVisibleVideoIds.isEmpty {
-            // Allow primary video to change during scroll - re-identify primary video if needed
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
                currentVisibleVideoIds.contains(where: { primaryId.contains($0) }) {
-                // Primary video still visible - check if we should switch to a different primary video
-                // This allows the primary video to change during scroll based on position
+                // Primary still visible — check if we should switch based on position
                 checkAndSwitchVideoIfNeeded()
                 previousVisibleVideoIds = currentVisibleVideoIds
             } else {
-                // Primary video no longer visible or not in primaryPlaying phase - reset
+                // Primary gone or idle — reset and schedule batched update
                 phase = .idle
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil
-                
-                // MEMORY FIX: Cancel ALL existing timers before creating new ones
-                surveyTimer?.invalidate()
-                surveyTimer = nil
                 playbackDebounceTimer?.invalidate()
                 playbackDebounceTimer = nil
-                scrollStopTimer?.invalidate()
-                scrollStopTimer = nil
-                
-                // Android-style deferred batching: Use 150ms intervals for performance
-                // Cancel existing debounce timer
-                visibilityUpdateDebounceTimer?.invalidate()
-
-                // Start new debounce timer (150ms for Android-style batching)
-                visibilityUpdateDebounceTimer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
-                    DispatchQueue.main.async {
-                        guard let self = self else { return }
-                        // Perform batched visibility update (Android-style)
-                        self.performBatchedVisibilityUpdate()
-                    }
-                }
-                RunLoop.main.add(visibilityUpdateDebounceTimer!, forMode: .common)
-
-                // Update previous state
+                scheduleBatchedVisibilityUpdate()
                 previousVisibleVideoIds = currentVisibleVideoIds
             }
         } else if phase == .idle && !currentVisibleVideoIds.isEmpty {
-            // Handle case where videos are visible but we're in idle (initial load or after reset)
-            // Use Android-style deferred batching
-            visibilityUpdateDebounceTimer?.invalidate()
-            visibilityUpdateDebounceTimer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    self.performBatchedVisibilityUpdate()
-                }
-            }
-            RunLoop.main.add(visibilityUpdateDebounceTimer!, forMode: .common)
-
-            // Update previous state
+            scheduleBatchedVisibilityUpdate()
             previousVisibleVideoIds = currentVisibleVideoIds
         } else {
-            // Update previous state for all other cases
             previousVisibleVideoIds = currentVisibleVideoIds
         }
-        
-        // CRITICAL: Clear preserve flag when user explicitly scrolls
-        // This ensures foreground recovery knows user changed context
+
+        // Clear preserve flag when user explicitly scrolls
         shouldPreserveStateOnForeground = false
-        
-        // MEMORY FIX: REMOVED DUPLICATE timer creation - already handled above
-        // The duplicate visibilityUpdateDebounceTimer was causing timer accumulation
     }
 
-    /// Android-style deferred batching for visibility updates (150ms intervals)
-    /// This method handles batched visibility updates for performance optimization
+    /// Schedule a single debounced visibility update (150ms).
+    /// Replaces multiple overlapping timers with one consolidated timer.
+    private func scheduleBatchedVisibilityUpdate() {
+        visibilityUpdateDebounceTimer?.invalidate()
+        visibilityUpdateDebounceTimer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.performBatchedVisibilityUpdate()
+            }
+        }
+        RunLoop.main.add(visibilityUpdateDebounceTimer!, forMode: .common)
+    }
+
+    /// Batched visibility update — runs synchronously on main thread.
+    /// With pure UIKit cells, all visibility calculations are cheap enough to run inline.
     private func performBatchedVisibilityUpdate() {
-        // Android-style: Check if primary video needs switching or if playback should start
-        guard !isPlaybackSuppressedByOverlay else {
-            return
-        }
+        guard !isPlaybackSuppressedByOverlay else { return }
 
-        // MEMORY FIX: Cancel any pending tasks before creating new ones
-        // This prevents task accumulation during rapid scroll updates
-        cancelActiveAsyncTasks()
-
-        // If we have visible videos but no primary video playing, start playback
         if phase == .idle && !visibleVideos.isEmpty {
-            let task = Task { await startPrimaryVideoPlaybackAsync() }
-            trackAsyncTask(task)
-        }
-        // If primary video is playing but might need switching, check it
-        else if phase == .primaryPlaying {
-            let task = Task { await checkAndSwitchVideoIfNeededAsync() }
-            trackAsyncTask(task)
+            startPrimaryVideoPlayback()
+        } else if phase == .primaryPlaying {
+            checkAndSwitchVideoIfNeeded()
         }
     }
 
     /// Stop all videos and reset state
     func stopAllVideos() {
-        // Cancel all timers to prevent resource accumulation
-        surveyTimer?.invalidate()
-        surveyTimer = nil
-
+        // Cancel all timers
         playbackDebounceTimer?.invalidate()
         playbackDebounceTimer = nil
-
-        scrollStopTimer?.invalidate()
-        scrollStopTimer = nil
-
-        // PERF FIX: Cancel visibility check debounce timer
-        visibilityCheckDebounceTimer?.invalidate()
-        visibilityCheckDebounceTimer = nil
-
-        // Cancel visibility update debounce timer
         visibilityUpdateDebounceTimer?.invalidate()
         visibilityUpdateDebounceTimer = nil
-
-        // Cancel immediate check throttle timer
-        immediateCheckThrottleTimer?.invalidate()
-        immediateCheckThrottleTimer = nil
-
-        // CRITICAL: Cancel overlay uncover timer to prevent CPU cycles accumulation
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
-        
-        // PERF FIX: Clear caches to free memory
+
         cachedVisibilityRatios.removeAll()
-        cellCache.removeAll()
-        lastCacheClearTime = Date()
-        
+
         // Cancel all active async tasks
         cancelActiveAsyncTasks()
 
@@ -1313,41 +1113,25 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     // MARK: - Private Methods
 
-    /// Called when scrolling stops (after 2s delay)
+    /// Called when scrolling stops
     private func onScrollStopped() {
         isScrolling = false
-        // Scroll stop handler is now a no-op since we handle everything via debounce during scroll
-        // Videos continue playing through scroll and beyond
     }
     
-    /// Synchronous wrapper for startPrimaryVideoPlaybackAsync
+    /// Start primary video playback — play topmost video immediately.
+    /// Fully synchronous: visibility calculations use direct UITableView access.
     private func startPrimaryVideoPlayback() {
-        let task = Task { await startPrimaryVideoPlaybackAsync() }
-        trackAsyncTask(task)
-    }
-
-    /// Start primary video playback - play topmost video immediately
-    /// Start primary video playback
-    /// Identifies the most appropriate video based on visibility and scroll direction
-    private func startPrimaryVideoPlaybackAsync() async {
-        // Never start feed playback while the UI is covered by an overlay.
         guard !isPlaybackSuppressedByOverlay else { return }
+        guard phase == .idle else { return }
 
-        // Guard against starting if not in idle phase
-        guard phase == .idle else {
-            return
-        }
-
-        // Identify topmost video
-        guard let primary = await identifyPrimaryVideoAsync() else {
+        guard let primary = identifyPrimaryVideo() else {
             stopAllVideos()
             return
         }
 
-        // First, stop the previous primary video (use Stop instead of Pause for immediate effect)
+        // Stop the previous primary video if different
         if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier,
            let previousPrimary = allVideos.first(where: { $0.identifier == previousPrimaryId }) {
-            // PHASE 2: Use SharedVideoPlayerManager for coordinated stop
             if SharedVideoPlayerManager.shared.currentVideoMid == previousPrimary.videoMid {
                 SharedVideoPlayerManager.shared.stopCurrentVideo()
             }
@@ -1355,29 +1139,17 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Pause all visible videos except the new primary
         for video in visibleVideos where video != primary {
-            // PHASE 2: Use SharedVideoPlayerManager for coordinated pause
             pauseVideo(video)
         }
 
-        // Add a small delay to ensure pause/stop commands are processed before starting new video
-        // This prevents multiple videos from playing simultaneously
+        // Small delay to ensure pause/stop commands are processed before starting new video
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            // Update state to primary phase BEFORE sending play command
             self.phase = .primaryPlaying
             self.primaryVideoId = primary.identifier
             self.currentlyPlayingVideoIds = [primary.identifier]
-
-            // Initialize visibility ratio cache for new primary video to prevent immediate re-switching
-            // Use 0.7 (70%) instead of 1.0 to be more realistic and prevent false threshold crossing
-            // This prevents the check from thinking visibility "dropped" from 1.0 to actual measured value
             self.cachedVisibilityRatios[primary.identifier] = 0.7
-
-            // Record switch time to prevent immediate re-checking
             self.lastPrimarySwitchTime = Date()
 
-            // PHASE 1: Use SharedVideoPlayerManager for coordinated playback
-            // The coordinator identifies which video should play, SharedVideoPlayerManager coordinates the playback
-            // Pass full identifier (cellTweetId_videoMid_attachmentIndex) so manager can distinguish instances
             SharedVideoPlayerManager.shared.playVideo(
                 videoId: primary.identifier,
                 videoMid: primary.videoMid,
@@ -1385,243 +1157,93 @@ class VideoPlaybackCoordinator: ObservableObject {
             )
         }
     }
-    
-    /// Async version: Identify the primary video based on scroll direction (Android behavior)
-    /// - Scrolling down: topmost video (lowest Y coordinate)
-    /// - Scrolling up: bottommost video (highest Y coordinate)
-    /// Uses cell visibility (≥50% threshold) for primary selection
-    private func identifyPrimaryVideoAsync() async -> VideoPlaybackInfo? {
-        guard let tableView = tableView,
-              tableView.window != nil else {
-            // Fallback: return first visible video if table view not in hierarchy
+
+    /// Identify the primary video based on scroll direction.
+    /// Scrolling down: topmost video (lowest Y) that is ≥50% visible.
+    /// Scrolling up: bottommost video (highest Y) that is ≥50% visible.
+    private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
+        guard tableView?.window != nil else {
             return visibleVideos.first
         }
 
-        // Get cell visibility ratios from background thread (also updates cell cache)
-        let cellVisibilityRatios = await calculateCellVisibilityAsync()
+        let ratios = calculateCellVisibility()
+        let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
-        if scrollDirection {
-            // Scrolling DOWN: Find topmost video that is at least 50% visible
-            for video in visibleVideos {
-                let visibilityRatio = cellVisibilityRatios[video.cellTweetId] ?? 0
-                if visibilityRatio >= 0.5 {
-                    return video
-                }
-            }
-            // No video is 50% visible, return first one anyway
-            return visibleVideos.first
-        } else {
-            // Scrolling UP: Find bottommost video (highest Y coordinate) that is at least 50% visible
-            for video in visibleVideos.reversed() {
-                let visibilityRatio = cellVisibilityRatios[video.cellTweetId] ?? 0
-                if visibilityRatio >= 0.5 {
-                    return video
-                }
-            }
-            // No video is 50% visible, return last one anyway
-            return visibleVideos.last
-        }
-    }
-    
-    /// Immediately check and set primary video during scroll when visibility threshold is crossed
-    /// This makes playback start immediately even while scrolling, not waiting for debounce
-    /// Optimized to avoid expensive operations during fast scrolling
-    private func checkPrimaryVideoDuringScroll() {
-        // MEMORY FIX: Track this task to prevent accumulation during rapid scrolling
-        let task = Task {
-            guard let correctPrimary = await identifyPrimaryVideoAsync(), correctPrimary.identifier != primaryVideoId else {
-                return
-            }
-
-            // Immediately start playback for the new primary video
-            let previousPrimaryId = primaryVideoId
-            primaryVideoId = correctPrimary.identifier
-
-            // Use DispatchQueue.main.async for immediate response during scroll
-            DispatchQueue.main.async {
-                // Stop previous primary if different
-                if let previousPrimaryId = previousPrimaryId, previousPrimaryId != correctPrimary.identifier,
-                   let previousPrimary = self.allVideos.first(where: { $0.identifier == previousPrimaryId }) {
-                    // PHASE 2: Use SharedVideoPlayerManager for coordinated stop
-                    if SharedVideoPlayerManager.shared.currentVideoMid == previousPrimary.videoMid {
-                        SharedVideoPlayerManager.shared.stopCurrentVideo()
-                    }
-                }
-
-                // Start new primary video immediately
-                // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
-                SharedVideoPlayerManager.shared.playVideo(
-                    videoId: correctPrimary.identifier,
-                    videoMid: correctPrimary.videoMid,
-                    cellTweetId: correctPrimary.cellTweetId
-                )
+        for video in candidates {
+            if (ratios[video.cellTweetId] ?? 0) >= 0.5 {
+                return video
             }
         }
-        trackAsyncTask(task)
+        return scrollDirection ? visibleVideos.first : visibleVideos.last
     }
 
-    /// Synchronous wrapper for checkAndSwitchVideoIfNeededAsync
+    /// Check if current primary video is less than 30% visible and switch to next video if needed.
+    /// Fully synchronous — uses computeVisibleRect() for consistent inset calculation.
     private func checkAndSwitchVideoIfNeeded() {
-        let task = Task { await checkAndSwitchVideoIfNeededAsync() }
-        trackAsyncTask(task)
-    }
-
-    /// Check if current primary video is less than 50% visible and switch to next video if needed
-    private func checkAndSwitchVideoIfNeededAsync() async {
-        // Enforce cache size limits to prevent unbounded growth
         clearStaleCache()
-        
-        // Only check during primary playing phase
+
         guard phase == .primaryPlaying,
               let primaryId = primaryVideoId,
               let tableView = tableView,
-              tableView.window != nil else {
-            // Skip check if table view not in view hierarchy
-            return
-        }
-        
-        // Prevent immediate re-switching after a video becomes primary (prevents glitch when scrolling up)
-        // Wait at least 0.2 seconds after a switch before allowing another switch
-        // (Reduced from 0.3s for more responsive video switching during fast scrolling)
-        if let lastSwitchTime = lastPrimarySwitchTime {
-            let timeSinceSwitch = Date().timeIntervalSince(lastSwitchTime)
-            if timeSinceSwitch < 0.2 {
-                // Too soon after switch - skip check to prevent glitch
-                return
-            }
-        }
-        
-        // Find current primary video
-        guard let currentPrimary = visibleVideos.first(where: { $0.identifier == primaryId }) else {
-            return
-        }
+              tableView.window != nil else { return }
 
-        // Capture UI state on main thread to avoid Main Thread Checker violations
-        let uiState: (visibilityRatio: CGFloat, cellLookupTweetId: String)? = await MainActor.run {
-            // PERF FIX: Use cached cell if available, otherwise find and cache it
-            let cellLookupTweetId = currentPrimary.cellTweetId
-            let cell: UITableViewCell
-            if let cachedCell = self.cellCache[cellLookupTweetId] {
-                cell = cachedCell
-            } else {
-                guard let foundCell = self.findCell(forCellTweetId: currentPrimary.cellTweetId, in: tableView) else {
-                    // Return early if cell not found - we need to capture this state
-                    return nil
-                }
-                self.cellCache[cellLookupTweetId] = foundCell
-                cell = foundCell
-            }
+        // Prevent immediate re-switching (0.2s cooldown)
+        if let lastSwitchTime = lastPrimarySwitchTime,
+           Date().timeIntervalSince(lastSwitchTime) < 0.2 { return }
 
-            // PERF FIX: Clear cell cache periodically to prevent stale references
-            let now = Date()
-            if now.timeIntervalSince(self.lastCacheClearTime) > self.cellCacheClearInterval {
-                self.cellCache.removeAll()
-                self.lastCacheClearTime = now
-            }
+        guard let currentPrimary = visibleVideos.first(where: { $0.identifier == primaryId }) else { return }
 
-            // Use safeAreaInsets (not adjustedContentInset) to get actual visible area
-            let topInset = tableView.safeAreaInsets.top
-            let bottomInset = tableView.safeAreaInsets.bottom
+        // Calculate visibility using unified visibleRect
+        guard let visibleRect = computeVisibleRect(),
+              let cell = findCell(forCellTweetId: currentPrimary.cellTweetId, in: tableView) else { return }
 
-            let visibleRect = CGRect(
-                x: 0,
-                y: tableView.contentOffset.y + topInset,
-                width: tableView.bounds.width,
-                height: tableView.bounds.height - topInset - bottomInset
-            )
+        let intersection = cell.frame.intersection(visibleRect)
+        let visibilityRatio = cell.frame.height > 0 ? intersection.height / cell.frame.height : 0
 
-            let cellFrame = tableView.convert(cell.frame, to: tableView)
-            let intersection = cellFrame.intersection(visibleRect)
-
-            // Calculate visibility ratio (0.0 = completely out of view, 1.0 = fully visible)
-            let visibilityRatio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
-
-            return (visibilityRatio: visibilityRatio, cellLookupTweetId: cellLookupTweetId)
-        }
-
-        guard let uiState = uiState else { return }
-
-        let visibilityRatio = uiState.visibilityRatio
-        
-        // PERF FIX: Only proceed if visibility ratio changed significantly or crossed threshold
-        let previousRatio = cachedVisibilityRatios[primaryId] ?? 0.7  // Use realistic default, not 1.0
+        let previousRatio = cachedVisibilityRatios[primaryId] ?? 0.7
         let ratioChange = abs(visibilityRatio - previousRatio)
-
-        // Update cache
         cachedVisibilityRatios[primaryId] = visibilityRatio
-        
-        // Only check threshold if ratio changed significantly or crossed the 30% threshold (hysteresis)
-        // Changed from 50% to 30% to match the new stopping threshold
-        let crossedThreshold = (previousRatio > 0.30 && visibilityRatio <= 0.30) || (previousRatio <= 0.30 && visibilityRatio > 0.30)
-        
-        guard crossedThreshold || ratioChange >= visibilityRatioThreshold else {
-            // No significant change, skip expensive operations
-            return
-        }
-        
-        // CRITICAL FIX: Add hysteresis to prevent rapid switching
-        // Only switch away from primary if visibility drops below 30% (not 50%)
-        // This prevents videos from stopping when they're still quite visible (e.g., 45% visible)
-        // The 50% threshold is used for SELECTING primary, but 30% for KEEPING primary
-        if visibilityRatio < 0.30 {
-            // Re-identify primary video based on current scroll direction
-            // This handles both scrolling down (switch to next) and scrolling up (switch to previous)
-            let newPrimary = await identifyPrimaryVideoAsync()
 
-            // If no suitable new primary found, or the new primary is the same as current (but current is < 50% visible),
-            // stop all playback - don't keep playing a mostly-off-screen video
-            guard let newPrimary = newPrimary else {
+        // Only act if ratio changed significantly or crossed the 30% hysteresis threshold
+        let crossedThreshold = (previousRatio > 0.30 && visibilityRatio <= 0.30) || (previousRatio <= 0.30 && visibilityRatio > 0.30)
+        guard crossedThreshold || ratioChange >= visibilityRatioThreshold else { return }
+
+        // Switch away if primary drops below 30%
+        if visibilityRatio < 0.30 {
+            guard let newPrimary = identifyPrimaryVideo() else {
                 stopAllVideos()
                 return
             }
 
-            // If the "best" video is still the current one but it's < 50% visible, stop playback
             if newPrimary.identifier == primaryId {
                 stopAllVideos()
                 return
             }
 
-            // Stop current primary video and pause all other visible videos
-            // Also pause the new primary temporarily, then we'll play it after a delay
-            DispatchQueue.main.async {
-                // Stop the current primary video (use Stop for immediate effect)
-                // PHASE 2: Use SharedVideoPlayerManager for coordinated stop
-                if SharedVideoPlayerManager.shared.currentVideoMid == currentPrimary.videoMid {
-                    SharedVideoPlayerManager.shared.stopCurrentVideo()
+            // Stop current primary
+            if SharedVideoPlayerManager.shared.currentVideoMid == currentPrimary.videoMid {
+                SharedVideoPlayerManager.shared.stopCurrentVideo()
+            }
+
+            // Pause all other visible videos
+            for video in visibleVideos where video.identifier != newPrimary.identifier {
+                if let delegate = mediaCellDelegates[video.videoMid] {
+                    delegate.shouldPauseVideo(withMid: video.videoMid)
                 }
+            }
 
-                // Pause all other visible videos (including the new primary temporarily)
-                self.visibleVideos.forEach { video in
-                    if video.identifier != newPrimary.identifier {
-                        // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
-                        // Phase 3: Use delegate instead of notification
-                        if let delegate = self.mediaCellDelegates[video.videoMid] {
-                            delegate.shouldPauseVideo(withMid: video.videoMid)
-                        }
-                    }
-                }
+            // Small delay then start new primary
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                self.primaryVideoId = newPrimary.identifier
+                self.currentlyPlayingVideoIds = [newPrimary.identifier]
+                self.cachedVisibilityRatios[newPrimary.identifier] = 0.7
+                self.lastPrimarySwitchTime = Date()
 
-                // Add a small delay to ensure stop/pause commands are processed before starting new video
-                // This prevents multiple videos from playing simultaneously
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    // Switch to new primary video based on scroll direction
-                    self.primaryVideoId = newPrimary.identifier
-                    self.currentlyPlayingVideoIds = [newPrimary.identifier]
-
-                    // Initialize visibility ratio cache for new primary video to prevent immediate re-switching
-                    // Use 0.7 (70%) instead of 1.0 to be more realistic and prevent false threshold crossing
-                    self.cachedVisibilityRatios[newPrimary.identifier] = 0.7
-
-                    // Record switch time to prevent immediate re-checking
-                    self.lastPrimarySwitchTime = Date()
-
-                    // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
-                    SharedVideoPlayerManager.shared.playVideo(
-                        videoId: newPrimary.identifier,
-                        videoMid: newPrimary.videoMid,
-                        cellTweetId: newPrimary.cellTweetId
-                    )
-                }
+                SharedVideoPlayerManager.shared.playVideo(
+                    videoId: newPrimary.identifier,
+                    videoMid: newPrimary.videoMid,
+                    cellTweetId: newPrimary.cellTweetId
+                )
             }
         }
     }
@@ -1667,31 +1289,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// `UITableView.indexPathsForVisibleRows` can include rows that are only a few pixels on-screen.
     /// If we auto-advance into those, the next video will "play" but appear invisible to the user.
     private func isVideoCellVisibleEnough(_ video: VideoPlaybackInfo, minVisibilityRatio: CGFloat = 0.5) -> Bool {
-        guard let tableView = tableView, tableView.window != nil else { return false }
+        guard let tableView = tableView, tableView.window != nil,
+              let visibleRect = computeVisibleRect(),
+              let cell = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { return false }
 
-        let cellLookupTweetId = video.cellTweetId
-        let cell: UITableViewCell
-        if let cached = cellCache[cellLookupTweetId] {
-            cell = cached
-        } else {
-            guard let found = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { return false }
-            cellCache[cellLookupTweetId] = found
-            cell = found
-        }
-
-        // Use safeAreaInsets (not adjustedContentInset) to get actual visible area
-        let topInset = tableView.safeAreaInsets.top
-        let bottomInset = tableView.safeAreaInsets.bottom
-
-        let visibleRect = CGRect(
-            x: 0,
-            y: tableView.contentOffset.y + topInset,
-            width: tableView.bounds.width,
-            height: tableView.bounds.height - topInset - bottomInset
-        )
-        let cellFrame = cell.frame // already in tableView's coordinate space
-        let intersection = cellFrame.intersection(visibleRect)
-        let ratio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+        let intersection = cell.frame.intersection(visibleRect)
+        let ratio = cell.frame.height > 0 ? intersection.height / cell.frame.height : 0
         return ratio >= minVisibilityRatio
     }
     
@@ -1882,24 +1485,12 @@ class VideoPlaybackCoordinator: ObservableObject {
             phase = .idle
             
             // Cancel all timers
-            surveyTimer?.invalidate()
-            surveyTimer = nil
             playbackDebounceTimer?.invalidate()
             playbackDebounceTimer = nil
-            scrollStopTimer?.invalidate()
-            scrollStopTimer = nil
-            visibilityCheckDebounceTimer?.invalidate()
-            visibilityCheckDebounceTimer = nil
             visibilityUpdateDebounceTimer?.invalidate()
             visibilityUpdateDebounceTimer = nil
-            immediateCheckThrottleTimer?.invalidate()
-            immediateCheckThrottleTimer = nil
-            
-            // PERF FIX: Cancel visibility check debounce timer and clear caches
-            visibilityCheckDebounceTimer?.invalidate()
-            visibilityCheckDebounceTimer = nil
+
             cachedVisibilityRatios.removeAll()
-            cellCache.removeAll()
             
             // If there are visible videos, restart playback
             if !visibleVideos.isEmpty {
