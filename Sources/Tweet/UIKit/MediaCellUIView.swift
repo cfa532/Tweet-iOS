@@ -49,7 +49,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Mute button (only for single-video tweets)
     private lazy var muteButton: UIButton = {
         let btn = UIButton(type: .system)
-        btn.tintColor = .white.withAlphaComponent(0.6)
+        btn.tintColor = .white.withAlphaComponent(0.7)
         btn.backgroundColor = UIColor.black.withAlphaComponent(0.3)
         btn.layer.cornerRadius = 13
         btn.clipsToBounds = true
