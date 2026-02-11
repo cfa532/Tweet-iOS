@@ -1209,96 +1209,11 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // Determine if this is a pure retweet (no own content, shows original tweet)
-        let isRetweet = tweet.originalTweetId != nil && tweet.originalAuthorId != nil
-        let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
-            || (tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true))
-        let isPureRetweet = isRetweet && !hasOwnContent
-
-        // For pure retweets, estimate based on original tweet content
-        let displayTweet: Tweet
-        if isPureRetweet, let originalId = tweet.originalTweetId,
-           let original = Tweet.getInstance(for: originalId), original.author != nil {
-            displayTweet = original
-        } else {
-            displayTweet = tweet
-        }
-
-        // Calculate estimate matching actual UIKit cell layout
-        var estimate: CGFloat = 0
-
-        // Top padding (16pt in TweetCellContentView)
-        estimate += 16
-
-        // Retweet banner for pure retweets (18pt + 2pt spacing)
-        if isPureRetweet {
-            estimate += 20
-        }
-
-        // Header: author name + timestamp (~24pt)
-        estimate += 24
-
-        // Text content estimate (use displayTweet for pure retweets)
-        if let content = displayTweet.content, !content.isEmpty {
-            // Chars per line: ~42 for 16pt font, max 7 lines
-            let estimatedLines = min(7, max(1, ceil(CGFloat(content.count) / 42.0)))
-            estimate += estimatedLines * 20 + 2  // 20pt line height + 2pt bottom padding
-        }
-
-        // MediaGrid: PRECISE calculation using actual aspect ratios (use displayTweet for pure retweets)
-        if let attachments = displayTweet.attachments, !attachments.isEmpty {
-            let mediaAttachments = attachments.filter { TweetBodyUIView.isMediaType($0.type) }
-            if !mediaAttachments.isEmpty {
-                let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, isEmbedded: false)
-                estimate += mediaHeight + 8  // +8 for spacing
-            }
-        }
-
-        // Embedded tweet estimate (only for quoted tweets, not pure retweets)
-        // Pure retweets show the original tweet inline, not as an embedded tweet
-        if isRetweet && hasOwnContent, let originalTweetId = tweet.originalTweetId {
-            if let embeddedTweet = Tweet.getInstance(for: originalTweetId),
-               embeddedTweet.author != nil {
-                // Embedded tweet is loaded - calculate its actual height
-                var embeddedHeight: CGFloat = 60  // Border + header + padding
-
-                if let embeddedContent = embeddedTweet.content, !embeddedContent.isEmpty {
-                    let estimatedLines = max(1, ceil(CGFloat(embeddedContent.count) / 40.0))
-                    embeddedHeight += estimatedLines * 18
-                }
-
-                var hasEmbeddedMedia = false
-                if let embeddedAttachments = embeddedTweet.attachments, !embeddedAttachments.isEmpty {
-                    let embeddedMedia = embeddedAttachments.filter { TweetBodyUIView.isMediaType($0.type) }
-                    if !embeddedMedia.isEmpty {
-                        hasEmbeddedMedia = true
-                        embeddedHeight += MediaGridViewModel.calculateHeight(for: embeddedMedia, isEmbedded: true)
-                    }
-                }
-
-                // Reduce spacing when media has no caption (image attachments)
-                estimate += embeddedHeight + (hasEmbeddedMedia ? 0 : 8)
-            } else {
-                // CRITICAL: Not loaded yet - estimate PLACEHOLDER height, not final height!
-                // EmbeddedTweetUIView shows a 60pt fixed placeholder when not loaded
-                // (see EmbeddedTweetUIView.swift: placeholderHeightConstraint = 60)
-                // Estimating final loaded height (124-274pt) causes jumps when placeholder renders
-                let placeholderHeight: CGFloat = 60
-                let topPadding: CGFloat = 8  // Always 8pt spacing before embedded tweet in quoted tweets
-                estimate += placeholderHeight + topPadding
-            }
-        }
-
-        // Actions row (~30pt in TweetActionBarView)
-        estimate += 30
-
-        // Bottom padding (16pt in TweetCellContentView)
-        estimate += 16
-
-        // Separator (1pt)
-        estimate += 1
-
-        return estimate
+        // Use the same deterministic calculation as heightForRowAt.
+        // When estimate == actual, UIKit doesn't need to adjust contentOffset → no scroll jumps.
+        let calculated = Self.calculateTweetHeight(for: tweet)
+        tweet.cachedHeight = calculated
+        return calculated
     }
 
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
@@ -1483,10 +1398,13 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // Use Auto Layout measurement. The deferred layoutIfNeeded() in
-        // TweetCellContentView.configure() ensures the SwiftUI hosting controller
-        // content has settled before the next display cycle.
-        return UITableView.automaticDimension
+        // Calculate deterministic height matching Auto Layout constraints.
+        // Returning automaticDimension causes UIKit to do a separate measurement pass
+        // that may differ from estimatedHeightForRowAt, triggering content offset
+        // adjustments (tiny scroll jumps) during deceleration.
+        let calculated = Self.calculateTweetHeight(for: tweet)
+        tweet.cachedHeight = calculated
+        return calculated
     }
 
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
