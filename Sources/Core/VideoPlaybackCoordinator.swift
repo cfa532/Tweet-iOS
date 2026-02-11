@@ -1162,8 +1162,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         lastPrimarySwitchTime = Date()
 
         // Small delay to ensure pause/stop commands are processed before starting new video
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             SharedVideoPlayerManager.shared.playVideo(
                 videoId: primary.identifier,
                 videoMid: primary.videoMid,
@@ -1253,8 +1252,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             lastPrimarySwitchTime = Date()
 
             // Small delay to let stop/pause propagate before starting new video
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                guard let self else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 SharedVideoPlayerManager.shared.playVideo(
                     videoId: newPrimary.identifier,
                     videoMid: newPrimary.videoMid,
