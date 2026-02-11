@@ -42,6 +42,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private let loadingSpinner: UIActivityIndicatorView = {
         let spinner = UIActivityIndicatorView(style: .medium)
         spinner.hidesWhenStopped = true
+        spinner.color = .white.withAlphaComponent(0.6)
         return spinner
     }()
 
@@ -396,6 +397,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             .store(in: &cancellables)
 
+        // Show spinner while player is loading
+        loadingSpinner.startAnimating()
+        bringSubviewToFront(loadingSpinner)
+
         // Acquire player (sync from cache or async from SharedAssetCache)
         acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
 
@@ -512,17 +517,22 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Assign to player view
         self.player = newPlayer
+
+        // CRITICAL: Set callback BEFORE setPlayer() — setPlayer triggers observeReadyForDisplay()
+        // which fires onReadyForDisplay immediately if the layer already has a rendered frame.
+        videoPlayerView.onReadyForDisplay = { [weak self] in
+            self?.loadingSpinner.stopAnimating()
+        }
         videoPlayerView.setPlayer(newPlayer)
 
         // Set up KVO + notification observers
         setupPlayerObservers(newPlayer)
 
-        // Check if player is already ready with buffered data
+        // Mark player as logically loaded if item is ready (for coordinator play commands)
         if let item = newPlayer.currentItem,
            item.status == .readyToPlay,
            !item.loadedTimeRanges.isEmpty {
             isPlayerLoaded = true
-            loadingSpinner.stopAnimating()
         }
     }
 
@@ -751,13 +761,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         }
 
-        // KVO: player item status
+        // KVO: player item status — tracks logical readiness (for coordinator play commands)
+        // Spinner is stopped by onReadyForDisplay (first rendered frame), not here.
         playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if item.status == .readyToPlay, !item.loadedTimeRanges.isEmpty {
                     self.isPlayerLoaded = true
-                    self.loadingSpinner.stopAnimating()
                 } else if item.status == .failed {
                     self.loadingSpinner.stopAnimating()
                 }
@@ -1161,6 +1171,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         waitingForPlayerTask?.cancel()
         waitingForPlayerTask = nil
         isWaitingForPlayerReady = false
+
+        // Clear first-frame callback
+        videoPlayerView.onReadyForDisplay = nil
 
         // Remove observers
         removePlayerObservers()

@@ -12,13 +12,19 @@ import SwiftUI
 /// UIKit video player view that directly uses AVPlayerLayer
 /// This bypasses AVPlayerViewController and its control UI overhead
 class LightweightVideoPlayerView: UIView {
-    
+
     private var playerLayer: AVPlayerLayer?
     private var playerItemObserver: NSKeyValueObservation?
+    private var readyForDisplayObserver: NSKeyValueObservation?
+
+    /// Called once when the player layer renders its first frame (black screen → video visible)
+    var onReadyForDisplay: (() -> Void)?
+
     private var player: AVPlayer? {
         didSet {
             playerLayer?.player = player
             setupPlayerObserver()
+            observeReadyForDisplay()
         }
     }
     
@@ -62,8 +68,31 @@ class LightweightVideoPlayerView: UIView {
         }
     }
     
+    private func observeReadyForDisplay() {
+        readyForDisplayObserver?.invalidate()
+        readyForDisplayObserver = nil
+
+        guard let playerLayer else { return }
+
+        // Already rendering — fire immediately
+        if playerLayer.isReadyForDisplay {
+            onReadyForDisplay?()
+            return
+        }
+
+        readyForDisplayObserver = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async {
+                self?.readyForDisplayObserver?.invalidate()
+                self?.readyForDisplayObserver = nil
+                self?.onReadyForDisplay?()
+            }
+        }
+    }
+
     deinit {
         playerItemObserver?.invalidate()
+        readyForDisplayObserver?.invalidate()
     }
     
     override func layoutSubviews() {
