@@ -186,7 +186,7 @@ class MediaGridUIView: UIView {
         gridWidth: CGFloat,
         gridHeight: CGFloat
     ) -> [CGRect] {
-        let spacing: CGFloat = 2
+        let spacing: CGFloat = 1
 
         switch attachments.count {
         case 1:
@@ -353,8 +353,8 @@ class MediaGridUIView: UIView {
         gridHeight: CGFloat,
         spacing: CGFloat
     ) -> [CGRect] {
-        let cellW = gridWidth / 2 - 1  // -1 for half of spacing
-        let cellH = gridHeight / 2 - 1
+        let cellW = (gridWidth - spacing) / 2
+        let cellH = (gridHeight - spacing) / 2
 
         return [
             CGRect(x: 0, y: 0, width: cellW, height: cellH),
