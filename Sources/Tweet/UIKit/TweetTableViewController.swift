@@ -1394,14 +1394,14 @@ class TweetTableViewController: UITableViewController {
                 height += 60
             }
 
-            height += 4 // contentColumn.setCustomSpacing(4, after: embeddedTweetWrapper)
+            height += 10 // contentColumn.setCustomSpacing(10, after: embeddedTweetWrapper)
         }
 
         // Action bar (fixed 30pt)
         height += 30
 
-        // Bottom padding (mainStack.bottom to separator.top = 6pt)
-        height += 6
+        // Bottom padding
+        height += 8
 
         // Separator
         height += 1
