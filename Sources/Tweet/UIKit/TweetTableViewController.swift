@@ -1648,14 +1648,18 @@ class TweetTableViewController: UITableViewController {
         let visibleBottom = tableView.contentOffset.y + tableView.bounds.height - insets.bottom
         let visibleRect = CGRect(x: 0, y: visibleTop, width: tableView.bounds.width, height: max(0, visibleBottom - visibleTop))
 
-        // Only include tweets whose cells actually intersect the user-visible area
+        // Only include tweets whose cells are at least 50% visible in the user-visible area.
+        // This ensures videos stop/pause when scrolled mostly out of view, not only when
+        // the cell fully leaves the screen (didEndDisplaying).
         let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
             let totalRows = pinnedTweets.count + tweets.count
             guard indexPath.row < totalRows else { return nil }
 
-            // Check if this cell's frame is within the visible rect (not behind bars)
+            // Require ≥50% of cell height visible (was: any intersection)
             let cellRect = tableView.rectForRow(at: indexPath)
-            guard cellRect.intersects(visibleRect) else { return nil }
+            let intersection = cellRect.intersection(visibleRect)
+            let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
+            guard ratio >= 0.5 else { return nil }
 
             // Determine which tweet this row represents
             if indexPath.row < pinnedTweets.count {
@@ -1666,6 +1670,16 @@ class TweetTableViewController: UITableViewController {
                 return tweets[regularIndex].mid
             }
         })
+
+        // Forward visibility to cells based on the same 50% threshold.
+        // MediaGridUIView and MediaCellUIView both guard against redundant state changes.
+        for indexPath in visibleIndexPaths {
+            guard let tweetCell = tableView.cellForRow(at: indexPath) as? TweetTableViewCell else { continue }
+            let cellRect = tableView.rectForRow(at: indexPath)
+            let intersection = cellRect.intersection(visibleRect)
+            let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
+            tweetCell.tweetContentView.setMediaVisible(ratio >= 0.5)
+        }
 
         // Only update coordinator if visible tweets actually changed
         // This prevents unnecessary video coordinator work during smooth scrolling

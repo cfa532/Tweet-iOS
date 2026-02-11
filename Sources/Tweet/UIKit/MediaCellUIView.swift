@@ -1010,6 +1010,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Visibility
 
     func setVisible(_ visible: Bool) {
+        guard isVisible != visible else { return }
         isVisible = visible
 
         guard let attachment else { return }
