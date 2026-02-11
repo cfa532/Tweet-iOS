@@ -46,8 +46,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Mute button (only for single-video tweets)
     private lazy var muteButton: UIButton = {
         let btn = UIButton(type: .system)
-        btn.tintColor = .white.withAlphaComponent(0.7)
-        btn.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        btn.tintColor = .white.withAlphaComponent(0.4)
+        btn.backgroundColor = UIColor.black.withAlphaComponent(0.2)
         btn.layer.cornerRadius = 13
         btn.clipsToBounds = true
         btn.addTarget(self, action: #selector(muteTapped), for: .touchUpInside)
@@ -113,6 +113,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var setupPlayerTask: Task<Void, Never>?
     private var waitingForPlayerTask: Task<Void, Never>?
     private var isWaitingForPlayerReady: Bool = false
+
+    /// Periodic time observer token for the video timer label
+    private var timeObserverToken: Any?
 
     /// Frame capture throttle
     private var lastFrameCaptureAt: Date = .distantPast
@@ -398,10 +401,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Acquire player (sync from cache or async from SharedAssetCache)
         acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
 
-        // Mute button and timer for single video
+        // Mute button for single video (timer shown when playback starts)
         if isSingleMedia {
             setupMuteButton()
-            setupVideoTimer(videoMid: attachment.mid)
         }
     }
 
@@ -669,6 +671,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         UIView.animate(withDuration: 0.3) {
             player.volume = 1.0
         }
+
+        // Show timer when playback actually starts
+        if isSingleMedia, let mid = attachment?.mid {
+            setupVideoTimer(videoMid: mid)
+            startPlayerTimeObserver()
+        }
     }
 
     // MARK: - Frame Capture
@@ -878,33 +886,47 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         timerLabel.text = "0:00"
         bringSubviewToFront(timerLabel)
 
-        // Listen for timer updates
-        NotificationCenter.default.publisher(for: .videoTimerUpdate)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] notification in
-                guard let mid = notification.userInfo?["videoMid"] as? String,
-                      mid == videoMid,
-                      let time = notification.userInfo?["timeRemaining"] as? String else { return }
-                self?.timerLabel.text = time
-                self?.setNeedsLayout()
-            }
-            .store(in: &cancellables)
-
-        // Request timer update
-        NotificationCenter.default.post(
-            name: .requestVideoTimerUpdate,
-            object: nil,
-            userInfo: ["videoMid": videoMid]
-        )
-
         // Auto-hide timer after 5 seconds
         scheduleTimerHide()
+    }
+
+    /// Attach a periodic time observer to the player to drive the timer label.
+    /// Called from configurePlayer() once we have a valid AVPlayer.
+    private func startPlayerTimeObserver() {
+        guard isSingleMedia else { return }
+        removePlayerTimeObserver()
+
+        guard let player = player else { return }
+        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
+        timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            self?.updateTimerLabel(currentTime: time)
+        }
+    }
+
+    private func removePlayerTimeObserver() {
+        if let token = timeObserverToken, let player = player {
+            player.removeTimeObserver(token)
+        }
+        timeObserverToken = nil
+    }
+
+    private func updateTimerLabel(currentTime: CMTime) {
+        guard let item = player?.currentItem else { return }
+        let duration = item.duration
+        guard duration.isValid, !duration.isIndefinite, duration.seconds > 0 else { return }
+
+        let remaining = max(0, duration.seconds - currentTime.seconds)
+        let minutes = Int(remaining) / 60
+        let seconds = Int(remaining) % 60
+        timerLabel.text = "\(minutes):\(String(format: "%02d", seconds))"
+        setNeedsLayout()
     }
 
     private func scheduleTimerHide() {
         timerHideTask?.cancel()
         let task = DispatchWorkItem { [weak self] in
             self?.timerLabel.isHidden = true
+            self?.removePlayerTimeObserver()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: task)
         timerHideTask = task
@@ -1199,6 +1221,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoOutput = nil
         videoOutputAttachedItem = nil
 
+        // Remove periodic time observer before releasing player
+        removePlayerTimeObserver()
+
         // Detach player from view
         videoPlayerView.setPlayer(nil)
         videoPlayerView.isHidden = true
@@ -1282,6 +1307,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         playerItemStatusObserver?.invalidate()
         resumeObserver?.invalidate()
+        removePlayerTimeObserver()
         timerHideTask?.cancel()
         setupPlayerTask?.cancel()
         waitingForPlayerTask?.cancel()
