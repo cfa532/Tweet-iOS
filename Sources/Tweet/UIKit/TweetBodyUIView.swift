@@ -138,20 +138,17 @@ class TweetBodyUIView: UIView {
 
         // --- Text content ---
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Create attributed string with line spacing
-            let paragraphStyle = NSMutableParagraphStyle()
-            paragraphStyle.lineSpacing = 1  // 1pt extra spacing between lines
-            paragraphStyle.lineBreakMode = .byTruncatingTail
-
-            let attributedString = NSAttributedString(
-                string: content,
-                attributes: [
-                    .font: UIFont.systemFont(ofSize: 16),
-                    .foregroundColor: UIColor.label,
-                    .paragraphStyle: paragraphStyle
-                ]
-            )
-            contentLabel.attributedText = attributedString
+            // Compute available text width (must match deterministic height calculator)
+            let screenWidth = UIScreen.main.bounds.width
+            let textWidth: CGFloat
+            if isEmbedded {
+                // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4) - embPad(16) - embAvatar(40) - embSpacing(8)
+                textWidth = screenWidth - 129
+            } else {
+                // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4)
+                textWidth = screenWidth - 65
+            }
+            contentLabel.attributedText = Self.makeContentAttributedString(content: content, availableWidth: textWidth)
             contentLabel.isHidden = false
         } else {
             contentLabel.attributedText = nil
@@ -324,5 +321,101 @@ class TweetBodyUIView: UIView {
         default:
             return false
         }
+    }
+
+    // MARK: - Truncation with "More>>" indicator
+
+    private static let contentFont = UIFont.systemFont(ofSize: 16)
+    private static let maxContentLines = 7
+
+    /// Build attributed text. If text exceeds maxContentLines, truncate and append accent-colored " More>>".
+    static func makeContentAttributedString(content: String, availableWidth: CGFloat) -> NSAttributedString {
+        let font = contentFont
+        let maxLines = maxContentLines
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 1
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        let textAttributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraphStyle
+        ]
+
+        // Use TextKit to measure line count
+        let textStorage = NSTextStorage(string: content, attributes: textAttributes)
+        let textContainer = NSTextContainer(size: CGSize(width: availableWidth, height: .greatestFiniteMagnitude))
+        textContainer.lineFragmentPadding = 0
+        let layoutManager = NSLayoutManager()
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        // Collect glyph ranges per line
+        var lineGlyphRanges: [NSRange] = []
+        var glyphIndex = 0
+        while glyphIndex < layoutManager.numberOfGlyphs {
+            var lineRange = NSRange()
+            layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineRange)
+            lineGlyphRanges.append(lineRange)
+            glyphIndex = NSMaxRange(lineRange)
+        }
+
+        // No truncation needed — return plain text
+        guard lineGlyphRanges.count > maxLines else {
+            let ps = NSMutableParagraphStyle()
+            ps.lineSpacing = 1
+            ps.lineBreakMode = .byTruncatingTail
+            return NSAttributedString(string: content, attributes: [
+                .font: font,
+                .foregroundColor: UIColor.label,
+                .paragraphStyle: ps
+            ])
+        }
+
+        // Text is truncated — find character range visible in maxLines
+        let lastLineGlyphRange = lineGlyphRanges[maxLines - 1]
+        let lastLineCharRange = layoutManager.characterRange(forGlyphRange: lastLineGlyphRange, actualGlyphRange: nil)
+        let lastLineStart = lastLineCharRange.location
+
+        // Measure localized "More..." suffix width to know how much room to reserve
+        let moreString = " " + NSLocalizedString("More...", comment: "")
+        let moreWidth = NSAttributedString(string: moreString, attributes: [.font: font]).size().width
+        let targetWidth = availableWidth - moreWidth - 2 // 2px safety margin
+
+        // Trim last line text until there's room for "… More>>"
+        var trimEnd = NSMaxRange(lastLineCharRange)
+        while trimEnd > lastLineStart {
+            let lastLineText = (content as NSString).substring(with: NSRange(location: lastLineStart, length: trimEnd - lastLineStart))
+            let lineWidth = NSAttributedString(string: lastLineText, attributes: [.font: font]).size().width
+            if lineWidth <= targetWidth {
+                break
+            }
+            trimEnd -= 1
+        }
+
+        // Build body text: everything up to trimEnd, strip trailing whitespace
+        var bodyText = (content as NSString).substring(to: trimEnd)
+        while bodyText.hasSuffix(" ") || bodyText.hasSuffix("\n") || bodyText.hasSuffix("\r") {
+            bodyText = String(bodyText.dropLast())
+        }
+
+        // Build final attributed string
+        let bodyPs = NSMutableParagraphStyle()
+        bodyPs.lineSpacing = 1
+        bodyPs.lineBreakMode = .byWordWrapping
+
+        let result = NSMutableAttributedString(string: bodyText, attributes: [
+            .font: font,
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: bodyPs
+        ])
+        result.append(NSAttributedString(string: moreString, attributes: [
+            .font: font,
+            .foregroundColor: UIColor.systemBlue,
+        ]))
+
+        return result
     }
 }
