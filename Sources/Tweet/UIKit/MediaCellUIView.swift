@@ -42,7 +42,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private let loadingSpinner: UIActivityIndicatorView = {
         let spinner = UIActivityIndicatorView(style: .medium)
         spinner.hidesWhenStopped = true
-        spinner.color = .white.withAlphaComponent(0.6)
         return spinner
     }()
 
@@ -304,8 +303,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
-        // 2. Disk cache (background) → network
+        // 2. Disk cache (background) → network (default gray color for light image background)
+        loadingSpinner.color = nil  // reset to system default (gray, visible on .systemGray6)
         loadingSpinner.startAnimating()
+        bringSubviewToFront(loadingSpinner)
         let attachmentCopy = attachment
         let baseUrlCopy = effectiveBaseUrl
 
@@ -397,7 +398,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             .store(in: &cancellables)
 
-        // Show spinner while player is loading
+        // Show spinner while player is loading (white for visibility on dark video background)
+        loadingSpinner.color = .white.withAlphaComponent(0.7)
         loadingSpinner.startAnimating()
         bringSubviewToFront(loadingSpinner)
 
