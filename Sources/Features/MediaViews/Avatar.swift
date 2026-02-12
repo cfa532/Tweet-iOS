@@ -53,8 +53,8 @@ struct Avatar: View {
                     // Try to load from cache first when view appears
                     // Always check cache even if loadFailed is true, as the avatar might have been loaded elsewhere
                     if cachedImage == nil {
-                        let cacheKey = user.avatar ?? (URL(string: avatarUrl)?.lastPathComponent ?? avatarUrl)
-                        let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
+                        let rawKey = user.avatar ?? (URL(string: avatarUrl)?.lastPathComponent ?? avatarUrl)
+                        let avatarAttachment = MimeiFileType(mid: "avatar_\(rawKey)", mediaType: .image)
                         
                         // CRITICAL: Use memory-only cache check to avoid blocking disk I/O in view body
                         if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
@@ -123,8 +123,7 @@ struct Avatar: View {
                   !isLoading else { return }
 
             // Image is now cached, try loading from memory (should be instant)
-            let cacheKey = user.avatar ?? ""
-            let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
+            let avatarAttachment = MimeiFileType(mid: "avatar_\(user.avatar ?? "")", mediaType: .image)
 
             if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                 cachedImage = cached
@@ -141,11 +140,12 @@ struct Avatar: View {
         
         // IMPORTANT: Use user's avatar MimeiId as the cache key (stable identifier)
         // NOT the URL which can change when baseUrl changes
-        let cacheKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
-        
+        // Prefix with "avatar_" so ImageCacheManager protects it from memory eviction
+        let rawKey = user.avatar ?? (URL(string: urlString)?.lastPathComponent ?? urlString)
+
         // Create a MimeiFileType with the user's avatar MimeiId so caching works correctly
         let avatarAttachment = MimeiFileType(
-            mid: cacheKey,
+            mid: "avatar_\(rawKey)",
             mediaType: .image
         )
         

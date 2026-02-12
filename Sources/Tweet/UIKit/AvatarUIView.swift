@@ -143,7 +143,7 @@ class AvatarUIView: UIView {
                   let avatarId = notification.userInfo?["avatarId"] as? String,
                   avatarId == user.avatar,
                   self.imageView.image == nil else { return }
-            let cacheKey = user.avatar ?? ""
+            let cacheKey = "avatar_\(user.avatar ?? "")"
             let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
             if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                 self.imageView.image = cached
@@ -161,7 +161,8 @@ class AvatarUIView: UIView {
             return
         }
 
-        let cacheKey = user.avatar ?? (URL(string: avatarUrl)?.lastPathComponent ?? avatarUrl)
+        let rawKey = user.avatar ?? (URL(string: avatarUrl)?.lastPathComponent ?? avatarUrl)
+        let cacheKey = "avatar_\(rawKey)"
         let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
 
         // Check memory cache first (synchronous, fast)
