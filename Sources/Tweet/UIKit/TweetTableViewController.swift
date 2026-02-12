@@ -1209,20 +1209,10 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // Use the same deterministic calculation as heightForRowAt.
-        // When estimate == actual, UIKit doesn't need to adjust contentOffset → no scroll jumps.
-        let calculated = Self.calculateTweetHeight(for: tweet)
-
-        // Only cache if retweet/quoted tweet's original is fully loaded.
-        // Otherwise the height is based on incomplete data (empty wrapper or placeholder)
-        // and will be wrong once the original tweet loads.
-        let needsOriginal = tweet.originalTweetId != nil
-        let originalLoaded = !needsOriginal ||
-                             (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
-        if originalLoaded {
-            tweet.cachedHeight = calculated
-        }
-        return calculated
+        // Use deterministic calculation as estimate.
+        // willDisplay caches the actual Auto Layout height for future use,
+        // so subsequent calls will hit the cachedHeight path above.
+        return Self.calculateTweetHeight(for: tweet)
     }
 
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
@@ -1257,12 +1247,18 @@ class TweetTableViewController: UITableViewController {
 
         // spacing after header: 0
         // Body: text + media
+        // TweetBodyUIView layout: contentStack.top = bodyView.top + 2 (always)
+        // contentLabel → media: customSpacing = 4 when text visible, 0 when hidden
         // Account for cell-level padding (leadingPadding + trailingPadding, default 8+8)
         let cellPadding: CGFloat = 16 // leadingPadding(8) + trailingPadding(8) default
         let contentWidth = (UIScreen.main.bounds.width - cellPadding - 3 /* leading */ - 42 /* avatar */ - 4 /* stack spacing */)
-        var bodyHeight: CGFloat = 0
+
+        // bodyHeight mirrors TweetBodyUIView's contentStack Auto Layout
+        var bodyHeight: CGFloat = 2 // contentStack.top offset (always present)
+        var hasTextContent = false
 
         if let content = displayTweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            hasTextContent = true
             // Build (or retrieve cached) attributed string — single typesetting pass
             let attrString: NSAttributedString
             if let cached = displayTweet.cachedContentAttributedString,
@@ -1290,10 +1286,8 @@ class TweetTableViewController: UITableViewController {
         var hasCaptionLabel = false
         if !mediaAttachments.isEmpty {
             let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, isEmbedded: false)
-            if bodyHeight > 0 {
-                bodyHeight += 8 // mediaTopToContent constant
-            } else {
-                bodyHeight += 6 // mediaTopToSelf constant
+            if hasTextContent {
+                bodyHeight += 4 // customSpacing(after: contentLabel) when text visible
             }
             bodyHeight += mediaHeight
 
@@ -1306,14 +1300,12 @@ class TweetTableViewController: UITableViewController {
                     let hasFileName = att.fileName != nil &&
                         !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
                     if hasTitle || hasFileName {
-                        bodyHeight += 2 // captionTopConstraint constant
+                        bodyHeight += 2 // customSpacing(after: mediaContainerView)
                         bodyHeight += 17 // caption label height (14pt font, single line)
                         hasCaptionLabel = true
                     }
                 }
             }
-        } else if bodyHeight > 0 {
-            bodyHeight += 2 // text-only: contentStack top padding
         }
 
         height += bodyHeight
@@ -1415,8 +1407,8 @@ class TweetTableViewController: UITableViewController {
         // Action bar (fixed 30pt)
         height += 30
 
-        // Bottom padding
-        height += 8
+        // Bottom padding (matches mainStack.bottomAnchor = separatorView.topAnchor - 16)
+        height += 16
 
         // Separator
         height += 1
@@ -1441,25 +1433,15 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Use cached height if available
+        // Use cached height if available (set by willDisplay from actual Auto Layout)
         if let cachedHeight = tweet.cachedHeight {
             return cachedHeight
         }
 
-        // Calculate deterministic height matching Auto Layout constraints.
-        // Returning automaticDimension causes UIKit to do a separate measurement pass
-        // that may differ from estimatedHeightForRowAt, triggering content offset
-        // adjustments (tiny scroll jumps) during deceleration.
-        let calculated = Self.calculateTweetHeight(for: tweet)
-
-        // Only cache if retweet/quoted tweet's original is fully loaded.
-        let needsOriginal = tweet.originalTweetId != nil
-        let originalLoaded = !needsOriginal ||
-                             (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
-        if originalLoaded {
-            tweet.cachedHeight = calculated
-        }
-        return calculated
+        // Let Auto Layout determine the exact cell height.
+        // willDisplay will cache the actual height for future use,
+        // ensuring estimate == actual on subsequent displays (no scroll jumps).
+        return UITableView.automaticDimension
     }
 
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
@@ -1480,23 +1462,18 @@ class TweetTableViewController: UITableViewController {
             tweetCell.tweetContentView.setMediaVisible(true)
         }
 
-        // Cache height immediately - deferred caching causes scroll jumps
-        // Only cache if:
-        // 1. Not already cached
-        // 2. Cell has valid height (> 0)
-        // 3. If tweet has embedded tweet, it must be fully loaded (to prevent caching placeholder height)
-        if tweet.cachedHeight == nil && cell.frame.height > 0 {
-            // Check if embedded tweet is required and loaded
+        // Cache the actual Auto Layout height from the cell frame.
+        // heightForRowAt returns automaticDimension on first display, so cell.frame.height
+        // reflects the true Auto Layout result. Cache it for future use so that
+        // estimatedHeightForRowAt == heightForRowAt → no scroll jumps on subsequent displays.
+        if cell.frame.height > 0 {
             let needsEmbeddedTweet = tweet.originalTweetId != nil
             let embeddedTweetLoaded = !needsEmbeddedTweet ||
                                      (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
-
-            // Only cache if embedded tweet doesn't exist OR is fully loaded
             if embeddedTweetLoaded {
                 tweet.cachedHeight = cell.frame.height
                 TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
             }
-            // If embedded tweet not loaded, don't cache - we'll cache later when it loads
         }
     }
 

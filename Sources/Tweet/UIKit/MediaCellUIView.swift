@@ -312,6 +312,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             let cachedImage = self.imageCache.getCompressedImage(for: attachmentCopy)
 
             await MainActor.run {
+                // Guard: cell may have been reused for a different attachment
+                guard self.attachment?.mid == attachmentCopy.mid else { return }
+
                 if let cachedImage {
                     self.imageView.image = cachedImage
                     self.loadingSpinner.stopAnimating()
@@ -322,6 +325,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         attachment: attachmentCopy,
                         baseUrl: baseUrlCopy
                     ) { [weak self] loadedImage in
+                        // Guard: cell may have been reused while network load was in flight
+                        guard self?.attachment?.mid == attachmentCopy.mid else { return }
                         self?.imageView.image = loadedImage
                         self?.loadingSpinner.stopAnimating()
                     }
