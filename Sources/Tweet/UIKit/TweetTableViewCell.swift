@@ -56,11 +56,17 @@ class TweetTableViewCell: UITableViewCell {
         leadingConstraint = tweetContentView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
         trailingConstraint = tweetContentView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
 
+        let bottomConstraint = tweetContentView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        // Use high priority (not required) so the estimated row height
+        // (UIView-Encapsulated-Layout-Height) doesn't conflict during initial layout.
+        // The cell will still self-size correctly.
+        bottomConstraint.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
             tweetContentView.topAnchor.constraint(equalTo: contentView.topAnchor),
             leadingConstraint,
             trailingConstraint,
-            tweetContentView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            bottomConstraint,
         ])
     }
 
