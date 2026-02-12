@@ -232,19 +232,18 @@ struct ProfileView: View {
                     pinnedTweetIds: pinnedTweetIds,
                     user: user,
                     hproseInstance: hproseInstance,
-                    onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
+                    onUserSelect: { _ in }, // Not used - onAvatarTapInProfile handles all avatar navigation
                     onTweetTap: { tweet in
                         // Append tweet to navigationPath to navigate to detail view
                         // This matches the pattern used in HomeViewModel
                         navigationPath.append(tweet)
                     },
                     onAvatarTapInProfile: { tappedUser in
-                        // Check if the tapped avatar is the same as the profile user
                         if tappedUser.mid == user.mid {
-                            // Same user - scroll to top
                             scrollToTop()
+                        } else {
+                            selectedUserForNavigation = tappedUser
                         }
-                        // Different user navigation is handled by NavigationLink in TweetItemView
                     },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
                     onScroll: { offset, delta in
