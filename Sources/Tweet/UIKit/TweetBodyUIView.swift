@@ -405,7 +405,7 @@ class TweetBodyUIView: UIView {
                 hi = mid - 1
             }
         }
-        var trimEnd = lo
+        let trimEnd = lo
 
         // Build body text: everything up to trimEnd, strip trailing whitespace
         var bodyText = (content as NSString).substring(to: trimEnd)

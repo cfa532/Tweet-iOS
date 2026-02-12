@@ -83,9 +83,6 @@ class TweetCellContentView: UIView {
     private weak var currentTweet: Tweet?
     private weak var parentViewController: UIViewController?
 
-    /// Per-feed video coordinator (set by TweetTableViewCell)
-    weak var videoCoordinator: VideoPlaybackCoordinator?
-
     // Callbacks (set by cell / controller)
     var onAvatarTap: ((User) -> Void)?
     var onTweetTap: ((Tweet) -> Void)?
@@ -302,10 +299,6 @@ class TweetCellContentView: UIView {
                    parentViewController: UIViewController) {
         self.parentViewController = parentViewController
         self.currentTweet = tweet
-
-        // Propagate per-feed coordinator to subviews
-        bodyView.videoCoordinator = videoCoordinator
-        embeddedTweetView.videoCoordinator = videoCoordinator
 
         // Skip if same tweet
         if currentTweetId == tweet.mid { return }

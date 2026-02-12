@@ -819,8 +819,8 @@ class VideoPlaybackCoordinator: ObservableObject {
 
                     // Only stop the actual player if no other visible cell shows the same videoMid
                     if !stillVisibleMids.contains(video.videoMid) {
-                        if SharedVideoPlayerManager.shared.currentVideoMid == video.videoMid {
-                            SharedVideoPlayerManager.shared.stopCurrentVideo()
+                        if FeedVideoPlayerManager.shared.activeVideoMid == video.videoMid {
+                            FeedVideoPlayerManager.shared.stopVideo()
                         }
                     }
                 }
@@ -904,8 +904,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Clear previous visible identifiers so next updateVisibleTweets sees a change
         previousVisibleIdentifiers.removeAll()
 
-        // PHASE 2: Use SharedVideoPlayerManager to stop all videos
-        SharedVideoPlayerManager.shared.stopCurrentVideo()
+        FeedVideoPlayerManager.shared.stopVideo()
     }
 
     // MARK: - Background/Foreground Video Memory Management
@@ -917,6 +916,9 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Stop all videos first
         stopAllVideos()
+
+        // Release the shared feed player's item to free memory
+        FeedVideoPlayerManager.shared.releaseForBackground()
 
         // Release all players via SharedAssetCache
         SharedAssetCache.shared.releaseAllPlayers()
@@ -1142,16 +1144,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         // Stop the previous primary video if different
-        if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier,
-           let previousPrimary = allVideos.first(where: { $0.identifier == previousPrimaryId }) {
-            if SharedVideoPlayerManager.shared.currentVideoMid == previousPrimary.videoMid {
-                SharedVideoPlayerManager.shared.stopCurrentVideo()
+        if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier {
+            if FeedVideoPlayerManager.shared.activeVideoIdentifier == previousPrimaryId {
+                FeedVideoPlayerManager.shared.stopVideo()
             }
-        }
-
-        // Pause all visible videos except the new primary
-        for video in visibleVideos where video != primary {
-            pauseVideo(video)
         }
 
         // Set state immediately to prevent duplicate calls from rapid scroll updates
@@ -1161,12 +1157,12 @@ class VideoPlaybackCoordinator: ObservableObject {
         cachedVisibilityRatios[primary.identifier] = 0.7
         lastPrimarySwitchTime = Date()
 
-        // Small delay to ensure pause/stop commands are processed before starting new video
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            SharedVideoPlayerManager.shared.playVideo(
-                videoId: primary.identifier,
-                videoMid: primary.videoMid,
-                cellTweetId: primary.cellTweetId
+        // Play via FeedVideoPlayerManager (direct call, no notification broadcast)
+        if let cell = mediaCellDelegates[primary.identifier] as? MediaCellUIView {
+            FeedVideoPlayerManager.shared.playVideo(
+                identifier: primary.identifier,
+                mid: primary.videoMid,
+                cell: cell
             )
         }
     }
@@ -1233,30 +1229,18 @@ class VideoPlaybackCoordinator: ObservableObject {
                 return
             }
 
-            // Stop current primary
-            if SharedVideoPlayerManager.shared.currentVideoMid == currentPrimary.videoMid {
-                SharedVideoPlayerManager.shared.stopCurrentVideo()
-            }
-
-            // Pause all other visible videos
-            for video in visibleVideos where video.identifier != newPrimary.identifier {
-                if let delegate = mediaCellDelegates[video.identifier] {
-                    delegate.shouldPauseVideo(withMid: video.videoMid)
-                }
-            }
-
             // Set state immediately to prevent duplicate calls
             primaryVideoId = newPrimary.identifier
             currentlyPlayingVideoIds = [newPrimary.identifier]
             cachedVisibilityRatios[newPrimary.identifier] = 0.7
             lastPrimarySwitchTime = Date()
 
-            // Small delay to let stop/pause propagate before starting new video
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                SharedVideoPlayerManager.shared.playVideo(
-                    videoId: newPrimary.identifier,
-                    videoMid: newPrimary.videoMid,
-                    cellTweetId: newPrimary.cellTweetId
+            // Play via FeedVideoPlayerManager (handles stop of old + attach to new)
+            if let cell = mediaCellDelegates[newPrimary.identifier] as? MediaCellUIView {
+                FeedVideoPlayerManager.shared.playVideo(
+                    identifier: newPrimary.identifier,
+                    mid: newPrimary.videoMid,
+                    cell: cell
                 )
             }
         }
@@ -1285,15 +1269,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         let videoId = video.identifier
         currentlyPlayingVideoIds.remove(videoId)
         
-        // PHASE 2: Use SharedVideoPlayerManager for coordinated pause
+        // Use FeedVideoPlayerManager for coordinated pause
         // Only pause if this is the currently playing video
-        if SharedVideoPlayerManager.shared.currentVideoMid == video.videoMid {
-            SharedVideoPlayerManager.shared.pauseCurrentVideo()
-        } else {
-            // For non-current videos, send direct delegate call
-            if let delegate = mediaCellDelegates[video.identifier] {
-                delegate.shouldPauseVideo(withMid: video.videoMid)
-            }
+        if FeedVideoPlayerManager.shared.activeVideoIdentifier == video.identifier {
+            FeedVideoPlayerManager.shared.pauseVideo()
         }
     }
 
@@ -1389,12 +1368,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         primaryVideoId = nextVideo.identifier
         currentlyPlayingVideoIds = [nextVideo.identifier]
 
-        // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
-        SharedVideoPlayerManager.shared.playVideo(
-            videoId: nextVideo.identifier,
-            videoMid: nextVideo.videoMid,
-            cellTweetId: nextVideo.cellTweetId
-        )
+        // Play via FeedVideoPlayerManager
+        if let cell = mediaCellDelegates[nextVideo.identifier] as? MediaCellUIView {
+            FeedVideoPlayerManager.shared.playVideo(
+                identifier: nextVideo.identifier,
+                mid: nextVideo.videoMid,
+                cell: cell
+            )
+        }
     }
     
     /// Handle video finished notification
@@ -1441,36 +1422,29 @@ class VideoPlaybackCoordinator: ObservableObject {
                     if primaryIndex > 0 && visibleVideos.count > 1 {
                         // Primary is not first - restart from first video
                         
-                        // CRITICAL: Clear stale coordinatorWantsToPlay flags from other videos
-                        // Send pause commands to all videos except the first one
-                        // PHASE 2: Pause non-primary videos directly (not managed by SharedVideoPlayerManager)
-                        for (index, video) in visibleVideos.enumerated() where index > 0 {
-                            if let delegate = mediaCellDelegates[video.identifier] {
-                                delegate.shouldPauseVideo(withMid: video.videoMid)
-                            }
-                        }
-                        
                         let firstVideo = visibleVideos[0]
                         primaryVideoId = firstVideo.identifier
                         currentlyPlayingVideoIds = [firstVideo.identifier]
-                        
-                        // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
-                        SharedVideoPlayerManager.shared.playVideo(
-                            videoId: firstVideo.identifier,
-                            videoMid: firstVideo.videoMid,
-                            cellTweetId: firstVideo.cellTweetId
-                        )
+
+                        if let cell = mediaCellDelegates[firstVideo.identifier] as? MediaCellUIView {
+                            FeedVideoPlayerManager.shared.playVideo(
+                                identifier: firstVideo.identifier,
+                                mid: firstVideo.videoMid,
+                                cell: cell
+                            )
+                        }
                     } else {
                         // Primary is first or only video - resume it
                         primaryVideoId = primary.identifier
                         currentlyPlayingVideoIds = [primary.identifier]
 
-                        // PHASE 2: Use SharedVideoPlayerManager for coordinated playback
-                        SharedVideoPlayerManager.shared.playVideo(
-                            videoId: primary.identifier,
-                            videoMid: primary.videoMid,
-                            cellTweetId: primary.cellTweetId
-                        )
+                        if let cell = mediaCellDelegates[primary.identifier] as? MediaCellUIView {
+                            FeedVideoPlayerManager.shared.playVideo(
+                                identifier: primary.identifier,
+                                mid: primary.videoMid,
+                                cell: cell
+                            )
+                        }
                     }
                 } else {
                     // Primary video no longer in list (scrolled out), restart playback
