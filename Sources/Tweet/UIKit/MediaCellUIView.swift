@@ -187,6 +187,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     func configure(
         parentTweet: Tweet,
+        attachment: MimeiFileType,
         attachmentIndex: Int,
         aspectRatio: Float,
         shouldLoadVideo: Bool,
@@ -215,10 +216,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         self.isSingleMedia = isSingleMedia
         self.parentViewController = parentViewController
 
-        guard let attachments = parentTweet.attachments,
-              attachmentIndex >= 0 && attachmentIndex < attachments.count else { return }
-
-        let att = attachments[attachmentIndex]
+        let att = attachment
         self.attachment = att
 
         // Compute effective base URL
@@ -314,19 +312,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid) {
             imageView.image = cachedFrame
             imageView.isHidden = false
+            // No spinner — thumbnail is already visible; FeedVideoPlayerManager will
+            // call showVideoLoading() if/when it picks this cell for playback
         } else {
-            // No cached frame — show dark placeholder so spinner is visible,
-            // then generate a thumbnail from the video's first frame
+            // No cached frame — show dark placeholder + spinner while thumbnail loads
             imageView.image = nil
             imageView.backgroundColor = .black
             imageView.isHidden = false
+            loadingSpinner.color = .white.withAlphaComponent(0.7)
+            loadingSpinner.startAnimating()
+            bringSubviewToFront(loadingSpinner)
             loadVideoThumbnail(attachment: attachment, url: url, parentTweet: parentTweet)
         }
-
-        // Start spinner immediately so user sees loading feedback
-        loadingSpinner.color = .white.withAlphaComponent(0.7)
-        loadingSpinner.startAnimating()
-        bringSubviewToFront(loadingSpinner)
 
         // Reset any previous video state
         cleanupVideoPlayer()
@@ -345,31 +342,49 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
-    /// Load a thumbnail from the video's first frame using AVAssetImageGenerator.
-    /// Lightweight — only downloads enough of the video for one keyframe.
+    /// Load a thumbnail from the video using AVAssetImageGenerator.
+    /// Tries multiple timestamps to find a non-black frame (many videos fade in from black).
+    /// Uses AVURLAsset directly — no SharedAssetCache needed for thumbnail extraction.
     private func loadVideoThumbnail(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
         let mid = attachment.mid
-        let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
-        let mediaType = attachment.type
 
         thumbnailTask?.cancel()
         thumbnailTask = Task { [weak self] in
             do {
-                let asset = try await SharedAssetCache.shared.getAsset(
-                    for: uniqueURL, tweetId: parentTweet.mid, mediaType: mediaType
-                )
+                let asset = AVURLAsset(url: url)
                 try Task.checkCancellation()
 
                 let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 720, height: 720)
 
-                let time = CMTime(seconds: 0.0, preferredTimescale: 600)
-                let cgImage = try await generator.image(at: time).image
+                // Try multiple timestamps — frame at 0.0 is often black (fade-in).
+                let timestamps: [Double] = [0.0, 1.0, 0.5, 2.0]
+                var bestImage: UIImage?
+
+                for seconds in timestamps {
+                    try Task.checkCancellation()
+                    let time = CMTime(seconds: seconds, preferredTimescale: 600)
+                    guard let cgImage = try? await generator.image(at: time).image else { continue }
+                    let image = UIImage(cgImage: cgImage)
+                    if !VideoFrameExtractor.isMostlyBlack(image) {
+                        bestImage = image
+                        break
+                    }
+                    // Keep the first frame as fallback even if it's dark
+                    if bestImage == nil { bestImage = image }
+                }
+
                 try Task.checkCancellation()
 
-                let image = UIImage(cgImage: cgImage)
-                guard !VideoFrameExtractor.isMostlyBlack(image) else { return }
+                guard let image = bestImage else {
+                    // All timestamps failed — stop spinner
+                    await MainActor.run { [weak self] in
+                        guard let self, self.attachment?.mid == mid else { return }
+                        self.loadingSpinner.stopAnimating()
+                    }
+                    return
+                }
 
                 await MainActor.run { [weak self] in
                     guard let self, self.attachment?.mid == mid else { return }
@@ -378,10 +393,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     if FeedVideoPlayerManager.shared.activeCell !== self {
                         self.imageView.image = image
                         self.imageView.isHidden = false
+                        self.loadingSpinner.stopAnimating()
                     }
                 }
             } catch {
-                // Cancelled or failed to generate — cell will show black until player attaches
+                // Failed to generate thumbnail — stop spinner so cell doesn't spin forever
+                guard !Task.isCancelled else { return }
+                await MainActor.run { [weak self] in
+                    guard let self, self.attachment?.mid == mid else { return }
+                    self.loadingSpinner.stopAnimating()
+                }
             }
         }
     }
@@ -504,6 +525,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             parentVC.present(hostingVC, animated: true) {
                 self?.fullscreenOverlay.isHidden = true
                 self?.fullscreenSpinner.stopAnimating()
+                // End the cell's overlay — MediaBrowserView's own overlay is now active
+                OverlayVisibilityCoordinator.shared.endOverlay(
+                    id: "mediaBrowserFullScreen",
+                    source: "MediaCellUIView"
+                )
             }
 
             self?.isShowingFullscreen = true
@@ -525,6 +551,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if attachment.type == .image && imageView.image == nil {
                 if let url = attachment.getUrl(effectiveBaseUrl) {
                     loadImage(attachment: attachment, url: url)
+                }
+            }
+
+            // Re-load video thumbnail if it was cancelled while off-screen
+            if isVideoAttachment && imageView.image == nil {
+                if let url = attachment.getUrl(effectiveBaseUrl), let parentTweet {
+                    loadVideoThumbnail(attachment: attachment, url: url, parentTweet: parentTweet)
                 }
             }
 
@@ -566,7 +599,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
                     SharedAssetCache.shared.markAsNotVisible(mediaID)
                     VideoStateCache.shared.markAsNotVisible(attachment.mid)
-                    SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet?.mid ?? "")
+                    // Cancel only THIS media's loading — not all media in the tweet.
+                    // cancelLoadingForOutOfSightTweet would cancel sibling videos' tasks too.
+                    SharedAssetCache.shared.cancelLoading(for: mediaID)
                 }
 
                 // Detach shared player if this cell was the active one
@@ -612,10 +647,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Called by FeedVideoPlayerManager to attach the shared player to this cell's layer
     func attachSharedPlayer(_ player: AVPlayer) {
-        videoPlayerView.isHidden = false
+        // Keep videoPlayerView hidden until first frame renders — avoids black flash
         videoPlayerView.onReadyForDisplay = { [weak self] in
-            self?.loadingSpinner.stopAnimating()
+            self?.videoPlayerView.isHidden = false
             self?.imageView.isHidden = true
+            self?.loadingSpinner.stopAnimating()
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)

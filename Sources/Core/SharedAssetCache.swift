@@ -179,7 +179,14 @@ class SharedAssetCache: ObservableObject {
     }
     
     // MARK: - Asset Management
-    
+
+    /// Cache an asset so that `getAsset()` returns it immediately.
+    /// Used by FeedVideoPlayerManager to share loaded assets with fullscreen path.
+    @MainActor func cacheAsset(_ asset: AVAsset, for mediaID: String) {
+        assetCache[mediaID] = asset
+        cacheTimestamps[mediaID] = Date()
+    }
+
     /// Cancel loading tasks for a specific URL only if no cache is available
     @MainActor func cancelLoading(for mediaID: String) {
         // Check if we have cached content before cancelling

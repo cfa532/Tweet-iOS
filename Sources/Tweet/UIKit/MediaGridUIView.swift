@@ -96,6 +96,7 @@ class MediaGridUIView: UIView {
             // Aspect ratio will be updated in layoutSubviews with correct dimensions
             cellView.configure(
                 parentTweet: tweet,
+                attachment: attachments[i],
                 attachmentIndex: i,
                 aspectRatio: 1.0,  // Placeholder, will be updated in layoutSubviews
                 shouldLoadVideo: shouldLoadVideo,
@@ -152,7 +153,7 @@ class MediaGridUIView: UIView {
         )
 
         // Update cell frames and aspect ratios
-        for (i, cellView) in cellViews.enumerated() where i < frames.count {
+        for (i, cellView) in cellViews.enumerated() where i < frames.count && i < attachments.count {
             cellView.frame = frames[i]
 
             // Update aspect ratio based on actual frame
@@ -160,6 +161,7 @@ class MediaGridUIView: UIView {
             if let parentVC = parentViewController {
                 cellView.configure(
                     parentTweet: parentTweet,
+                    attachment: attachments[i],
                     attachmentIndex: i,
                     aspectRatio: cellAspectRatio,
                     shouldLoadVideo: shouldLoadVideo,

@@ -134,21 +134,34 @@ class FeedVideoPlayerManager {
         let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? mid
 
         loadItemTask = Task { [weak self] in
-            do {
-                let newItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
-                    for: url, mediaID: mediaID, mediaType: mediaType
-                )
+            // Retry up to 2 times on transient network failures (e.g. "Connection reset by peer"
+            // that occurs when LocalHTTPServer isn't ready at app launch)
+            var lastError: Error?
+            for attempt in 0..<3 {
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self, self.activeVideoMid == mid else { return }
-                    self.handleNewPlayerItem(newItem, cell: cell, mid: mid)
+                if attempt > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+                    guard !Task.isCancelled else { return }
                 }
-            } catch {
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self?.activeCell?.hideVideoLoading()
-                    print("⚠️ [FEED PLAYER] Failed to load item for \(mid.prefix(10)): \(error)")
+                do {
+                    let newItem = try await SharedAssetCache.shared.getOrCreatePlayerItem(
+                        for: url, mediaID: mediaID, mediaType: mediaType
+                    )
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard let self, self.activeVideoMid == mid else { return }
+                        self.handleNewPlayerItem(newItem, cell: cell, mid: mid)
+                    }
+                    return  // Success — exit retry loop
+                } catch {
+                    lastError = error
+                    guard !Task.isCancelled else { return }
                 }
+            }
+            // All retries exhausted
+            await MainActor.run {
+                self?.activeCell?.hideVideoLoading()
+                print("⚠️ [FEED PLAYER] Failed to load item for \(mid.prefix(10)) after retries: \(lastError?.localizedDescription ?? "unknown")")
             }
         }
     }
@@ -172,8 +185,13 @@ class FeedVideoPlayerManager {
         guard let player else { return }
         saveCurrentState()
         player.pause()
+        detachVideoOutput()
         removeObservers()
         removeTimeObserver()
+
+        // Release the player item to free network/cache resources
+        // (fullscreen will load its own item from the cached asset)
+        player.replaceCurrentItem(with: nil)
 
         // Detach from cell
         activeCell?.detachSharedPlayer()
@@ -217,6 +235,12 @@ class FeedVideoPlayerManager {
         removeObservers()
         removeTimeObserver()
         detachVideoOutput()
+
+        // Cache the asset so FullScreenVideoManager.getAsset() finds it instantly
+        let mediaID = SharedAssetCache.shared.extractMediaID(
+            from: (item.asset as? AVURLAsset)?.url ?? URL(fileURLWithPath: "/")
+        ) ?? mid
+        SharedAssetCache.shared.cacheAsset(item.asset, for: mediaID)
 
         if let player {
             player.replaceCurrentItem(with: item)
