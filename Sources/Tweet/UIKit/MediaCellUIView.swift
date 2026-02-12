@@ -43,13 +43,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return spinner
     }()
 
-    /// Mute button (only for single-video tweets)
+    /// Mute button background circle (26pt visual, inside 44pt touch area)
+    private let muteCircleLayer: CALayer = {
+        let layer = CALayer()
+        layer.backgroundColor = UIColor.black.withAlphaComponent(0.2).cgColor
+        layer.cornerRadius = 13
+        return layer
+    }()
+
+    /// Mute button (only for single-video tweets) — 44pt touch area, 26pt visual circle
     private lazy var muteButton: UIButton = {
         let btn = UIButton(type: .system)
-        btn.tintColor = .white.withAlphaComponent(0.4)
-        btn.backgroundColor = UIColor.black.withAlphaComponent(0.2)
-        btn.layer.cornerRadius = 13
-        btn.clipsToBounds = true
+        btn.tintColor = .white.withAlphaComponent(0.6)
+        btn.backgroundColor = .clear
+        btn.layer.insertSublayer(muteCircleLayer, at: 0)
         btn.addTarget(self, action: #selector(muteTapped), for: .touchUpInside)
         btn.isHidden = true
         return btn
@@ -128,6 +135,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     // MARK: - General State
 
+    /// Per-feed video coordinator (set by MediaGridUIView during configure)
+    weak var videoCoordinator: VideoPlaybackCoordinator?
+
     private var attachment: MimeiFileType?
     private weak var parentTweet: Tweet?
     private var attachmentIndex: Int = 0
@@ -189,13 +199,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         fullscreenOverlay.frame = b
         fullscreenSpinner.center = CGPoint(x: b.midX, y: b.midY)
 
-        // Mute button: bottom-right, 12pt padding
-        let muteSize: CGFloat = 26
+        // Mute button: 44pt touch area centered on 26pt visual circle, bottom-right
+        let visualSize: CGFloat = 26
+        let touchSize: CGFloat = 44
+        let inset = (touchSize - visualSize) / 2  // 9pt
         muteButton.frame = CGRect(
-            x: b.maxX - muteSize - 12,
-            y: b.maxY - muteSize - 12,
-            width: muteSize, height: muteSize
+            x: b.maxX - visualSize - 12 - inset,
+            y: b.maxY - visualSize - 12 - inset,
+            width: touchSize, height: touchSize
         )
+        muteCircleLayer.frame = CGRect(x: inset, y: inset, width: visualSize, height: visualSize)
 
         // Timer label: bottom-left, 12pt padding
         if !timerLabel.isHidden {
@@ -587,6 +600,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
+        // Reset finished videos to beginning before playing
+        if isVideoAtEnd(player) {
+            VideoStateCache.shared.clearCachedState(for: mid)
+            player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
+                self.playWithVolumeFadeIn(player)
+            }
+            return
+        }
+
         // Player is ready — play
         playWithVolumeFadeIn(player)
     }
@@ -876,7 +899,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func updateMuteButtonIcon() {
         let iconName = MuteState.shared.isMuted ? "speaker.slash" : "speaker.wave.2"
-        let config = UIImage.SymbolConfiguration(pointSize: 16)
+        let config = UIImage.SymbolConfiguration(pointSize: 14)
         muteButton.setImage(UIImage(systemName: iconName, withConfiguration: config), for: .normal)
     }
 
@@ -1077,7 +1100,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Register delegate for video coordination (keyed by identifier so
             // the same video in a tweet + retweet gets separate delegates)
             if let id = videoIdentifier {
-                VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: id)
+                (videoCoordinator ?? .shared).registerDelegate(self, forIdentifier: id)
             }
 
             // Setup foreground observer for images and videos
@@ -1094,7 +1117,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Unregister delegate (by identifier — won't accidentally remove another cell's delegate)
             if let id = videoIdentifier {
-                VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: id)
+                (videoCoordinator ?? .shared).unregisterDelegate(forIdentifier: id)
             }
 
             // Video-specific invisible handling
@@ -1286,7 +1309,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let att = attachment {
             GlobalImageLoadManager.shared.cancelLoad(id: att.mid)
             if let id = videoIdentifier {
-                VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: id)
+                (videoCoordinator ?? .shared).unregisterDelegate(forIdentifier: id)
             }
         }
 

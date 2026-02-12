@@ -83,6 +83,9 @@ class TweetCellContentView: UIView {
     private weak var currentTweet: Tweet?
     private weak var parentViewController: UIViewController?
 
+    /// Per-feed video coordinator (set by TweetTableViewCell)
+    weak var videoCoordinator: VideoPlaybackCoordinator?
+
     // Callbacks (set by cell / controller)
     var onAvatarTap: ((User) -> Void)?
     var onTweetTap: ((Tweet) -> Void)?
@@ -250,8 +253,11 @@ class TweetCellContentView: UIView {
         }
 
         // Check if tap is on body view - need to verify it's not on media
-        if bodyView.frame.contains(location) {
-            let bodyLocation = gesture.location(in: bodyView)
+        // Use bodyView's own coordinate system (bounds) — bodyView.frame is in contentColumn's
+        // coordinate system, not self's, so frame.contains(location) gives wrong results for
+        // taps on the right side of the media (e.g. the mute button).
+        let bodyLocation = gesture.location(in: bodyView)
+        if bodyView.bounds.contains(bodyLocation) {
             // Use hitTest to check if tap is on an interactive element in body (media grid)
             if let hitView = bodyView.hitTest(bodyLocation, with: nil),
                hitView !== bodyView {
@@ -296,6 +302,10 @@ class TweetCellContentView: UIView {
                    parentViewController: UIViewController) {
         self.parentViewController = parentViewController
         self.currentTweet = tweet
+
+        // Propagate per-feed coordinator to subviews
+        bodyView.videoCoordinator = videoCoordinator
+        embeddedTweetView.videoCoordinator = videoCoordinator
 
         // Skip if same tweet
         if currentTweetId == tweet.mid { return }
