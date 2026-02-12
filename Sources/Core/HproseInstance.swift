@@ -1510,26 +1510,29 @@ final class HproseInstance: ObservableObject {
     private func processUserDataResponse(user: User, response: Any, skipRetryAndBlacklist: Bool) async throws -> Bool {
         // Handle dictionary response (user data)
         if let userDict = response as? [String: Any] {
+            // Validate response data BEFORE updating the singleton to avoid overwriting
+            // a valid user object with invalid data from the server
+            guard let mid = userDict["mid"] as? String, !mid.isEmpty,
+                  userDict["username"] != nil else {
+                print("ERROR: [processUserDataResponse] INVALID USER DATA in response: mid or username missing for userId: \(user.mid)")
+                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received - missing mid or username")
+            }
+
             if !skipRetryAndBlacklist {
                 blackList.recordSuccess(user.mid)
             }
-            
+
             try await updateUserFromDict(userDict, for: user, preserveBaseUrl: false)
-            
-            if isValidUserData(user) {
-                // Update NodePool with successful access (replace IP list with working IP)
-                // Only update access node (hostIds[1]) since that's what we resolved during fetchUser
-                if let baseUrlString = user.baseUrl?.absoluteString,
-                   let hostIds = user.hostIds, hostIds.count > 1 {
-                    let accessNodeMid = hostIds[1]
-                    NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString)
-                    print("DEBUG: [processUserDataResponse] ✅ Updated pool: access node \(accessNodeMid) now has working IP")
-                }
-                return true
-            } else {
-                print("ERROR: [processUserDataResponse] INVALID USER DATA: userId: \(user.mid), mid: \(user.mid), username: \(user.username ?? "nil")")
-                throw HproseError.userNotFound(userId: user.mid, reason: "Invalid user data received")
+
+            // Update NodePool with successful access (replace IP list with working IP)
+            // Only update access node (hostIds[1]) since that's what we resolved during fetchUser
+            if let baseUrlString = user.baseUrl?.absoluteString,
+               let hostIds = user.hostIds, hostIds.count > 1 {
+                let accessNodeMid = hostIds[1]
+                NodePool.shared.updateNodeIP(nodeMid: accessNodeMid, newIP: baseUrlString)
+                print("DEBUG: [processUserDataResponse] ✅ Updated pool: access node \(accessNodeMid) now has working IP")
             }
+            return true
         }
         
         // Handle nil response - return false to indicate retry needed
