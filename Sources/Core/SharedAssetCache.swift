@@ -136,7 +136,6 @@ class SharedAssetCache: ObservableObject {
     private func performCleanup() {
         let memoryBefore = getMemoryUsageString()
         let cacheSizeBefore = playerCache.count
-        print("🔄 [MEMORY] Periodic cleanup starting (memory: \(memoryBefore), cache: \(cacheSizeBefore) players)")
 
         let now = Date()
         // CRITICAL: Never evict visible or near-visible videos while app is in foreground
@@ -171,11 +170,6 @@ class SharedAssetCache: ObservableObject {
 
         let memoryAfter = getMemoryUsageString()
         let cacheSizeAfter = playerCache.count
-        if memoryBefore != memoryAfter || cacheSizeBefore != cacheSizeAfter {
-            print("✅ [MEMORY] Periodic cleanup completed (memory: \(memoryBefore) → \(memoryAfter), cache: \(cacheSizeBefore) → \(cacheSizeAfter))")
-        } else {
-            print("ℹ️ [MEMORY] Periodic cleanup completed (no changes needed)")
-        }
     }
     
     // MARK: - Asset Management
@@ -816,18 +810,22 @@ class SharedAssetCache: ObservableObject {
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
             // Check if this is a player shell (item was removed to free memory)
             if cachedPlayer.currentItem == nil {
-                print("🔄 [SharedAssetCache] Found player shell for \(mediaID), reloading item...")
+                print("🔄 [SharedAssetCache SHELL] Video \(mediaID.prefix(10)) found player shell - reloading item...")
+                let itemStartTime = Date()
                 // Player exists but item was cleared - reload the item into existing player
                 do {
                     let playerItem = try await getOrCreatePlayerItem(for: url, mediaID: mediaID, mediaType: mediaType)
+                    let itemElapsed = Date().timeIntervalSince(itemStartTime)
                     await MainActor.run {
                         cachedPlayer.replaceCurrentItem(with: playerItem)
-                        print("✅ [SharedAssetCache] Reloaded item into player shell for \(mediaID)")
+                        let itemStatus = playerItem.status.rawValue
+                        let duration = playerItem.duration.seconds
+                        print("✅ [SharedAssetCache SHELL] Video \(mediaID.prefix(10)) item reloaded in \(String(format: "%.3f", itemElapsed))s: itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
                     }
                     return cachedPlayer
                 } catch {
                     // Failed to reload item - fall through to create new player
-                    print("⚠️ [SharedAssetCache] Failed to reload item into shell: \(error)")
+                    print("⚠️ [SharedAssetCache SHELL] Video \(mediaID.prefix(10)) failed to reload item: \(error)")
                     // Remove broken shell from cache
                     await MainActor.run {
                         _ = playerCache.removeValue(forKey: cacheKey)
@@ -835,26 +833,37 @@ class SharedAssetCache: ObservableObject {
                 }
             } else {
                 // Player has item - return it
+                let currentTime = cachedPlayer.currentTime().seconds
+                let itemStatus = cachedPlayer.currentItem?.status.rawValue ?? -1
+                let duration = cachedPlayer.currentItem?.duration.seconds ?? 0
+                print("♻️ [SharedAssetCache CACHED] Video \(mediaID.prefix(10)) returning cached player: currentTime=\(String(format: "%.2f", currentTime))s, itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
                 return cachedPlayer
             }
         }
         
         // NEW: Throttle concurrent player creation to prevent memory spikes
+        print("🆕 [SharedAssetCache NEW] Video \(mediaID.prefix(10)) no cached player - creating new...")
         return try await withCheckedThrowingContinuation { continuation in
             Task { @MainActor in
                 if self.activeCreations < self.maxConcurrentCreations {
                     // Can create immediately
                     self.activeCreations += 1
-                    
+                    let createStartTime = Date()
+
                     Task {
                         do {
                             let player = try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
+                            let createElapsed = Date().timeIntervalSince(createStartTime)
+                            let itemStatus = player.currentItem?.status.rawValue ?? -1
+                            let duration = player.currentItem?.duration.seconds ?? 0
+                            print("✅ [SharedAssetCache NEW] Video \(mediaID.prefix(10)) created in \(String(format: "%.3f", createElapsed))s: itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
                             await MainActor.run {
                                 self.activeCreations -= 1
                                 self.processNextPendingCreation()
                             }
                             continuation.resume(returning: player)
                         } catch {
+                            print("❌ [SharedAssetCache NEW] Video \(mediaID.prefix(10)) creation failed: \(error)")
                             await MainActor.run {
                                 self.activeCreations -= 1
                                 self.processNextPendingCreation()
@@ -864,7 +873,7 @@ class SharedAssetCache: ObservableObject {
                     }
                 } else {
                     // Queue for later
-                    print("⏳ [THROTTLE] Queuing player creation (active: \(self.activeCreations), pending: \(self.pendingCreations.count + 1))")
+                    print("⏳ [SharedAssetCache THROTTLE] Video \(mediaID.prefix(10)) queuing (active: \(self.activeCreations), pending: \(self.pendingCreations.count + 1))")
                     self.pendingCreations.append((url, tweetId, mediaType, continuation))
                 }
             }
