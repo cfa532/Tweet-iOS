@@ -108,6 +108,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// KVO observers
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var resumeObserver: NSKeyValueObservation?
+    private var timeControlStatusObserver: NSKeyValueObservation?
 
     /// Notification observers
     private var videoCompletionObserver: NSObjectProtocol?
@@ -132,6 +133,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Prevent duplicate finish handling
     private var isHandlingFinishEvent: Bool = false
+
+    /// Track if we've already hidden the spinner (prevent hiding it multiple times)
+    private var hasHiddenLoadingSpinner: Bool = false
 
     // MARK: - General State
 
@@ -377,31 +381,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             self?.handleStopAllVideos()
         }
 
-        // Listen for coordinator commands via SharedVideoPlayerManager notifications
-        let videoMid = attachment.mid
-        shouldPlayObserver = NotificationCenter.default.addObserver(
-            forName: .shouldPlayVideo, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard let mid = notification.userInfo?["videoMid"] as? String,
-                  mid == videoMid else { return }
-            self?.handleCoordinatorPlayCommand()
-        }
-
-        shouldPauseObserver = NotificationCenter.default.addObserver(
-            forName: .shouldPauseVideo, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard let mid = notification.userInfo?["videoMid"] as? String,
-                  mid == videoMid else { return }
-            self?.handleCoordinatorPauseCommand()
-        }
-
-        shouldStopObserver = NotificationCenter.default.addObserver(
-            forName: .shouldStopVideo, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard let mid = notification.userInfo?["videoMid"] as? String,
-                  mid == videoMid else { return }
-            self?.handleCoordinatorStopCommand()
-        }
+        // Coordinator commands arrive via MediaCellDelegate methods (shouldPlayVideo/shouldPauseVideo/shouldStopVideo)
+        // — no notification observers needed. This prevents cross-feed interference.
 
         // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
@@ -412,6 +393,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             .store(in: &cancellables)
 
         // Show spinner while player is loading (white for visibility on dark video background)
+        hasHiddenLoadingSpinner = false
         loadingSpinner.color = .white.withAlphaComponent(0.7)
         loadingSpinner.startAnimating()
         bringSubviewToFront(loadingSpinner)
@@ -463,6 +445,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
         guard shouldLoadVideo else { return }
         isPlayerLoaded = false
+        hasHiddenLoadingSpinner = false
         loadingSpinner.startAnimating()
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
@@ -529,10 +512,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Assign to player view
         self.player = newPlayer
 
-        // CRITICAL: Set callback BEFORE setPlayer() — setPlayer triggers observeReadyForDisplay()
-        // which fires onReadyForDisplay immediately if the layer already has a rendered frame.
+        // Set callback for when first frame is rendered — use as fallback to hide spinner
+        // if player doesn't reach .playing state (e.g., due to buffering or coordinator timing)
         videoPlayerView.onReadyForDisplay = { [weak self] in
-            self?.loadingSpinner.stopAnimating()
+            guard let self else { return }
+            // Only hide if player has sufficient buffer or is already playing
+            if let player = self.player,
+               let item = player.currentItem,
+               item.status == .readyToPlay,
+               (!item.loadedTimeRanges.isEmpty || player.timeControlStatus == .playing) {
+                self.hideLoadingSpinner()
+            }
         }
 
         // Disable implicit CALayer animations during player attachment to avoid main-thread hitch
@@ -546,8 +536,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Mark player as logically loaded if item is ready (for coordinator play commands)
         if let item = newPlayer.currentItem,
-           item.status == .readyToPlay,
-           !item.loadedTimeRanges.isEmpty {
+           item.status == .readyToPlay {
             isPlayerLoaded = true
         }
 
@@ -799,19 +788,38 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         // KVO: player item status — tracks logical readiness (for coordinator play commands)
-        // Spinner is stopped by onReadyForDisplay (first rendered frame), not here.
         // NOTE: .initial removed — it fires the callback synchronously during observe() setup,
         // causing a main-thread hitch. Initial state is checked manually in configurePlayer().
         playerItemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
-                if item.status == .readyToPlay, !item.loadedTimeRanges.isEmpty {
+                if item.status == .readyToPlay {
+                    // Mark as loaded when status is ready, even if no data buffered yet
+                    // (player will buffer as needed when play() is called)
                     self.isPlayerLoaded = true
                 } else if item.status == .failed {
-                    self.loadingSpinner.stopAnimating()
+                    self.hideLoadingSpinner()
                 }
             }
         }
+
+        // KVO: timeControlStatus — hide spinner when video actually starts playing
+        timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // Hide spinner when playback actually starts (most reliable indicator)
+                if player.timeControlStatus == .playing {
+                    self.hideLoadingSpinner()
+                }
+            }
+        }
+    }
+
+    /// Hides the loading spinner (only once to prevent redundant calls)
+    private func hideLoadingSpinner() {
+        guard !hasHiddenLoadingSpinner else { return }
+        hasHiddenLoadingSpinner = true
+        loadingSpinner.stopAnimating()
     }
 
     private func removePlayerObservers() {
@@ -821,6 +829,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerItemStatusObserver = nil
         resumeObserver?.invalidate()
         resumeObserver = nil
+        timeControlStatusObserver?.invalidate()
+        timeControlStatusObserver = nil
     }
 
     // MARK: - Video Finished
@@ -1286,6 +1296,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
         isPlayerLoaded = false
         isHandlingFinishEvent = false
+        hasHiddenLoadingSpinner = false
         lastFrameCaptureAt = .distantPast
     }
 
@@ -1359,6 +1370,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         playerItemStatusObserver?.invalidate()
         resumeObserver?.invalidate()
+        timeControlStatusObserver?.invalidate()
         removePlayerTimeObserver()
         timerHideTask?.cancel()
         setupPlayerTask?.cancel()
