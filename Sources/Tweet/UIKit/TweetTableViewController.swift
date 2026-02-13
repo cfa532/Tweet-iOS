@@ -115,8 +115,8 @@ class TweetTableViewController: UITableViewController {
     // Refresh control
     private var customRefreshControl: UIRefreshControl?
     
-    // Video playback coordinator
-    private let videoCoordinator = VideoPlaybackCoordinator.shared
+    // Video playback coordinator (per-feed instance, injected from TweetTableView)
+    let videoCoordinator: VideoPlaybackCoordinator
     
     // Scroll tracking for toolbar hiding
     private var lastScrollOffset: CGFloat = 0
@@ -163,6 +163,15 @@ class TweetTableViewController: UITableViewController {
     // Scroll state tracking to prevent direction detection jitter during deceleration
     private var isUserDragging: Bool = false
     private var isDecelerating: Bool = false
+
+    init(videoCoordinator: VideoPlaybackCoordinator) {
+        self.videoCoordinator = videoCoordinator
+        super.init(style: .plain)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1137,6 +1146,7 @@ class TweetTableViewController: UITableViewController {
                 parentViewController: self,
                 leadingPadding: leadingPadding,
                 trailingPadding: trailingPadding,
+                videoCoordinator: videoCoordinator,
                 onAvatarTap: onAvatarTap,
                 onTweetTap: onTweetTap,
                 onShowLogin: onShowLogin,

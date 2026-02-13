@@ -60,6 +60,8 @@ class TweetBodyUIView: UIView {
     private var mediaHeightConstraint: NSLayoutConstraint?
 
     var onTweetBodyTap: (() -> Void)?
+    /// Per-feed video coordinator (set by TweetCellContentView)
+    weak var videoCoordinator: VideoPlaybackCoordinator?
     /// Whether the video caption label is currently visible (for single-video tweets with title)
     private(set) var isCaptionVisible: Bool = false
     private var currentTweetId: String?
@@ -187,6 +189,7 @@ class TweetBodyUIView: UIView {
             mediaContainerView.isHidden = false
 
             // Configure pure UIKit media grid
+            mediaGridView.videoCoordinator = videoCoordinator
             mediaGridView.configure(
                 tweet: tweet,
                 attachments: mediaAttachments,
@@ -405,7 +408,7 @@ class TweetBodyUIView: UIView {
                 hi = mid - 1
             }
         }
-        var trimEnd = lo
+        let trimEnd = lo
 
         // Build body text: everything up to trimEnd, strip trailing whitespace
         var bodyText = (content as NSString).substring(to: trimEnd)

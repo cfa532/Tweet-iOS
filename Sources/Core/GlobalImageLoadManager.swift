@@ -479,7 +479,7 @@ class GlobalImageLoadManager: ObservableObject {
             return nil
             
         } catch {
-            print("Error loading image from network (\(request.url)): \(error.localizedDescription)")
+            print("Error loading image from network (\(request.url)): \(error)")
 
             // Track consecutive network failures
             consecutiveNetworkFailures += 1

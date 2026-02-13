@@ -25,6 +25,9 @@ class MediaGridUIView: UIView {
     private var shouldLoadVideo: Bool = true
     private weak var parentViewController: UIViewController?
 
+    /// Per-feed video coordinator (set by TweetBodyUIView)
+    weak var videoCoordinator: VideoPlaybackCoordinator?
+
     private var hasInitialized: Bool = false
     private var cancellables = Set<AnyCancellable>()
 
@@ -90,6 +93,7 @@ class MediaGridUIView: UIView {
 
         for i in 0..<displayCount {
             let cellView = MediaCellUIView()
+            cellView.videoCoordinator = videoCoordinator
             // Frame will be set in layoutSubviews when actual width is known
             cellView.frame = .zero
 

@@ -69,6 +69,10 @@ struct TweetListView: View {
     @State private var hasAppearedOnce: Bool = false  // Track if view has appeared before (to detect navigation return)
     @State private var lastCleanupTime: Date = Date()
     private let cleanupInterval: TimeInterval = 10.0  // Cleanup every 10 seconds max
+
+    /// Per-feed video coordinator — main feed uses .shared, other feeds get independent instances
+    /// to prevent cross-feed interference (separate allVideos, visibleTweetIds, tableView, etc.)
+    private let videoCoordinator: VideoPlaybackCoordinator
     
     // Memory management - limit total tweets in memory
     private let maxTweetsInMemory: Int = 200  // Keep max 200 tweets to prevent unbounded growth
@@ -181,6 +185,11 @@ struct TweetListView: View {
         self.onTweetTap = onTweetTap
         self.onShowLogin = onShowLogin
         self.onShowToast = onShowToast
+        // Main feed uses shared coordinator; other feeds get independent instances
+        // to prevent cross-feed interference (separate allVideos, visibleTweetIds, tableView, etc.)
+        self.videoCoordinator = (feedIdentifier == "mainFeed")
+            ? VideoPlaybackCoordinator.shared
+            : VideoPlaybackCoordinator()
         self.notifications = notifications ?? [
             TweetListNotification(
                 name: .newTweetCreated,
@@ -218,6 +227,7 @@ struct TweetListView: View {
                     trailingPadding: trailingPadding,
                     pinnedTweets: pinnedTweets,
                     feedIdentifier: feedIdentifier,
+                    videoCoordinator: videoCoordinator,
                     onAvatarTap: onAvatarTap,
                     onTweetTap: onTweetTap,
                     onShowLogin: onShowLogin,

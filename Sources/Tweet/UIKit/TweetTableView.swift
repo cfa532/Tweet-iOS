@@ -20,6 +20,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     let trailingPadding: CGFloat
     let pinnedTweets: [Tweet]
     let feedIdentifier: String
+    let videoCoordinator: VideoPlaybackCoordinator
     let onAvatarTap: ((User) -> Void)?
     let onTweetTap: ((Tweet) -> Void)?
     let onShowLogin: (() -> Void)?
@@ -44,7 +45,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> TweetTableViewController {
-        let controller = TweetTableViewController()
+        let controller = TweetTableViewController(videoCoordinator: videoCoordinator)
 
         context.coordinator.controller = controller
 

@@ -85,6 +85,9 @@ class EmbeddedTweetUIView: UIView {
     private var currentTweetId: String?
     private weak var parentViewController: UIViewController?
 
+    /// Per-feed video coordinator (set by TweetCellContentView)
+    weak var videoCoordinator: VideoPlaybackCoordinator?
+
     var onTap: ((Tweet) -> Void)?
 
     override init(frame: CGRect) {
@@ -183,6 +186,7 @@ class EmbeddedTweetUIView: UIView {
             avatarView.configure(user: author, size: 40)
         }
         headerView.configure(tweet: tweet)
+        bodyView.videoCoordinator = videoCoordinator
         bodyView.configure(tweet: tweet, isEmbedded: true,
                            cellTweetId: quotingTweetId,
                            parentViewController: parentViewController)
@@ -253,6 +257,7 @@ class EmbeddedTweetUIView: UIView {
     }
 
     private func registerVideoRelationship(quotingTweet: Tweet, originalTweet: Tweet) {
+        let coordinator = videoCoordinator ?? .shared
         let hasContentText = quotingTweet.content != nil &&
             !(quotingTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         let hasAttachments = quotingTweet.attachments != nil &&
@@ -260,12 +265,12 @@ class EmbeddedTweetUIView: UIView {
         let hasOwnContent = hasContentText || hasAttachments
 
         if hasOwnContent {
-            VideoPlaybackCoordinator.shared.addEmbeddedTweetVideos(
+            coordinator.addEmbeddedTweetVideos(
                 quotingTweetId: quotingTweet.mid,
                 embeddedTweet: originalTweet
             )
         } else {
-            VideoPlaybackCoordinator.shared.addRetweetVideos(
+            coordinator.addRetweetVideos(
                 retweetId: quotingTweet.mid,
                 originalTweet: originalTweet
             )
