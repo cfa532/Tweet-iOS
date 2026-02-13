@@ -25,10 +25,9 @@ enum Constants {
     
     // Video Processing Thresholds
     static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 32 * 1024 * 1024  // 32MB
-    static let HLS_ROUTE_2_THRESHOLD_BYTES: Int64 = 128 * 1024 * 1024  // 128MB
     
     // Image Loading Timeout
-    static let IMAGE_LOAD_TIMEOUT: TimeInterval = 10.0  // 10 seconds for all image loading requests
+    static let IMAGE_LOAD_TIMEOUT: TimeInterval = 15.0  // 15 seconds for all image loading requests
 }
 
 enum UserContentType: String {

@@ -31,9 +31,6 @@ class ScrollPositionManager {
         // Other feeds (profiles, bookmarks, favorites) are memory-only for the session
         if identifier == "mainFeed" {
             persistScrollPosition(position, for: identifier)
-            print("📍 [SCROLL SAVE] Persisted to UserDefaults: \(position) for feed: \(identifier)")
-        } else {
-            print("📍 [SCROLL SAVE] Saved to memory only: \(position) for feed: \(identifier)")
         }
     }
 
@@ -114,7 +111,6 @@ class ScrollPositionManager {
             // Only persist main feed to UserDefaults
             if feedId == "mainFeed" {
                 persistScrollPosition(position, for: feedId)
-                print("📍 [SCROLL] Persisted main feed scroll position for app restart: \(position)")
             }
         }
     }
@@ -384,7 +380,6 @@ class TweetTableViewController: UITableViewController {
 
             // Save the current scroll position before backgrounding
             self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
-            print("📍 [SCROLL] Saved scroll position: \(self.scrollPositionBeforeBackground ?? 0)")
 
             // MEMORY CLEANUP - Video players are now released by AppDelegate
             // DON'T clear SwiftUI view cache or reload table - this causes gray placeholders
@@ -424,8 +419,6 @@ class TweetTableViewController: UITableViewController {
             print("📊 [MEMORY] Current: \(memoryNow)MB")
 
             guard let savedPosition = self.scrollPositionBeforeBackground else { return }
-
-            print("📍 [SCROLL] Restoring scroll position: \(savedPosition)")
 
             // Restore the scroll position after a brief delay to let layout settle
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
@@ -1689,12 +1682,10 @@ class TweetTableViewController: UITableViewController {
             // Save to both instance variable (for same-session) and persistent storage
             savedScrollPosition = currentOffset
             ScrollPositionManager.shared.saveScrollPosition(currentOffset, for: feedIdentifier)
-            print("📍 [SCROLL] Saved position on scroll stop: \(currentOffset) for feed: \(feedIdentifier)")
         } else {
             // Clear position if at/near top
             savedScrollPosition = nil
             ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
-            print("📍 [SCROLL] Cleared position (at top) for feed: \(feedIdentifier)")
         }
     }
     
