@@ -398,9 +398,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             .store(in: &cancellables)
 
-        // Don't show spinner yet - only show when coordinator wants to play but player isn't ready
-        // This prevents spinner from showing on videos that are just being preloaded
+        // Show spinner while player is loading (white for visibility on dark video background)
         hasHiddenLoadingSpinner = false
+        loadingSpinner.color = .white.withAlphaComponent(0.7)
+        loadingSpinner.startAnimating()
+        bringSubviewToFront(loadingSpinner)
 
         // Acquire player (sync from cache or async from SharedAssetCache)
         acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
@@ -420,11 +422,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             let cachedPlayer = cachedState.player
             cachedPlayer.isMuted = MuteState.shared.isMuted
-            print("🎬 [ACQUIRE] Video \(mid.prefix(10)) found in VideoStateCache at \(String(format: "%.2f", cachedPlayer.currentTime().seconds))s")
 
             // Validate cached player
             guard cachedPlayer.currentItem != nil else {
-                print("⚠️ [ACQUIRE] Video \(mid.prefix(10)) cached player has no item - reloading async")
                 SharedAssetCache.shared.removeInvalidPlayer(for: mid, force: true)
                 VideoStateCache.shared.clearCachedState(for: mid)
                 acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
@@ -433,7 +433,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Reset finished videos to beginning
             if isVideoAtEnd(cachedPlayer) {
-                print("🔄 [ACQUIRE] Video \(mid.prefix(10)) at end - resetting to .zero")
                 VideoStateCache.shared.clearCachedState(for: mid)
                 cachedPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             }
@@ -446,7 +445,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         // TIER 2: Async loading
-        print("⏳ [ACQUIRE] Video \(mid.prefix(10)) not in cache - loading async")
         acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
     }
 
@@ -454,7 +452,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard shouldLoadVideo else { return }
         isPlayerLoaded = false
         hasHiddenLoadingSpinner = false
-        // Don't start spinner here - only start when coordinator wants to play
+        loadingSpinner.startAnimating()
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
         let tweetId = parentTweet.mid
@@ -476,9 +474,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 await MainActor.run { [weak self] in
                     guard !Task.isCancelled, let self else { return }
                     newPlayer.isMuted = MuteState.shared.isMuted
-                    let currentTime = newPlayer.currentTime().seconds
-                    let duration = newPlayer.currentItem?.duration.seconds ?? 0
-                    print("✅ [ACQUIRE] Video \(attachment.mid.prefix(10)) async load complete: currentTime=\(String(format: "%.2f", currentTime))s, duration=\(String(format: "%.2f", duration))s")
                     self.configurePlayer(newPlayer)
                     self.setupPlayerTask = nil
                 }
@@ -545,16 +540,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Set up KVO + notification observers
         setupPlayerObservers(newPlayer)
 
-        // Mark player as logically loaded if item is ready AND duration is valid
+        // Mark player as logically loaded if item is ready (for coordinator play commands)
         if let item = newPlayer.currentItem,
            item.status == .readyToPlay {
-            let duration = item.duration
-            if duration.isValid && !duration.isIndefinite && duration.seconds.isFinite {
-                isPlayerLoaded = true
-                print("✅ [CONFIGURE] Video \(attachment?.mid.prefix(10) ?? "unknown") ready with duration=\(String(format: "%.2f", duration.seconds))s")
-            } else {
-                print("⚠️ [CONFIGURE] Video \(attachment?.mid.prefix(10) ?? "unknown") status ready but duration invalid - waiting...")
-            }
+            isPlayerLoaded = true
         }
 
         // Defer video output attachment — AVPlayerItemVideoOutput creation causes
@@ -570,19 +559,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleCoordinatorPlayCommand() {
         guard let mid = attachment?.mid else { return }
 
-        print("🎬 [PLAY CMD] Video \(mid.prefix(10)): coordinatorWantsToPlay=true, playerLoaded=\(isPlayerLoaded), hasPlayer=\(player != nil)")
-
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
 
         // If player not ready, wait for it
         guard let player = player, isPlayerLoaded else {
-            // Show spinner while waiting for player to be ready
-            loadingSpinner.color = .white.withAlphaComponent(0.7)
-            loadingSpinner.startAnimating()
-            bringSubviewToFront(loadingSpinner)
-
             // Trigger player setup if needed
             if player == nil, shouldLoadVideo, isVisible,
                let att = attachment, let url = att.getUrl(effectiveBaseUrl),
@@ -615,7 +597,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Reset finished videos to beginning before playing
         if isVideoAtEnd(player) {
-            print("🔄 [PLAY CMD] Video \(mid.prefix(10)) at end - resetting to .zero")
             VideoStateCache.shared.clearCachedState(for: mid)
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                 guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
@@ -625,7 +606,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         // Player is ready — play
-        print("▶️ [PLAY CMD] Video \(mid.prefix(10)) ready - calling playWithVolumeFadeIn (currentTime=\(String(format: "%.2f", player.currentTime().seconds))s)")
         playWithVolumeFadeIn(player)
     }
 
@@ -690,18 +670,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func playWithVolumeFadeIn(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
 
-        let currentTime = player.currentTime().seconds
-        let duration = player.currentItem?.duration.seconds ?? 0
-        print("🎥 [PLAY] Video \(mid.prefix(10)) currentTime=\(String(format: "%.2f", currentTime))s, duration=\(String(format: "%.2f", duration))s")
-
         // Check for cached position to resume from
         if let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
             let targetSeconds = info.time.seconds
-            print("📍 [PLAY] Video \(mid.prefix(10)) has cached position: \(String(format: "%.2f", targetSeconds))s")
             if targetSeconds.isFinite, targetSeconds > 0.25 {
                 let currentSeconds = player.currentTime().seconds
                 if currentSeconds.isFinite, abs(currentSeconds - targetSeconds) > 0.25 {
-                    print("⏩ [PLAY] Video \(mid.prefix(10)) seeking to cached position \(String(format: "%.2f", targetSeconds))s")
                     player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                         self?.startPlaybackWithFade(player)
                     }
@@ -714,14 +688,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     private func startPlaybackWithFade(_ player: AVPlayer) {
-        guard let mid = attachment?.mid else { return }
-
-        // CRITICAL: Check if player has buffered data before playing
-        // Playing an unbuffered player can cause AVPlayerItemDidPlayToEndTime to fire immediately
-        let hasBufferedData = player.currentItem?.loadedTimeRanges.isEmpty == false
-        let bufferStatus = player.currentItem?.status == .readyToPlay
-        print("▶️ [START] Video \(mid.prefix(10)) buffered=\(hasBufferedData), status=\(bufferStatus ? "ready" : "not ready")")
-
         player.isMuted = MuteState.shared.isMuted
         player.volume = 0
         player.play()
@@ -730,7 +696,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         // Show timer when playback actually starts
-        if isSingleMedia {
+        if isSingleMedia, let mid = attachment?.mid {
             setupVideoTimer(videoMid: mid)
             startPlayerTimeObserver()
         }
@@ -834,15 +800,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if item.status == .readyToPlay {
-                    // CRITICAL: Only mark as loaded if duration is valid
-                    // Playing a player with NaN duration causes it to jump to end immediately
-                    let duration = item.duration
-                    if duration.isValid && !duration.isIndefinite && duration.seconds.isFinite {
-                        self.isPlayerLoaded = true
-                        print("✅ [PLAYER READY] Video \(self.attachment?.mid.prefix(10) ?? "unknown") duration=\(String(format: "%.2f", duration.seconds))s")
-                    } else {
-                        print("⚠️ [PLAYER READY] Video \(self.attachment?.mid.prefix(10) ?? "unknown") duration invalid (nans) - waiting...")
-                    }
+                    // Mark as loaded when status is ready, even if no data buffered yet
+                    // (player will buffer as needed when play() is called)
+                    self.isPlayerLoaded = true
                 } else if item.status == .failed {
                     self.hideLoadingSpinner()
                 }
@@ -892,9 +852,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let duration = item.duration
         guard duration.isValid, duration.seconds > 0 else { return }
 
-        let currentTime = player.currentTime().seconds
-        let timeUntilEnd = duration.seconds - currentTime
-        print("🏁 [FINISH] Video \(mid.prefix(10)) finished: currentTime=\(String(format: "%.2f", currentTime))s, duration=\(String(format: "%.2f", duration.seconds))s, timeUntilEnd=\(String(format: "%.2f", timeUntilEnd))s")
+        let timeUntilEnd = duration.seconds - player.currentTime().seconds
         guard timeUntilEnd < 0.5 else { return }
 
         // Pause immediately

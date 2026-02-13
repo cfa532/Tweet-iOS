@@ -835,9 +835,6 @@ class SharedAssetCache: ObservableObject {
                 }
             } else {
                 // Player has item - return it
-                let currentTime = cachedPlayer.currentTime().seconds
-                let duration = cachedPlayer.currentItem?.duration.seconds ?? 0
-                print("♻️ [SharedAssetCache] Returning cached player for \(mediaID.prefix(10)): currentTime=\(String(format: "%.2f", currentTime))s, duration=\(String(format: "%.2f", duration))s")
                 return cachedPlayer
             }
         }
