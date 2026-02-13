@@ -157,8 +157,14 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         }
         
         if let error = error {
-            print("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
-            BlackList.shared.recordFailure(mediaID)
+            let nsError = error as NSError
+            if nsError.code == NSURLErrorCancelled {
+                // Don't count cancellations (e.g. from emergency cleanup or scroll-away) as real failures
+                print("⚠️ [PROGRESSIVE STREAM] Cancelled for \(mediaID) - not recording as failure")
+            } else {
+                print("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
+                BlackList.shared.recordFailure(mediaID)
+            }
         } else {
             // Stream completed successfully
         }
