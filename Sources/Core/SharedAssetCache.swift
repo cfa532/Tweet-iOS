@@ -802,15 +802,11 @@ class SharedAssetCache: ObservableObject {
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
             // Check if this is a player shell (item was removed to free memory)
             if cachedPlayer.currentItem == nil {
-                let itemStartTime = Date()
                 // Player exists but item was cleared - reload the item into existing player
                 do {
                     let playerItem = try await getOrCreatePlayerItem(for: url, mediaID: mediaID, mediaType: mediaType)
-                    let itemElapsed = Date().timeIntervalSince(itemStartTime)
                     await MainActor.run {
                         cachedPlayer.replaceCurrentItem(with: playerItem)
-                        let itemStatus = playerItem.status.rawValue
-                        let duration = playerItem.duration.seconds
                     }
                     return cachedPlayer
                 } catch {
@@ -821,10 +817,6 @@ class SharedAssetCache: ObservableObject {
                     }
                 }
             } else {
-                // Player has item - return it
-                let currentTime = cachedPlayer.currentTime().seconds
-                let itemStatus = cachedPlayer.currentItem?.status.rawValue ?? -1
-                let duration = cachedPlayer.currentItem?.duration.seconds ?? 0
                 return cachedPlayer
             }
         }
@@ -835,14 +827,10 @@ class SharedAssetCache: ObservableObject {
                 if self.activeCreations < self.maxConcurrentCreations {
                     // Can create immediately
                     self.activeCreations += 1
-                    let createStartTime = Date()
 
                     Task {
                         do {
                             let player = try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
-                            let createElapsed = Date().timeIntervalSince(createStartTime)
-                            let itemStatus = player.currentItem?.status.rawValue ?? -1
-                            let duration = player.currentItem?.duration.seconds ?? 0
                             await MainActor.run {
                                 self.activeCreations -= 1
                                 self.processNextPendingCreation()
@@ -1497,19 +1485,19 @@ class SharedAssetCache: ObservableObject {
     @MainActor func handleNetworkFailureCleanup() {
 
         // Cancel all active loading tasks
-        for (mediaID, task) in loadingTasks {
+        for (_, task) in loadingTasks {
             task.cancel()
         }
         loadingTasks.removeAll()
 
         // Cancel all preload tasks
-        for (mediaID, task) in preloadTasks {
+        for (_, task) in preloadTasks {
             task.cancel()
         }
         preloadTasks.removeAll()
 
         // Cancel all retry tasks
-        for (mediaID, task) in scheduledVideoRetries {
+        for (_, task) in scheduledVideoRetries {
             task.cancel()
         }
         scheduledVideoRetries.removeAll()
@@ -1734,7 +1722,6 @@ class SharedAssetCache: ObservableObject {
     func releaseAllPlayers() {
 
         let playersToRelease = playerCache.values
-        let count = playersToRelease.count
 
         // Release each player properly
         for player in playersToRelease {
@@ -1752,9 +1739,6 @@ class SharedAssetCache: ObservableObject {
 
     /// MEMORY FIX: Force immediate cleanup of old/inactive players to release memory during fast scrolling
     @MainActor func forceMemoryCleanup() {
-        let memoryBefore = getMemoryUsageString()
-        let cacheSizeBefore = playerCache.count
-
         let now = Date()
         let memoryUsage = getCurrentMemoryUsage() / (1024 * 1024)
 
@@ -1789,10 +1773,6 @@ class SharedAssetCache: ObservableObject {
                 resourceLoaderDelegates.removeValue(forKey: key)
                 cleanupTweetMappings(for: key)
             }
-
-            let memoryAfter = getMemoryUsageString()
-            let cacheSizeAfter = playerCache.count
-        } else {
         }
     }
     
@@ -1800,7 +1780,6 @@ class SharedAssetCache: ObservableObject {
         // Normal LRU eviction - enforce cache size limits
         let targetSize = maxPlayerCacheSize - reserveSlots
         if playerCache.count > targetSize {
-            let memoryBefore = getMemoryUsageString()
 
             // CRITICAL: Never evict visible or near-visible videos while app is in foreground
             let protected = foregroundProtectedMids
@@ -1821,10 +1800,6 @@ class SharedAssetCache: ObservableObject {
                 resourceLoaderDelegates.removeValue(forKey: key)
                 // PERFORMANCE FIX: Clean up tweet URL mappings
                 cleanupTweetMappings(for: key)
-            }
-
-            if !keysToRemove.isEmpty {
-                let memoryAfter = getMemoryUsageString()
             }
         }
 
@@ -2082,7 +2057,7 @@ class SharedAssetCache: ObservableObject {
 
         // Pause all players and detach their items to release video buffers
         // This releases the heavy memory (decoded frames, buffered data) but keeps the AVPlayer objects
-        for (key, player) in playerCache {
+        for (_, player) in playerCache {
             player.pause()
             player.replaceCurrentItem(with: nil) // Releases video buffers and assets
         }

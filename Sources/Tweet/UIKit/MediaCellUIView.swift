@@ -418,14 +418,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func acquirePlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
         let mid = attachment.mid
-        let acquireStartTime = Date()
 
         // TIER 1: Synchronous cache hit (VideoStateCache)
         if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
             let cachedPlayer = cachedState.player
             cachedPlayer.isMuted = MuteState.shared.isMuted
-            let itemStatus = cachedPlayer.currentItem?.status.rawValue ?? -1
-            let duration = cachedPlayer.currentItem?.duration.seconds ?? 0
 
             // Validate cached player
             guard cachedPlayer.currentItem != nil else {
@@ -443,8 +440,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Pause if playing (prevent audio bleed in feed)
             if cachedPlayer.rate > 0 { cachedPlayer.pause() }
-
-            let elapsed = Date().timeIntervalSince(acquireStartTime)
             configurePlayer(cachedPlayer)
             return
         }
@@ -455,13 +450,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func acquirePlayerAsync(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
         guard shouldLoadVideo else { return }
-        let mid = attachment.mid
         isPlayerLoaded = false
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
         let tweetId = parentTweet.mid
         let mediaType = attachment.type
-        let asyncStartTime = Date()
 
         setupPlayerTask?.cancel()
         setupPlayerTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -471,14 +464,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     for: uniqueURL, tweetId: tweetId, mediaType: mediaType
                 )
                 try Task.checkCancellation()
-
-                // Log what we got back from SharedAssetCache
-                let currentTime = newPlayer.currentTime().seconds
-                let itemStatus = newPlayer.currentItem?.status.rawValue ?? -1
-                let duration = newPlayer.currentItem?.duration.seconds ?? 0
-                let elapsed = Date().timeIntervalSince(asyncStartTime)
-                await MainActor.run {
-                }
 
                 // Apply mute state immediately after creation
                 let muteState = await MainActor.run { MuteState.shared.isMuted }
@@ -512,12 +497,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Player Configuration
 
     private func configurePlayer(_ newPlayer: AVPlayer) {
-        guard let mid = attachment?.mid else { return }
+        guard (attachment?.mid) != nil else { return }
         playerConfigureStartTime = Date()
-
-        let itemStatus = newPlayer.currentItem?.status.rawValue ?? -1
-        let duration = newPlayer.currentItem?.duration.seconds ?? 0
-        let hasItem = newPlayer.currentItem != nil
 
         // Configure automatic waiting based on type
         if attachment?.type == .video {
@@ -564,9 +545,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let item = newPlayer.currentItem,
            item.status == .readyToPlay {
             isPlayerLoaded = true
-            if let startTime = playerConfigureStartTime {
-                let elapsed = Date().timeIntervalSince(startTime)
-            }
             // If coordinator requested play while player was being acquired, start now
             if coordinatorWantsToPlay {
                 if isVideoAtEnd(newPlayer) {
@@ -699,9 +677,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func playWithVolumeFadeIn(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
 
-        let currentTime = player.currentTime().seconds
-        let duration = player.currentItem?.duration.seconds ?? 0
-
         // Check for cached position to resume from
         if let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
             let targetSeconds = info.time.seconds
@@ -709,8 +684,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 let currentSeconds = player.currentTime().seconds
                 if currentSeconds.isFinite, abs(currentSeconds - targetSeconds) > 0.25 {
                     player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                        guard let self, let mid = self.attachment?.mid else { return }
-                        let actualTime = player.currentTime().seconds
+                        guard let self, let _ = self.attachment?.mid else { return }
                         self.startPlaybackWithFade(player)
                     }
                     return
@@ -724,10 +698,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func startPlaybackWithFade(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
 
-        let hasBufferedData = player.currentItem?.loadedTimeRanges.isEmpty == false
         let bufferStatus = player.currentItem?.status == .readyToPlay
-        let reportedTime = player.currentTime().seconds
-        let duration = player.currentItem?.duration.seconds ?? 0
 
         // Only reveal video player if it's actually ready; otherwise keep placeholder visible
         videoPlayerView.isHidden = false
@@ -856,13 +827,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     self.isPlayerLoaded = true
 
                     if !wasAlreadyLoaded {
-                        let duration = item.duration.seconds
-                        let durationValid = item.duration.isValid && !item.duration.isIndefinite && duration.isFinite
-                        if let startTime = self.playerConfigureStartTime {
-                            let elapsed = Date().timeIntervalSince(startTime)
-                        } else {
-                        }
-
                         // If coordinator requested play while player was loading, start now
                         if self.coordinatorWantsToPlay, let player = self.player {
                             if self.isVideoAtEnd(player) {

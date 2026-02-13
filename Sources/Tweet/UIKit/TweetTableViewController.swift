@@ -373,7 +373,6 @@ class TweetTableViewController: UITableViewController {
             }
 
             // Log memory before cleanup
-            let memoryBefore = self.getMemoryUsage()
             print("🌙 [BACKGROUND] App entering background - starting aggressive memory cleanup")
 
             // Save the current scroll position before backgrounding
@@ -389,8 +388,6 @@ class TweetTableViewController: UITableViewController {
             // End background task after a short delay to allow cleanup to complete
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self = self else { return }
-                let memoryAfter = self.getMemoryUsage()
-                let memoryFreed = memoryBefore - memoryAfter
                 print("✅ [BACKGROUND] Cleanup complete")
 
                 // End background task when done
@@ -410,9 +407,6 @@ class TweetTableViewController: UITableViewController {
 
             // Cancel background task if still active
             self.endBackgroundTask()
-
-            // Log current memory
-            let memoryNow = self.getMemoryUsage()
 
             guard let savedPosition = self.scrollPositionBeforeBackground else { return }
 
