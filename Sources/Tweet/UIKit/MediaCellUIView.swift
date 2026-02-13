@@ -633,6 +633,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
+        // Validate player health — after background, currentItem may have been stripped
+        // while isPlayerLoaded remained true (cell was not visible during foreground recovery)
+        if player.currentItem == nil || player.currentTime().seconds.isNaN {
+            print("⚠️ [PLAY CMD] Video \(mid.prefix(10)) stale player (currentItem=\(player.currentItem == nil ? "nil" : "exists"), time=\(player.currentTime().seconds)) - re-acquiring")
+            cleanupVideoPlayer()
+            isPlayerLoaded = false
+            if let att = attachment, let url = att.getUrl(effectiveBaseUrl), let parentTweet = parentTweet {
+                setupVideoCell(attachment: att, url: url, parentTweet: parentTweet)
+            }
+            // Restore after setupVideoCell — both cleanupVideoPlayer() calls reset it,
+            // but we need it so the new player auto-plays once ready
+            coordinatorWantsToPlay = true
+            return
+        }
+
         // Reset finished videos to beginning before playing
         if isVideoAtEnd(player) {
             print("🔄 [PLAY CMD] Video \(mid.prefix(10)) at end - resetting to .zero before playing")
@@ -737,9 +752,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let duration = player.currentItem?.duration.seconds ?? 0
         print("▶️ [START] Video \(mid.prefix(10)) buffered=\(hasBufferedData), status=\(bufferStatus ? "ready" : "not ready"), reportedTime=\(String(format: "%.2f", reportedTime))s, duration=\(String(format: "%.2f", duration))s")
 
-        // Reveal video player and hide placeholder
+        // Only reveal video player if it's actually ready; otherwise keep placeholder visible
         videoPlayerView.isHidden = false
-        imageView.isHidden = true
+        if bufferStatus {
+            imageView.isHidden = true
+        }
         hideLoadingSpinner()
 
         player.isMuted = MuteState.shared.isMuted
@@ -1311,7 +1328,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 // replaceCurrentItem(with: nil) on all players and clears the cache.
                 // Our self.player still references the now-dead player (no currentItem).
                 // We must discard it and let the coordinator re-acquire a fresh player.
-                if let player = self.player, player.currentItem == nil {
+                if let player = self.player,
+                   player.currentItem == nil || player.currentTime().seconds.isNaN {
                     self.cleanupVideoPlayer()
                     self.isPlayerLoaded = false
                     // Show cached last frame so the cell isn't black while a new player loads
