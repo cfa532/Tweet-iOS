@@ -496,12 +496,15 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func loadImageFromNetwork(_ request: ImageLoadRequest) async -> UIImage? {
+        let startTime = Date()
+        print("📥 [IMAGE LOAD] Starting [\(request.priority)]: \(request.url.lastPathComponent)")
+
         do {
             // Create URLRequest with timeout
             var urlRequest = URLRequest(url: request.url)
             urlRequest.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
             urlRequest.cachePolicy = .returnCacheDataElseLoad
-            
+
             let (data, response) = try await URLSession.shared.data(for: urlRequest)
             
             // Check if we got a valid response
@@ -525,6 +528,9 @@ class GlobalImageLoadManager: ObservableObject {
             if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment) {
                 // Reset network failure counter on successful load
                 consecutiveNetworkFailures = 0
+                let elapsed = Date().timeIntervalSince(startTime)
+                let sizeKB = Double(data.count) / 1024.0
+                print("✅ [IMAGE LOAD] Completed [\(request.priority)] in \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", sizeKB))KB): \(request.url.lastPathComponent)")
                 return image
             }
 
