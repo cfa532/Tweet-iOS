@@ -941,10 +941,12 @@ class SharedAssetCache: ObservableObject {
                 return player
             } catch {
                 // Notify failure
+                let isCancellation = (error as NSError).code == NSURLErrorCancelled || error is CancellationError
                 await MainActor.run {
                     VideoLoadingManager.shared.videoLoadCompleted()
-                    // ❌ RECORD FAILURE TO BLACKLIST
-                    BlackList.shared.recordFailure(MimeiId(mediaID))
+                    if !isCancellation {
+                        BlackList.shared.recordFailure(MimeiId(mediaID))
+                    }
                 }
                 throw error
             }
@@ -957,16 +959,17 @@ class SharedAssetCache: ObservableObject {
                     VideoLoadingManager.shared.videoLoadCompleted()
                     // Clear retry count on success
                     videoRetryCount.removeValue(forKey: mediaID)
-                    // ✅ RECORD SUCCESS TO BLACKLIST
                     BlackList.shared.recordSuccess(MimeiId(mediaID))
                 }
                 return player
             } catch {
                 // Notify failure
+                let isCancellation = (error as NSError).code == NSURLErrorCancelled || error is CancellationError
                 await MainActor.run {
                     VideoLoadingManager.shared.videoLoadCompleted()
-                    // ❌ RECORD FAILURE TO BLACKLIST
-                    BlackList.shared.recordFailure(MimeiId(mediaID))
+                    if !isCancellation {
+                        BlackList.shared.recordFailure(MimeiId(mediaID))
+                    }
                 }
                 throw error
             }

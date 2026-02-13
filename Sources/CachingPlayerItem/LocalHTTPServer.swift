@@ -1210,7 +1210,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             if let error = error {
                 print("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
-                BlackList.shared.recordFailure(mediaID)
+                if (error as NSError).code != NSURLErrorCancelled {
+                    BlackList.shared.recordFailure(mediaID)
+                }
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
@@ -1979,13 +1981,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                 let pathComponents = cachePath.components(separatedBy: "/")
                 let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
                 
-                if error != nil {
-                    
-                    // Record failure for this mediaID (attachment mid)
-                    if !mediaID.isEmpty {
+                if let error = error {
+                    // Don't count cancellations (e.g. from emergency cleanup) as real failures
+                    if !mediaID.isEmpty, (error as NSError).code != NSURLErrorCancelled {
                         BlackList.shared.recordFailure(mediaID)
                     }
-                    
+
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                     completion?()
                     return
