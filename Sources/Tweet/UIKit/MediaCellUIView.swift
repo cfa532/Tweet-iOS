@@ -930,7 +930,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleVideoFinished() async {
         guard !isHandlingFinishEvent else { return }
         isHandlingFinishEvent = true
-        defer { isHandlingFinishEvent = false }
+        // Note: flag stays true until cell is reused (cleanupVideoPlayer)
+        // or coordinator sends a new play command (handleCoordinatorPlayCommand)
 
         guard let player = player, let item = player.currentItem,
               let mid = attachment?.mid else { return }

@@ -906,9 +906,9 @@ class SharedAssetCache: ObservableObject {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID"])
         }
         
-        // Clean up cache BEFORE creating new player
+        // Clean up cache BEFORE creating new player — evict to make room for incoming player
         await MainActor.run {
-            self.managePlayerCacheSize()
+            self.managePlayerCacheSize(reserveSlots: 1)
         }
         
         // CRITICAL: Notify VideoLoadingManager that a load is starting
@@ -1817,9 +1817,10 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    private func managePlayerCacheSize() {
+    private func managePlayerCacheSize(reserveSlots: Int = 0) {
         // Normal LRU eviction - enforce cache size limits
-        if playerCache.count > maxPlayerCacheSize {
+        let targetSize = maxPlayerCacheSize - reserveSlots
+        if playerCache.count > targetSize {
             let memoryBefore = getMemoryUsageString()
             print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - evicting oldest (memory: \(memoryBefore))")
 
@@ -1829,7 +1830,7 @@ class SharedAssetCache: ObservableObject {
                 .filter { !protected.contains($0.key) } // Skip protected videos
                 .sorted { $0.value < $1.value }
                 .map { $0.key }
-            let keysToRemove = sortedKeys.prefix(playerCache.count - maxPlayerCacheSize)
+            let keysToRemove = sortedKeys.prefix(playerCache.count - targetSize)
 
             for key in keysToRemove {
                 if let player = playerCache[key] {
