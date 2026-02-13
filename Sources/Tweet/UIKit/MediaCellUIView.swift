@@ -362,10 +362,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Video
 
     private func setupVideoCell(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        // Show cached last frame as instant placeholder (pure UIKit, no render delay)
+        // Show cached last frame as placeholder over the videoPlayerView
         if let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid) {
             imageView.image = cachedFrame
             imageView.isHidden = false
+            bringSubviewToFront(imageView)
         } else {
             imageView.isHidden = true
         }
@@ -373,7 +374,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Reset any previous video state
         cleanupVideoPlayer()
 
-        // Show the player view container (black background until player delivers frames)
+        // Show videoPlayerView so AVPlayerLayer can decode frames;
+        // imageView (if it has a cached frame) sits on top as placeholder.
         videoPlayerView.isHidden = false
 
         // Tap gesture for fullscreen (all media — including embedded tweets — opens fullscreen)
@@ -399,11 +401,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             .store(in: &cancellables)
 
-        // Show spinner while player is loading (white for visibility on dark video background)
+        // Spinner is deferred — only shown when coordinator requests play and player isn't ready
         hasHiddenLoadingSpinner = false
         loadingSpinner.color = .white.withAlphaComponent(0.7)
-        loadingSpinner.startAnimating()
-        bringSubviewToFront(loadingSpinner)
 
         // Acquire player (sync from cache or async from SharedAssetCache)
         acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
@@ -462,8 +462,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard shouldLoadVideo else { return }
         let mid = attachment.mid
         isPlayerLoaded = false
-        hasHiddenLoadingSpinner = false
-        loadingSpinner.startAnimating()
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
         let tweetId = parentTweet.mid
@@ -548,15 +546,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Assign to player view
         self.player = newPlayer
 
-        // Set callback for when first frame is rendered — use as fallback to hide spinner
-        // if player doesn't reach .playing state (e.g., due to buffering or coordinator timing)
+        // When player layer renders its first frame, reveal it and hide the placeholder
         videoPlayerView.onReadyForDisplay = { [weak self] in
             guard let self else { return }
-            // Only hide if player has sufficient buffer or is already playing
             if let player = self.player,
                let item = player.currentItem,
                item.status == .readyToPlay,
                (!item.loadedTimeRanges.isEmpty || player.timeControlStatus == .playing) {
+                self.videoPlayerView.isHidden = false
+                self.imageView.isHidden = true
                 self.hideLoadingSpinner()
             }
         }
@@ -616,6 +614,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
             print("⏳ [PLAY CMD] Video \(mid.prefix(10)) not ready - player=\(self.player != nil), loaded=\(isPlayerLoaded), will play when ready")
+
+            // Show spinner now that we actually want to play
+            videoPlayerView.isHidden = false
+            loadingSpinner.startAnimating()
+            bringSubviewToFront(loadingSpinner)
 
             // Trigger player setup if needed
             if self.player == nil, shouldLoadVideo, isVisible,
@@ -733,6 +736,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let reportedTime = player.currentTime().seconds
         let duration = player.currentItem?.duration.seconds ?? 0
         print("▶️ [START] Video \(mid.prefix(10)) buffered=\(hasBufferedData), status=\(bufferStatus ? "ready" : "not ready"), reportedTime=\(String(format: "%.2f", reportedTime))s, duration=\(String(format: "%.2f", duration))s")
+
+        // Reveal video player and hide placeholder
+        videoPlayerView.isHidden = false
+        imageView.isHidden = true
+        hideLoadingSpinner()
 
         player.isMuted = MuteState.shared.isMuted
         player.volume = 0
