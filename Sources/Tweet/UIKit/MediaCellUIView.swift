@@ -1237,6 +1237,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 (videoCoordinator ?? .shared).unregisterDelegate(forIdentifier: id)
             }
 
+            // Cancel in-flight player acquisition task
+            setupPlayerTask?.cancel()
+            setupPlayerTask = nil
+
             // Video-specific invisible handling
             if isVideoAttachment {
                 if let url = attachment.getUrl(effectiveBaseUrl) {
