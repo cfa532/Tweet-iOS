@@ -162,6 +162,14 @@ struct HomeView: View {
                 navigationPath.append(commentNav)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .showBarsAfterScrollEnd)) { _ in
+            // Show bars WITHOUT animation so the frame change is instant.
+            // TweetTableViewController compensates contentOffset in viewDidLayoutSubviews.
+            guard !isNavigationVisible else { return }
+            isNavigationVisible = true
+            postNavigationVisibilityNotification(isVisible: true)
+            lastVisibilityChangeTime = Date()
+        }
         .onDisappear {
             withAnimation(.easeInOut(duration: 0.3)) {
                 isNavigationVisible = true
@@ -179,7 +187,6 @@ struct HomeView: View {
                 foregroundObserver = nil
             }
 
-            print("DEBUG: [HomeView] View disappeared, navigation reset to visible")
         }
         .onAppear {
             // Ensure navigation is visible when view appears
@@ -190,7 +197,6 @@ struct HomeView: View {
                 object: nil,
                 userInfo: ["isVisible": true]
             )
-            print("DEBUG: [HomeView] View appeared, navigation set to visible")
 
             // Setup foreground observer to restore navigation state when app returns from background
             setupForegroundObserver()
@@ -285,7 +291,6 @@ struct HomeView: View {
             queue: .main
         ) { [self] _ in
             // Always reset navigation to visible when returning from background
-            print("DEBUG: [HomeView] App returned to foreground, resetting navigation visible to true")
             isNavigationVisible = true
             NotificationCenter.default.post(
                 name: .navigationVisibilityChanged,

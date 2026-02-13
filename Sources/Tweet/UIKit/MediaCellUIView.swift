@@ -426,11 +426,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             cachedPlayer.isMuted = MuteState.shared.isMuted
             let itemStatus = cachedPlayer.currentItem?.status.rawValue ?? -1
             let duration = cachedPlayer.currentItem?.duration.seconds ?? 0
-            print("🎬 [ACQUIRE TIER-1] Video \(mid.prefix(10)) found in VideoStateCache: currentTime=\(String(format: "%.2f", cachedPlayer.currentTime().seconds))s, itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
 
             // Validate cached player
             guard cachedPlayer.currentItem != nil else {
-                print("⚠️ [ACQUIRE TIER-1] Video \(mid.prefix(10)) cached player has no item - falling back to TIER-2")
                 SharedAssetCache.shared.removeInvalidPlayer(for: mid, force: true)
                 VideoStateCache.shared.clearCachedState(for: mid)
                 acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
@@ -439,7 +437,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Reset finished videos to beginning
             if isVideoAtEnd(cachedPlayer) {
-                print("🔄 [ACQUIRE TIER-1] Video \(mid.prefix(10)) at end - resetting to .zero")
                 VideoStateCache.shared.clearCachedState(for: mid)
                 cachedPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in }
             }
@@ -448,13 +445,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if cachedPlayer.rate > 0 { cachedPlayer.pause() }
 
             let elapsed = Date().timeIntervalSince(acquireStartTime)
-            print("✅ [ACQUIRE TIER-1] Video \(mid.prefix(10)) complete in \(String(format: "%.3f", elapsed))s")
             configurePlayer(cachedPlayer)
             return
         }
 
         // TIER 2: Async loading
-        print("⏳ [ACQUIRE TIER-2] Video \(mid.prefix(10)) not in VideoStateCache - loading async from SharedAssetCache")
         acquirePlayerAsync(attachment: attachment, url: url, parentTweet: parentTweet)
     }
 
@@ -483,7 +478,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 let duration = newPlayer.currentItem?.duration.seconds ?? 0
                 let elapsed = Date().timeIntervalSince(asyncStartTime)
                 await MainActor.run {
-                    print("✅ [ACQUIRE TIER-2] Video \(mid.prefix(10)) returned from SharedAssetCache in \(String(format: "%.3f", elapsed))s: currentTime=\(String(format: "%.2f", currentTime))s, itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
                 }
 
                 // Apply mute state immediately after creation
@@ -499,7 +493,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             } catch {
                 guard !Task.isCancelled else { return }
                 await MainActor.run { [weak self] in
-                    print("❌ [ACQUIRE TIER-2] Video \(mid.prefix(10)) failed: \(error)")
                     self?.loadingSpinner.stopAnimating()
                     self?.setupPlayerTask = nil
                 }
@@ -525,7 +518,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let itemStatus = newPlayer.currentItem?.status.rawValue ?? -1
         let duration = newPlayer.currentItem?.duration.seconds ?? 0
         let hasItem = newPlayer.currentItem != nil
-        print("⚙️ [CONFIGURE] Video \(mid.prefix(10)) starting: hasItem=\(hasItem), itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s, currentTime=\(String(format: "%.2f", newPlayer.currentTime().seconds))s")
 
         // Configure automatic waiting based on type
         if attachment?.type == .video {
@@ -574,11 +566,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             isPlayerLoaded = true
             if let startTime = playerConfigureStartTime {
                 let elapsed = Date().timeIntervalSince(startTime)
-                print("✅ [CONFIGURE] Video \(mid.prefix(10)) complete in \(String(format: "%.3f", elapsed))s - player already ready")
             }
             // If coordinator requested play while player was being acquired, start now
             if coordinatorWantsToPlay {
-                print("▶️ [CONFIGURE] Video \(mid.prefix(10)) - coordinator wants play, starting now")
                 if isVideoAtEnd(newPlayer) {
                     newPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                         guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
@@ -589,7 +579,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
             }
         } else {
-            print("⏳ [CONFIGURE] Video \(mid.prefix(10)) waiting for player to become ready...")
         }
 
         // Defer video output attachment — AVPlayerItemVideoOutput creation causes
@@ -605,7 +594,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleCoordinatorPlayCommand() {
         guard let mid = attachment?.mid else { return }
 
-        print("🎬 [PLAY CMD] Video \(mid.prefix(10)): coordinatorWantsToPlay=true, playerLoaded=\(isPlayerLoaded), hasPlayer=\(player != nil)")
 
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
@@ -613,7 +601,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
-            print("⏳ [PLAY CMD] Video \(mid.prefix(10)) not ready - player=\(self.player != nil), loaded=\(isPlayerLoaded), will play when ready")
 
             // Show spinner now that we actually want to play
             videoPlayerView.isHidden = false
@@ -624,7 +611,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if self.player == nil, shouldLoadVideo, isVisible,
                let att = attachment, let url = att.getUrl(effectiveBaseUrl),
                let parentTweet = parentTweet {
-                print("🔄 [PLAY CMD] Video \(mid.prefix(10)) triggering player acquisition")
                 acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
             }
 
@@ -636,7 +622,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Validate player health — after background, currentItem may have been stripped
         // while isPlayerLoaded remained true (cell was not visible during foreground recovery)
         if player.currentItem == nil || player.currentTime().seconds.isNaN {
-            print("⚠️ [PLAY CMD] Video \(mid.prefix(10)) stale player (currentItem=\(player.currentItem == nil ? "nil" : "exists"), time=\(player.currentTime().seconds)) - re-acquiring")
             cleanupVideoPlayer()
             isPlayerLoaded = false
             if let att = attachment, let url = att.getUrl(effectiveBaseUrl), let parentTweet = parentTweet {
@@ -650,7 +635,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Reset finished videos to beginning before playing
         if isVideoAtEnd(player) {
-            print("🔄 [PLAY CMD] Video \(mid.prefix(10)) at end - resetting to .zero before playing")
             VideoStateCache.shared.clearCachedState(for: mid)
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                 guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
@@ -660,7 +644,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         // Player is ready — play
-        print("▶️ [PLAY CMD] Video \(mid.prefix(10)) ready - calling playWithVolumeFadeIn (currentTime=\(String(format: "%.2f", player.currentTime().seconds))s)")
         playWithVolumeFadeIn(player)
     }
 
@@ -718,20 +701,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         let currentTime = player.currentTime().seconds
         let duration = player.currentItem?.duration.seconds ?? 0
-        print("🎥 [PLAY] Video \(mid.prefix(10)) currentTime=\(String(format: "%.2f", currentTime))s, duration=\(String(format: "%.2f", duration))s")
 
         // Check for cached position to resume from
         if let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
             let targetSeconds = info.time.seconds
-            print("📍 [PLAY] Video \(mid.prefix(10)) has cached position: \(String(format: "%.2f", targetSeconds))s")
             if targetSeconds.isFinite, targetSeconds > 0.25 {
                 let currentSeconds = player.currentTime().seconds
                 if currentSeconds.isFinite, abs(currentSeconds - targetSeconds) > 0.25 {
-                    print("⏩ [PLAY] Video \(mid.prefix(10)) seeking to cached position \(String(format: "%.2f", targetSeconds))s")
                     player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                         guard let self, let mid = self.attachment?.mid else { return }
                         let actualTime = player.currentTime().seconds
-                        print("✅ [SEEK CACHED] Video \(mid.prefix(10)) seeked to cached position, actualTime=\(String(format: "%.2f", actualTime))s, finished=\(finished)")
                         self.startPlaybackWithFade(player)
                     }
                     return
@@ -739,7 +718,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         }
 
-        print("▶️ [PLAY] Video \(mid.prefix(10)) no cached position - starting from current position")
         startPlaybackWithFade(player)
     }
 
@@ -750,7 +728,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let bufferStatus = player.currentItem?.status == .readyToPlay
         let reportedTime = player.currentTime().seconds
         let duration = player.currentItem?.duration.seconds ?? 0
-        print("▶️ [START] Video \(mid.prefix(10)) buffered=\(hasBufferedData), status=\(bufferStatus ? "ready" : "not ready"), reportedTime=\(String(format: "%.2f", reportedTime))s, duration=\(String(format: "%.2f", duration))s")
 
         // Only reveal video player if it's actually ready; otherwise keep placeholder visible
         videoPlayerView.isHidden = false
@@ -883,14 +860,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         let durationValid = item.duration.isValid && !item.duration.isIndefinite && duration.isFinite
                         if let startTime = self.playerConfigureStartTime {
                             let elapsed = Date().timeIntervalSince(startTime)
-                            print("✅ [PLAYER READY] Video \(mid.prefix(10)) ready in \(String(format: "%.3f", elapsed))s: duration=\(String(format: "%.2f", duration))s, durationValid=\(durationValid)")
                         } else {
-                            print("✅ [PLAYER READY] Video \(mid.prefix(10)) ready: duration=\(String(format: "%.2f", duration))s, durationValid=\(durationValid)")
                         }
 
                         // If coordinator requested play while player was loading, start now
                         if self.coordinatorWantsToPlay, let player = self.player {
-                            print("▶️ [PLAYER READY] Video \(mid.prefix(10)) - coordinator wants play, starting now")
                             if self.isVideoAtEnd(player) {
                                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                                     guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
@@ -966,10 +940,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         let currentTime = player.currentTime().seconds
         let timeUntilEnd = duration.seconds - currentTime
-        print("🏁 [FINISH] Video \(mid.prefix(10)) finished: currentTime=\(String(format: "%.2f", currentTime))s, duration=\(String(format: "%.2f", duration.seconds))s, timeUntilEnd=\(String(format: "%.2f", timeUntilEnd))s")
 
         guard timeUntilEnd < 0.5 else {
-            print("⚠️ [FINISH] Video \(mid.prefix(10)) not at end (timeUntilEnd=\(String(format: "%.2f", timeUntilEnd))s) - ignoring finish event")
             return
         }
 
@@ -977,7 +949,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         player.pause()
         player.isMuted = MuteState.shared.isMuted
         VideoStateCache.shared.clearCachedState(for: mid)
-        print("🗑️ [FINISH] Video \(mid.prefix(10)) cleared from VideoStateCache")
         captureLastFrameIfPossible(reason: "videoFinished")
 
         // Notify coordinator to advance to next video

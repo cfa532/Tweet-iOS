@@ -52,9 +52,7 @@ class ScrollPositionManager {
 
             // Force immediate write to disk
             UserDefaults.standard.synchronize()
-            print("📍 [SCROLL CLEAR] Cleared from UserDefaults for feed: \(identifier)")
         } else {
-            print("📍 [SCROLL CLEAR] Cleared from memory for feed: \(identifier)")
         }
     }
 
@@ -183,6 +181,8 @@ class TweetTableViewController: UITableViewController {
     private var cachedMainContentRect: CGRect?
     private var lastContentOffset: CGFloat = 0
     private var lastCallbackOffset: CGFloat = 0  // Only updated when onScroll fires — gives accumulated delta
+    private var isCompensatingForBarAppearance: Bool = false  // Compensate contentOffset when header expands
+    private var compensationBaseOriginY: CGFloat?
     private var lastHeaderHeight: CGFloat = 0
     private var lastFooterHeight: CGFloat = 0
     
@@ -338,7 +338,6 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            print("⚠️ [MEMORY] Memory warning received - clearing caches")
 
             // Stop all videos and clear coordinator caches via notification
             NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
@@ -376,7 +375,6 @@ class TweetTableViewController: UITableViewController {
             // Log memory before cleanup
             let memoryBefore = self.getMemoryUsage()
             print("🌙 [BACKGROUND] App entering background - starting aggressive memory cleanup")
-            print("📊 [MEMORY] Before cleanup: \(memoryBefore)MB")
 
             // Save the current scroll position before backgrounding
             self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
@@ -394,7 +392,6 @@ class TweetTableViewController: UITableViewController {
                 let memoryAfter = self.getMemoryUsage()
                 let memoryFreed = memoryBefore - memoryAfter
                 print("✅ [BACKGROUND] Cleanup complete")
-                print("📊 [MEMORY] After cleanup: \(memoryAfter)MB (freed: \(memoryFreed)MB)")
 
                 // End background task when done
                 self.endBackgroundTask()
@@ -416,7 +413,6 @@ class TweetTableViewController: UITableViewController {
 
             // Log current memory
             let memoryNow = self.getMemoryUsage()
-            print("📊 [MEMORY] Current: \(memoryNow)MB")
 
             guard let savedPosition = self.scrollPositionBeforeBackground else { return }
 
@@ -523,17 +519,14 @@ class TweetTableViewController: UITableViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
 
-        print("📍 [SCROLL RESTORE] viewWillAppear for feed: \(feedIdentifier), isScrollingToTop=\(isScrollingToTop)")
 
         // Restore scroll position from persistent storage if available
         // This handles cases where the view controller was deallocated and recreated
         if !isScrollingToTop {
             // First check instance variable (for same-session navigation)
             if let savedPosition = savedScrollPosition {
-                print("📍 [SCROLL RESTORE] Found savedScrollPosition: \(savedPosition) - restoring immediately")
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self, !self.isScrollingToTop else {
-                        print("📍 [SCROLL RESTORE] Cancelled - scrolling to top")
                         return
                     }
                     self.lastContentOffset = savedPosition
@@ -541,18 +534,14 @@ class TweetTableViewController: UITableViewController {
                     self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
                     self.lastScrollOffset = savedPosition
                     self.savedScrollPosition = nil
-                    print("📍 [SCROLL RESTORE] ✅ Restored from savedScrollPosition: \(savedPosition)")
                 }
             } else if let persistentPosition = ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) {
-                print("📍 [SCROLL RESTORE] Found persistent position: \(persistentPosition) - deferring until content loaded for feed: \(feedIdentifier)")
                 // Defer restore: content may not be loaded yet on app restart
                 // The pending position will be applied once updateTweets provides enough content
                 pendingScrollRestore = persistentPosition
             } else {
-                print("📍 [SCROLL RESTORE] No saved position found for feed: \(feedIdentifier) - starting at top")
             }
         } else {
-            print("📍 [SCROLL RESTORE] Skipped - currently scrolling to top")
         }
     }
     
@@ -597,7 +586,6 @@ class TweetTableViewController: UITableViewController {
 
         // Need enough content to scroll to the target position
         guard contentHeight > targetPosition + frameHeight * 0.5 else {
-            print("📍 [SCROLL RESTORE] ⏳ Waiting for content: have \(Int(contentHeight))px, need \(Int(targetPosition + frameHeight * 0.5))px")
             return
         }
 
@@ -606,11 +594,23 @@ class TweetTableViewController: UITableViewController {
         lastCallbackOffset = targetPosition
         lastScrollOffset = targetPosition
         pendingScrollRestore = nil
-        print("📍 [SCROLL RESTORE] ✅ Restored deferred position: \(targetPosition) (contentHeight: \(Int(contentHeight)))")
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+
+        // Compensate contentOffset when the header expands without animation.
+        // The frame jumps instantly; we adjust offset by the same amount so
+        // visible content stays at the same screen position.
+        if isCompensatingForBarAppearance, let baseY = compensationBaseOriginY {
+            let currentY = view.convert(CGPoint.zero, to: nil).y
+            let shift = currentY - baseY
+            if abs(shift) > 1 {
+                tableView.contentOffset.y += shift
+                compensationBaseOriginY = currentY
+                isCompensatingForBarAppearance = false
+            }
+        }
 
         // Try deferred scroll restore on every layout pass (content size updates trigger layout)
         tryRestorePendingScrollPosition()
@@ -1623,7 +1623,15 @@ class TweetTableViewController: UITableViewController {
         // Convert velocity to delta convention: positive = scrolling down, negative = scrolling up
         let delta: CGFloat = velocity > 0 ? -headerThreshold : headerThreshold
 
-        onScroll?(currentOffset, delta)
+        if delta > 0 {
+            // Scrolling down → hide bars immediately (no layout shift — content area expands)
+            onScroll?(currentOffset, delta)
+        } else {
+            // Scrolling up → show bars immediately without animation.
+            // Post notification so parent sets isNavigationVisible without withAnimation;
+            // viewDidLayoutSubviews compensates contentOffset for the instant frame shift.
+            showBarsWithoutAnimation()
+        }
 
         lastCallbackOffset = currentOffset
         lastScrollCallbackTime = now
@@ -1632,7 +1640,6 @@ class TweetTableViewController: UITableViewController {
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         // User started dragging - cancel any pending scroll restore
         if pendingScrollRestore != nil {
-            print("📍 [SCROLL RESTORE] Cancelled pending restore - user started scrolling")
             pendingScrollRestore = nil
         }
         // User started dragging - reset callback baseline to current position
@@ -1661,10 +1668,29 @@ class TweetTableViewController: UITableViewController {
         // This ensures position is persisted even if app is killed before viewWillDisappear
         saveScrollPositionIfNeeded()
 
-        // If decelerated to near the top, signal "scroll up" so toolbar shows
+        // If decelerated to near the top, show bars
         let topInset = scrollView.adjustedContentInset.top
         if scrollView.contentOffset.y <= -topInset + 10 {
-            onScroll?(scrollView.contentOffset.y, -50)
+            showBarsWithoutAnimation()
+        }
+    }
+
+    /// Show bars immediately without animation.
+    ///
+    /// Posts `.showBarsAfterScrollEnd` so the parent view sets isNavigationVisible
+    /// **without animation**.  The instant frame change is then compensated in
+    /// `viewDidLayoutSubviews` so visible content stays at the same screen position.
+    private func showBarsWithoutAnimation() {
+        // Record baseline before the header expands
+        isCompensatingForBarAppearance = true
+        compensationBaseOriginY = view.convert(CGPoint.zero, to: nil).y
+
+        NotificationCenter.default.post(name: .showBarsAfterScrollEnd, object: nil)
+
+        // Safety timeout — stop compensating even if layout never fires
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.isCompensatingForBarAppearance = false
+            self?.compensationBaseOriginY = nil
         }
     }
 

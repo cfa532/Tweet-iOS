@@ -146,6 +146,11 @@ struct ProfileView: View {
                     userInfo: ["isVisible": true]
                 )
             }
+            .onReceive(NotificationCenter.default.publisher(for: .showBarsAfterScrollEnd)) { _ in
+                guard !isNavigationVisible else { return }
+                isNavigationVisible = true
+                postNavigationVisibilityNotification(isVisible: true)
+            }
     }
     
     @ViewBuilder

@@ -57,6 +57,9 @@ extension Notification.Name {
     static let scrollToTop = Notification.Name("ScrollToTop")
     /// Posted when navigation visibility changes (for scroll-based hiding/showing)
     static let navigationVisibilityChanged = Notification.Name("NavigationVisibilityChanged")
+    /// Posted to show navigation bars without animation after scroll-up ends.
+    /// Avoids layout shift that occurs when animated header expansion pushes the table view down.
+    static let showBarsAfterScrollEnd = Notification.Name("ShowBarsAfterScrollEnd")
     /// Posted when a deeplink URL is received
     static let deeplinkReceived = Notification.Name("DeeplinkReceived")
     /// Posted when a deeplink tweet is not found

@@ -532,11 +532,9 @@ class SharedAssetCache: ObservableObject {
             if !(error is CancellationError) {
                 // Track consecutive network failures
                 consecutiveNetworkFailures += 1
-                print("DEBUG: [SharedAssetCache] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
 
                 // Trigger emergency cleanup if too many consecutive failures
                 if consecutiveNetworkFailures >= maxConsecutiveFailures {
-                    print("DEBUG: [SharedAssetCache] Too many consecutive network failures, triggering cleanup")
                     handleNetworkFailureCleanup()
                     consecutiveNetworkFailures = 0 // Reset counter after cleanup
                 }
@@ -804,7 +802,6 @@ class SharedAssetCache: ObservableObject {
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: cacheKey) }) {
             // Check if this is a player shell (item was removed to free memory)
             if cachedPlayer.currentItem == nil {
-                print("🔄 [SharedAssetCache SHELL] Video \(mediaID.prefix(10)) found player shell - reloading item...")
                 let itemStartTime = Date()
                 // Player exists but item was cleared - reload the item into existing player
                 do {
@@ -814,12 +811,10 @@ class SharedAssetCache: ObservableObject {
                         cachedPlayer.replaceCurrentItem(with: playerItem)
                         let itemStatus = playerItem.status.rawValue
                         let duration = playerItem.duration.seconds
-                        print("✅ [SharedAssetCache SHELL] Video \(mediaID.prefix(10)) item reloaded in \(String(format: "%.3f", itemElapsed))s: itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
                     }
                     return cachedPlayer
                 } catch {
                     // Failed to reload item - fall through to create new player
-                    print("⚠️ [SharedAssetCache SHELL] Video \(mediaID.prefix(10)) failed to reload item: \(error)")
                     // Remove broken shell from cache
                     await MainActor.run {
                         _ = playerCache.removeValue(forKey: cacheKey)
@@ -830,13 +825,11 @@ class SharedAssetCache: ObservableObject {
                 let currentTime = cachedPlayer.currentTime().seconds
                 let itemStatus = cachedPlayer.currentItem?.status.rawValue ?? -1
                 let duration = cachedPlayer.currentItem?.duration.seconds ?? 0
-                print("♻️ [SharedAssetCache CACHED] Video \(mediaID.prefix(10)) returning cached player: currentTime=\(String(format: "%.2f", currentTime))s, itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
                 return cachedPlayer
             }
         }
         
         // NEW: Throttle concurrent player creation to prevent memory spikes
-        print("🆕 [SharedAssetCache NEW] Video \(mediaID.prefix(10)) no cached player - creating new...")
         return try await withCheckedThrowingContinuation { continuation in
             Task { @MainActor in
                 if self.activeCreations < self.maxConcurrentCreations {
@@ -850,14 +843,12 @@ class SharedAssetCache: ObservableObject {
                             let createElapsed = Date().timeIntervalSince(createStartTime)
                             let itemStatus = player.currentItem?.status.rawValue ?? -1
                             let duration = player.currentItem?.duration.seconds ?? 0
-                            print("✅ [SharedAssetCache NEW] Video \(mediaID.prefix(10)) created in \(String(format: "%.3f", createElapsed))s: itemStatus=\(itemStatus), duration=\(String(format: "%.2f", duration))s")
                             await MainActor.run {
                                 self.activeCreations -= 1
                                 self.processNextPendingCreation()
                             }
                             continuation.resume(returning: player)
                         } catch {
-                            print("❌ [SharedAssetCache NEW] Video \(mediaID.prefix(10)) creation failed: \(error)")
                             await MainActor.run {
                                 self.activeCreations -= 1
                                 self.processNextPendingCreation()
@@ -867,7 +858,6 @@ class SharedAssetCache: ObservableObject {
                     }
                 } else {
                     // Queue for later
-                    print("⏳ [SharedAssetCache THROTTLE] Video \(mediaID.prefix(10)) queuing (active: \(self.activeCreations), pending: \(self.pendingCreations.count + 1))")
                     self.pendingCreations.append((url, tweetId, mediaType, continuation))
                 }
             }
@@ -1012,7 +1002,6 @@ class SharedAssetCache: ObservableObject {
                 do {
                     return try await createProgressivePlayer(for: url, mediaID: mediaID)
                 } catch {
-                    print("❌ [PROGRESSIVE VIDEO] Failed after 1 retry with baseUrl refresh: \(mediaID)")
                     // Reset retry count for next time
                     _ = await MainActor.run {
                         videoRetryCount.removeValue(forKey: mediaID)
@@ -1021,7 +1010,6 @@ class SharedAssetCache: ObservableObject {
                 }
             } else {
                 // Already retried once, give up
-                print("❌ [PROGRESSIVE VIDEO] Failed - already attempted retry: \(mediaID)")
                 // Reset retry count for next time
                 _ = await MainActor.run {
                     videoRetryCount.removeValue(forKey: mediaID)
@@ -1043,7 +1031,6 @@ class SharedAssetCache: ObservableObject {
         
         // Register real URL and get localhost proxy URL
         let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: cleanURL)
-        print("🔗 [PROGRESSIVE VIDEO] Original URL: \(url.absoluteString)")
         
         // Create AVPlayer with localhost URL (LocalHTTPServer fixes Content-Type)
         let asset = AVURLAsset(url: localURL)
@@ -1508,25 +1495,21 @@ class SharedAssetCache: ObservableObject {
 
     /// Emergency cleanup during network failures
     @MainActor func handleNetworkFailureCleanup() {
-        print("DEBUG: [SharedAssetCache] Network failure detected, performing emergency cleanup")
 
         // Cancel all active loading tasks
         for (mediaID, task) in loadingTasks {
-            print("DEBUG: [SharedAssetCache] Cancelling active load: \(mediaID)")
             task.cancel()
         }
         loadingTasks.removeAll()
 
         // Cancel all preload tasks
         for (mediaID, task) in preloadTasks {
-            print("DEBUG: [SharedAssetCache] Cancelling preload: \(mediaID)")
             task.cancel()
         }
         preloadTasks.removeAll()
 
         // Cancel all retry tasks
         for (mediaID, task) in scheduledVideoRetries {
-            print("DEBUG: [SharedAssetCache] Cancelling retry: \(mediaID)")
             task.cancel()
         }
         scheduledVideoRetries.removeAll()
@@ -1749,7 +1732,6 @@ class SharedAssetCache: ObservableObject {
     /// PUBLIC: Aggressively release all players to free memory
     /// Call this when navigating away from video pages
     func releaseAllPlayers() {
-        print("🗑️ [MEMORY] Releasing ALL players (\(playerCache.count) total)")
 
         let playersToRelease = playerCache.values
         let count = playersToRelease.count
@@ -1766,14 +1748,12 @@ class SharedAssetCache: ObservableObject {
 
         // Keep timestamps and asset cache for faster recovery
 
-        print("✅ [MEMORY] Released \(count) players successfully")
     }
 
     /// MEMORY FIX: Force immediate cleanup of old/inactive players to release memory during fast scrolling
     @MainActor func forceMemoryCleanup() {
         let memoryBefore = getMemoryUsageString()
         let cacheSizeBefore = playerCache.count
-        print("🧹 [MEMORY] Starting force cleanup (memory: \(memoryBefore), cache: \(cacheSizeBefore) players)")
 
         let now = Date()
         let memoryUsage = getCurrentMemoryUsage() / (1024 * 1024)
@@ -1795,10 +1775,8 @@ class SharedAssetCache: ObservableObject {
             .filter { !protected.contains($0.key) && now.timeIntervalSince($0.value) > ageThreshold }
             .map { $0.key }
 
-        print("📊 [MEMORY] Using age threshold: \(Int(ageThreshold))s (memory: \(memoryUsage)MB, protected videos: \(protected.count))")
 
         if !oldKeys.isEmpty {
-            print("🗑️ [MEMORY] Found \(oldKeys.count) old players to remove")
 
             for key in oldKeys {
                 if let player = playerCache[key] {
@@ -1814,9 +1792,7 @@ class SharedAssetCache: ObservableObject {
 
             let memoryAfter = getMemoryUsageString()
             let cacheSizeAfter = playerCache.count
-            print("✅ [MEMORY] Force cleanup completed - freed \(oldKeys.count) players (memory: \(memoryBefore) → \(memoryAfter), cache: \(cacheSizeBefore) → \(cacheSizeAfter))")
         } else {
-            print("ℹ️ [MEMORY] Force cleanup: no old players to remove (memory: \(memoryBefore))")
         }
     }
     
@@ -1825,7 +1801,6 @@ class SharedAssetCache: ObservableObject {
         let targetSize = maxPlayerCacheSize - reserveSlots
         if playerCache.count > targetSize {
             let memoryBefore = getMemoryUsageString()
-            print("⚠️ [PLAYER CACHE] Over limit: \(playerCache.count)/\(maxPlayerCacheSize) - evicting oldest (memory: \(memoryBefore))")
 
             // CRITICAL: Never evict visible or near-visible videos while app is in foreground
             let protected = foregroundProtectedMids
@@ -1850,7 +1825,6 @@ class SharedAssetCache: ObservableObject {
 
             if !keysToRemove.isEmpty {
                 let memoryAfter = getMemoryUsageString()
-                print("🗑️ [PLAYER CACHE] Evicted \(keysToRemove.count) players (memory: \(memoryBefore) → \(memoryAfter))")
             }
         }
 
@@ -1919,15 +1893,12 @@ class SharedAssetCache: ObservableObject {
                 return
             }
 
-            print("⚠️ [MEMORY] High usage: \(memoryUsageMB)MB (>1GB) - triggering cleanup")
             lastMemoryWarningTime = Date()
             handleMemoryWarning()
         } else if memoryUsageMB > 800 {
             // Only log when approaching concerning levels, don't trigger cleanup yet
-            print("📊 [MEMORY] Elevated usage: \(memoryUsageMB)MB (monitoring)")
         } else {
             // Log current memory state periodically for visibility
-            print("📈 [MEMORY] Current usage: \(memoryUsageMB)MB (normal)")
         }
         // Silent monitoring below 1GB
     }
@@ -2108,14 +2079,12 @@ class SharedAssetCache: ObservableObject {
     /// Release video memory but keep AVPlayer shells for fast recovery
     /// This releases heavy video buffers while preserving player objects for quick resume
     func releaseVideoMemoryButKeepPlayers() {
-        print("💾 [SharedAssetCache] Releasing video memory (keeping player shells for fast recovery)")
 
         // Pause all players and detach their items to release video buffers
         // This releases the heavy memory (decoded frames, buffered data) but keeps the AVPlayer objects
         for (key, player) in playerCache {
             player.pause()
             player.replaceCurrentItem(with: nil) // Releases video buffers and assets
-            print("💾 [SharedAssetCache] Released memory for player: \(key)")
         }
         // DON'T remove from playerCache - keep the shells for fast recovery
 
@@ -2130,7 +2099,6 @@ class SharedAssetCache: ObservableObject {
         preloadTasks.removeAll()
 
         // Keep playerCache, resourceLoaderDelegates, cacheTimestamps for fast recovery
-        print("💾 [SharedAssetCache] Memory released - kept \(playerCache.count) player shells for recovery")
     }
 
     func clearVideoPlayersForBackgroundRecovery() {

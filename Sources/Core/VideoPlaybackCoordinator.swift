@@ -1011,7 +1011,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         guard let tweet = currentTweets.first(where: { $0.mid == video.mediaTweetId }) ?? Tweet.getInstance(for: video.mediaTweetId),
               let attachments = tweet.attachments,
               video.attachmentIndex < attachments.count else {
-            print("⚠️ [PRELOAD] Could not find tweet or attachment for video: \(video.videoMid.prefix(8))")
             return
         }
 
@@ -1030,12 +1029,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         guard let url = videoURL else {
-            print("⚠️ [PRELOAD] Could not construct URL for video: \(video.videoMid.prefix(8))")
             return
         }
 
         // Request preload via SharedAssetCache (it handles caching and player creation)
-        print("⏳ [PRELOAD] Preloading video asset: \(video.videoMid.prefix(8))...")
         SharedAssetCache.shared.preloadAsset(for: url, tweetId: tweet.mid)
 
         // Track that this video has been preloaded
@@ -1318,7 +1315,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Play next visible video after primary finishes
     private func playNextVisibleVideo() {
         guard let currentPrimary = primaryVideoId else {
-            print("⚠️ [VIDEO ADVANCE] Cannot advance - no current primary video")
             return
         }
 
@@ -1326,12 +1322,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         // But we need to ensure we're advancing to the next video in feed order (by Y position)
         // Find current primary in visible videos list (sorted by position)
         guard let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentPrimary }) else {
-            print("⚠️ [VIDEO ADVANCE] Current primary not in visible videos - stopping all")
             stopAllVideos()
             return
         }
 
-        print("📹 [VIDEO ADVANCE] Current video finished at index \(currentIndex)/\(visibleVideos.count), scrolling \(scrollDirection ? "down" : "up")")
 
         // Find next video based on scroll direction
         // Scrolling down: next video (index + 1)
@@ -1341,7 +1335,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling DOWN: advance to next video
             targetIndex = currentIndex + 1
             guard targetIndex < visibleVideos.count else {
-                print("⚠️ [VIDEO ADVANCE] No next video (reached end of list) - stopping all")
                 stopAllVideos()
                 return
             }
@@ -1349,7 +1342,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling UP: go back to previous video
             targetIndex = currentIndex - 1
             guard targetIndex >= 0 else {
-                print("⚠️ [VIDEO ADVANCE] No previous video (at start of list) - stopping all")
                 stopAllVideos()
                 return
             }
@@ -1363,11 +1355,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         let step = scrollDirection ? 1 : -1
         var candidateIndex = targetIndex
         var nextVideo: VideoPlaybackInfo?
-        print("🔍 [VIDEO ADVANCE] Searching for next visible video starting at index \(targetIndex)")
         while candidateIndex >= 0 && candidateIndex < visibleVideos.count {
             let candidate = visibleVideos[candidateIndex]
             let isVisible = isVideoCellVisibleEnough(candidate, minVisibilityRatio: 0.33)
-            print("🔍 [VIDEO ADVANCE] Checking candidate at index \(candidateIndex): \(candidate.videoMid.prefix(10))... - visible enough: \(isVisible)")
             if isVisible {
                 nextVideo = candidate
                 break
@@ -1376,11 +1366,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         guard let nextVideo else {
-            print("⚠️ [VIDEO ADVANCE] No sufficiently visible next video found - stopping all")
             stopAllVideos()
             return
         }
-        print("✅ [VIDEO ADVANCE] Found next video: \(nextVideo.videoMid.prefix(10))... at index \(candidateIndex)")
         let currentVideo = visibleVideos[currentIndex]
         
 
