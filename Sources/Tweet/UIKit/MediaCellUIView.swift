@@ -336,16 +336,42 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     self.imageView.image = cachedImage
                     self.loadingSpinner.stopAnimating()
                 } else {
-                    GlobalImageLoadManager.shared.loadImageNormalPriority(
-                        id: attachmentCopy.mid,
-                        url: url,
-                        attachment: attachmentCopy,
-                        baseUrl: baseUrlCopy
-                    ) { [weak self] loadedImage in
-                        // Guard: cell may have been reused while network load was in flight
-                        guard self?.attachment?.mid == attachmentCopy.mid else { return }
-                        self?.imageView.image = loadedImage
-                        self?.loadingSpinner.stopAnimating()
+                    // Use high priority for visible images (critical if single media, high if in grid)
+                    let priority = self.isSingleMedia ? "critical" : "high"
+                    if priority == "critical" {
+                        GlobalImageLoadManager.shared.loadImageCriticalPriority(
+                            id: attachmentCopy.mid,
+                            url: url,
+                            attachment: attachmentCopy,
+                            baseUrl: baseUrlCopy
+                        ) { [weak self] loadedImage in
+                            // Guard: cell may have been reused while network load was in flight
+                            guard self?.attachment?.mid == attachmentCopy.mid else { return }
+                            if let loadedImage = loadedImage {
+                                self?.imageView.image = loadedImage
+                                self?.loadingSpinner.stopAnimating()
+                            } else {
+                                // Image failed/cancelled - stop spinner but keep trying on next appearance
+                                self?.loadingSpinner.stopAnimating()
+                            }
+                        }
+                    } else {
+                        GlobalImageLoadManager.shared.loadImageHighPriority(
+                            id: attachmentCopy.mid,
+                            url: url,
+                            attachment: attachmentCopy,
+                            baseUrl: baseUrlCopy
+                        ) { [weak self] loadedImage in
+                            // Guard: cell may have been reused while network load was in flight
+                            guard self?.attachment?.mid == attachmentCopy.mid else { return }
+                            if let loadedImage = loadedImage {
+                                self?.imageView.image = loadedImage
+                                self?.loadingSpinner.stopAnimating()
+                            } else {
+                                // Image failed/cancelled - stop spinner but keep trying on next appearance
+                                self?.loadingSpinner.stopAnimating()
+                            }
+                        }
                     }
                 }
             }
@@ -1092,9 +1118,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Update base URL
             updateEffectiveBaseUrl()
 
-            if attachment.type == .image && imageView.image == nil {
-                if let url = attachment.getUrl(effectiveBaseUrl) {
-                    loadImage(attachment: attachment, url: url)
+            // Boost priority for pending image loads or load if needed
+            if attachment.type == .image {
+                if imageView.image == nil {
+                    if let url = attachment.getUrl(effectiveBaseUrl) {
+                        // Boost priority if already in queue, otherwise load with high priority
+                        let targetPriority: ImageLoadingPriority = isSingleMedia ? .critical : .high
+                        GlobalImageLoadManager.shared.boostPriority(id: attachment.mid, to: targetPriority)
+                        loadImage(attachment: attachment, url: url)
+                    }
+                } else {
+                    // Image already loaded, but boost priority in case it's in retry queue
+                    let targetPriority: ImageLoadingPriority = isSingleMedia ? .critical : .high
+                    GlobalImageLoadManager.shared.boostPriority(id: attachment.mid, to: targetPriority)
                 }
             }
 

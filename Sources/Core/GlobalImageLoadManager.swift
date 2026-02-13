@@ -210,14 +210,14 @@ class GlobalImageLoadManager: ObservableObject {
         // Cancel active load
         activeLoads[id]?.cancel()
         activeLoads.removeValue(forKey: id)
-        
+
         // Cancel any scheduled retry
         if scheduledRetries[id] != nil {
             scheduledRetries[id]?.cancel()
             scheduledRetries.removeValue(forKey: id)
             print("DEBUG: [GlobalImageLoadManager] Cancelled scheduled retry for: \(id)")
         }
-        
+
         // ✅ CRITICAL FIX: Remove from pending queue to release closure-captured memory
         let removedCount = pendingRequests.count
         pendingRequests.removeAll { $0.id == id }
@@ -225,8 +225,54 @@ class GlobalImageLoadManager: ObservableObject {
         if actualRemoved > 0 {
             print("🧹 [GlobalImageLoadManager] Removed \(actualRemoved) pending request(s) for: \(id)")
         }
-        
+
         updateStatistics()
+    }
+
+    /// Boost priority of a pending request (e.g., when media becomes visible)
+    func boostPriority(id: String, to newPriority: ImageLoadingPriority) {
+        // If already loading, no need to boost (it's already active)
+        if activeLoads[id] != nil {
+            return
+        }
+
+        // Find request in pending queue
+        guard let index = pendingRequests.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        // Get the request
+        let request = pendingRequests[index]
+
+        // If already at or above target priority, no need to boost
+        if request.priority.rawValue >= newPriority.rawValue {
+            return
+        }
+
+        // Remove from current position
+        pendingRequests.remove(at: index)
+
+        // Create boosted request
+        let boostedRequest = ImageLoadRequest(
+            id: request.id,
+            url: request.url,
+            attachment: request.attachment,
+            baseUrl: request.baseUrl,
+            priority: newPriority,
+            completion: request.completion,
+            onProgress: request.onProgress
+        )
+
+        // Re-insert at appropriate position based on new priority
+        let insertIndex = pendingRequests.firstIndex { $0.priority.rawValue < newPriority.rawValue } ?? pendingRequests.count
+        pendingRequests.insert(boostedRequest, at: insertIndex)
+
+        print("📈 [GlobalImageLoadManager] Boosted priority for \(id): \(request.priority) → \(newPriority)")
+
+        // Try to process it immediately if we have capacity
+        if activeLoads.count < maxConcurrentLoads {
+            processNextPendingRequest()
+        }
     }
     
     /// Force retry a failed image load
@@ -416,21 +462,28 @@ class GlobalImageLoadManager: ObservableObject {
             
             await MainActor.run {
                 let mediaID = MimeiId(request.attachment.mid)
-                
+
                 if let image = image {
                     // ✅ RECORD SUCCESS TO BLACKLIST
                     BlackList.shared.recordSuccess(mediaID)
-                    
+
                     request.completion(image)
                     self.completedRequests.insert(request.id)
                     self.retryCounts.removeValue(forKey: request.id) // Clear retry count on success
                 } else {
-                    // ❌ RECORD FAILURE TO BLACKLIST
-                    BlackList.shared.recordFailure(mediaID)
-                    
-                    // Always call completion, even on failure, so UI can update isLoading state
+                    // Check if task was cancelled before treating as failure
+                    if Task.isCancelled {
+                        print("DEBUG: [GlobalImageLoadManager] Task cancelled for \(request.id) - skipping retry")
+                    } else {
+                        // ❌ RECORD FAILURE TO BLACKLIST
+                        BlackList.shared.recordFailure(mediaID)
+
+                        // Only retry for real failures, not cancellations
+                        self.handleLoadFailure(request)
+                    }
+
+                    // Always call completion, even on failure/cancellation, so UI can update isLoading state
                     request.completion(nil)
-                    self.handleLoadFailure(request)
                 }
                 self.activeLoads.removeValue(forKey: request.id)
                 self.updateStatistics()
@@ -479,6 +532,17 @@ class GlobalImageLoadManager: ObservableObject {
             return nil
             
         } catch {
+            // Check if this is a cancellation error (user scrolled away)
+            let nsError = error as NSError
+            let isCancelled = nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+
+            if isCancelled {
+                print("DEBUG: [GlobalImageLoadManager] Image load cancelled (user scrolled): \(request.url.lastPathComponent)")
+                // Don't count cancellations as network failures
+                return nil
+            }
+
+            // Real network error - log and track
             print("Error loading image from network (\(request.url)): \(error)")
 
             // Track consecutive network failures
@@ -665,10 +729,17 @@ class GlobalImageLoadManager: ObservableObject {
             
             return resizedImage
         } catch {
-            // Re-throw cancellation errors so they can be handled upstream
+            // Re-throw Task cancellation errors so they can be handled upstream
             if error is CancellationError {
                 throw error
             }
+
+            // Re-throw URL cancellation errors (user scrolled away)
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+                throw error
+            }
+
             return nil
         }
     }
@@ -965,6 +1036,19 @@ class GlobalImageLoadManager: ObservableObject {
 // MARK: - Convenience Extensions
 
 extension GlobalImageLoadManager {
+    /// Load image with critical priority (for currently visible images on screen)
+    func loadImageCriticalPriority(id: String, url: URL, attachment: MimeiFileType, baseUrl: URL, completion: @escaping @MainActor (UIImage?) -> Void) {
+        let request = ImageLoadRequest(
+            id: id,
+            url: url,
+            attachment: attachment,
+            baseUrl: baseUrl,
+            priority: .critical,
+            completion: completion
+        )
+        loadImage(request: request)
+    }
+
     /// Load image with high priority (for visible images)
     func loadImageHighPriority(id: String, url: URL, attachment: MimeiFileType, baseUrl: URL, completion: @escaping @MainActor (UIImage?) -> Void) {
         let request = ImageLoadRequest(
