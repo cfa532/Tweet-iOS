@@ -805,20 +805,25 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
 
                 if let error = error {
-                    // Track consecutive network failures
-                    consecutiveNetworkFailures += 1
-                    print("DEBUG: [LocalHTTPServer] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+                    let nwCode = (error as NSError).code
+                    // Only count non-benign errors toward emergency cleanup.
+                    // Code 54 (connection reset) and 89 (cancelled) are normal
+                    // when AVPlayer closes/reopens local connections.
+                    let isBenign = (nwCode == 54 || nwCode == 89 || nwCode == NSURLErrorCancelled)
+                    if !isBenign {
+                        consecutiveNetworkFailures += 1
+                        print("DEBUG: [LocalHTTPServer] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
 
-                    // Trigger emergency cleanup if too many consecutive failures
-                    if consecutiveNetworkFailures >= maxConsecutiveFailures {
-                        print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
-                        handleNetworkFailureCleanup()
-                        consecutiveNetworkFailures = 0 // Reset counter after cleanup
+                        if consecutiveNetworkFailures >= maxConsecutiveFailures {
+                            print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
+                            handleNetworkFailureCleanup()
+                            consecutiveNetworkFailures = 0
+                        }
                     }
 
                     // Only log non-connection-reset errors
-                    if (error as NSError).code != 54 {  // 54 = Connection reset by peer
-                        print("ERROR: [LocalHTTPServer] Receive error: \(error)")
+                    if nwCode != 54 {
+                        print("DEBUG: [LocalHTTPServer] Receive error (code \(nwCode)): \(error)")
                     }
                 } else {
                     // Reset network failure counter on successful receive
