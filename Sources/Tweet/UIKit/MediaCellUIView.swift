@@ -117,10 +117,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var shouldPauseObserver: NSObjectProtocol?
     private var shouldStopObserver: NSObjectProtocol?
 
-    /// Async player acquisition / wait tasks
+    /// Async player acquisition task
     private var setupPlayerTask: Task<Void, Never>?
-    private var waitingForPlayerTask: Task<Void, Never>?
-    private var isWaitingForPlayerReady: Bool = false
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -580,6 +578,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 let elapsed = Date().timeIntervalSince(startTime)
                 print("✅ [CONFIGURE] Video \(mid.prefix(10)) complete in \(String(format: "%.3f", elapsed))s - player already ready")
             }
+            // If coordinator requested play while player was being acquired, start now
+            if coordinatorWantsToPlay {
+                print("▶️ [CONFIGURE] Video \(mid.prefix(10)) - coordinator wants play, starting now")
+                if isVideoAtEnd(newPlayer) {
+                    newPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
+                        self.playWithVolumeFadeIn(player)
+                    }
+                } else {
+                    playWithVolumeFadeIn(newPlayer)
+                }
+            }
         } else {
             print("⏳ [CONFIGURE] Video \(mid.prefix(10)) waiting for player to become ready...")
         }
@@ -603,56 +613,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
 
-        // If player not ready, wait for it
+        // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
-            print("⏳ [PLAY CMD] Video \(mid.prefix(10)) not ready - player=\(self.player != nil), loaded=\(isPlayerLoaded)")
+            print("⏳ [PLAY CMD] Video \(mid.prefix(10)) not ready - player=\(self.player != nil), loaded=\(isPlayerLoaded), will play when ready")
 
             // Trigger player setup if needed
-            if player == nil, shouldLoadVideo, isVisible,
+            if self.player == nil, shouldLoadVideo, isVisible,
                let att = attachment, let url = att.getUrl(effectiveBaseUrl),
                let parentTweet = parentTweet {
                 print("🔄 [PLAY CMD] Video \(mid.prefix(10)) triggering player acquisition")
                 acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
             }
 
-            // Wait for player to become ready (max 3s)
-            guard !isWaitingForPlayerReady else { return }
-            isWaitingForPlayerReady = true
-            let waitStartTime = Date()
-            waitingForPlayerTask = Task { @MainActor [weak self] in
-                defer {
-                    self?.isWaitingForPlayerReady = false
-                    self?.waitingForPlayerTask = nil
-                }
-                var attempts = 0
-                while (self?.player == nil || self?.isPlayerLoaded != true) && attempts < 30 {
-                    do {
-                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                    } catch { return }
-                    attempts += 1
-                    if attempts % 5 == 0 { // Log every 0.5s
-                        let elapsed = Date().timeIntervalSince(waitStartTime)
-                        await MainActor.run {
-                            if let self, let mid = self.attachment?.mid {
-                                print("⏱️ [WAIT LOOP] Video \(mid.prefix(10)) waiting \(String(format: "%.1f", elapsed))s: player=\(self.player != nil), loaded=\(self.isPlayerLoaded), attempt \(attempts)/30")
-                            }
-                        }
-                    }
-                }
-                guard let self, self.coordinatorWantsToPlay else { return }
-                if self.isPlayerLoaded, let player = self.player, player.currentItem != nil {
-                    let waitElapsed = Date().timeIntervalSince(waitStartTime)
-                    if let mid = self.attachment?.mid {
-                        print("✅ [WAIT LOOP] Video \(mid.prefix(10)) became ready after \(String(format: "%.3f", waitElapsed))s - calling playWithVolumeFadeIn")
-                    }
-                    self.playWithVolumeFadeIn(player)
-                } else {
-                    if let mid = self.attachment?.mid {
-                        let waitElapsed = Date().timeIntervalSince(waitStartTime)
-                        print("❌ [WAIT LOOP] Video \(mid.prefix(10)) timeout after \(String(format: "%.3f", waitElapsed))s - player not ready")
-                    }
-                }
-            }
+            // coordinatorWantsToPlay is already set — KVO observer will call
+            // playWhenReady() when playerItem.status becomes .readyToPlay
             return
         }
 
@@ -675,9 +649,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleCoordinatorPauseCommand() {
         guard let mid = attachment?.mid else { return }
         coordinatorWantsToPlay = false
-        waitingForPlayerTask?.cancel()
-        waitingForPlayerTask = nil
-        isWaitingForPlayerReady = false
 
         if let player = player {
             if player.rate > 0 {
@@ -697,9 +668,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleCoordinatorStopCommand() {
         guard let mid = attachment?.mid else { return }
         coordinatorWantsToPlay = false
-        waitingForPlayerTask?.cancel()
-        waitingForPlayerTask = nil
-        isWaitingForPlayerReady = false
 
         if let player = player {
             if player.rate > 0 {
@@ -714,9 +682,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleStopAllVideos() {
         guard isVideoAttachment else { return }
         coordinatorWantsToPlay = false
-        waitingForPlayerTask?.cancel()
-        waitingForPlayerTask = nil
-        isWaitingForPlayerReady = false
 
         if let player = player {
             if player.rate > 0 {
@@ -896,6 +861,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                             print("✅ [PLAYER READY] Video \(mid.prefix(10)) ready in \(String(format: "%.3f", elapsed))s: duration=\(String(format: "%.2f", duration))s, durationValid=\(durationValid)")
                         } else {
                             print("✅ [PLAYER READY] Video \(mid.prefix(10)) ready: duration=\(String(format: "%.2f", duration))s, durationValid=\(durationValid)")
+                        }
+
+                        // If coordinator requested play while player was loading, start now
+                        if self.coordinatorWantsToPlay, let player = self.player {
+                            print("▶️ [PLAYER READY] Video \(mid.prefix(10)) - coordinator wants play, starting now")
+                            if self.isVideoAtEnd(player) {
+                                player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                                    guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
+                                    self.playWithVolumeFadeIn(player)
+                                }
+                            } else {
+                                self.playWithVolumeFadeIn(player)
+                            }
                         }
                     }
                 } else if item.status == .failed {
@@ -1384,9 +1362,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Cancel async tasks
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
-        waitingForPlayerTask?.cancel()
-        waitingForPlayerTask = nil
-        isWaitingForPlayerReady = false
 
         // Clear first-frame callback
         videoPlayerView.onReadyForDisplay = nil
@@ -1503,6 +1478,5 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         removePlayerTimeObserver()
         timerHideTask?.cancel()
         setupPlayerTask?.cancel()
-        waitingForPlayerTask?.cancel()
     }
 }
