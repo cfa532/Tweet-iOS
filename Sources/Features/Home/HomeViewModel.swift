@@ -379,6 +379,11 @@ struct TweetListDestinationView: View {
         let targetUser = User.getInstance(mid: destination.userId)
         let isTargetAppUser = destination.userId == hproseInstance.appUser.mid
 
+        // Create unique feedIdentifier for scroll position persistence
+        let feedIdentifier = destination.listType == .BOOKMARKS
+            ? "bookmarks_\(destination.userId)"
+            : "favorites_\(destination.userId)"
+
         TweetListView(
             title: listTitle(isAppUser: isTargetAppUser),
             tweets: $tweets,
@@ -400,6 +405,7 @@ struct TweetListDestinationView: View {
                     return fetchedTweets
                 }
             },
+            feedIdentifier: feedIdentifier,
             preserveOrder: isTargetAppUser,
             onAvatarTap: { tappedUser in
                 navigationPath.append(tappedUser)

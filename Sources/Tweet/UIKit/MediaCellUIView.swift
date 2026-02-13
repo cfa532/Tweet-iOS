@@ -899,8 +899,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         }
                     }
                 } else if item.status == .failed {
-                    print("❌ [PLAYER FAILED] Video \(mid.prefix(10)) failed to load")
+                    let errorMsg = item.error?.localizedDescription ?? "Unknown error"
+                    print("❌ [PLAYER FAILED] Video \(mid.prefix(10)) failed to load: \(errorMsg)")
+                    if let error = item.error {
+                        print("❌ [PLAYER ERROR DETAIL] Domain: \((error as NSError).domain), Code: \((error as NSError).code)")
+                        print("❌ [PLAYER ERROR] \(error)")
+                    }
                     self.hideLoadingSpinner()
+                } else if item.status == .unknown {
+                    // Log unknown status to diagnose why player is stuck
+                    if let asset = item.asset as? AVURLAsset {
+                        print("⏳ [PLAYER STATUS] Video \(mid.prefix(10)) status=.unknown, url=\(asset.url.absoluteString)")
+                    } else {
+                        print("⏳ [PLAYER STATUS] Video \(mid.prefix(10)) status=.unknown")
+                    }
                 }
             }
         }
