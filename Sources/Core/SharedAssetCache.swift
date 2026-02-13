@@ -134,9 +134,6 @@ class SharedAssetCache: ObservableObject {
     }
     
     private func performCleanup() {
-        let memoryBefore = getMemoryUsageString()
-        let cacheSizeBefore = playerCache.count
-
         let now = Date()
         // CRITICAL: Never evict visible or near-visible videos while app is in foreground
         let protected = foregroundProtectedMids
@@ -167,9 +164,6 @@ class SharedAssetCache: ObservableObject {
         
         // PERFORMANCE FIX: Clean up expired disk cache status entries
         cleanupExpiredDiskCacheStatus()
-
-        let memoryAfter = getMemoryUsageString()
-        let cacheSizeAfter = playerCache.count
     }
     
     // MARK: - Asset Management
