@@ -23,6 +23,9 @@ class SharedAssetCache: ObservableObject {
     // CRITICAL: Track visible videos to prevent their players from being removed
     private var visibleVideoMids: Set<String> = []
 
+    // Track preloaded players (next videos in scroll direction) — protected from LRU eviction
+    private var preloadedPlayerMids: Set<String> = []
+
     // Track app foreground state — when foreground, protect visible + nearby videos from eviction
     private var isAppInForeground: Bool = true
     
@@ -691,6 +694,8 @@ class SharedAssetCache: ObservableObject {
     private var foregroundProtectedMids: Set<String> {
         guard isAppInForeground else { return [] }
         var protected = visibleVideoMids
+        // Protect preloaded players (next videos in scroll direction)
+        protected.formUnion(preloadedPlayerMids)
         // Also protect media belonging to tweets in the VideoLoadingManager visible window
         for tweetId in VideoLoadingManager.shared.visibleTweetIds {
             let mediaIDs = getMediaIDsForTweet(tweetId)
@@ -1613,30 +1618,128 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Preload asset only (for background loading - lower priority)
-    func preloadAsset(for url: URL, tweetId: String? = nil) {
+    func preloadAsset(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) {
         // Use mediaID as cache key (stable identifier), not URL which can change
         guard let mediaID = extractMediaID(from: url) else { return }
         let cacheKey = mediaID
-        
+
+        // Skip if asset already cached
+        if assetCache[cacheKey] != nil { return }
+
+        // Skip if already downloading
+        if loadingTasks[cacheKey] != nil { return }
+
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         preloadTasks.removeValue(forKey: cacheKey)
-        
+
         let task = Task {
             defer {
                 // ✅ CRITICAL MEMORY FIX: Remove completed preload task
                 preloadTasks.removeValue(forKey: cacheKey)
             }
             do {
-                _ = try await getAsset(for: url, tweetId: tweetId)
+                _ = try await getAsset(for: url, tweetId: tweetId, mediaType: mediaType)
             } catch {
                 // Handle error silently
             }
         }
-        
+
         preloadTasks[cacheKey] = task
     }
     
+    /// Preload player (not just asset) for upcoming video in scroll direction.
+    /// Creates an AVPlayer, generates a first-frame thumbnail, and caches both
+    /// so the cell has a poster image and an instantly-available player.
+    func preloadPlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) {
+        guard let mediaID = extractMediaID(from: url) else { return }
+
+        // Skip if player already cached
+        if playerCache[mediaID] != nil {
+            preloadedPlayerMids.insert(mediaID)
+            // Still generate thumbnail if missing
+            if VideoLastFrameCache.shared.image(for: mediaID) == nil,
+               let asset = assetCache[mediaID] {
+                generateThumbnail(from: asset, for: mediaID)
+            }
+            return
+        }
+
+        // Cancel existing preload task for this media
+        preloadTasks[mediaID]?.cancel()
+        preloadTasks.removeValue(forKey: mediaID)
+
+        let task = Task {
+            defer {
+                preloadTasks.removeValue(forKey: mediaID)
+            }
+            do {
+                let player = try await getOrCreatePlayer(for: url, tweetId: tweetId, mediaType: mediaType)
+                // Pause immediately — this is a preloaded player, not for playback yet
+                await MainActor.run {
+                    player.pause()
+                    self.preloadedPlayerMids.insert(mediaID)
+                }
+                // Generate first-frame thumbnail so the cell isn't black before playback
+                if VideoLastFrameCache.shared.image(for: mediaID) == nil,
+                   let item = player.currentItem {
+                    self.generateThumbnail(from: item.asset, for: mediaID)
+                }
+                print("🔮 [PLAYER PRELOAD] Pre-created player for \(mediaID)")
+            } catch {
+                // Preload failure is non-critical
+            }
+        }
+        preloadTasks[mediaID] = task
+    }
+
+    /// Generate and cache a first-frame thumbnail from a video asset.
+    private func generateThumbnail(from asset: AVAsset, for mediaID: String) {
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 480, height: 480)
+        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+        generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
+            guard result == .succeeded, let cgImage else { return }
+            let image = UIImage(cgImage: cgImage)
+            DispatchQueue.main.async {
+                VideoLastFrameCache.shared.set(image, for: mediaID)
+                print("🖼️ [PLAYER PRELOAD] Generated thumbnail for \(mediaID)")
+            }
+        }
+    }
+
+    /// Generate a thumbnail from a cached asset if no thumbnail exists yet.
+    /// Calls completion on main thread with the generated image, or does nothing if asset isn't cached.
+    func generateThumbnailIfNeeded(for mediaID: String, completion: @escaping @MainActor (UIImage) -> Void) {
+        guard VideoLastFrameCache.shared.image(for: mediaID) == nil else { return }
+        guard let asset = assetCache[mediaID] else { return }
+
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 480, height: 480)
+        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+        generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
+            guard result == .succeeded, let cgImage else { return }
+            let image = UIImage(cgImage: cgImage)
+            DispatchQueue.main.async {
+                VideoLastFrameCache.shared.set(image, for: mediaID)
+                completion(image)
+            }
+        }
+    }
+
+    /// Update preloaded player set — called when scroll direction changes to release stale preloads
+    func updatePreloadedPlayerMids(_ mids: Set<String>) {
+        let previousCount = preloadedPlayerMids.count
+        preloadedPlayerMids = mids.intersection(playerCache.keys)
+        let newCount = preloadedPlayerMids.count
+        // Only log when the protected set actually changed size
+        if newCount != previousCount {
+            print("🔮 [PLAYER PRELOAD] Protected players: \(newCount) (was \(previousCount))")
+        }
+    }
+
     /// Cancel preload for specific URL
     func cancelPreload(for url: URL) {
         // Use mediaID as cache key (stable identifier), not URL which can change

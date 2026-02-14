@@ -222,6 +222,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
+
+    // Log deduplication: suppress duplicate CACHE MISS logs for same mediaID+range within 3s
+    private var recentCacheMissLogs: [String: Date] = [:]
+    private let cacheMissLogLock = NSLock()
     
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
@@ -1192,7 +1196,21 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
-        print("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
+        // Deduplicate: suppress identical cache miss logs within 3 seconds
+        let logKey = "\(mediaID)_\(rangeStr)"
+        let now = Date()
+        cacheMissLogLock.lock()
+        let lastLog = recentCacheMissLogs[logKey]
+        let shouldLog = lastLog == nil || now.timeIntervalSince(lastLog!) >= 3.0
+        if shouldLog { recentCacheMissLogs[logKey] = now }
+        // Prune old entries periodically
+        if recentCacheMissLogs.count > 50 {
+            recentCacheMissLogs = recentCacheMissLogs.filter { now.timeIntervalSince($0.value) < 5.0 }
+        }
+        cacheMissLogLock.unlock()
+        if shouldLog {
+            print("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
+        }
         
         // CACHE MISS - fetch from real server
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)

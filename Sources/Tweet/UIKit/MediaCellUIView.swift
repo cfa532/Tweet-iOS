@@ -12,6 +12,18 @@ import SwiftUI
 import Combine
 import AVFoundation
 
+// MARK: - Video Cell State Machine
+
+/// Explicit states for video cell UI — each state defines exactly what's visible.
+enum VideoCellState {
+    case noContent      // No thumbnail, no player — spinner on dark backdrop
+    case thumbnail      // Showing cached/generated thumbnail in imageView
+    case playerLoading  // Player attached, awaiting first frame render
+    case playerReady    // Player rendered first frame, paused
+    case playing        // Actively playing
+    case paused         // Paused, showing last rendered frame
+}
+
 // MARK: - MediaCellUIView
 
 class MediaCellUIView: UIView, MediaCellDelegate {
@@ -41,6 +53,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let spinner = UIActivityIndicatorView(style: .medium)
         spinner.hidesWhenStopped = true
         return spinner
+    }()
+
+    /// Retry button shown when image download fails
+    private lazy var retryButton: UIButton = {
+        let btn = UIButton(type: .system)
+        let config = UIImage.SymbolConfiguration(pointSize: 28, weight: .medium)
+        btn.setImage(UIImage(systemName: "arrow.clockwise.circle", withConfiguration: config), for: .normal)
+        btn.tintColor = .secondaryLabel
+        btn.addTarget(self, action: #selector(retryImageLoad), for: .touchUpInside)
+        btn.isHidden = true
+        return btn
     }()
 
     /// Mute button background circle (26pt visual, inside 44pt touch area)
@@ -132,8 +155,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Prevent duplicate finish handling
     private var isHandlingFinishEvent: Bool = false
 
-    /// Track if we've already hidden the spinner (prevent hiding it multiple times)
-    private var hasHiddenLoadingSpinner: Bool = false
+    /// Video cell state machine — controls imageView/videoPlayerView/spinner visibility
+    private var videoCellState: VideoCellState = .noContent
 
     /// Track when player configuration started (for timing logs)
     private var playerConfigureStartTime: Date?
@@ -186,9 +209,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func setupViews() {
         clipsToBounds = true
 
-        addSubview(imageView)
         addSubview(videoPlayerView)
+        addSubview(imageView)
         addSubview(loadingSpinner)
+        addSubview(retryButton)
         addSubview(fullscreenOverlay)
         fullscreenOverlay.addSubview(fullscreenSpinner)
         addSubview(muteButton)
@@ -201,6 +225,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         imageView.frame = b
         videoPlayerView.frame = b
         loadingSpinner.center = CGPoint(x: b.midX, y: b.midY)
+        retryButton.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+        retryButton.center = CGPoint(x: b.midX, y: b.midY)
         fullscreenOverlay.frame = b
         fullscreenSpinner.center = CGPoint(x: b.midX, y: b.midY)
 
@@ -228,6 +254,45 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         audioHostingController?.view.frame = b
+    }
+
+    // MARK: - Video Cell State Machine
+
+    /// Single source of truth for video cell visibility.
+    /// imageView is NEVER shown with nil image — either it has content or it's hidden.
+    private func transitionTo(_ state: VideoCellState) {
+        videoCellState = state
+        switch state {
+        case .noContent:
+            imageView.isHidden = true
+            videoPlayerView.isHidden = false  // black backdrop for spinner
+            loadingSpinner.startAnimating()
+        case .thumbnail:
+            imageView.isHidden = false  // caller must set imageView.image before this
+            videoPlayerView.isHidden = true
+            loadingSpinner.stopAnimating()
+        case .playerLoading:
+            let hasThumbnail = imageView.image != nil
+            imageView.isHidden = !hasThumbnail
+            videoPlayerView.isHidden = false
+            if hasThumbnail {
+                loadingSpinner.stopAnimating()
+            } else {
+                loadingSpinner.startAnimating()
+            }
+        case .playerReady:
+            imageView.isHidden = true
+            videoPlayerView.isHidden = false
+            loadingSpinner.stopAnimating()
+        case .playing:
+            imageView.isHidden = true
+            videoPlayerView.isHidden = false
+            loadingSpinner.stopAnimating()
+        case .paused:
+            imageView.isHidden = true
+            videoPlayerView.isHidden = false
+            loadingSpinner.stopAnimating()
+        }
     }
 
     // MARK: - Configure
@@ -279,6 +344,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoPlayerView.isHidden = true
         muteButton.isHidden = true
         timerLabel.isHidden = true
+        retryButton.isHidden = true
         loadingSpinner.stopAnimating()
 
         guard let url = att.getUrl(effectiveBaseUrl) else { return }
@@ -321,7 +387,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // 2. Disk cache (background) → network (default gray color for light image background)
         loadingSpinner.color = nil  // reset to system default (gray, visible on .systemGray6)
         loadingSpinner.startAnimating()
-        bringSubviewToFront(loadingSpinner)
         let attachmentCopy = attachment
         let baseUrlCopy = effectiveBaseUrl
 
@@ -349,9 +414,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         if let loadedImage = loadedImage {
                             self?.imageView.image = loadedImage
                             self?.loadingSpinner.stopAnimating()
+                            self?.retryButton.isHidden = true
                         } else {
-                            // Image failed/cancelled - stop spinner but keep trying on next appearance
+                            // Image failed/cancelled - show retry button if not cancelled
                             self?.loadingSpinner.stopAnimating()
+                            if !Task.isCancelled {
+                                self?.retryButton.isHidden = false
+                            }
                         }
                     }
                 }
@@ -362,23 +431,36 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Video
 
     private func setupVideoCell(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
-        // Show cached last frame as placeholder over the videoPlayerView
-        if let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid) {
-            imageView.image = cachedFrame
-            imageView.isHidden = false
-            bringSubviewToFront(imageView)
-        } else {
-            imageView.isHidden = true
-        }
-
         // Reset any previous video state
         cleanupVideoPlayer()
 
-        // Show videoPlayerView so AVPlayerLayer can decode frames;
-        // imageView (if it has a cached frame) sits on top as placeholder.
-        videoPlayerView.isHidden = false
+        // Set spinner color for video (white on dark background)
+        loadingSpinner.color = .white.withAlphaComponent(0.7)
 
-        // Tap gesture for fullscreen (all media — including embedded tweets — opens fullscreen)
+        // Set initial state based on cached thumbnail availability
+        if let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid) {
+            imageView.image = cachedFrame
+            transitionTo(.thumbnail)
+        } else {
+            transitionTo(.noContent)
+            // Try to generate thumbnail from cached asset
+            if let mediaID = SharedAssetCache.shared.extractMediaID(from: url) {
+                SharedAssetCache.shared.generateThumbnailIfNeeded(for: mediaID) { [weak self] image in
+                    guard let self, self.attachment?.mid == attachment.mid else { return }
+                    self.imageView.image = image
+                    switch self.videoCellState {
+                    case .noContent:
+                        self.transitionTo(.thumbnail)
+                    case .playerLoading:
+                        self.transitionTo(.playerLoading)  // re-evaluate: shows thumbnail, stops spinner
+                    default:
+                        break  // player already rendering
+                    }
+                }
+            }
+        }
+
+        // Tap gesture for fullscreen
         let tap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
         videoPlayerView.addGestureRecognizer(tap)
         videoPlayerView.isUserInteractionEnabled = true
@@ -390,9 +472,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             self?.handleStopAllVideos()
         }
 
-        // Coordinator commands arrive via MediaCellDelegate methods (shouldPlayVideo/shouldPauseVideo/shouldStopVideo)
-        // — no notification observers needed. This prevents cross-feed interference.
-
         // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
             .receive(on: DispatchQueue.main)
@@ -400,10 +479,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 self?.player?.isMuted = muted
             }
             .store(in: &cancellables)
-
-        // Spinner is deferred — only shown when coordinator requests play and player isn't ready
-        hasHiddenLoadingSpinner = false
-        loadingSpinner.color = .white.withAlphaComponent(0.7)
 
         // Acquire player (sync from cache or async from SharedAssetCache)
         acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
@@ -516,25 +591,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Clean up old observers before setting new player
         removePlayerObservers()
 
-        // Assign to player view
+        // Assign player
         self.player = newPlayer
 
-        // When player layer renders its first frame, mark ready and hide spinner.
-        // Keep imageView visible as placeholder — it is only hidden when playback
-        // actually starts (in startPlaybackWithFade). This prevents black flashes
-        // from stale isReadyForDisplay on cached/re-attached players.
+        // Transition to playerLoading — shows thumbnail if available, spinner if not
+        transitionTo(.playerLoading)
+
+        // When player layer renders its first frame, transition to playerReady
         videoPlayerView.onReadyForDisplay = { [weak self] in
             guard let self else { return }
-            if let player = self.player,
-               let item = player.currentItem,
-               item.status == .readyToPlay,
-               (!item.loadedTimeRanges.isEmpty || player.timeControlStatus == .playing) {
-                self.videoPlayerView.isHidden = false
-                self.hideLoadingSpinner()
+            if self.videoCellState == .playerLoading {
+                self.transitionTo(.playerReady)
             }
         }
 
-        // Disable implicit CALayer animations during player attachment to avoid main-thread hitch
+        // Disable implicit CALayer animations during player attachment
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         videoPlayerView.setPlayer(newPlayer)
@@ -543,11 +614,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Set up KVO + notification observers
         setupPlayerObservers(newPlayer)
 
-        // Mark player as logically loaded if item is ready (for coordinator play commands)
+        // If item is already ready, handle immediately
         if let item = newPlayer.currentItem,
            item.status == .readyToPlay {
             isPlayerLoaded = true
-            // If coordinator requested play while player was being acquired, start now
             if coordinatorWantsToPlay {
                 if isVideoAtEnd(newPlayer) {
                     newPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
@@ -558,18 +628,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     playWithVolumeFadeIn(newPlayer)
                 }
             } else {
-                // Not going to play yet — seek to force AVPlayerLayer to decode and
-                // display a frame (prevents black cell for paused non-primary videos).
-                // Seek to current position, or to zero for never-played videos.
+                // Not going to play — seek to force AVPlayerLayer to decode a frame.
+                // onReadyForDisplay will fire → .playerReady
                 let t = newPlayer.currentTime()
                 let seekTarget = (t.isValid && !t.seconds.isNaN) ? t : .zero
                 newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
             }
-        } else {
         }
 
-        // Defer video output attachment — AVPlayerItemVideoOutput creation causes
-        // expensive AVFoundation pipeline reconfiguration that blocks the main thread
+        // Defer video output attachment
         DispatchQueue.main.async { [weak self] in
             guard let self, self.player === newPlayer else { return }
             self.ensureVideoOutputAttached(for: newPlayer)
@@ -589,10 +656,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
 
-            // Show spinner now that we actually want to play
-            videoPlayerView.isHidden = false
-            loadingSpinner.startAnimating()
-            bringSubviewToFront(loadingSpinner)
+            // Show loading state (spinner if no thumbnail, thumbnail if available)
+            if videoCellState == .noContent || videoCellState == .thumbnail {
+                transitionTo(.playerLoading)
+            }
 
             // Trigger player setup if needed
             if self.player == nil, shouldLoadVideo, isVisible,
@@ -643,6 +710,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "coordinatorPause")
+            if videoCellState == .playing {
+                transitionTo(.paused)
+            }
             // Volume fade-out then pause
             UIView.animate(withDuration: 0.2, animations: {
                 player.volume = 0
@@ -662,6 +732,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "coordinatorStop")
+            if videoCellState == .playing {
+                transitionTo(.paused)
+            }
             player.pause()
         }
         VideoStateCache.shared.markAsStoppedByCoordinator(mid)
@@ -676,6 +749,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "stopAllVideos")
+            if videoCellState == .playing {
+                transitionTo(.paused)
+            }
             player.pause()
             player.isMuted = MuteState.shared.isMuted
         }
@@ -707,14 +783,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func startPlaybackWithFade(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
 
-        let bufferStatus = player.currentItem?.status == .readyToPlay
-
-        // Only reveal video player if it's actually ready; otherwise keep placeholder visible
-        videoPlayerView.isHidden = false
-        if bufferStatus {
-            imageView.isHidden = true
-        }
-        hideLoadingSpinner()
+        // Transition to playing — hides imageView, shows videoPlayerView, stops spinner
+        transitionTo(.playing)
 
         player.isMuted = MuteState.shared.isMuted
         player.volume = 0
@@ -723,7 +793,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             player.volume = 1.0
         }
 
-        // Show timer when playback actually starts
+        // Show timer when playback starts
         if isSingleMedia {
             setupVideoTimer(videoMid: mid)
             startPlayerTimeObserver()
@@ -830,13 +900,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 guard let mid = self.attachment?.mid else { return }
 
                 if item.status == .readyToPlay {
-                    // Mark as loaded when status is ready, even if no data buffered yet
-                    // (player will buffer as needed when play() is called)
                     let wasAlreadyLoaded = self.isPlayerLoaded
                     self.isPlayerLoaded = true
 
                     if !wasAlreadyLoaded {
-                        // If coordinator requested play while player was loading, start now
                         if self.coordinatorWantsToPlay, let player = self.player {
                             if self.isVideoAtEnd(player) {
                                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
@@ -847,8 +914,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                                 self.playWithVolumeFadeIn(player)
                             }
                         } else if let player = self.player {
-                            // Not going to play — seek to force AVPlayerLayer to decode
-                            // and display a frame (prevents black cell).
+                            // Not going to play — seek to force AVPlayerLayer to decode a frame.
+                            // onReadyForDisplay will fire → .playerReady
                             let t = player.currentTime()
                             let target = (t.isValid && !t.seconds.isNaN) ? t : .zero
                             player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
@@ -861,7 +928,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         print("❌ [PLAYER ERROR DETAIL] Domain: \((error as NSError).domain), Code: \((error as NSError).code)")
                         print("❌ [PLAYER ERROR] \(error)")
                     }
-                    self.hideLoadingSpinner()
+                    self.loadingSpinner.stopAnimating()
                 } else if item.status == .unknown {
                     // Log unknown status to diagnose why player is stuck
                     if let asset = item.asset as? AVURLAsset {
@@ -873,23 +940,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         }
 
-        // KVO: timeControlStatus — hide spinner when video actually starts playing
+        // KVO: timeControlStatus — safety net to stop spinner when video starts playing
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
-                // Hide spinner when playback actually starts (most reliable indicator)
                 if player.timeControlStatus == .playing {
-                    self.hideLoadingSpinner()
+                    self.loadingSpinner.stopAnimating()
                 }
             }
         }
-    }
-
-    /// Hides the loading spinner (only once to prevent redundant calls)
-    private func hideLoadingSpinner() {
-        guard !hasHiddenLoadingSpinner else { return }
-        hasHiddenLoadingSpinner = true
-        loadingSpinner.stopAnimating()
     }
 
     private func removePlayerObservers() {
@@ -971,7 +1030,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func setupMuteButton() {
         muteButton.isHidden = false
         updateMuteButtonIcon()
-        bringSubviewToFront(muteButton)
 
         // Observe mute state changes for icon
         MuteState.shared.$isMuted
@@ -997,7 +1055,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func setupVideoTimer(videoMid: String) {
         timerLabel.isHidden = false
         timerLabel.text = "0:00"
-        bringSubviewToFront(timerLabel)
 
         // Auto-hide timer after 5 seconds
         scheduleTimerHide()
@@ -1069,6 +1126,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     // MARK: - Tap Handling
+
+    @objc private func retryImageLoad() {
+        guard let attachment, attachment.type == .image,
+              let url = attachment.getUrl(effectiveBaseUrl) else { return }
+        retryButton.isHidden = true
+        // Clear permanently-failed status so GlobalImageLoadManager will retry
+        GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
+        loadImage(attachment: attachment, url: url)
+    }
 
     @objc private func imageTapped() {
         guard let parentTweet, let parentVC = parentViewController else { return }
@@ -1278,15 +1344,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                    player.currentItem == nil || player.currentTime().seconds.isNaN {
                     self.cleanupVideoPlayer()
                     self.isPlayerLoaded = false
-                    // Show cached last frame so the cell isn't black while a new player loads
-                    if let cachedFrame = VideoLastFrameCache.shared.image(for: att.mid) {
-                        self.imageView.image = cachedFrame
-                        self.imageView.isHidden = false
-                    }
-                    // Re-acquire a fresh player and auto-play once ready
+                    // Re-acquire a fresh player — coordinator will send play
+                    // command via updateVisibleTweets if this is the primary video.
+                    // Not calling handleCoordinatorPlayCommand() here prevents
+                    // non-primary videos from briefly playing then getting stopped
+                    // before they can render a frame (which causes black screen).
                     if let url = att.getUrl(self.effectiveBaseUrl), let parentTweet = self.parentTweet {
                         self.setupVideoCell(attachment: att, url: url, parentTweet: parentTweet)
-                        self.handleCoordinatorPlayCommand()
                     }
                 } else {
                     // Player is still valid (short background). AVPlayerLayer's render
@@ -1301,8 +1365,27 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Called from didBecomeActive when GPU is guaranteed ready.
     /// Skips currently playing videos to avoid disrupting playback.
     func refreshVideoLayerAfterForeground() {
-        guard isVideoAttachment, !videoPlayerView.isHidden,
-              let player = player, player.rate == 0 else { return }
+        guard isVideoAttachment, let player = player, player.rate == 0 else { return }
+        // Only refresh if videoPlayerView was previously rendering content
+        guard videoCellState == .playerReady || videoCellState == .paused else { return }
+
+        // Temporarily show cached thumbnail while AVPlayerLayer re-initializes.
+        // This prevents a black flash if the layer takes time to resume rendering.
+        if let mid = attachment?.mid,
+           let cachedFrame = VideoLastFrameCache.shared.image(for: mid) {
+            imageView.image = cachedFrame
+        }
+        transitionTo(.playerLoading)
+
+        // Transition to playerReady when the layer renders its first frame
+        videoPlayerView.onReadyForDisplay = { [weak self] in
+            guard let self else { return }
+            if self.videoCellState == .playerLoading {
+                self.transitionTo(.playerReady)
+            }
+        }
+
+        // Re-attach player to force layer re-initialization
         videoPlayerView.setPlayer(nil)
         videoPlayerView.setPlayer(player)
         let t = player.currentTime()
@@ -1390,7 +1473,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
         isPlayerLoaded = false
         isHandlingFinishEvent = false
-        hasHiddenLoadingSpinner = false
+        videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
     }
 
@@ -1428,6 +1511,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         imageView.isHidden = true
         imageView.gestureRecognizers?.forEach { imageView.removeGestureRecognizer($0) }
         loadingSpinner.stopAnimating()
+        retryButton.isHidden = true
         muteButton.isHidden = true
         timerLabel.isHidden = true
         fullscreenOverlay.isHidden = true
@@ -1437,6 +1521,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         removeAudioHosting()
 
         // Reset state
+        videoCellState = .noContent
         attachment = nil
         parentTweet = nil
         isVisible = false

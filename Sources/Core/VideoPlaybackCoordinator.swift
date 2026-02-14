@@ -1005,37 +1005,42 @@ class VideoPlaybackCoordinator: ObservableObject {
         return videosToPreload
     }
 
-    /// Preload video asset without starting playback
-    private func preloadVideoAsset(_ video: VideoPlaybackInfo) {
-        // Get the tweet to find the attachment URL
+    /// Resolve the video URL and tweet ID for a VideoPlaybackInfo entry.
+    private func resolveVideoURL(_ video: VideoPlaybackInfo) -> (url: URL, tweetId: String, mediaType: MediaType)? {
         guard let tweet = currentTweets.first(where: { $0.mid == video.mediaTweetId }) ?? Tweet.getInstance(for: video.mediaTweetId),
               let attachments = tweet.attachments,
               video.attachmentIndex < attachments.count else {
-            return
+            return nil
         }
 
         let attachment = attachments[video.attachmentIndex]
-        guard attachment.type == .video || attachment.type == .hls_video else { return }
+        guard attachment.type == .video || attachment.type == .hls_video else { return nil }
 
-        // Get the URL for the video
-        // For HLS videos, use the cached url property
-        // For regular videos, construct URL from author's baseUrl
         var videoURL: URL?
-
         if let urlString = attachment.url, let url = URL(string: urlString) {
             videoURL = url
         } else if let author = tweet.author, let baseUrl = author.baseUrl {
             videoURL = attachment.getUrl(baseUrl)
         }
 
-        guard let url = videoURL else {
-            return
-        }
+        guard let url = videoURL else { return nil }
+        return (url, tweet.mid, attachment.type)
+    }
 
-        // Request preload via SharedAssetCache (it handles caching and player creation)
-        SharedAssetCache.shared.preloadAsset(for: url, tweetId: tweet.mid)
+    /// Preload video asset without starting playback
+    private func preloadVideoAsset(_ video: VideoPlaybackInfo) {
+        guard let resolved = resolveVideoURL(video) else { return }
 
-        // Track that this video has been preloaded
+        SharedAssetCache.shared.preloadAsset(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        preloadedVideoMids.insert(video.videoMid)
+    }
+
+    /// Preload video player (asset + AVPlayer) for upcoming video in scroll direction.
+    /// The pre-created player will be instantly available when the cell becomes visible.
+    private func preloadVideoPlayer(_ video: VideoPlaybackInfo) {
+        guard let resolved = resolveVideoURL(video) else { return }
+
+        SharedAssetCache.shared.preloadPlayer(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
         preloadedVideoMids.insert(video.videoMid)
     }
 
@@ -1049,27 +1054,53 @@ class VideoPlaybackCoordinator: ObservableObject {
         return Date().timeIntervalSince(lastPreload) >= scrollPreloadThrottleInterval
     }
 
-    /// Preload videos ahead in the scroll direction during scrolling
+    /// Preload videos ahead in the scroll direction during scrolling.
+    /// First 3 videos: full player preload (AVPlayer ready to play instantly).
+    /// Remaining videos: asset-only preload (download data, player created on demand).
     private func preloadVideosInScrollDirection() {
-        // Update throttle timestamp
         lastScrollPreloadTime = Date()
 
-        // Find the next 2 videos in scroll direction that haven't been preloaded
-        let videosToPreload = getNextVideosInScrollDirection(count: 4)
+        let playerPreloadCount = 3
 
-        guard !videosToPreload.isEmpty else { return }
+        // Get ALL next videos (including already-preloaded) for protection tracking
+        let allNextVideos = getNextVideosInScrollDirection(count: playerPreloadCount + 1, includePreloaded: true)
+        guard !allNextVideos.isEmpty else { return }
 
-        print("🔮 [SCROLL PRELOAD] Preloading \(videosToPreload.count) videos ahead (\(scrollDirection ? "down" : "up"))")
-
-        for video in videosToPreload {
-            // Skip if already preloaded
-            guard !preloadedVideoMids.contains(video.videoMid) else { continue }
-            preloadVideoAsset(video)
+        // Collect media IDs of the top-3 upcoming videos for eviction protection,
+        // regardless of whether they were just preloaded or preloaded earlier
+        var playerPreloadMids = Set<String>()
+        for video in allNextVideos.prefix(playerPreloadCount) {
+            if let resolved = resolveVideoURL(video),
+               let mediaID = SharedAssetCache.shared.extractMediaID(from: resolved.url) {
+                playerPreloadMids.insert(mediaID)
+            }
         }
+
+        // Filter to only videos that still need preloading
+        let newVideos = allNextVideos.filter { !preloadedVideoMids.contains($0.videoMid) }
+
+        if !newVideos.isEmpty {
+            let alreadyPreloadedInTop = allNextVideos.prefix(playerPreloadCount).filter { preloadedVideoMids.contains($0.videoMid) }.count
+            let playerCount = min(newVideos.count, max(0, playerPreloadCount - alreadyPreloadedInTop))
+            print("🔮 [SCROLL PRELOAD] Preloading \(newVideos.count) videos ahead (\(scrollDirection ? "down" : "up")): \(playerCount) players + \(newVideos.count - playerCount) assets")
+
+            for video in newVideos {
+                let isTopN = allNextVideos.prefix(playerPreloadCount).contains(where: { $0.videoMid == video.videoMid })
+                if isTopN {
+                    preloadVideoPlayer(video)
+                } else {
+                    preloadVideoAsset(video)
+                }
+            }
+        }
+
+        // Always update eviction protection for the top-3 upcoming videos
+        SharedAssetCache.shared.updatePreloadedPlayerMids(playerPreloadMids)
     }
 
-    /// Get the next videos in scroll direction that are not currently visible
-    private func getNextVideosInScrollDirection(count: Int) -> [VideoPlaybackInfo] {
+    /// Get the next videos in scroll direction that are not currently visible.
+    /// When `includePreloaded` is true, returns all upcoming videos (for protection tracking).
+    private func getNextVideosInScrollDirection(count: Int, includePreloaded: Bool = false) -> [VideoPlaybackInfo] {
         // Get indices of currently visible videos
         let visibleVideoSet = visibleTweetIds
         let visibleIndices = allVideos.enumerated()
@@ -1088,7 +1119,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 let nextIndex = lastVisibleIndex + i
                 if nextIndex < allVideos.count {
                     let video = allVideos[nextIndex]
-                    if video.isInVisibleMediaRange && !preloadedVideoMids.contains(video.videoMid) {
+                    if video.isInVisibleMediaRange && (includePreloaded || !preloadedVideoMids.contains(video.videoMid)) {
                         result.append(video)
                     }
                 }
@@ -1100,7 +1131,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 let prevIndex = firstVisibleIndex - i
                 if prevIndex >= 0 {
                     let video = allVideos[prevIndex]
-                    if video.isInVisibleMediaRange && !preloadedVideoMids.contains(video.videoMid) {
+                    if video.isInVisibleMediaRange && (includePreloaded || !preloadedVideoMids.contains(video.videoMid)) {
                         result.append(video)
                     }
                 }
