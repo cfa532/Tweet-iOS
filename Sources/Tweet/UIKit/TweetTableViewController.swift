@@ -192,6 +192,8 @@ class TweetTableViewController: UITableViewController {
     // Foreground/background observer to prevent white space issue
     private var foregroundObserver: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
+    private var didBecomeActiveObserver: NSObjectProtocol?
+    private var needsVideoLayerRefresh = false
     private var scrollPositionBeforeBackground: CGFloat?
 
     // Observer for feed view appearance (to restart video playback after navigation)
@@ -255,6 +257,10 @@ class TweetTableViewController: UITableViewController {
         }
 
         if let observer = backgroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        if let observer = didBecomeActiveObserver {
             NotificationCenter.default.removeObserver(observer)
         }
 
@@ -407,14 +413,7 @@ class TweetTableViewController: UITableViewController {
 
             // Cancel background task if still active
             self.endBackgroundTask()
-
-            // Force all displayed cells to re-render their video layers immediately.
-            // This must run for ALL foreground returns (even without a saved scroll position)
-            // because partially visible cells have no foreground observer of their own.
-            for cell in self.tableView.visibleCells {
-                guard let tweetCell = cell as? TweetTableViewCell else { continue }
-                tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
-            }
+            self.needsVideoLayerRefresh = true
 
             guard let savedPosition = self.scrollPositionBeforeBackground else { return }
 
@@ -430,6 +429,22 @@ class TweetTableViewController: UITableViewController {
 
                 // Restore visible video players and preload 2 more in scroll direction
                 self.restoreVideoPlayersAfterForeground()
+            }
+        }
+
+        // After app is fully active (GPU ready), force all displayed video cells
+        // to re-render. This covers partially visible cells that have no per-cell
+        // foreground observer (isVisible=false removes it).
+        didBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self, self.needsVideoLayerRefresh else { return }
+            self.needsVideoLayerRefresh = false
+            for cell in self.tableView.visibleCells {
+                guard let tweetCell = cell as? TweetTableViewCell else { continue }
+                tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
             }
         }
     }

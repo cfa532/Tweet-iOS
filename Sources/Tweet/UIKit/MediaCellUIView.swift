@@ -557,6 +557,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 } else {
                     playWithVolumeFadeIn(newPlayer)
                 }
+            } else {
+                // Not going to play yet — seek to force AVPlayerLayer to decode and
+                // display a frame (prevents black cell for paused non-primary videos).
+                // Seek to current position, or to zero for never-played videos.
+                let t = newPlayer.currentTime()
+                let seekTarget = (t.isValid && !t.seconds.isNaN) ? t : .zero
+                newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         } else {
         }
@@ -839,6 +846,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                             } else {
                                 self.playWithVolumeFadeIn(player)
                             }
+                        } else if let player = self.player {
+                            // Not going to play — seek to force AVPlayerLayer to decode
+                            // and display a frame (prevents black cell).
+                            let t = player.currentTime()
+                            let target = (t.isValid && !t.seconds.isNaN) ? t : .zero
+                            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
                         }
                     }
                 } else if item.status == .failed {
@@ -1222,19 +1235,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     if let playerItem = player.currentItem {
                         playerItem.preferredForwardBufferDuration = 0.0
                     }
-
-                    // Show imageView and hide videoPlayerView so the cell doesn't
-                    // show a black AVPlayerLayer (e.g. after returning from background).
-                    // startPlaybackWithFade will swap back when the coordinator plays.
-                    // Only swap if we have actual content to show.
-                    let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid)
-                    if cachedFrame != nil || imageView.image != nil {
-                        if let cachedFrame {
-                            imageView.image = cachedFrame
-                        }
-                        imageView.isHidden = false
-                        videoPlayerView.isHidden = true
-                    }
                 }
                 coordinatorWantsToPlay = false
             }
@@ -1288,57 +1288,26 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         self.setupVideoCell(attachment: att, url: url, parentTweet: parentTweet)
                         self.handleCoordinatorPlayCommand()
                     }
-                } else if self.player != nil {
+                } else {
                     // Player is still valid (short background). AVPlayerLayer's render
-                    // pipeline is suspended at willEnterForeground.
-                    if let cachedFrame = VideoLastFrameCache.shared.image(for: att.mid) {
-                        // Have a cached frame — show it immediately, no black flash
-                        self.imageView.image = cachedFrame
-                        self.imageView.isHidden = false
-                        self.videoPlayerView.isHidden = true
-                    } else {
-                        // No cached frame — keep videoPlayerView visible and do a
-                        // deferred seek after GPU resumes (post-didBecomeActive)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                            guard let self, let player = self.player else { return }
-                            self.videoPlayerView.setPlayer(nil)
-                            self.videoPlayerView.setPlayer(player)
-                            let t = player.currentTime()
-                            if t.isValid && !t.seconds.isNaN {
-                                player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
-                            }
-                        }
-                    }
+                    // pipeline is suspended — handled by TVC's didBecomeActive observer
+                    // which calls refreshVideoLayerAfterForeground() when GPU is ready.
                 }
             }
         }
     }
 
-    /// Safety net: swap any still-visible black videoPlayerView for imageView after foreground.
-    /// Primary handling is in setVisible(false) and the per-cell foreground observer.
+    /// Re-attach player and seek to force AVPlayerLayer to render after foreground.
+    /// Called from didBecomeActive when GPU is guaranteed ready.
+    /// Skips currently playing videos to avoid disrupting playback.
     func refreshVideoLayerAfterForeground() {
         guard isVideoAttachment, !videoPlayerView.isHidden,
-              let mid = attachment?.mid else { return }
-
-        let cachedFrame = VideoLastFrameCache.shared.image(for: mid)
-        if cachedFrame != nil || imageView.image != nil {
-            if let cachedFrame {
-                imageView.image = cachedFrame
-            }
-            imageView.isHidden = false
-            videoPlayerView.isHidden = true
-        } else if player != nil {
-            // No image content at all — deferred seek after GPU resumes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, let player = self.player else { return }
-                self.videoPlayerView.setPlayer(nil)
-                self.videoPlayerView.setPlayer(player)
-                let t = player.currentTime()
-                if t.isValid && !t.seconds.isNaN {
-                    player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
-                }
-            }
-        }
+              let player = player, player.rate == 0 else { return }
+        videoPlayerView.setPlayer(nil)
+        videoPlayerView.setPlayer(player)
+        let t = player.currentTime()
+        let target = (t.isValid && !t.seconds.isNaN) ? t : .zero
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     // MARK: - MediaCellDelegate
