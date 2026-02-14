@@ -17,7 +17,7 @@ class ImageCacheManager: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let cacheDirectory: URL
     private let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days in seconds
-    private let maxDiskCacheSize: Int64 = 5000 * 1024 * 1024 // 500MB
+    // Disk cache: no size limit — only 7-day age expiry via cleanupOldCache()
     private let maxCompressedImageSize: Int = 300 * 1024 // 300KB for compressed images
     private let maxDownsampleDimension: CGFloat = 1024
     
@@ -91,8 +91,8 @@ class ImageCacheManager: @unchecked Sendable {
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
         // Set cache limits
-        cache.countLimit = 100 // Maximum number of images in memory
-        cache.totalCostLimit = 35 * 1024 * 1024 // 35MB limit
+        cache.countLimit = 200 // Maximum number of images in memory
+        cache.totalCostLimit = 100 * 1024 * 1024 // 100MB limit
         
     }
     
@@ -193,17 +193,14 @@ class ImageCacheManager: @unchecked Sendable {
     
     func cleanupOldCache() {
         do {
-            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])
+            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
             let now = Date()
-            var totalSize: Int64 = 0
             var filesToDelete: [URL] = []
-            
-            // First pass: Calculate total size and identify old files
+
+            // Delete files older than 7 days (skip protected content)
             for fileURL in contents {
                 if let attributes = try? fileManager.attributesOfItem(atPath: fileURL.path),
-                   let modificationDate = attributes[.modificationDate] as? Date,
-                   let fileSize = attributes[.size] as? Int64 {
-                    totalSize += fileSize
+                   let modificationDate = attributes[.modificationDate] as? Date {
 
                     // Extract image ID from filename (format: imageID or imageID-thumb)
                     let filename = fileURL.deletingPathExtension().lastPathComponent
@@ -215,7 +212,6 @@ class ImageCacheManager: @unchecked Sendable {
                     let isAvatar = filename.contains("avatar_")
 
                     if isPrivate || isPermanent || isAvatar {
-                        print("💾 [ImageCacheManager] Skipping permanent image: \(imageID) (private: \(isPrivate), bookmarked: \(isPermanent), avatar: \(isAvatar))")
                         continue
                     }
 
@@ -224,39 +220,7 @@ class ImageCacheManager: @unchecked Sendable {
                     }
                 }
             }
-            
-            // Second pass: If still over limit, delete oldest files
-            if totalSize > maxDiskCacheSize {
-                let sortedFiles = contents.sorted { url1, url2 in
-                    let date1 = (try? fileManager.attributesOfItem(atPath: url1.path)[.modificationDate] as? Date) ?? Date.distantPast
-                    let date2 = (try? fileManager.attributesOfItem(atPath: url2.path)[.modificationDate] as? Date) ?? Date.distantPast
-                    return date1 < date2
-                }
-                
-                for fileURL in sortedFiles {
-                    // Extract image ID from filename
-                    let filename = fileURL.deletingPathExtension().lastPathComponent
-                    let imageID = filename.components(separatedBy: "-").first ?? filename
 
-                    // NEVER delete: private tweets OR bookmarks/favorites OR avatars
-                    let isPrivate = isPrivateTweet(imageID: imageID)
-                    let isPermanent = isPermanentImageID(imageID)
-                    let isAvatar = filename.contains("avatar_")
-
-                    if isPrivate || isPermanent || isAvatar {
-                        continue
-                    }
-                    
-                    if let fileSize = try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? Int64 {
-                        filesToDelete.append(fileURL)
-                        totalSize -= fileSize
-                        if totalSize <= maxDiskCacheSize {
-                            break
-                        }
-                    }
-                }
-            }
-            
             // Delete identified files
             for fileURL in filesToDelete {
                 try? fileManager.removeItem(at: fileURL)
@@ -374,34 +338,8 @@ class ImageCacheManager: @unchecked Sendable {
             }
         }
         
-        // Remove percentage of disk cache files (oldest first), but preserve avatars
-        do {
-            let contents = try fileManager.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: [.contentModificationDateKey])
-
-            // Filter out avatar files to protect them from cleanup
-            let nonAvatarFiles = contents.filter { fileURL in
-                let fileName = fileURL.lastPathComponent
-                return !fileName.contains("avatar_")
-            }
-
-            // Sort by modification date (oldest first)
-            let sortedFiles = nonAvatarFiles.sorted { url1, url2 in
-                let date1 = (try? fileManager.attributesOfItem(atPath: url1.path)[.modificationDate] as? Date) ?? Date.distantPast
-                let date2 = (try? fileManager.attributesOfItem(atPath: url2.path)[.modificationDate] as? Date) ?? Date.distantPast
-                return date1 < date2
-            }
-
-            let countToRemove = max(1, (sortedFiles.count * percentageToRemove) / 100)
-            let filesToRemove = Array(sortedFiles.prefix(countToRemove))
-
-            for fileURL in filesToRemove {
-                try? fileManager.removeItem(at: fileURL)
-            }
-
-            print("DEBUG: [ImageCacheManager] Released \(filesToRemove.count) image files from disk (avatars protected)")
-        } catch {
-            print("Error releasing partial image cache: \(error)")
-        }
+        // Disk cache files don't consume RAM — skip disk deletion during memory pressure.
+        // Disk cleanup is handled separately by cleanupOldCache() (7-day expiry / 500MB limit).
     }
 
     /// Clear memory cache only (keep disk cache intact)

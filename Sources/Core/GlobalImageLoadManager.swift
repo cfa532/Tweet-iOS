@@ -141,6 +141,7 @@ class GlobalImageLoadManager: ObservableObject {
         
         // Check if this request has permanently failed (exhausted all retries)
         if permanentlyFailedRequests.contains(request.id) {
+            print("❌ [IMAGE LOAD] Skipping permanently failed image: \(request.id)")
             // Call completion with nil to update UI state
             request.completion(nil)
             return
@@ -165,16 +166,9 @@ class GlobalImageLoadManager: ObservableObject {
             retryCounts[request.id] = 0
         }
         
-        // Check memory pressure
+        // Check memory pressure — only shed low-priority work, keep visible images loading
         if isMemoryPressureHigh() {
             print("DEBUG: [GlobalImageLoadManager] High memory pressure detected: \(activeLoads.count) active loads, \(scheduledRetries.count) scheduled retries")
-
-            // Cancel ALL active network loads immediately to free memory
-            for (requestId, task) in activeLoads {
-                print("DEBUG: [GlobalImageLoadManager] Cancelling active load: \(requestId)")
-                task.cancel()
-            }
-            activeLoads.removeAll()
 
             // Cancel ALL scheduled retries immediately to free memory
             for workItem in scheduledRetries.values {
@@ -182,14 +176,17 @@ class GlobalImageLoadManager: ObservableObject {
             }
             scheduledRetries.removeAll()
 
-            // Clear pending requests to prevent accumulation
-            let pendingCount = pendingRequests.count
-            pendingRequests.removeAll()
-            print("DEBUG: [GlobalImageLoadManager] Cleared \(pendingCount) pending requests due to memory pressure")
+            // Only drop low/normal priority pending requests; keep high/critical
+            let beforeCount = pendingRequests.count
+            pendingRequests.removeAll { $0.priority.rawValue < ImageLoadingPriority.high.rawValue }
+            let droppedCount = beforeCount - pendingRequests.count
+            if droppedCount > 0 {
+                print("DEBUG: [GlobalImageLoadManager] Dropped \(droppedCount) low-priority pending requests due to memory pressure")
+            }
 
-            // Release cache moderately (was 50%, too aggressive - causes thrashing)
+            // Release memory cache moderately
             ImageCacheManager.shared.releasePartialCache(percentage: 20)
-            
+
             if request.priority.rawValue < ImageLoadingPriority.high.rawValue {
                 // Defer low priority requests during memory pressure
                 deferRequest(request)
@@ -440,7 +437,7 @@ class GlobalImageLoadManager: ObservableObject {
             // After retries, mark as permanently failed to prevent further attempts
             permanentlyFailedRequests.insert(request.id)
             retryCounts.removeValue(forKey: request.id)
-            print("DEBUG: [GlobalImageLoadManager] Image permanently failed after \(maxRetries) retries: \(request.id)")
+            print("❌ [IMAGE LOAD] Permanently failed after \(maxRetries) retries: \(request.id)")
         }
     }
     
@@ -511,21 +508,22 @@ class GlobalImageLoadManager: ObservableObject {
             // Check if we got a valid response
             guard let httpResponse = response as? HTTPURLResponse,
                   (200...299).contains(httpResponse.statusCode) else {
-                print("Error: Invalid response (\((response as? HTTPURLResponse)?.statusCode ?? -1)) for image at \(request.url)")
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                print("❌ [IMAGE LOAD] HTTP \(statusCode) for \(request.url.lastPathComponent)")
                 return nil
             }
-            
+
             // Update progress
             await MainActor.run {
                 request.onProgress(1.0)
             }
-            
+
             // Check if data is empty
             guard !data.isEmpty else {
-                print("Error: Empty data received for image at \(request.url)")
+                print("❌ [IMAGE LOAD] Empty response body for \(request.url.lastPathComponent)")
                 return nil
             }
-            
+
             if let image = ImageCacheManager.shared.cacheImageData(data, for: request.attachment) {
                 // Reset network failure counter on successful load
                 consecutiveNetworkFailures = 0
@@ -535,7 +533,7 @@ class GlobalImageLoadManager: ObservableObject {
                 return image
             }
 
-            print("Error: Failed to cache UIImage from data for \(request.url)")
+            print("❌ [IMAGE LOAD] Failed to decode image data (\(data.count) bytes) for \(request.url.lastPathComponent)")
             return nil
             
         } catch {
@@ -550,7 +548,7 @@ class GlobalImageLoadManager: ObservableObject {
             }
 
             // Real network error - log and track
-            print("Error loading image from network (\(request.url)): \(error)")
+            print("❌ [IMAGE LOAD] Network error for \(request.url.lastPathComponent): \(error.localizedDescription)")
 
             // Track consecutive network failures
             consecutiveNetworkFailures += 1
@@ -703,21 +701,25 @@ class GlobalImageLoadManager: ObservableObject {
             // Check if we got a valid response
             guard let httpResponse = response as? HTTPURLResponse,
                   (200...299).contains(httpResponse.statusCode) else {
-                print("Error: Invalid response (\((response as? HTTPURLResponse)?.statusCode ?? -1)) for optimized image at \(request.url)")
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                print("❌ [IMAGE LOAD] HTTP \(statusCode) for optimized \(request.url.lastPathComponent)")
                 return nil
             }
-            
+
             // Update progress (only if not cancelled)
             await MainActor.run {
                 guard !Task.isCancelled else { return }
                 request.onProgress(1.0)
             }
-            
+
             // Check cancellation before image processing
             try Task.checkCancellation()
-            
+
             // Create UIImage from data
-            guard let originalImage = UIImage(data: data) else { return nil }
+            guard let originalImage = UIImage(data: data) else {
+                print("❌ [IMAGE LOAD] Failed to decode optimized image data (\(data.count) bytes) for \(request.url.lastPathComponent)")
+                return nil
+            }
             
             // Check cancellation before resizing
             try Task.checkCancellation()
@@ -928,8 +930,9 @@ class GlobalImageLoadManager: ObservableObject {
 
     private func performPeriodicCleanup() {
         // Trim completedRequests if too large (IDs of successfully loaded images)
-        if completedRequests.count > 500 {
-            let excess = completedRequests.count - 250
+        // Keep generous threshold — these are just String IDs (~50 bytes each)
+        if completedRequests.count > 2000 {
+            let excess = completedRequests.count - 1000
             let keysToRemove = Array(completedRequests.prefix(excess))
             completedRequests.subtract(keysToRemove)
         }
