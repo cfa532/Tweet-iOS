@@ -1083,10 +1083,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Post stop all to pause feed videos
         NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-        OverlayVisibilityCoordinator.shared.beginOverlay(
-            id: "mediaBrowserFullScreen",
-            source: "MediaCellUIView"
-        )
 
         // Delay to allow spinner to render
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
