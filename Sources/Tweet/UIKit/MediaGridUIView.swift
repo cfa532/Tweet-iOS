@@ -431,6 +431,12 @@ class MediaGridUIView: UIView {
         moreLabel = nil
     }
 
+    func refreshVideoLayersAfterForeground() {
+        for cell in cellViews {
+            cell.refreshVideoLayerAfterForeground()
+        }
+    }
+
     func prepareForReuse() {
         clearCells()
         cancellables.removeAll()

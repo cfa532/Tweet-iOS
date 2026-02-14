@@ -408,6 +408,14 @@ class TweetTableViewController: UITableViewController {
             // Cancel background task if still active
             self.endBackgroundTask()
 
+            // Force all displayed cells to re-render their video layers immediately.
+            // This must run for ALL foreground returns (even without a saved scroll position)
+            // because partially visible cells have no foreground observer of their own.
+            for cell in self.tableView.visibleCells {
+                guard let tweetCell = cell as? TweetTableViewCell else { continue }
+                tweetCell.tweetContentView.refreshVideoLayersAfterForeground()
+            }
+
             guard let savedPosition = self.scrollPositionBeforeBackground else { return }
 
             // Restore the scroll position after a brief delay to let layout settle

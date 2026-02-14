@@ -701,6 +701,13 @@ class TweetCellContentView: UIView {
         }
     }
 
+    func refreshVideoLayersAfterForeground() {
+        bodyView.mediaGridView.refreshVideoLayersAfterForeground()
+        if !embeddedTweetWrapper.isHidden {
+            embeddedTweetView.refreshVideoLayersAfterForeground()
+        }
+    }
+
     // MARK: - Reuse
 
     func prepareForReuse() {

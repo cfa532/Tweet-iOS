@@ -519,7 +519,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Assign to player view
         self.player = newPlayer
 
-        // When player layer renders its first frame, reveal it and hide the placeholder
+        // When player layer renders its first frame, mark ready and hide spinner.
+        // Keep imageView visible as placeholder — it is only hidden when playback
+        // actually starts (in startPlaybackWithFade). This prevents black flashes
+        // from stale isReadyForDisplay on cached/re-attached players.
         videoPlayerView.onReadyForDisplay = { [weak self] in
             guard let self else { return }
             if let player = self.player,
@@ -527,7 +530,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                item.status == .readyToPlay,
                (!item.loadedTimeRanges.isEmpty || player.timeControlStatus == .playing) {
                 self.videoPlayerView.isHidden = false
-                self.imageView.isHidden = true
                 self.hideLoadingSpinner()
             }
         }
@@ -1220,6 +1222,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     if let playerItem = player.currentItem {
                         playerItem.preferredForwardBufferDuration = 0.0
                     }
+
+                    // Show imageView and hide videoPlayerView so the cell doesn't
+                    // show a black AVPlayerLayer (e.g. after returning from background).
+                    // startPlaybackWithFade will swap back when the coordinator plays.
+                    // Only swap if we have actual content to show.
+                    let cachedFrame = VideoLastFrameCache.shared.image(for: attachment.mid)
+                    if cachedFrame != nil || imageView.image != nil {
+                        if let cachedFrame {
+                            imageView.image = cachedFrame
+                        }
+                        imageView.isHidden = false
+                        videoPlayerView.isHidden = true
+                    }
                 }
                 coordinatorWantsToPlay = false
             }
@@ -1273,10 +1288,54 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         self.setupVideoCell(attachment: att, url: url, parentTweet: parentTweet)
                         self.handleCoordinatorPlayCommand()
                     }
-                } else if let player = self.player {
-                    // Player is still valid — just re-attach to force AVPlayerLayer to re-render
-                    self.videoPlayerView.setPlayer(nil)
-                    self.videoPlayerView.setPlayer(player)
+                } else if self.player != nil {
+                    // Player is still valid (short background). AVPlayerLayer's render
+                    // pipeline is suspended at willEnterForeground.
+                    if let cachedFrame = VideoLastFrameCache.shared.image(for: att.mid) {
+                        // Have a cached frame — show it immediately, no black flash
+                        self.imageView.image = cachedFrame
+                        self.imageView.isHidden = false
+                        self.videoPlayerView.isHidden = true
+                    } else {
+                        // No cached frame — keep videoPlayerView visible and do a
+                        // deferred seek after GPU resumes (post-didBecomeActive)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                            guard let self, let player = self.player else { return }
+                            self.videoPlayerView.setPlayer(nil)
+                            self.videoPlayerView.setPlayer(player)
+                            let t = player.currentTime()
+                            if t.isValid && !t.seconds.isNaN {
+                                player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Safety net: swap any still-visible black videoPlayerView for imageView after foreground.
+    /// Primary handling is in setVisible(false) and the per-cell foreground observer.
+    func refreshVideoLayerAfterForeground() {
+        guard isVideoAttachment, !videoPlayerView.isHidden,
+              let mid = attachment?.mid else { return }
+
+        let cachedFrame = VideoLastFrameCache.shared.image(for: mid)
+        if cachedFrame != nil || imageView.image != nil {
+            if let cachedFrame {
+                imageView.image = cachedFrame
+            }
+            imageView.isHidden = false
+            videoPlayerView.isHidden = true
+        } else if player != nil {
+            // No image content at all — deferred seek after GPU resumes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, let player = self.player else { return }
+                self.videoPlayerView.setPlayer(nil)
+                self.videoPlayerView.setPlayer(player)
+                let t = player.currentTime()
+                if t.isValid && !t.seconds.isNaN {
+                    player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
                 }
             }
         }
