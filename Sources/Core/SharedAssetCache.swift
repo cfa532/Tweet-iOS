@@ -103,6 +103,7 @@ class SharedAssetCache: ObservableObject {
     // MARK: - Player Creation Throttling
     private var activeCreations = 0
     private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, continuation: CheckedContinuation<AVPlayer, Error>)] = []
+    private let maxPendingCreations = 10 // MEMORY LEAK FIX: Limit queue size to prevent unbounded continuation buildup
     
     // MARK: - Cache Persistence
     private let cacheMetadataKey = "SharedAssetCache_Metadata"
@@ -164,6 +165,15 @@ class SharedAssetCache: ObservableObject {
         
         // PERFORMANCE FIX: Clean up expired disk cache status entries
         cleanupExpiredDiskCacheStatus()
+
+        // MEMORY LEAK FIX: Clean up tweetUrlMapping entries that have no cached content
+        // Failed videos create tweetUrlMapping entries but never get cache timestamps,
+        // so they are never cleaned by the expiredKeys loop above
+        cleanupOrphanedTweetMappings()
+
+        // MEMORY LEAK FIX: Clean up cachingPlayerDelegates for media IDs that have no player
+        // Failed HLS player creations store delegates that are never cleaned
+        cleanupOrphanedDelegates()
     }
     
     // MARK: - Asset Management
@@ -307,6 +317,38 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
+    /// MEMORY LEAK FIX: Clean up tweetUrlMapping entries whose mediaIDs have no cached content
+    /// and no active loading tasks. These are left behind by failed video loads.
+    private func cleanupOrphanedTweetMappings() {
+        var tweetsToRemove: [String] = []
+        for (tweetId, mediaIDs) in tweetUrlMapping {
+            // Check if any mediaID for this tweet has cached content or active tasks
+            let hasAnyCachedOrActive = mediaIDs.contains { mediaID in
+                assetCache[mediaID] != nil ||
+                playerCache[mediaID] != nil ||
+                loadingTasks[mediaID] != nil ||
+                preloadTasks[mediaID] != nil
+            }
+            if !hasAnyCachedOrActive {
+                tweetsToRemove.append(tweetId)
+            }
+        }
+        for tweetId in tweetsToRemove {
+            tweetUrlMapping.removeValue(forKey: tweetId)
+        }
+    }
+
+    /// MEMORY LEAK FIX: Clean up cachingPlayerDelegates for mediaIDs that have no player or player item
+    /// Failed HLS creations store delegates that are never cleaned up
+    private func cleanupOrphanedDelegates() {
+        let orphanedDelegateKeys = cachingPlayerDelegates.keys.filter { mediaID in
+            playerCache[mediaID] == nil && cachingPlayerItems[mediaID] == nil
+        }
+        for key in orphanedDelegateKeys {
+            cachingPlayerDelegates.removeValue(forKey: key)
+        }
+    }
+
     /// Cancel all loading tasks for a tweet only if no cache is available
     @MainActor func cancelLoadingForTweet(_ tweetId: String) {
         // Check if tweet has cached content
@@ -844,9 +886,14 @@ class SharedAssetCache: ObservableObject {
                             continuation.resume(throwing: error)
                         }
                     }
-                } else {
-                    // Queue for later
+                } else if self.pendingCreations.count < self.maxPendingCreations {
+                    // Queue for later (with size limit to prevent unbounded growth)
                     self.pendingCreations.append((url, tweetId, mediaType, continuation))
+                } else {
+                    // MEMORY LEAK FIX: Reject when queue is full to prevent unbounded continuation buildup
+                    print("⚠️ [SharedAssetCache] Rejecting player creation - pending queue full (\(self.pendingCreations.count))")
+                    continuation.resume(throwing: NSError(domain: "SharedAssetCache", code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "Player creation queue full"]))
                 }
             }
         }

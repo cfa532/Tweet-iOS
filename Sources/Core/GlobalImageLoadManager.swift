@@ -87,6 +87,7 @@ class GlobalImageLoadManager: ObservableObject {
     private init() {
         setupMemoryMonitoring()
         setupAppLifecycleNotifications()
+        startPeriodicCleanup()
     }
     
     // MARK: - Public Interface
@@ -912,8 +913,50 @@ class GlobalImageLoadManager: ObservableObject {
         updateStatistics()
     }
     
+    // MARK: - Periodic Cleanup
+
+    private var periodicCleanupTimer: Timer?
+
+    /// MEMORY LEAK FIX: Periodically trim tracking sets that grow unbounded during a session
+    private func startPeriodicCleanup() {
+        periodicCleanupTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.performPeriodicCleanup()
+            }
+        }
+    }
+
+    private func performPeriodicCleanup() {
+        // Trim completedRequests if too large (IDs of successfully loaded images)
+        if completedRequests.count > 500 {
+            let excess = completedRequests.count - 250
+            let keysToRemove = Array(completedRequests.prefix(excess))
+            completedRequests.subtract(keysToRemove)
+        }
+
+        // Trim permanentlyFailedRequests to prevent unbounded growth
+        if permanentlyFailedRequests.count > 200 {
+            let excess = permanentlyFailedRequests.count - 100
+            let keysToRemove = Array(permanentlyFailedRequests.prefix(excess))
+            permanentlyFailedRequests.subtract(keysToRemove)
+        }
+
+        // Trim nonImageResponses - these are never cleaned automatically
+        if nonImageResponses.count > 200 {
+            let excess = nonImageResponses.count - 100
+            let keysToRemove = Array(nonImageResponses.prefix(excess))
+            nonImageResponses.subtract(keysToRemove)
+        }
+
+        // Trim retryCounts
+        if retryCounts.count > 100 {
+            let keysToKeep = Set(Array(retryCounts.keys).suffix(50))
+            retryCounts = retryCounts.filter { keysToKeep.contains($0.key) }
+        }
+    }
+
     // MARK: - Memory Monitoring
-    
+
     private func setupMemoryMonitoring() {
         // Monitor memory warnings
         NotificationCenter.default.addObserver(
@@ -1035,6 +1078,7 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     deinit {
+        periodicCleanupTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 }

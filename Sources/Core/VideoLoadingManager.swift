@@ -53,7 +53,13 @@ class VideoLoadingManager: ObservableObject {
     /// Update the list of all tweet IDs (called when tweet list changes)
     func updateTweetList(_ tweetIds: [String]) async {
         await MainActor.run {
+            let newTweetSet = Set(tweetIds)
             allTweetIds = tweetIds
+
+            // MEMORY LEAK FIX: Remove entries for tweets no longer in the list
+            // Without this, tweetsWithVideos and retweetToOriginalMap grow indefinitely
+            tweetsWithVideos.formIntersection(newTweetSet)
+            retweetToOriginalMap = retweetToOriginalMap.filter { newTweetSet.contains($0.key) }
         }
     }
 
@@ -270,8 +276,9 @@ class VideoLoadingManager: ObservableObject {
         }
         
         // Process cancellations in background
-        Task.detached(priority: .background) {
-            await self.processCancellationBatch(batch)
+        // MEMORY LEAK FIX: Use [weak self] to avoid unnecessary strong capture
+        Task.detached(priority: .background) { [weak self] in
+            await self?.processCancellationBatch(batch)
         }
         
         isProcessingCancellations = false
