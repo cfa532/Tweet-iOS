@@ -630,8 +630,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             } else {
                 // Not going to play — seek to force AVPlayerLayer to decode a frame.
                 // onReadyForDisplay will fire → .playerReady
-                let t = newPlayer.currentTime()
-                let seekTarget = (t.isValid && !t.seconds.isNaN) ? t : .zero
+                // Seek to 0.01s to force decode (seeking to current position is no-op)
+                let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
                 newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         }
@@ -916,9 +916,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         } else if let player = self.player {
                             // Not going to play — seek to force AVPlayerLayer to decode a frame.
                             // onReadyForDisplay will fire → .playerReady
-                            let t = player.currentTime()
-                            let target = (t.isValid && !t.seconds.isNaN) ? t : .zero
-                            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+                            // Seek to 0.01s to force decode (seeking to current position is no-op)
+                            let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
+                            player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
                         }
                     }
                 } else if item.status == .failed {
