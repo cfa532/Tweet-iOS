@@ -912,7 +912,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func actuallyStartPlayback(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
 
-        // Transition to playing — hides imageView, shows videoPlayerView, stops spinner
+        // Re-attach player to layer if it was detached for background.
+        // In normal flow this is a no-op (same player already attached).
+        videoPlayerView.setPlayer(player)
+
+        // Transition to playing — keeps thumbnail as cover until layer confirms rendering
         transitionTo(.playing)
 
         player.isMuted = MuteState.shared.isMuted
@@ -1516,6 +1520,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard let mid = attachment?.mid,
               let thumbnail = VideoLastFrameCache.shared.image(for: mid) else { return }
         imageView.image = thumbnail
+        // Detach player from layer so isReadyForDisplay resets to false.
+        // This ensures the thumbnail stays as cover until the layer actually
+        // renders a frame after foreground return.
+        videoPlayerView.setPlayer(nil)
         transitionTo(.thumbnail)
     }
 
