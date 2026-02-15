@@ -91,7 +91,8 @@ class TweetTableViewCell: UITableViewCell {
         onAvatarTap: ((User) -> Void)?,
         onTweetTap: ((Tweet) -> Void)?,
         onShowLogin: (() -> Void)?,
-        onShowToast: ((String, Bool) -> Void)?
+        onShowToast: ((String, Bool) -> Void)?,
+        allowDeleteAll: Bool = false
     ) {
         currentTweetId = tweet.mid
 
@@ -110,7 +111,8 @@ class TweetTableViewCell: UITableViewCell {
             hproseInstance: hproseInstance,
             isPinned: isPinned,
             isLastItem: isLastItem,
-            parentViewController: parentViewController
+            parentViewController: parentViewController,
+            allowDeleteAll: allowDeleteAll
         )
     }
 

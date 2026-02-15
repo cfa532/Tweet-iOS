@@ -363,6 +363,9 @@ final class HproseInstance: ObservableObject {
             print("✅ [initializeAppUser] AppUser singleton avatar: \(appUser.avatar ?? "nil"), baseUrl: \(appUser.baseUrl?.absoluteString ?? "nil")")
             print("DEBUG: [HproseInstance] Initialized app user: \(userId), baseUrl: \(String(describing: appUser.baseUrl))")
             
+            // Pre-populate NodePool with appUser's access node so it's available immediately
+            NodePool.shared.updateFromUser(appUser)
+
             // Mark initialization as complete so error messages can be shown
             // This is safe to do here since the user can now interact with the app
             isAppInitializing = false
@@ -2154,6 +2157,7 @@ final class HproseInstance: ObservableObject {
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
+                        NodePool.shared.updateFromUser(loginUser)
                     }
                     Task {
                         await self.populateFellowLists(user: loginUser)
@@ -2175,6 +2179,7 @@ final class HproseInstance: ObservableObject {
                     await MainActor.run {
                         self.preferenceHelper?.setUserId(loginUser.mid)
                         self.appUser = loginUser
+                        NodePool.shared.updateFromUser(loginUser)
                     }
                     Task {
                         await self.populateFellowLists(user: loginUser)
@@ -2900,12 +2905,18 @@ final class HproseInstance: ObservableObject {
             }
             
             print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
-            
-            // Immediately update appUser tweet count (like favorites/bookmarks)
-            await MainActor.run {
-                let currentCount = self.appUser.tweetCount ?? 0
-                self.appUser.tweetCount = max(0, currentCount - 1)
-                print("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+
+            // Only decrement tweetCount if appUser is the author
+            // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
+            let tweetAuthorId = Tweet.getInstance(for: tweetId)?.authorId
+            if tweetAuthorId == nil || tweetAuthorId == appUser.mid {
+                await MainActor.run {
+                    let currentCount = self.appUser.tweetCount ?? 0
+                    self.appUser.tweetCount = max(0, currentCount - 1)
+                    print("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+                }
+            } else {
+                print("DEBUG: [deleteTweet] Skipping tweetCount decrement — tweet authored by \(tweetAuthorId ?? "unknown"), not appUser")
             }
             
             // Refresh appUser from server to get updated tweetCount and other properties

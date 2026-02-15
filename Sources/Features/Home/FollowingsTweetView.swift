@@ -63,6 +63,7 @@ struct FollowingsTweetView: View {
             onScroll: { offset, delta in
                 onScroll?(offset, delta)
             },
+            allowDeleteAll: true,
             onAvatarTap: { user in onAvatarTap(user) },
             onTweetTap: { tweet in onTweetTap(tweet) },
             onShowLogin: onShowLogin,

@@ -299,7 +299,8 @@ class TweetCellContentView: UIView {
 
     func configure(tweet: Tweet, hproseInstance: HproseInstance,
                    isPinned: Bool, isLastItem: Bool,
-                   parentViewController: UIViewController) {
+                   parentViewController: UIViewController,
+                   allowDeleteAll: Bool = false) {
         self.parentViewController = parentViewController
         self.currentTweet = tweet
 
@@ -317,10 +318,12 @@ class TweetCellContentView: UIView {
         // Determine which tweet's content to show
         if isRetweet {
             configureAsRetweet(tweet: tweet, hproseInstance: hproseInstance,
-                               isPinned: isPinned, parentViewController: parentViewController)
+                               isPinned: isPinned, parentViewController: parentViewController,
+                               allowDeleteAll: allowDeleteAll)
         } else {
             configureAsRegularTweet(tweet: tweet, hproseInstance: hproseInstance,
-                                    isPinned: isPinned, parentViewController: parentViewController)
+                                    isPinned: isPinned, parentViewController: parentViewController,
+                                    allowDeleteAll: allowDeleteAll)
         }
 
         // Separator
@@ -340,7 +343,8 @@ class TweetCellContentView: UIView {
     }
 
     private func configureAsRegularTweet(tweet: Tweet, hproseInstance: HproseInstance,
-                                          isPinned: Bool, parentViewController: UIViewController) {
+                                          isPinned: Bool, parentViewController: UIViewController,
+                                          allowDeleteAll: Bool = false) {
         // Hide retweet banner
         showRetweetBanner(false)
 
@@ -371,7 +375,7 @@ class TweetCellContentView: UIView {
         // Header
         headerView.configure(tweet: tweet)
         let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
-                                   showDelete: tweet.authorId == hproseInstance.appUser.mid,
+                                   showDelete: allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid,
                                    hproseInstance: hproseInstance)
         headerView.setMenu(menu)
 
@@ -390,7 +394,8 @@ class TweetCellContentView: UIView {
     }
 
     private func configureAsRetweet(tweet: Tweet, hproseInstance: HproseInstance,
-                                     isPinned: Bool, parentViewController: UIViewController) {
+                                     isPinned: Bool, parentViewController: UIViewController,
+                                     allowDeleteAll: Bool = false) {
         guard let originalTweetId = tweet.originalTweetId,
               let originalAuthorId = tweet.originalAuthorId else { return }
 
@@ -406,20 +411,23 @@ class TweetCellContentView: UIView {
             // Pure retweet: show original tweet's content directly, with retweet banner
             configurePureRetweet(tweet: tweet, originalTweet: embeddedTweet,
                                   hproseInstance: hproseInstance, isPinned: isPinned,
-                                  parentViewController: parentViewController)
+                                  parentViewController: parentViewController,
+                                  allowDeleteAll: allowDeleteAll)
         } else {
             // Quoted tweet: show own content + embedded original tweet below
             configureQuotedTweet(tweet: tweet, embeddedTweet: embeddedTweet,
                                   originalTweetId: originalTweetId,
                                   originalAuthorId: originalAuthorId,
                                   hproseInstance: hproseInstance, isPinned: isPinned,
-                                  parentViewController: parentViewController)
+                                  parentViewController: parentViewController,
+                                  allowDeleteAll: allowDeleteAll)
         }
     }
 
     private func configurePureRetweet(tweet: Tweet, originalTweet: Tweet,
                                        hproseInstance: HproseInstance, isPinned: Bool,
-                                       parentViewController: UIViewController) {
+                                       parentViewController: UIViewController,
+                                       allowDeleteAll: Bool = false) {
         // Show retweet banner above the tweet
         showRetweetBanner(true)
 
@@ -455,7 +463,7 @@ class TweetCellContentView: UIView {
         // Header from original tweet
         headerView.configure(tweet: originalTweet)
         let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
-                                   showDelete: tweet.authorId == hproseInstance.appUser.mid,
+                                   showDelete: allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid,
                                    hproseInstance: hproseInstance)
         headerView.setMenu(menu)
 
@@ -476,7 +484,8 @@ class TweetCellContentView: UIView {
     private func configureQuotedTweet(tweet: Tweet, embeddedTweet: Tweet?,
                                        originalTweetId: String, originalAuthorId: String,
                                        hproseInstance: HproseInstance, isPinned: Bool,
-                                       parentViewController: UIViewController) {
+                                       parentViewController: UIViewController,
+                                       allowDeleteAll: Bool = false) {
         // Hide retweet banner
         showRetweetBanner(false)
 
@@ -505,7 +514,7 @@ class TweetCellContentView: UIView {
         // Header from quoting tweet
         headerView.configure(tweet: tweet)
         let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
-                                   showDelete: tweet.authorId == hproseInstance.appUser.mid,
+                                   showDelete: allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid,
                                    hproseInstance: hproseInstance)
         headerView.setMenu(menu)
 
@@ -654,36 +663,37 @@ class TweetCellContentView: UIView {
             }
             actions.append(privacyAction)
 
-            // Delete (only for own tweets if showDelete is true)
-            if showDelete {
-                let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: "Menu item"),
-                                            image: UIImage(systemName: "trash"),
-                                            attributes: .destructive) { _ in
-                    // Optimistic UI update — remove immediately
-                    NotificationCenter.default.post(
-                        name: .tweetDeleted,
-                        object: nil,
-                        userInfo: ["tweetId": tweet.mid]
-                    )
-                    Task {
-                        do {
-                            _ = try await hproseInstance.deleteTweet(tweet.mid)
-                        } catch {
-                            // Restore tweet on failure
-                            NotificationCenter.default.post(
-                                name: .tweetRestored,
-                                object: nil,
-                                userInfo: ["tweetId": tweet.mid]
-                            )
-                            NotificationCenter.default.post(
-                                name: .errorOccurred,
-                                object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
-                            )
-                        }
+        }
+
+        // Delete — shown for own tweets, or for any tweet when allowDeleteAll is true (main feed)
+        if showDelete {
+            let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: "Menu item"),
+                                        image: UIImage(systemName: "trash"),
+                                        attributes: .destructive) { _ in
+                // Optimistic UI update — remove immediately
+                NotificationCenter.default.post(
+                    name: .tweetDeleted,
+                    object: nil,
+                    userInfo: ["tweetId": tweet.mid]
+                )
+                Task {
+                    do {
+                        _ = try await hproseInstance.deleteTweet(tweet.mid)
+                    } catch {
+                        // Restore tweet on failure
+                        NotificationCenter.default.post(
+                            name: .tweetRestored,
+                            object: nil,
+                            userInfo: ["tweetId": tweet.mid]
+                        )
+                        NotificationCenter.default.post(
+                            name: .errorOccurred,
+                            object: NSError(domain: "TweetDeletion", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to delete tweet: \(ErrorMessageHelper.userFriendlyMessage(from: error))"])
+                        )
                     }
                 }
-                actions.append(deleteAction)
             }
+            actions.append(deleteAction)
         }
 
         return UIMenu(title: "", children: actions)

@@ -35,6 +35,7 @@ struct TweetListView: View {
     let pinnedTweets: [Tweet]  // Pinned tweets for video coordination
     let feedIdentifier: String  // Unique identifier for persistent scroll position
     let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
+    let allowDeleteAll: Bool  // If true, appUser can delete any tweet (main feed); otherwise only own tweets
     private let pageSize: UInt = 10  // Manual load-more only
 
     // Navigation callbacks (passed through to UIKit cells)
@@ -162,6 +163,7 @@ struct TweetListView: View {
         pinnedTweets: [Tweet] = [],
         feedIdentifier: String = "mainFeed",
         preserveOrder: Bool = false,
+        allowDeleteAll: Bool = false,
         header: (() -> AnyView)? = nil,
         onRefreshExtra: (() async -> Void)? = nil,
         onAvatarTap: ((User) -> Void)? = nil,
@@ -179,6 +181,7 @@ struct TweetListView: View {
         self.pinnedTweets = pinnedTweets
         self.feedIdentifier = feedIdentifier
         self.preserveOrder = preserveOrder
+        self.allowDeleteAll = allowDeleteAll
         self.header = header
         self.onRefreshExtra = onRefreshExtra
         self.onAvatarTap = onAvatarTap
@@ -231,7 +234,8 @@ struct TweetListView: View {
                     onAvatarTap: onAvatarTap,
                     onTweetTap: onTweetTap,
                     onShowLogin: onShowLogin,
-                    onShowToast: onShowToast
+                    onShowToast: onShowToast,
+                    allowDeleteAll: allowDeleteAll
                 )
                 .onAppear {
                     screenHeight = geometry.size.height

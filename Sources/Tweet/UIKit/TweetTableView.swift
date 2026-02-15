@@ -25,6 +25,7 @@ struct TweetTableView: UIViewControllerRepresentable {
     let onTweetTap: ((Tweet) -> Void)?
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
+    let allowDeleteAll: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -63,6 +64,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         controller.onTweetTap = onTweetTap
         controller.onShowLogin = onShowLogin
         controller.onShowToast = onShowToast
+        controller.allowDeleteAll = allowDeleteAll
 
         controller.updateHeader()
 
@@ -106,6 +108,7 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.onTweetTap = onTweetTap
         uiViewController.onShowLogin = onShowLogin
         uiViewController.onShowToast = onShowToast
+        uiViewController.allowDeleteAll = allowDeleteAll
 
         // Only update header if it exists — avoids unnecessary SwiftUI layout work
         // on every updateUIViewController call (which fires on any SwiftUI state change)

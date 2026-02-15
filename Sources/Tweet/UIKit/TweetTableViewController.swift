@@ -71,6 +71,7 @@ class TweetTableViewController: UITableViewController {
     var onTweetTap: ((Tweet) -> Void)?
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
+    var allowDeleteAll: Bool = false
     
     // Header hosting controller
     private var headerHostingController: UIHostingController<AnyView>?
@@ -1057,7 +1058,8 @@ class TweetTableViewController: UITableViewController {
                 onAvatarTap: onAvatarTap,
                 onTweetTap: onTweetTap,
                 onShowLogin: onShowLogin,
-                onShowToast: onShowToast
+                onShowToast: onShowToast,
+                allowDeleteAll: allowDeleteAll
             )
         }
 
