@@ -76,16 +76,3 @@
 | [UNIVERSAL_LINKS.md](./UNIVERSAL_LINKS.md) | Universal links setup and testing |
 | [PERMISSION_LOCALIZATION_GUIDE.md](./PERMISSION_LOCALIZATION_GUIDE.md) | Permission string localization |
 | [Server_API.md](./Server_API.md) | Server API reference (symlink to backend repo) |
-
----
-
-## Archive
-
-Historical documentation preserved in [archive/](./archive/). Contains 170+ files including:
-
-- **Session-specific fix logs** from Oct 2025 - Jan 2026 (pre-UIKit migration)
-- **Old performance audits** and optimization reports
-- **Superseded architecture docs** (SwiftUI-only feed, old video systems)
-- **Consolidated originals** (NodePool, Universal Links, Push Notifications pairs)
-
-Most archived docs reference the old SwiftUI feed architecture replaced by pure UIKit cells in Feb 2026 (Phases 1-5).
