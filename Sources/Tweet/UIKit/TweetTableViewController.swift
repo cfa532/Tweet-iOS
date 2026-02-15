@@ -85,12 +85,12 @@ class TweetTableViewController: UITableViewController {
     private var lastScrollOffset: CGFloat = 0
     private var hasCompletedInitialLayout: Bool = false
     private var hasAdjustedInitialPosition: Bool = false
-    private var lastScrollCallbackTime: Date?
-    private let scrollCallbackThrottleInterval: TimeInterval = 0.1 // 100ms throttle for scroll callbacks
-    
+    private var lastScrollCallbackTime: CFTimeInterval = 0
+    private let scrollCallbackThrottleInterval: CFTimeInterval = 0.1 // 100ms throttle for scroll callbacks
+
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
-    private var lastVideoVisibilityUpdate: Date?
+    private var lastVideoVisibilityUpdate: CFTimeInterval = 0
     private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms - faster video starts
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     private var lastPreloadTweetIds: Set<String> = [] // Cache last preload zone tweet IDs
@@ -604,14 +604,12 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Public API
     
     func updatePinnedTweets(_ tweets: [Tweet]) {
-        print("🔵 [PINNED UPDATE] updatePinnedTweets called with \(tweets.count) tweets: \(tweets.map { $0.mid })")
         let oldCount = pinnedTweets.count
         let oldPinnedTweets = pinnedTweets
         self.pinnedTweets = tweets
 
-        // CRITICAL: Rebuild video list when pinned tweets change
+        // Rebuild video list when pinned tweets change
         // This ensures pinned tweet videos are registered with the coordinator
-        print("🔵 [PINNED UPDATE] Rebuilding video list with \(self.tweets.count) regular tweets and \(pinnedTweets.count) pinned tweets")
         videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: pinnedTweets)
 
         // Check if same tweets in same order - only counts may have changed
@@ -627,7 +625,6 @@ class TweetTableViewController: UITableViewController {
             if sameOrder {
                 // OPTIMIZATION: Same pinned tweets in same order - only hit counts changed
                 // SwiftUI will automatically re-render action buttons via @Published properties
-                print("🔄 [PINNED UPDATE OPTIMIZATION] Only hit counts changed - skipping reload")
 
                 // Still update visibility for video coordinator
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -700,7 +697,6 @@ class TweetTableViewController: UITableViewController {
             for i in 0..<oldCount {
                 if oldTweets[i].mid != newTweets[i].mid {
                     sameOrder = false
-                    print("🔄 [UPDATE CHECK] Order changed at index \(i): \(oldTweets[i].mid) -> \(newTweets[i].mid)")
                     break
                 }
             }
@@ -709,11 +705,8 @@ class TweetTableViewController: UITableViewController {
                 // OPTIMIZATION: Same tweets in same order - only hit counts changed
                 // Tweet.getInstance() already updated the @Published count properties
                 // SwiftUI will automatically re-render action buttons, no need to reload cells
-                print("✅ [UPDATE OPTIMIZATION] Only hit counts changed - skipping table reload (count: \(oldCount))")
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
-            } else {
-                print("⚠️ [UPDATE] Same count but different order - will use smart update")
             }
         }
         
@@ -897,55 +890,42 @@ class TweetTableViewController: UITableViewController {
         // ✅ FIX: Only log state changes, and avoid logging Date() or complex objects
         // Excessive logging can cause Xcode console to stop showing logs (FontServicesDaemonManager error)
         if stateChanged {
-            // Use simple format to avoid overwhelming console
-            print("🔄 [LOADING STATE] isLoadingMore: \(isLoadingMore), hasMoreTweets: \(hasMoreTweets)")
         }
-        
+
         // Show/hide loading spinner with animations
         if isLoadingMore {
-            // ✅ FIX: Don't show spinner if we just showed/have no-more-tweets message
-            // If there are no more tweets and we just showed the message, don't show spinner
-            // This prevents the spinner flash right after the message disappears
+            // Don't show spinner if we just showed/have no-more-tweets message
             if isShowingNoMoreTweetsMessage || (!hasMoreTweets && lastNoMoreTweetsShownTime != nil) {
                 let timeSinceMessage = lastNoMoreTweetsShownTime.map { Date().timeIntervalSince($0) } ?? 0
-                if timeSinceMessage < 3.0 {  // Within 3 seconds of showing message (2s display + 1s buffer)
-                    print("⏳ [FOOTER SPINNER] Skipping spinner - no-more-tweets message was recently shown")
-                    return
-                }
+                if timeSinceMessage < 3.0 { return }
             }
-            
+
             // Record when spinner was shown
             loadingSpinnerStartTime = Date()
-            // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
-            print("⏳ [FOOTER SPINNER] Showing spinner with animation")
-            
-            // Start timeout timer as safety measure (30 second timeout)
+
+            // Start timeout timer as safety measure
             loadingTimeoutTimer?.invalidate()
             loadingTimeoutTimer = Timer.scheduledTimer(withTimeInterval: maximumLoadingTime, repeats: false) { [weak self] _ in
                 guard let self = self else { return }
-                print("⚠️ [TIMEOUT] Loading took longer than \(Int(self.maximumLoadingTime))s - forcing spinner to hide")
-                
-                // Force hide spinner and reset state
                 if self.isLoadingMore {
                     self.updateLoadingState(isLoadingMore: false, hasMoreTweets: self.hasMoreTweets)
                 }
             }
-            
+
             // Use taller footer to position spinner just above bottom nav bar
             let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 80))
             footerView.backgroundColor = .clear
-            
+
             let spinner = UIActivityIndicatorView(style: .medium)
-            // Position spinner in lower part of footer, closer to bottom nav
             spinner.center = CGPoint(x: footerView.bounds.width / 2, y: 30)
             spinner.startAnimating()
             footerView.addSubview(spinner)
-            
+
             // Fade in and slide up animation
             footerView.alpha = 0
             footerView.transform = CGAffineTransform(translationX: 0, y: 20)
             tableView.tableFooterView = footerView
-            
+
             UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut) {
                 footerView.alpha = 1.0
                 footerView.transform = .identity
@@ -955,10 +935,10 @@ class TweetTableViewController: UITableViewController {
             if let startTime = loadingSpinnerStartTime {
                 let elapsedTime = Date().timeIntervalSince(startTime)
                 let remainingTime = max(0, minimumSpinnerDisplayTime - elapsedTime)
-                
+
                 // Check if we should show "no more tweets" message
                 let shouldShowMessage = previousLoadingMore && !hasMoreTweets && tweets.count > 0
-                
+
                 // Add cooldown check
                 let canShowMessage: Bool
                 if let lastShown = lastNoMoreTweetsShownTime {
@@ -966,9 +946,8 @@ class TweetTableViewController: UITableViewController {
                 } else {
                     canShowMessage = true
                 }
-                
+
                 if remainingTime > 0 {
-                    print("⏳ [FOOTER SPINNER] Delaying hide for \(Int(remainingTime * 1000))ms to meet minimum 500ms")
                     DispatchQueue.main.asyncAfter(deadline: .now() + remainingTime) { [weak self] in
                         guard let self = self else { return }
                         self.hideSpinner(shouldShowMessage: shouldShowMessage && canShowMessage)
@@ -978,47 +957,30 @@ class TweetTableViewController: UITableViewController {
                 }
             } else {
                 // No start time recorded, hide immediately
-                // ✅ FIX: Don't clear footer if we're showing the "no more tweets" message
-                // This prevents the message from being removed prematurely
-                if isShowingNoMoreTweetsMessage {
-                    print("✅ [FOOTER SPINNER] Skipping footer clear - no-more-tweets message is showing")
-                    return
-                }
-                if tableView.tableFooterView != nil {
-                    print("✅ [FOOTER SPINNER] Hiding spinner (no start time)")
-                }
+                // Don't clear footer if we're showing the "no more tweets" message
+                if isShowingNoMoreTweetsMessage { return }
                 tableView.tableFooterView = nil
             }
         }
     }
-    
+
     private func hideSpinner(shouldShowMessage: Bool) {
         // Cancel timeout timer since loading completed normally
         loadingTimeoutTimer?.invalidate()
         loadingTimeoutTimer = nil
-        
-        // ✅ FIX: Don't hide spinner if we're showing the "no more tweets" message
-        // This prevents the message from being removed when hideSpinner is called
+
+        // Don't hide spinner if we're showing the "no more tweets" message
         if isShowingNoMoreTweetsMessage {
-            print("✅ [FOOTER SPINNER] Skipping hide - no-more-tweets message is showing")
             loadingSpinnerStartTime = nil
             return
         }
-        
+
         guard let footerView = tableView.tableFooterView else {
-            print("✅ [FOOTER SPINNER] No footer view to hide")
             loadingSpinnerStartTime = nil
             if shouldShowMessage {
                 showNoMoreTweetsMessage()
             }
             return
-        }
-        
-        if let startTime = loadingSpinnerStartTime {
-            let displayDuration = Date().timeIntervalSince(startTime)
-            print("✅ [FOOTER SPINNER] Hiding spinner with animation (displayed for \(String(format: "%.2f", displayDuration * 1000))ms)")
-        } else {
-            print("✅ [FOOTER SPINNER] Hiding spinner with animation (no start time)")
         }
         
         // Fade out and slide down animation
@@ -1029,13 +991,10 @@ class TweetTableViewController: UITableViewController {
             guard let self = self else { return }
             if self.tableView.tableFooterView === footerView {
                 self.tableView.tableFooterView = nil
-                print("✅ [FOOTER SPINNER] Footer view removed from table")
             }
             self.loadingSpinnerStartTime = nil
-            
-            // Show message after spinner clears
+
             if shouldShowMessage {
-                print("📭 [TRANSITION] Showing 'no more tweets' message after spinner")
                 self.showNoMoreTweetsMessage()
             }
         }
@@ -1150,8 +1109,14 @@ class TweetTableViewController: UITableViewController {
                     let embeddedTweetLoaded = !needsEmbeddedTweet ||
                                              (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
                     if embeddedTweetLoaded {
-                        tweet.cachedHeight = cell.frame.height
-                        TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                        // Sanity check: don't cache if significantly smaller than expected
+                        // (indicates cell hasn't fully rendered — e.g., media grid pending)
+                        let expectedHeight = Self.calculateTweetHeight(for: tweet)
+                        let isReasonable = cell.frame.height >= expectedHeight - 20
+                        if isReasonable {
+                            tweet.cachedHeight = cell.frame.height
+                            TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                        }
                     }
                 }
             }
@@ -1175,9 +1140,18 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Use cached height if available — guaranteed accurate
+        // Use in-memory cached height if available — set by willDisplay from actual Auto Layout
         if let cachedHeight = tweet.cachedHeight {
             return cachedHeight
+        }
+
+        // Use persisted height cache (survives app restarts) as second-best estimate.
+        // This prevents scroll jumps for previously-viewed tweets on cold start.
+        // NOTE: Do NOT set tweet.cachedHeight here — persisted heights may be stale
+        // (e.g., from a session where the cell didn't fully render). Only willDisplay
+        // should set cachedHeight after Auto Layout verifies the actual height.
+        if let persistedHeight = TweetHeightCache.shared.getHeight(for: tweet.mid) {
+            return persistedHeight
         }
 
         // Use deterministic calculation as estimate.
@@ -1404,7 +1378,11 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
-        // Use cached height if available (set by willDisplay from actual Auto Layout)
+        // Use cached height if available (set by willDisplay from actual Auto Layout).
+        // Only trust in-memory cachedHeight — it was verified by Auto Layout this session.
+        // Do NOT use persisted TweetHeightCache here: returning a stale fixed height
+        // prevents Auto Layout from running, locking in wrong heights for cells that
+        // didn't fully render when they were cached.
         if let cachedHeight = tweet.cachedHeight {
             return cachedHeight
         }
@@ -1437,13 +1415,30 @@ class TweetTableViewController: UITableViewController {
         // heightForRowAt returns automaticDimension on first display, so cell.frame.height
         // reflects the true Auto Layout result. Cache it for future use so that
         // estimatedHeightForRowAt == heightForRowAt → no scroll jumps on subsequent displays.
+        //
+        // Guards against caching incomplete heights:
+        // 1. embeddedTweetLoaded: don't cache if retweet/quote's original tweet isn't loaded
+        // 2. Height sanity check: don't cache if significantly smaller than calculated estimate
+        //    (indicates cell hasn't fully rendered — e.g., media grid not yet laid out)
         if cell.frame.height > 0 {
             let needsEmbeddedTweet = tweet.originalTweetId != nil
             let embeddedTweetLoaded = !needsEmbeddedTweet ||
                                      (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
             if embeddedTweetLoaded {
-                tweet.cachedHeight = cell.frame.height
-                TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                // Sanity check: if the actual height is much smaller than expected,
+                // the cell likely hasn't finished rendering (async content pending).
+                // Don't cache — let Auto Layout re-determine on next display.
+                let expectedHeight = Self.calculateTweetHeight(for: tweet)
+                let isReasonable = cell.frame.height >= expectedHeight - 20
+
+                if isReasonable {
+                    tweet.cachedHeight = cell.frame.height
+                    TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
+                } else {
+                    // Clear stale persisted height so it doesn't poison future sessions
+                    tweet.cachedHeight = nil
+                    TweetHeightCache.shared.removeHeight(for: tweet.mid)
+                }
             }
         }
     }
@@ -1467,17 +1462,10 @@ class TweetTableViewController: UITableViewController {
             isScrollingBackward = frameDelta < 0
         }
 
-        // Throttle video visibility updates
-        let now = Date()
-        let shouldUpdate: Bool
+        // Throttle video visibility updates (CACurrentMediaTime is cheaper than Date())
+        let now = CACurrentMediaTime()
 
-        if let lastUpdate = lastVideoVisibilityUpdate {
-            shouldUpdate = now.timeIntervalSince(lastUpdate) >= videoVisibilityThrottleInterval
-        } else {
-            shouldUpdate = true
-        }
-
-        if shouldUpdate {
+        if now - lastVideoVisibilityUpdate >= videoVisibilityThrottleInterval {
             lastVideoVisibilityUpdate = now
             updateVisibleTweetsForVideoPlayback()
         }
@@ -1489,7 +1477,6 @@ class TweetTableViewController: UITableViewController {
         let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight + contentInsetBottom
 
         if tweets.count >= 4 && bottomOffset > bottomPullThreshold && !isLoadingMore && !isBottomPullActive {
-            print("📱 [BOTTOM PULL] Threshold reached, triggering loadMore (hasMoreTweets: \(hasMoreTweets))")
             isBottomPullActive = true
             triggerBottomPullLoadMore()
         } else if bottomOffset <= 0 {
@@ -1512,7 +1499,7 @@ class TweetTableViewController: UITableViewController {
         guard abs(velocity) > 100 else { return }  // ignore ambiguous / near-zero velocity
 
         // Time-based throttling
-        let shouldThrottleByTime = lastScrollCallbackTime.map { now.timeIntervalSince($0) < scrollCallbackThrottleInterval } ?? false
+        let shouldThrottleByTime = (now - lastScrollCallbackTime) < scrollCallbackThrottleInterval
 
         // Distance throttle — enough scroll distance since last callback
         let distanceSinceLastCallback = abs(currentOffset - lastCallbackOffset)
@@ -1776,7 +1763,6 @@ class TweetTableViewController: UITableViewController {
     
     /// Programmatically trigger load more (e.g., from external button or gesture)
     func triggerLoadMore() {
-        print("🔄 [PROGRAMMATIC] Load more requested")
         triggerBottomPullLoadMore()
     }
     
@@ -1789,27 +1775,21 @@ class TweetTableViewController: UITableViewController {
     
     private func triggerBottomPullLoadMore() {
         guard !isLoadingMore else { return }
-        
+
         // Check if there are no more tweets to load
         if !hasMoreTweets {
-            print("📭 [BOTTOM PULL] No more tweets - showing spinner for 500ms then message for 2s")
-            
             // Show spinner first for exactly 500ms
             updateLoadingState(isLoadingMore: true, hasMoreTweets: false)
-            
+
             // After 500ms, hide spinner (which will trigger message if conditions are met)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self = self else { return }
-                print("⏰ [TIMING] 500ms elapsed - hiding spinner and showing message")
                 self.updateLoadingState(isLoadingMore: false, hasMoreTweets: false)
-                
-                // Reset flag to allow next pull
                 self.isBottomPullActive = false
             }
             return
         }
-        
-        print("🔄 [BOTTOM PULL] Manual pull - calling loadMoreTweets(forceLoad: true)")
+
         updateLoadingState(isLoadingMore: true, hasMoreTweets: hasMoreTweets)
         
         // Call the load more callback with forceLoad=true to bypass hasMoreTweets check
@@ -1825,85 +1805,54 @@ class TweetTableViewController: UITableViewController {
     }
     
     private func showNoMoreTweetsMessage() {
-        // Prevent showing multiple messages at once
-        guard !isShowingNoMoreTweetsMessage else {
-            print("📭 [NO MORE TWEETS] Already showing message, skipping")
-            return
-        }
-        
+        guard !isShowingNoMoreTweetsMessage else { return }
+
         isShowingNoMoreTweetsMessage = true
         lastNoMoreTweetsShownTime = Date()
-        
-        // Cancel any existing timer
         noMoreTweetsMessageTimer?.invalidate()
-        
-        // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
-        print("📭 [NO MORE TWEETS] Showing message with animation")
-        
-        // Create footer view with message - increased height for more spacing from tweet above
+
         let footerView = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 120))
         footerView.backgroundColor = .clear
-        
+
         let messageLabel = UILabel()
         messageLabel.text = NSLocalizedString("No more tweets", comment: "Message shown when there are no more tweets to load")
         messageLabel.textAlignment = .center
         messageLabel.font = .systemFont(ofSize: 15, weight: .medium)
         messageLabel.textColor = .secondaryLabel
         messageLabel.translatesAutoresizingMaskIntoConstraints = false
-        
+
         footerView.addSubview(messageLabel)
-        
-        // ✅ FIX: Position message lower in footer to increase distance from tweet above
-        // Increased top padding from 20 to 40 to add more space
+
         NSLayoutConstraint.activate([
             messageLabel.centerXAnchor.constraint(equalTo: footerView.centerXAnchor),
             messageLabel.topAnchor.constraint(equalTo: footerView.topAnchor, constant: 40)
         ])
-        
-        // Fade in and slide up animation (matching Android)
+
         footerView.alpha = 0
         footerView.transform = CGAffineTransform(translationX: 0, y: 20)
         tableView.tableFooterView = footerView
-        
+
         UIView.animate(withDuration: 0.4, delay: 0, options: .curveEaseOut) {
             footerView.alpha = 1.0
             footerView.transform = .identity
         }
-        
+
         // Auto-hide after 2 seconds
-        let messageDisplayDuration: TimeInterval = 2.0
-        print("📭 [NO MORE TWEETS] Setting \(messageDisplayDuration)-second timer")
-        noMoreTweetsMessageTimer = Timer.scheduledTimer(withTimeInterval: messageDisplayDuration, repeats: false) { [weak self] timer in
-            guard let self = self else {
-                print("📭 [NO MORE TWEETS] Timer fired but self is nil")
-                return
-            }
-            
-            // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
-            print("📭 [NO MORE TWEETS] Timer fired - hiding message with animation (2s cooldown active)")
-            
-            // Fade out and slide up animation
+        noMoreTweetsMessageTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+
             UIView.animate(withDuration: 0.3, animations: {
                 footerView.alpha = 0
                 footerView.transform = CGAffineTransform(translationX: 0, y: -10)
             }) { _ in
                 if self.tableView.tableFooterView === footerView {
                     self.tableView.tableFooterView = nil
-                    // ✅ FIX: Don't print Date() directly - can cause Xcode console to stop showing logs
-                    print("📭 [NO MORE TWEETS] Message hidden and removed from table")
                 }
-                // ✅ FIX: Clear flag AFTER removing footer, but add small delay before allowing spinner
-                // This prevents updateLoadingState (called from SwiftUI updates) from immediately showing spinner
                 self.isShowingNoMoreTweetsMessage = false
-                
+
                 // Small delay to prevent immediate spinner flash after message removal
-                // updateUIViewController might be called right after this, and without the delay,
-                // it could show a spinner if isLoadingMore is still true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    // After brief delay, if state says we should load, allow it
-                    // But if there are no more tweets, don't show spinner
                     if self.isLoadingMore && self.hasMoreTweets {
-                        // Only update if we should actually be loading
                         self.updateLoadingState(isLoadingMore: self.isLoadingMore, hasMoreTweets: self.hasMoreTweets)
                     }
                 }

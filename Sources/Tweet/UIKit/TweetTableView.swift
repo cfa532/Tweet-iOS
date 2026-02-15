@@ -99,7 +99,6 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.leadingPadding = leadingPadding
         uiViewController.trailingPadding = trailingPadding
         uiViewController.feedIdentifier = feedIdentifier
-        uiViewController.headerViewBuilder = header
 
         // UIKit cell configuration
         uiViewController.hproseInstance = hproseInstance
@@ -108,6 +107,12 @@ struct TweetTableView: UIViewControllerRepresentable {
         uiViewController.onShowLogin = onShowLogin
         uiViewController.onShowToast = onShowToast
 
-        uiViewController.updateHeader()
+        // Only update header if it exists — avoids unnecessary SwiftUI layout work
+        // on every updateUIViewController call (which fires on any SwiftUI state change)
+        let headerChanged = (header != nil) != (uiViewController.headerViewBuilder != nil)
+        uiViewController.headerViewBuilder = header
+        if header != nil || headerChanged {
+            uiViewController.updateHeader()
+        }
     }
 }

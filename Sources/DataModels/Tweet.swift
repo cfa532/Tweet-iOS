@@ -36,7 +36,6 @@ class Tweet: Identifiable, Codable, ObservableObject {
                               favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
                               retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
                               isPrivate: isPrivate, downloadable: downloadable)
-        newInstance.cachedHeight = TweetHeightCache.shared.getHeight(for: mid)
         instances[mid] = newInstance
         return newInstance
     }

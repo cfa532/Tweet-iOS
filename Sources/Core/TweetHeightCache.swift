@@ -28,6 +28,10 @@ class TweetHeightCache {
         heights[mid] = height
     }
 
+    func removeHeight(for mid: String) {
+        heights.removeValue(forKey: mid)
+    }
+
     @objc func saveToDisk() {
         var toSave = heights
         // Trim to maxEntries if needed (drop arbitrary entries to stay within limit)
