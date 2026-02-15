@@ -10,107 +10,25 @@ import SwiftUI
 import Combine
 import Darwin
 
-/// Persistent storage for scroll positions across view controller deallocation
+/// In-memory scroll position storage across view controller deallocation within the same session.
+/// Does NOT persist to disk — on app restart the feed starts from the top.
 @MainActor
 class ScrollPositionManager {
     static let shared = ScrollPositionManager()
     private var scrollPositions: [String: CGFloat] = [:]
 
-    // UserDefaults key for persistent scroll position (survives app restart)
-    private let persistentScrollPositionKey = "mainFeedScrollPosition"
-
-    private init() {
-        // Load persistent scroll position on init
-        loadPersistentScrollPosition()
-    }
+    private init() {}
 
     func saveScrollPosition(_ position: CGFloat, for identifier: String) {
         scrollPositions[identifier] = position
-
-        // Only persist main feed to UserDefaults for app restart survival
-        // Other feeds (profiles, bookmarks, favorites) are memory-only for the session
-        if identifier == "mainFeed" {
-            persistScrollPosition(position, for: identifier)
-        }
     }
 
     func getScrollPosition(for identifier: String) -> CGFloat? {
-        return scrollPositions[identifier]
+        scrollPositions[identifier]
     }
 
     func clearScrollPosition(for identifier: String) {
         scrollPositions.removeValue(forKey: identifier)
-
-        // Only clear persistent storage for main feed
-        if identifier == "mainFeed" {
-            // Clear persistent position with feed-specific key
-            let key = "scrollPosition_\(identifier)"
-            UserDefaults.standard.removeObject(forKey: key)
-
-            // Also clear old main feed key for backward compatibility
-            UserDefaults.standard.removeObject(forKey: persistentScrollPositionKey)
-
-            // Force immediate write to disk
-            UserDefaults.standard.synchronize()
-        } else {
-        }
-    }
-
-    // MARK: - Persistent Storage (survives app restart)
-
-    private func persistScrollPosition(_ position: CGFloat, for identifier: String) {
-        // Use feed-specific key for each feed
-        let key = "scrollPosition_\(identifier)"
-        UserDefaults.standard.set(position, forKey: key)
-
-        // Clear old main feed key when saving new position (migration cleanup)
-        if identifier == "mainFeed" {
-            UserDefaults.standard.removeObject(forKey: persistentScrollPositionKey)
-        }
-
-        // Force immediate write to disk (important for app termination scenarios)
-        UserDefaults.standard.synchronize()
-    }
-
-    private func loadPersistentScrollPosition() {
-        // Load main feed position from old key for backward compatibility
-        let mainFeedPosition = UserDefaults.standard.double(forKey: persistentScrollPositionKey)
-        if mainFeedPosition > 0 {
-            scrollPositions["mainFeed"] = CGFloat(mainFeedPosition)
-            print("📍 [SCROLL INIT] Loaded main feed position from disk: \(mainFeedPosition)")
-        }
-
-        // ONLY load main feed position with new key format
-        // Other feeds (profiles, bookmarks, favorites) should NOT persist across app restarts
-        let mainFeedKey = "scrollPosition_mainFeed"
-        let mainFeedPositionNew = UserDefaults.standard.double(forKey: mainFeedKey)
-        if mainFeedPositionNew > 0 {
-            scrollPositions["mainFeed"] = CGFloat(mainFeedPositionNew)
-            print("📍 [SCROLL INIT] Loaded main feed position from disk (new format): \(mainFeedPositionNew)")
-        }
-
-        if scrollPositions.isEmpty {
-            print("📍 [SCROLL INIT] No persistent scroll positions found in UserDefaults")
-        }
-
-        // Clean up any profile/bookmark/favorite positions that might have been saved incorrectly
-        let defaults = UserDefaults.standard
-        let allKeys = defaults.dictionaryRepresentation().keys
-        for key in allKeys where key.hasPrefix("scrollPosition_") && key != mainFeedKey {
-            defaults.removeObject(forKey: key)
-            print("📍 [SCROLL INIT] Cleaned up non-main-feed position: \(key)")
-        }
-    }
-
-    /// Save current scroll positions immediately (call before app termination)
-    /// Only persists main feed to disk; other feeds are session-only
-    func savePersistentScrollPositionNow() {
-        for (feedId, position) in scrollPositions where position > 0 {
-            // Only persist main feed to UserDefaults
-            if feedId == "mainFeed" {
-                persistScrollPosition(position, for: feedId)
-            }
-        }
     }
 }
 
@@ -203,9 +121,6 @@ class TweetTableViewController: UITableViewController {
     private var savedScrollPosition: CGFloat?
     private var isScrollingToTop: Bool = false
 
-    // Deferred scroll restore: set when persistent position needs content to be loaded first
-    private var pendingScrollRestore: CGFloat?
-    
     // Feed identifier for persistent scroll position storage
     var feedIdentifier: String = "mainFeed"  // Default to main feed
     
@@ -508,9 +423,8 @@ class TweetTableViewController: UITableViewController {
     }
 
     func scrollToTop() {
-        // Clear saved scroll position when scrolling to top (both instance, pending, and persistent)
+        // Clear saved scroll position when scrolling to top
         savedScrollPosition = nil
-        pendingScrollRestore = nil
         ScrollPositionManager.shared.clearScrollPosition(for: feedIdentifier)
         isScrollingToTop = true
 
@@ -537,28 +451,20 @@ class TweetTableViewController: UITableViewController {
         super.viewWillAppear(animated)
 
 
-        // Restore scroll position from persistent storage if available
-        // This handles cases where the view controller was deallocated and recreated
+        // Restore scroll position for same-session navigation (push/pop or VC recreation)
         if !isScrollingToTop {
-            // First check instance variable (for same-session navigation)
-            if let savedPosition = savedScrollPosition {
+            // Check instance variable first, then in-memory ScrollPositionManager
+            let position = savedScrollPosition ?? ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier)
+            if let position {
                 DispatchQueue.main.async { [weak self] in
-                    guard let self = self, !self.isScrollingToTop else {
-                        return
-                    }
-                    self.lastContentOffset = savedPosition
-                    self.lastCallbackOffset = savedPosition
-                    self.tableView.setContentOffset(CGPoint(x: 0, y: savedPosition), animated: false)
-                    self.lastScrollOffset = savedPosition
+                    guard let self = self, !self.isScrollingToTop else { return }
+                    self.lastContentOffset = position
+                    self.lastCallbackOffset = position
+                    self.tableView.setContentOffset(CGPoint(x: 0, y: position), animated: false)
+                    self.lastScrollOffset = position
                     self.savedScrollPosition = nil
                 }
-            } else if let persistentPosition = ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) {
-                // Defer restore: content may not be loaded yet on app restart
-                // The pending position will be applied once updateTweets provides enough content
-                pendingScrollRestore = persistentPosition
-            } else {
             }
-        } else {
         }
     }
     
@@ -575,8 +481,8 @@ class TweetTableViewController: UITableViewController {
             // Only adjust if offset is close to 0 (the bad initial position)
             // and topInset is set (nav bar is present)
             // Ignore if already properly positioned or if user has scrolled
-            // Also ignore if we just restored a saved position (check instance, pending, and persistent)
-            let hasSavedPosition = savedScrollPosition != nil || pendingScrollRestore != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+            // Also ignore if we just restored a saved position
+            let hasSavedPosition = savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
             if topInset > 0 && currentOffset >= -5 && currentOffset <= 5 && !hasSavedPosition {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
@@ -594,25 +500,6 @@ class TweetTableViewController: UITableViewController {
         saveScrollPositionIfNeeded()
     }
     
-    /// Try to restore a deferred scroll position once content height is sufficient
-    private func tryRestorePendingScrollPosition() {
-        guard let targetPosition = pendingScrollRestore, !isScrollingToTop else { return }
-
-        let contentHeight = tableView.contentSize.height
-        let frameHeight = tableView.frame.height
-
-        // Need enough content to scroll to the target position
-        guard contentHeight > targetPosition + frameHeight * 0.5 else {
-            return
-        }
-
-        tableView.setContentOffset(CGPoint(x: 0, y: targetPosition), animated: false)
-        lastContentOffset = targetPosition
-        lastCallbackOffset = targetPosition
-        lastScrollOffset = targetPosition
-        pendingScrollRestore = nil
-    }
-
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
 
@@ -629,9 +516,6 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
-        // Try deferred scroll restore on every layout pass (content size updates trigger layout)
-        tryRestorePendingScrollPosition()
-
         // Initialize lastScrollOffset to current offset to prevent incorrect delta on first scroll
         // This prevents toolbar from hiding incorrectly when view loads with negative content offset
         if !hasCompletedInitialLayout {
@@ -643,11 +527,9 @@ class TweetTableViewController: UITableViewController {
             let topInset = tableView.adjustedContentInset.top
             let currentOffset = tableView.contentOffset.y
 
-
             // If offset is too negative (header would be under nav bar), correct it
             // But only if we don't have a saved position to restore
-            // CRITICAL: Check both instance variable AND persistent storage, AND pending restore
-            let hasSavedPosition = savedScrollPosition != nil || pendingScrollRestore != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
+            let hasSavedPosition = savedScrollPosition != nil || ScrollPositionManager.shared.getScrollPosition(for: feedIdentifier) != nil
             if currentOffset < -topInset && !hasSavedPosition {
                 tableView.setContentOffset(CGPoint(x: 0, y: -topInset), animated: false)
                 lastScrollOffset = -topInset
@@ -1655,10 +1537,6 @@ class TweetTableViewController: UITableViewController {
     }
     
     override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        // User started dragging - cancel any pending scroll restore
-        if pendingScrollRestore != nil {
-            pendingScrollRestore = nil
-        }
         // User started dragging - reset callback baseline to current position
         // so accumulated delta starts fresh from the new drag gesture
         isUserDragging = true
@@ -1714,7 +1592,7 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Scroll Position Persistence
 
     /// Save scroll position immediately if scrolled away from top
-    /// Called when scrolling stops to ensure position survives app termination
+    /// Save scroll position in memory for same-session navigation (push/pop, VC recreation)
     private func saveScrollPositionIfNeeded() {
         let topInset = tableView.adjustedContentInset.top
         let currentOffset = tableView.contentOffset.y

@@ -341,9 +341,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
 
-        // CRITICAL: Save main feed scroll position to survive app termination
-        ScrollPositionManager.shared.savePersistentScrollPositionNow()
-
         // Perform immediate background message check when entering background
         print("[AppDelegate] 🚀 Performing IMMEDIATE background message check on app background")
         performImmediateBackgroundCheck()
