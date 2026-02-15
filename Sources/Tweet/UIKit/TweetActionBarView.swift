@@ -72,6 +72,17 @@ class TweetActionBarView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    // Consume all taps within the action bar so they never fall through to the cell.
+    // Taps near the share button (to its left or right) route to shareButton.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, alpha > 0.01, self.point(inside: point, with: event) else { return nil }
+        if let hit = super.hitTest(point, with: event) { return hit }
+        // Empty space to the right of share button → treat as share tap
+        let shareOrigin = shareButton.convert(CGPoint.zero, to: self)
+        if point.x >= shareOrigin.x - 20 { return shareButton }
+        return self
+    }
+
     private func setupViews() {
         let tintColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
         commentButton.tintColor = tintColor
