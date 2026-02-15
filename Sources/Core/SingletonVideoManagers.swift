@@ -1277,13 +1277,16 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Clear singleton player content (keeps player instance for reuse)
     func clearSingletonPlayer() {
-        // CRITICAL: Save playback state before clearing
+        // Only save playback state if player actually loaded (has a currentItem).
+        // If currentItem is nil (video never finished loading due to IPFS latency),
+        // saving would write 0.0s and overwrite the valid position saved by the feed cell.
         if let player = singletonPlayer,
-           let videoMid = currentVideoMid {
+           let videoMid = currentVideoMid,
+           player.currentItem != nil {
             let wasPlaying = player.rate > 0
             let currentTime = player.currentTime()
             let duration = player.currentItem?.duration ?? .invalid
-            
+
             // Save to fullScreen context
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
@@ -1292,7 +1295,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 context: .fullScreen,
                 duration: duration
             )
-            
+
             // ALSO save to mediaCell context so MediaCell can resume from this position
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
@@ -1302,10 +1305,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 duration: duration
             )
         }
-        
-        // Pause and clear the current item, but keep the player instance
+
+        // Fully release the player — AVPlayer() creation is lightweight
         singletonPlayer?.pause()
         singletonPlayer?.replaceCurrentItem(with: nil)
+        singletonPlayer = nil
         
         currentVideoMid = nil
         currentTweetId = nil

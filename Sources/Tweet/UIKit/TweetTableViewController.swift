@@ -228,24 +228,11 @@ class TweetTableViewController: UITableViewController {
             guard self.feedIdentifier == "mainFeed" else { return }
 
             Task { @MainActor in
-                print("📺 [VIDEO RESTART] Main feed view appeared - rebuilding video list")
-
-                // Reset cached visible tweet IDs so updateVisibleTweetsForVideoPlayback will call coordinator
+                // Per-feed coordinators (Phase 5) mean allVideos is never overwritten by other feeds.
+                // No need to rebuild — just re-evaluate visibility to resume playback.
+                print("📺 [VIDEO RESTART] Main feed view appeared - resuming video playback")
                 self.lastVisibleTweetIds = []
-
-                // CRITICAL: Rebuild video list with main feed's tweets
-                // Profile view overwrites the coordinator's allVideos list, so we must rebuild it
-                // Use completion handler to update visible tweets AFTER video list is rebuilt
-                // NOTE: Don't call stopAllVideos() here - it causes flickering. Let the visibility
-                // tracking in updateVisibleTweetsForVideoPlayback handle stopping/starting videos.
-                print("📺 [VIDEO RESTART] Rebuilding video list with \(self.tweets.count) tweets and \(self.pinnedTweets.count) pinned tweets")
-                self.videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: self.pinnedTweets) { [weak self] in
-                    guard let self = self else { return }
-                    // Now allVideos contains main feed's videos
-                    // Update visibleTweetIds with main feed's visible tweets
-                    print("📺 [VIDEO RESTART] Video list rebuilt, updating visible tweets")
-                    self.updateVisibleTweetsForVideoPlayback()
-                }
+                self.updateVisibleTweetsForVideoPlayback()
             }
         }
     }
@@ -490,7 +477,7 @@ class TweetTableViewController: UITableViewController {
         }
 
         // NOTE: Video playback restart is handled by .feedViewDidAppear notification
-        // (see setupFeedViewDidAppearObserver) which properly rebuilds the video list
+        // (see setupFeedViewDidAppearObserver) which re-evaluates visibility to resume playback
     }
     
     override func viewWillDisappear(_ animated: Bool) {
