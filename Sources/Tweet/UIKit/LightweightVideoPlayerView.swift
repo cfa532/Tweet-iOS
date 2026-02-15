@@ -68,7 +68,9 @@ class LightweightVideoPlayerView: UIView {
         }
     }
     
-    private func observeReadyForDisplay() {
+    /// Start observing isReadyForDisplay. Fires `onReadyForDisplay` immediately if already ready,
+    /// otherwise waits for the layer to become ready. Can be called multiple times safely.
+    func observeReadyForDisplay() {
         readyForDisplayObserver?.invalidate()
         readyForDisplayObserver = nil
 
@@ -104,6 +106,11 @@ class LightweightVideoPlayerView: UIView {
         playerLayer?.frame = bounds
     }
     
+    /// Whether the player layer is currently rendering video frames.
+    var isLayerReadyForDisplay: Bool {
+        playerLayer?.isReadyForDisplay ?? false
+    }
+
     func setPlayer(_ player: AVPlayer?) {
         self.player = player
     }

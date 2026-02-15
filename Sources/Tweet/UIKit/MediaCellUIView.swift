@@ -331,14 +331,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 videoPlayerView.isHidden = false
             }
             loadingSpinner.stopAnimating()
-        case .playing:
-            imageView.isHidden = true
+        case .playing, .paused:
             videoPlayerView.isHidden = false
             loadingSpinner.stopAnimating()
-        case .paused:
-            imageView.isHidden = true
-            videoPlayerView.isHidden = false
-            loadingSpinner.stopAnimating()
+            // Keep thumbnail as cover until player layer is actually rendering frames.
+            // This prevents black flash when resuming from background.
+            if videoPlayerView.isLayerReadyForDisplay {
+                imageView.isHidden = true
+            } else {
+                imageView.isHidden = (imageView.image == nil)
+                videoPlayerView.onReadyForDisplay = { [weak self] in
+                    guard let self else { return }
+                    self.imageView.isHidden = true
+                }
+                videoPlayerView.observeReadyForDisplay()
+            }
         }
     }
 
