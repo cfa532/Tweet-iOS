@@ -43,10 +43,10 @@ class MediaGridUIView: UIView {
             } else {
                 handleBecameInvisible()
             }
-            // Forward to cell views
-            for cell in cellViews {
-                cell.setVisible(isGridVisible)
-            }
+            // NOTE: Removed automatic forwarding to cells - each cell now detects
+            // its own visibility via didMoveToWindow() and layoutSubviews()
+            // This prevents all cells from being marked visible simultaneously,
+            // which was causing async task cancellation for non-primary videos.
         }
     }
 
