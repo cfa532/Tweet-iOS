@@ -1508,11 +1508,11 @@ struct SimpleVideoPlayer: View {
             if mode == .mediaCell, let playerItem = player?.currentItem {
                 // Restore buffer duration for proper buffering
                 if let cachingPlayerItem = playerItem as? CachingPlayerItem {
-                    cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Restore normal buffering
+                    cachingPlayerItem.preferredForwardBufferDuration = 5.0  // Restore feed inline HLS buffering
                     cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Keep this false
                 } else {
                     // For progressive videos, restore buffer duration
-                    playerItem.preferredForwardBufferDuration = 30.0
+                    playerItem.preferredForwardBufferDuration = 10.0
                 }
             }
             

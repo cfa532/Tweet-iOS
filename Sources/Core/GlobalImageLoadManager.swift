@@ -57,7 +57,8 @@ class GlobalImageLoadManager: ObservableObject {
     static let shared = GlobalImageLoadManager()
     
     // MARK: - Configuration
-    private let maxConcurrentLoads = 8  // Balanced for stable network performance
+    private let maxConcurrentLoads = 12  // Balanced for stable network performance
+    private let reservedHighPrioritySlots = 4  // Slots reserved for critical/high priority requests
     private let maxQueueSize = 50
     private let memoryWarningThreshold = 0.45 // 45% of available memory
     
@@ -195,7 +196,7 @@ class GlobalImageLoadManager: ObservableObject {
         }
         
         // Check if we can start loading immediately
-        if activeLoads.count < maxConcurrentLoads {
+        if canStartLoad(priority: request.priority) {
             startLoading(request)
         } else {
             // Add to pending queue
@@ -268,7 +269,7 @@ class GlobalImageLoadManager: ObservableObject {
         print("📈 [GlobalImageLoadManager] Boosted priority for \(id): \(request.priority) → \(newPriority)")
 
         // Try to process it immediately if we have capacity
-        if activeLoads.count < maxConcurrentLoads {
+        if canStartLoad(priority: newPriority) {
             processNextPendingRequest()
         }
     }
@@ -584,7 +585,7 @@ class GlobalImageLoadManager: ObservableObject {
         }
         
         // Check if we can start loading immediately
-        if activeLoads.count < maxConcurrentLoads {
+        if canStartLoad(priority: request.priority) {
             startLoadingOptimized(request, maxSize: maxSize)
         } else {
             // Add to pending queue with special handling
@@ -798,12 +799,23 @@ class GlobalImageLoadManager: ObservableObject {
         updateStatistics()
     }
     
-    private func processNextPendingRequest() {
-        guard activeLoads.count < maxConcurrentLoads,
-              !pendingRequests.isEmpty else {
-            return
+    /// Check if a new load can start given priority-based slot reservation.
+    /// Last `reservedHighPrioritySlots` slots are reserved for critical/high priority requests.
+    private func canStartLoad(priority: ImageLoadingPriority) -> Bool {
+        let active = activeLoads.count
+        if active < maxConcurrentLoads - reservedHighPrioritySlots {
+            return true // Unreserved slots available for any priority
         }
-        
+        // Only critical/high priority can use reserved slots
+        return active < maxConcurrentLoads && priority.rawValue >= ImageLoadingPriority.high.rawValue
+    }
+
+    private func processNextPendingRequest() {
+        guard !pendingRequests.isEmpty else { return }
+
+        let nextPriority = pendingRequests.first!.priority
+        guard canStartLoad(priority: nextPriority) else { return }
+
         // Get the highest priority request
         let nextRequest = pendingRequests.removeFirst()
         startLoading(nextRequest)

@@ -664,7 +664,7 @@ class SharedAssetCache: ObservableObject {
 
             // If no buffered data, force preroll to reload from disk cache
             if !hasBufferedData && playerItem.status == .readyToPlay {
-                playerItem.preferredForwardBufferDuration = 15.0  // Balanced prefetch
+                playerItem.preferredForwardBufferDuration = 5.0  // Prefetch for feed inline playback
                 player.preroll(atRate: 1.0) { success in
                     if !success {
                         print("⚠️ [PLAYER HEALTH] Preroll failed for \(mediaID.prefix(8))")
@@ -1087,7 +1087,7 @@ class SharedAssetCache: ObservableObject {
         
         // Optimize buffering for progressive video playback
         player.automaticallyWaitsToMinimizeStalling = false
-        playerItem.preferredForwardBufferDuration = 30.0  // Buffer 30 seconds ahead to reduce spinner frequency
+        playerItem.preferredForwardBufferDuration = 10.0  // Buffer 10 seconds ahead for feed inline playback
         
         // Cache the player
         await MainActor.run { 
@@ -1283,7 +1283,7 @@ class SharedAssetCache: ObservableObject {
         
         // Optimize buffering for HLS playback
         player.automaticallyWaitsToMinimizeStalling = false
-        cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Buffer 15 seconds ahead (balanced prefetch)
+        cachingPlayerItem.preferredForwardBufferDuration = 5.0  // Buffer 5 seconds ahead for feed inline HLS playback
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
         // Cache the player using mediaID (video attachment mid)
@@ -1423,32 +1423,34 @@ class SharedAssetCache: ObservableObject {
     /// Does NOT try them simultaneously
     private func resolveHLSURL(_ url: URL) async -> URL {
         let urlString = url.absoluteString
-        
+
         // If already an m3u8 file, return as-is
         if urlString.hasSuffix(".m3u8") {
             return url
         }
-        
+
         // If it's a progressive video (mp4), return as-is - no HLS resolution needed
         if urlString.hasSuffix(".mp4") {
             return url
         }
-        
-        // HLS fallback strategy: master.m3u8 -> playlist.m3u8 (sequential, not simultaneous)
+
+        // HLS fallback strategy: try master.m3u8 and playlist.m3u8 in parallel
         let masterURL = url.appendingPathComponent("master.m3u8")
         let playlistURL = url.appendingPathComponent("playlist.m3u8")
-        
-        
-        // Step 1: Try master.m3u8 first (wait for completion before proceeding)
-        if await urlExists(masterURL, timeout: 8.0) {
+
+        // Launch both HEAD requests concurrently
+        async let masterExists = urlExists(masterURL, timeout: 8.0)
+        async let playlistExists = urlExists(playlistURL, timeout: 8.0)
+
+        // Prefer master.m3u8 if it exists
+        if await masterExists {
             return masterURL
         }
-        
-        // Step 2: Only if master.m3u8 failed, try playlist.m3u8 (sequential, not simultaneous)
-        if await urlExists(playlistURL, timeout: 8.0) {
+
+        if await playlistExists {
             return playlistURL
         }
-        
+
         // If both fail, return original URL and let it fail
         return url
     }

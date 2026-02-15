@@ -49,12 +49,15 @@ class ImageCacheManager: @unchecked Sendable {
         )
     }
     
-    private func waitForMemoryWindow(cacheKey: String, retryLabel: String) async -> Bool {
+    private func waitForMemoryWindow(cacheKey: String, retryLabel: String, priority: ImageLoadingPriority = .normal) async -> Bool {
+        // Critical priority bypasses memory pressure — visible content must load
+        if priority == .critical { return true }
+
         // Fast-path if we're comfortably below the threshold
         if !memoryDuplicateBlockState().blocked {
             return true
         }
-        
+
         let maxAttempts = 3
         for attempt in 0..<maxAttempts {
             let state = memoryDuplicateBlockState()
@@ -64,20 +67,20 @@ class ImageCacheManager: @unchecked Sendable {
                 }
                 return true
             }
-            
+
             let delaySeconds = pow(2.0, Double(attempt)) * 0.4
             print("⏳ [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - delaying new image download \(retryLabel) \(cacheKey) by \(String(format: "%.1f", delaySeconds))s")
             try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
-            
+
             if Task.isCancelled { return false }
         }
-        
+
         let finalState = memoryDuplicateBlockState()
         if finalState.blocked {
             print("🚫 [ImageCacheManager] Aborting new image download \(retryLabel) \(cacheKey) - memory still high at \(String(format: "%.1f", finalState.percentage * 100))%")
             return false
         }
-        
+
         return true
     }
     
@@ -550,26 +553,29 @@ class ImageCacheManager: @unchecked Sendable {
         return data
     }
     
-    func loadAndCacheImage(from url: URL, for attachment: MimeiFileType) async -> UIImage? {
+    func loadAndCacheImage(from url: URL, for attachment: MimeiFileType, priority: ImageLoadingPriority = .normal) async -> UIImage? {
         guard let cacheKey = getCacheKey(for: attachment) else {
             print("DEBUG: [ImageCacheManager] Cannot load image - no cache key available")
             return nil
         }
-        
+
         // Check if there's already an ongoing request for this image
         let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
             return ongoingRequests[cacheKey]
         }
-        
+
         if let existingTask = existingTask {
-            let state = memoryDuplicateBlockState()
-            if state.blocked {
-                print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate image request for \(cacheKey)")
-                return nil
+            // Critical priority always waits for the existing task
+            if priority != .critical {
+                let state = memoryDuplicateBlockState()
+                if state.blocked {
+                    print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate image request for \(cacheKey)")
+                    return nil
+                }
             }
             return await existingTask.value
         }
-        
+
         // Create new request task
         let task = Task<UIImage?, Never> {
             var tempURL: URL?
@@ -579,9 +585,9 @@ class ImageCacheManager: @unchecked Sendable {
                     try? FileManager.default.removeItem(at: tempURL)
                 }
             }
-            
+
             do {
-                guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[thumbnail]") else {
+                guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[thumbnail]", priority: priority) else {
                     return nil
                 }
                 try Task.checkCancellation()
@@ -632,25 +638,28 @@ class ImageCacheManager: @unchecked Sendable {
     ///   - baseUrl: Base URL for the attachment
     ///   - replaceCompressedCache: If true, replace the compressed cache entry with the original image
     /// - Returns: The loaded original image, or nil if loading failed
-    func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL, replaceCompressedCache: Bool = false) async -> UIImage? {
+    func loadOriginalImage(from url: URL, for attachment: MimeiFileType, baseUrl: URL, replaceCompressedCache: Bool = false, priority: ImageLoadingPriority = .normal) async -> UIImage? {
         guard let key = getCacheKey(for: attachment) else {
             print("DEBUG: [ImageCacheManager] Cannot load original image - no cache key available")
             return nil
         }
         let cacheKey = key + "_original"
-        
+
         // Check if there's already an ongoing request for this original image
         let existingTask: Task<UIImage?, Never>? = requestsQueue.sync {
             return ongoingRequests[cacheKey]
         }
-        
+
         if let existingTask = existingTask {
-            let state = memoryDuplicateBlockState()
-            if state.blocked {
-                print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate original image request for \(cacheKey)")
-                return nil
+            // Critical priority always waits for the existing task
+            if priority != .critical {
+                let state = memoryDuplicateBlockState()
+                if state.blocked {
+                    print("🚫 [ImageCacheManager] Memory at \(String(format: "%.1f", state.percentage * 100))% (threshold \(String(format: "%.0f", state.threshold * 100))%) - rejecting duplicate original image request for \(cacheKey)")
+                    return nil
+                }
             }
-            
+
             let result = await existingTask.value
             // Replace compressed cache if requested
             if replaceCompressedCache, let originalImage = result {
@@ -658,7 +667,7 @@ class ImageCacheManager: @unchecked Sendable {
             }
             return result
         }
-        
+
         // Create new request task
         let task = Task<UIImage?, Never> {
             var tempURL: URL?
@@ -668,9 +677,9 @@ class ImageCacheManager: @unchecked Sendable {
                     try? FileManager.default.removeItem(at: tempURL)
                 }
             }
-            
+
             do {
-                guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[original]") else {
+                guard await self.waitForMemoryWindow(cacheKey: cacheKey, retryLabel: "[original]", priority: priority) else {
                     return nil
                 }
                 try Task.checkCancellation()

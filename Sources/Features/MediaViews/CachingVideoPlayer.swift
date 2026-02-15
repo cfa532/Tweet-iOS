@@ -151,12 +151,12 @@ struct CachingVideoPlayer: View {
                 // This allows videos to buffer properly when they come back into view
                 if let playerItem = player?.currentItem {
                     if let cachingPlayerItem = playerItem as? CachingPlayerItem {
-                        cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Restore normal buffering
+                        cachingPlayerItem.preferredForwardBufferDuration = 5.0  // Restore feed inline HLS buffering
                         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                         print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible video: \(mid)")
                     } else {
                         // For progressive videos, restore buffer duration
-                        playerItem.preferredForwardBufferDuration = 30.0
+                        playerItem.preferredForwardBufferDuration = 10.0
                         print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible progressive video: \(mid)")
                     }
                 }
