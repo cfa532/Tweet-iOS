@@ -225,13 +225,14 @@ class TweetTableViewController: UITableViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
-            // Only restart if this is the main feed (not profile's tweet list)
-            guard self.feedIdentifier == "mainFeed" else { return }
 
             Task { @MainActor in
-                // Per-feed coordinators (Phase 5) mean allVideos is never overwritten by other feeds.
-                // No need to rebuild — just re-evaluate visibility to resume playback.
-                print("📺 [VIDEO RESTART] Main feed view appeared - resuming video playback")
+                print("📺 [VIDEO RESTART] Feed '\(self.feedIdentifier)' view appeared - resuming video playback")
+                // Reset coordinator state: detail view may have paused feed players
+                // (via .stopAllVideos from AudioSessionManager) while coordinator stayed
+                // in .primaryPlaying phase. stopAllVideos() resets phase to .idle and
+                // clears previousVisibleIdentifiers so updateVisibleTweets sees a change.
+                self.videoCoordinator.stopAllVideos()
                 self.lastVisibleTweetIds = []
                 self.updateVisibleTweetsForVideoPlayback()
             }
