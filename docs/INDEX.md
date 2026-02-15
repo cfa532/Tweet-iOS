@@ -1,320 +1,91 @@
 # Tweet-iOS Documentation Index
 
-**Last Updated:** January 19, 2026
+**Last Updated:** February 2026
 
 ---
 
-## 📁 Documentation Organization
+## Getting Started
 
-Documentation is now organized into focused categories:
-
-- **📂 [architecture/](./architecture/)** - System design and architectural documentation
-- **📂 [performance/](./performance/)** - Performance analysis, audits, and optimization docs
-- **📂 [features/](./features/)** - Feature-specific documentation
-- **📂 [api/](./api/)** - API and integration documentation
-- **📂 [guides/](./guides/)** - Setup and usage guides
-- **📂 [fixes/](./fixes/)** - Bug fixes and issue resolutions
-- **📂 [archive/](./archive/)** - Historical documentation
+| Document | Description |
+| -------- | ----------- |
+| [QUICKSTART.md](./QUICKSTART.md) | Getting started guide for new developers |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | App architecture: UIKit/SwiftUI hybrid, data flow, key managers |
+| [FEATURES.md](./FEATURES.md) | Complete feature list and capabilities |
+| [DEBUG_BUILD_INSTRUCTIONS.md](./DEBUG_BUILD_INSTRUCTIONS.md) | Build instructions, debugging, log capture |
 
 ---
 
-## 📚 Core Documentation
+## Core Systems
 
-### Architecture & Design
-| Document | Description | Status |
-|----------|-------------|--------|
-| [**ARCHITECTURE.md**](./ARCHITECTURE.md) | Overall app architecture, MVVM patterns, data flow | ✅ Current |
-| [**architecture/SCROLL_POSITION_FLOW.md**](./architecture/SCROLL_POSITION_FLOW.md) | Scroll position preservation flow | ✅ Current |
-| [**architecture/SCROLL_POSITION_PRESERVATION.md**](./architecture/SCROLL_POSITION_PRESERVATION.md) | Scroll position state management | ✅ Current |
-| [**architecture/VIDEO_COORDINATOR_ANALYSIS.md**](./architecture/VIDEO_COORDINATOR_ANALYSIS.md) | Video coordinator system analysis | ✅ Current |
-| [**features/RETWEET_VIDEO_ISSUE.md**](./features/RETWEET_VIDEO_ISSUE.md) | Retweet video functionality analysis | ✅ Current |
+### Video
 
-### Performance & Optimization
-| Document | Description | Status |
-|----------|-------------|--------|
-| [**performance/PERFORMANCE_ANALYSIS.md**](./performance/PERFORMANCE_ANALYSIS.md) | Comprehensive performance analysis | ✅ Current |
-| [**performance/PERFORMANCE_IMPROVEMENTS_COMPLETED.md**](./performance/PERFORMANCE_IMPROVEMENTS_COMPLETED.md) | Completed performance improvements | ✅ Current |
-| [**performance/PERFORMANCE_FIXES.md**](./performance/PERFORMANCE_FIXES.md) | TweetListView performance fixes | ✅ Current |
-| [**performance/PERFORMANCE_FIXES_REVISED.md**](./performance/PERFORMANCE_FIXES_REVISED.md) | Final performance & memory leak fixes | ✅ Current |
-| [**performance/CODEBASE_AUDIT_COMPLETE.md**](./performance/CODEBASE_AUDIT_COMPLETE.md) | Codebase performance audit | ✅ Current |
-| [**performance/CODEBASE_PERFORMANCE_ISSUES.md**](./performance/CODEBASE_PERFORMANCE_ISSUES.md) | Identified performance issues | ✅ Current |
-| [**performance/LAYOUT_STABILITY_REVIEW.md**](./performance/LAYOUT_STABILITY_REVIEW.md) | Layout stability analysis | ✅ Current |
-| [**performance/MEMORY_AUDIT_REPORT.md**](./performance/MEMORY_AUDIT_REPORT.md) | Memory usage audit | ✅ Current |
-| [**performance/LOAD_MORE_ENHANCEMENTS.md**](./performance/LOAD_MORE_ENHANCEMENTS.md) | Load more functionality improvements | ✅ Current |
-| [**performance/CACHE_OPTIMIZATION_SUMMARY.md**](./performance/CACHE_OPTIMIZATION_SUMMARY.md) | VideoPlaybackCoordinator cache optimization | ✅ Current |
-| [**performance/MEMORY_LEAK_ANALYSIS.md**](./performance/MEMORY_LEAK_ANALYSIS.md) | Memory leak analysis and fixes | ✅ Current |
-| [**performance/OPTIMIZATION_BEFORE_AFTER.md**](./performance/OPTIMIZATION_BEFORE_AFTER.md) | Performance optimization before/after comparison | ✅ Current |
-| [**performance/docsperformanceVideoPlaybackOptimization.md**](./performance/docsperformanceVideoPlaybackOptimization.md) | Video playback performance optimization guide | ✅ Current |
+| Document | Description |
+| -------- | ----------- |
+| [VIDEO_SYSTEM.md](./VIDEO_SYSTEM.md) | Complete video architecture and orchestration |
+| [VideoPlaybackAlgorithm.md](./VideoPlaybackAlgorithm.md) | Autoplay, visibility detection, sequential playback |
+| [VIDEO_PRIORITY_ALGORITHM.md](./VIDEO_PRIORITY_ALGORITHM.md) | Video download priority and concurrency |
+| [HLS_VIDEO_IMPLEMENTATION.md](./HLS_VIDEO_IMPLEMENTATION.md) | HLS streaming with local caching proxy |
+| [HLS_CONVERSION_ALGORITHM.md](./HLS_CONVERSION_ALGORITHM.md) | Server-side HLS conversion pipeline |
+| [architecture/VIDEO_COORDINATOR_ANALYSIS.md](./architecture/VIDEO_COORDINATOR_ANALYSIS.md) | Per-feed VideoPlaybackCoordinator analysis |
+| [features/RETWEET_VIDEO_ISSUE.md](./features/RETWEET_VIDEO_ISSUE.md) | Retweet video race condition analysis |
 
-### Features & Functionality
-| Document | Description | Status |
-|----------|-------------|--------|
-| [**FEATURES.md**](./FEATURES.md) | Complete feature list and capabilities | ✅ Current |
-| [**CHAT_AND_SEARCH_FEATURES.md**](./CHAT_AND_SEARCH_FEATURES.md) | Chat system and search functionality | ✅ Production |
-| [**CommentSystemREADME.md**](./CommentSystemREADME.md) | Comment/reply system implementation | ✅ Production |
-| [**SHARING_SYSTEM.md**](./SHARING_SYSTEM.md) | IP-based sharing URLs with Vue HashHistory compatibility | ✅ Production |
-| [**UPLOAD_SYSTEM.md**](./UPLOAD_SYSTEM.md) | Complete upload system with progress tracking | ✅ Production |
+### Caching & Memory
 
-### Core Systems & Algorithms
-| Document | Description | Status |
-|----------|-------------|--------|
-| [**VIDEO_SYSTEM.md**](./VIDEO_SYSTEM.md) | Complete video architecture and orchestration | ✅ Production |
-| [**VideoPlaybackAlgorithm.md**](./VideoPlaybackAlgorithm.md) | Video autoplay and visibility detection algorithm | ✅ Production |
-| [**NODEPOOL_STRATEGY.md**](./NODEPOOL_STRATEGY.md) | NodePool trust vs verify strategies for networking | ✅ Production |
-| [**NODEPOOL_QUICK_REFERENCE.md**](./NODEPOOL_QUICK_REFERENCE.md) | NodePool usage patterns and debugging | ✅ Production |
-| [**FETCHUSER_RETRY_IMPLEMENTATION.md**](./FETCHUSER_RETRY_IMPLEMENTATION.md) | User fetching with retry logic | ✅ Production |
-| [**GETPROVIDERIP_FLOW.md**](./GETPROVIDERIP_FLOW.md) | IP resolution flow with health checking | ✅ Production |
-| [**HLS_CONVERSION_ALGORITHM.md**](./HLS_CONVERSION_ALGORITHM.md) | HLS video conversion pipeline | ✅ Production |
-| [**HLS_VIDEO_IMPLEMENTATION.md**](./HLS_VIDEO_IMPLEMENTATION.md) | HLS streaming implementation | ✅ Production |
+| Document | Description |
+| -------- | ----------- |
+| [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md) | Memory monitoring, thresholds, cleanup strategies |
+| [TWEET_CACHE_STRATEGY.md](./TWEET_CACHE_STRATEGY.md) | Dual-strategy caching (main feed vs profile) |
+| [PERMANENT_CACHE_SYSTEM.md](./PERMANENT_CACHE_SYSTEM.md) | Permanent caching for private/bookmarked tweets |
+| [IMAGE_ZOOM_ALGORITHM.md](./IMAGE_ZOOM_ALGORITHM.md) | Dynamic image zoom in MediaBrowserView |
 
-### Development Guides
-| Document | Description | Status |
-|----------|-------------|--------|
-| [**QUICKSTART.md**](./QUICKSTART.md) | Getting started guide for new developers | ✅ Current |
-| [**DEBUG_BUILD_INSTRUCTIONS.md**](./DEBUG_BUILD_INSTRUCTIONS.md) | Build instructions and debugging setup | ✅ Current |
-| [**PERMISSION_LOCALIZATION_GUIDE.md**](./PERMISSION_LOCALIZATION_GUIDE.md) | Permission localization setup | ✅ Current |
-| [**ios_retweet_stability_improvements.md**](./ios_retweet_stability_improvements.md) | iOS-specific retweet improvements | ✅ Current |
+### Networking
 
-### Recent Critical Fixes
-| Document | Description | Date |
-|----------|-------------|------|
-| [**fixes/TEXT_TRUNCATION_PERFORMANCE_FIX.md**](./fixes/TEXT_TRUNCATION_PERFORMANCE_FIX.md) | **PERFORMANCE**: Fixed 900ms main thread hang by replacing nested GeometryReader with off-thread text measurement - 50% faster scrolling | Jan 2026 |
-| [**MEMORY_LEAK_ROOT_CAUSE.md**](./MEMORY_LEAK_ROOT_CAUSE.md) | **CRITICAL**: Root cause analysis of 100MB+ memory leak from failed downloads - closure capture, missing cleanup, and one-line fix | Jan 2026 |
-| [**BLACKLIST_MEDIA_INTEGRATION.md**](./BLACKLIST_MEDIA_INTEGRATION.md) | **NEW**: Integrated existing BlackList system with images and videos to prevent wasting resources on repeatedly failed media | Jan 2026 |
-| [**NODEPOOL_STRATEGY.md**](./NODEPOOL_STRATEGY.md) | **NEW**: NodePool optimization with trust (fetchUser) vs verify (getHostIP) strategies, automatic cleanup, self-healing | Jan 2026 |
-| [**fixes/LAYOUT_STABILITY_IMPROVEMENTS.md**](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) | **COMPREHENSIVE**: All layout stability mechanisms - retweet placeholders, scroll debouncing, GeometryReader removal, fixed sizes, drawing groups | Dec 2025 |
-| [**fixes/CACHE_KEY_MIGRATION_DEC_2025.md**](./fixes/CACHE_KEY_MIGRATION_DEC_2025.md) | Cache key migration from "main_feed" to appUser.mid with persistence across logouts | Dec 2025 |
-| [**fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md**](./fixes/SHARING_SYSTEM_ENHANCEMENT_NOV_14_2025.md) | Context-aware sharing: IP-based URLs for Vue HashHistory, accurate video screenshots from detail view | Nov 14, 2025 |
-| [**fixes/CACHED_TWEETS_BLOCKING_FIX.md**](./fixes/CACHED_TWEETS_BLOCKING_FIX.md) | **CURRENT PRODUCTION**: Non-blocking renders, eliminated 34 lines of baseUrl workaround code | Oct 22, 2025 |
-| [**fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md**](./fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md) | Code cleanup: removed complex baseUrl assignment system | Oct 22, 2025 |
-| [**fixes/LOGGING_IMPROVEMENTS_OCT_22_2025.md**](./fixes/LOGGING_IMPROVEMENTS_OCT_22_2025.md) | Removed repetitive logs, added strategic cache rendering logs | Oct 22, 2025 |
-| [**fixes/INSTANT_CACHE_RENDERING_FIX.md**](./fixes/INSTANT_CACHE_RENDERING_FIX.md) | ~~Earlier localhost baseUrl approach~~ | ⚠️ Superseded |
-| [**fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md**](./fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md) | Port-independent HLS playlist caching for reliable background recovery | Oct 17, 2025 |
-| [**fixes/SESSION_SUMMARY_OCT_17_2025.md**](./fixes/SESSION_SUMMARY_OCT_17_2025.md) | Complete session summary with all fixes, testing, and log access guide | Oct 17, 2025 |
+| Document | Description |
+| -------- | ----------- |
+| [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) | Multi-layer caching, BlackList, retry logic |
+| [NODEPOOL.md](./NODEPOOL.md) | Self-healing IP cache with trust vs verify strategies |
+| [GETPROVIDERIP_FLOW.md](./GETPROVIDERIP_FLOW.md) | Provider IP resolution with health checking |
+| [BLACKLIST_MEDIA_INTEGRATION.md](./BLACKLIST_MEDIA_INTEGRATION.md) | BlackList system for failed media URLs |
+
+### Scroll & Layout
+
+| Document | Description |
+| -------- | ----------- |
+| [architecture/SCROLL_POSITION_FLOW.md](./architecture/SCROLL_POSITION_FLOW.md) | Scroll position preservation flow |
+| [architecture/SCROLL_POSITION_PRESERVATION.md](./architecture/SCROLL_POSITION_PRESERVATION.md) | In-memory scroll position (no disk persistence) |
+| [STARTUP_PERFORMANCE_OPTIMIZATION.md](./STARTUP_PERFORMANCE_OPTIMIZATION.md) | Phased startup with lazy initialization |
 
 ---
 
-## 📦 Archive
+## Features
 
-Historical documentation preserved for reference.
-
-### Session Summaries
-- [archive/sessions/SESSION_SUMMARY_OCT13_2025.md](./archive/sessions/SESSION_SUMMARY_OCT13_2025.md)
-- [archive/sessions/SESSION_SUMMARY_OCT11_2025.md](./archive/sessions/SESSION_SUMMARY_OCT11_2025.md)
-- [archive/sessions/SESSION_FIXES_SUMMARY.md](./archive/sessions/SESSION_FIXES_SUMMARY.md)
-- [archive/sessions/BUILD_SUCCESS_SUMMARY.md](./archive/sessions/BUILD_SUCCESS_SUMMARY.md)
-
-### Historical Fixes
-- [archive/fixes/FULLSCREEN_BLACK_SCREEN_FIX.md](./archive/fixes/FULLSCREEN_BLACK_SCREEN_FIX.md)
-- [archive/fixes/FULLSCREEN_MUTE_STATE_FIX.md](./archive/fixes/FULLSCREEN_MUTE_STATE_FIX.md)
-- [archive/fixes/MEDIACELL_MUTE_STATE_FIX.md](./archive/fixes/MEDIACELL_MUTE_STATE_FIX.md)
-- [archive/fixes/BACKGROUND_VIDEO_RECOVERY_FIX.md](./archive/fixes/BACKGROUND_VIDEO_RECOVERY_FIX.md)
-- [archive/fixes/VIDEO_STATE_MANAGEMENT_FIX.md](./archive/fixes/VIDEO_STATE_MANAGEMENT_FIX.md)
-- [archive/fixes/TWEETDETAIL_PLAYER_CLEANUP_FIX.md](./archive/fixes/TWEETDETAIL_PLAYER_CLEANUP_FIX.md)
-- [archive/fixes/AUDIO_CALL_COMPATIBILITY_FIX.md](./archive/fixes/AUDIO_CALL_COMPATIBILITY_FIX.md)
-- [archive/fixes/SCROLL_PERFORMANCE_FIX.md](./archive/fixes/SCROLL_PERFORMANCE_FIX.md)
-- [archive/fixes/LOCAL_HTTP_SERVER_PORT_FIX.md](./archive/fixes/LOCAL_HTTP_SERVER_PORT_FIX.md)
-- [archive/fixes/SDWEBIMAGE_WARNINGS_FIX.md](./archive/fixes/SDWEBIMAGE_WARNINGS_FIX.md)
-
-### Old Implementations
-- [archive/old-implementations/SIMPLEVIDEOPLAYER_ANALYSIS.md](./archive/old-implementations/SIMPLEVIDEOPLAYER_ANALYSIS.md)
-- [archive/old-implementations/PROGRESSIVE_VIDEO_IMPLEMENTATION.md](./archive/old-implementations/PROGRESSIVE_VIDEO_IMPLEMENTATION.md)
-- [archive/old-implementations/SEQUENTIAL_VIDEO_PLAYBACK_IMPLEMENTATION.md](./archive/old-implementations/SEQUENTIAL_VIDEO_PLAYBACK_IMPLEMENTATION.md)
-- [archive/old-implementations/HLS_LIBX264_ALWAYS.md](./archive/old-implementations/HLS_LIBX264_ALWAYS.md)
-- [archive/old-implementations/WORKING_IMPLEMENTATION.md](./archive/old-implementations/WORKING_IMPLEMENTATION.md)
-
-### Code Quality Reports
-- [archive/CODE_SMELL_REPORT.md](./archive/CODE_SMELL_REPORT.md)
-- [archive/IMPROPER_DELAY_USAGE_REPORT.md](./archive/IMPROPER_DELAY_USAGE_REPORT.md)
-- [archive/DEBUG_LOG_CLEANUP_FINAL.md](./archive/DEBUG_LOG_CLEANUP_FINAL.md)
+| Document | Description |
+| -------- | ----------- |
+| [CHAT_AND_SEARCH_FEATURES.md](./CHAT_AND_SEARCH_FEATURES.md) | Chat system and search functionality |
+| [CommentSystemREADME.md](./CommentSystemREADME.md) | Comment/reply system implementation |
+| [UPLOAD_SYSTEM.md](./UPLOAD_SYSTEM.md) | Upload system with progress tracking |
+| [SHARING_SYSTEM.md](./SHARING_SYSTEM.md) | IP-based sharing URLs with Vue HashHistory |
+| [PUSH_NOTIFICATIONS.md](./PUSH_NOTIFICATIONS.md) | Local notifications (current) + APNs push (planned) |
 
 ---
 
-## 🚀 Quick Links
+## Guides
 
-### For New Developers
-1. Start with [QUICKSTART.md](QUICKSTART.md) - Getting started guide
-2. Read [ARCHITECTURE.md](ARCHITECTURE.md) - Understand the app structure
-3. Check [FEATURES.md](FEATURES.md) - Know what the app does
-4. Review [DEBUG_BUILD_INSTRUCTIONS.md](DEBUG_BUILD_INSTRUCTIONS.md) - Set up your environment
-
-### For Feature Development
-- **📂 Architecture:** Check [architecture/](./architecture/) folder
-- **📂 Performance:** See [performance/](./performance/) folder
-- **📂 Features:** Review [features/](./features/) folder
-- **Video System:** [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md) + [VideoPlaybackAlgorithm.md](VideoPlaybackAlgorithm.md)
-- **Upload System:** [UPLOAD_SYSTEM.md](UPLOAD_SYSTEM.md)
-- **Chat/Comments:** [CHAT_AND_SEARCH_FEATURES.md](CHAT_AND_SEARCH_FEATURES.md)
-
-### For Troubleshooting
-- **Performance Issues:** Check [performance/](./performance/) folder
-- **Video Problems:** [VIDEO_SYSTEM.md](VIDEO_SYSTEM.md) → Known Issues section
-- **Network Issues:** [NETWORK_RESILIENCE.md](NETWORK_RESILIENCE.md)
-- **Bug Fixes:** Search [fixes/](./fixes/) folder for similar issues
+| Document | Description |
+| -------- | ----------- |
+| [UNIVERSAL_LINKS.md](./UNIVERSAL_LINKS.md) | Universal links setup and testing |
+| [PERMISSION_LOCALIZATION_GUIDE.md](./PERMISSION_LOCALIZATION_GUIDE.md) | Permission string localization |
+| [Server_API.md](./Server_API.md) | Server API reference (symlink to backend repo) |
 
 ---
 
-## 📊 Documentation Standards
+## Archive
 
-### File Naming
-- **Main docs:** `SYSTEM_NAME.md` (all caps)
-- **Features:** `FeatureName.md` (PascalCase for complex)
-- **Archived:** Keep original names
+Historical documentation preserved in [archive/](./archive/). Contains 170+ files including:
 
-### Structure
-All main documents should include:
-1. Overview
-2. Architecture/Components
-3. Implementation Details
-4. Configuration
-5. Known Issues
-6. Future Improvements
+- **Session-specific fix logs** from Oct 2025 - Jan 2026 (pre-UIKit migration)
+- **Old performance audits** and optimization reports
+- **Superseded architecture docs** (SwiftUI-only feed, old video systems)
+- **Consolidated originals** (NodePool, Universal Links, Push Notifications pairs)
 
-### Status Labels
-- ✅ **Production** - Active, tested, in production
-- ⚠️ **Partial** - Partially implemented, migration in progress
-- 🚧 **WIP** - Work in progress
-- ❌ **Deprecated** - No longer used, kept for reference
-
----
-
-## 🔄 Recent Updates
-
-### January 19, 2026 - Documentation Reorganization
-- ✅ **Complete Documentation Restructure**: Moved all .md files into organized docs/ folder
-  - **Created subfolders**: `architecture/`, `performance/`, `features/`, `api/`, `guides/`
-  - **Moved scattered files**: Relocated docs from root, Sources/Core/, Sources/Tweet/ to docs/
-  - **Moved additional Core files**: 4 performance docs moved to [performance/](./performance/) folder
-  - **Consolidated duplicates**: Removed redundant documentation update files
-  - **Updated index**: Comprehensive INDEX.md with new organization and additional files
-- ✅ **Performance Documentation**: 13 performance-related docs organized in [performance/](./performance/) folder
-- ✅ **Architecture Documentation**: System design docs now in [architecture/](./architecture/) folder
-
-### December 29, 2025
-- ✅ **Connection Pooling Simplification**: Removed artificial throttling limits
-  - **Removed**: `ImageDownloadGate` (3 concurrent limit) - images now use URLSession.shared directly
-  - **Removed**: `healthCheckSession` (20-connection pool) - health checks now use URLSession.shared
-  - **Result**: Simpler architecture, better performance, consistent connection management
-  - **Files**: `ImageCacheManager.swift`, `HproseInstance.swift`
-  - 📄 Updated [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) - Added connection pooling section
-- ✅ **Cache Cleanup Fix**: Chat message media now properly cleared
-  - **Fixed**: `ChatCacheManager.clearAllCache()` now deletes media attachments (images/videos)
-  - **Implementation**: Added `deleteMediaForChatMessage()` helper matching tweet cleanup pattern
-  - **Result**: Complete cache cleanup when user taps "Clear Media Cache" in Settings
-  - **Files**: `ChatCacheManager.swift`, `Settings.swift`
-  - 📄 Updated [MEMORY_MANAGEMENT.md](./MEMORY_MANAGEMENT.md) - Added manual cache cleanup section
-
-### December 2025
-- ✅ **HLS Conversion Algorithm Documentation**: Complete documentation of video conversion pipeline
-  - **Normalization**: Resolution detection, bitrate calculation, scaling logic
-  - **Routing**: Size-based (≤32MB progressive, >32MB HLS) and resolution-based (single/dual variant)
-  - **Conversion**: Variant creation, codec selection (COPY vs libx264), master playlist generation
-  - **Memory Optimization**: Cleanup strategies, thread limits, buffer optimization
-  - **Examples**: Complete flows for 1080p, 720p, 360p, and portrait videos
-  - 📄 Added [HLS_CONVERSION_ALGORITHM.md](./HLS_CONVERSION_ALGORITHM.md) - Comprehensive algorithm documentation
-  - 📄 Updated [HLS_VIDEO_IMPLEMENTATION.md](./HLS_VIDEO_IMPLEMENTATION.md) - Added reference to conversion algorithm
-- ✅ **Layout Stability Improvements**: Comprehensive stability mechanisms
-  - **Retweet/Quoted Tweet Stability**: Fixed-height placeholders (280pt) prevent layout shifts when embedded tweets load
-  - **Scroll Debouncing**: Queue server updates during active scrolling, apply after scroll stops
-  - **GeometryReader Removal**: Removed from MediaGridView and SimpleVideoPlayer (mediaCell mode), use cached/fixed dimensions
-  - **Fixed Size Modifiers**: Applied throughout to prevent size changes
-  - **Drawing Group Isolation**: Prevent cascading layout shifts
-  - **Media Grid Stability**: Fixed dimensions, compositing group, stable IDs
-  - **Video Player Stability**: Fixed dimensions for mediaCell mode
-  - **TweetItemBodyView Stability**: Fixed sizes for all content elements
-  - **Result**: Zero layout shifts, smooth scroll experience, professional UX
-  - **Files**: `TweetItemView.swift`, `TweetListView.swift`, `MediaGridView.swift`, `SimpleVideoPlayer.swift`, `TweetItemBodyView.swift`, `MediaCell.swift`
-  - 📄 Updated [fixes/LAYOUT_STABILITY_IMPROVEMENTS.md](./fixes/LAYOUT_STABILITY_IMPROVEMENTS.md) - Complete documentation of all stability mechanisms
-
-### October 22, 2025
-- ✅ **CRITICAL RESOLVED**: Cached Tweets Blocking Fix
-  - **Root cause**: `TweetItemView` blocked rendering when `author.username == nil`
-  - **Solution**: Render immediately with placeholders, fetch author in background
-  - **Result**: Eliminated entire complex baseUrl assignment system (~34 lines removed)
-  - **Performance**: Cache loads in 7-9ms, first render ~70ms
-  - **Key Changes**:
-    - TweetItemView: Non-blocking author fetches (all scenarios)
-    - FollowingsTweetView: Removed baseUrl assignment loop
-    - HproseInstance: Removed updateAllUsersWithLocalhostToRealIP call
-    - User.swift: Removed updateAllUsersWithLocalhostToRealIP function
-  - **Code quality**: Simpler, fewer lines, same functionality
-  - **Files**: `TweetItemView.swift`, `FollowingsTweetView.swift`, `HproseInstance.swift`, `User.swift`
-- ✅ **Logging Improvements**: Removed repetitive video logs, improved cache load logs
-- 📄 Added [INSTANT_TWEET_RENDERING.md](./INSTANT_TWEET_RENDERING.md) - Current production system (simple!)
-- 📄 Added [fixes/CACHED_TWEETS_BLOCKING_FIX.md](./fixes/CACHED_TWEETS_BLOCKING_FIX.md) - Complete fix documentation
-- 📄 Added [fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md](./fixes/SIMPLIFICATION_SUMMARY_OCT_22_2025.md) - Code cleanup summary
-- 📄 Deprecated [BASEURL_RESOLUTION_AND_CACHE_RENDERING.md](./BASEURL_RESOLUTION_AND_CACHE_RENDERING.md) - Complex system no longer used
-
-### October 20, 2025
-- ✅ **BlackList Persistence Enhancement**
-  - **Change**: BlackList now survives cache clearing and app reinstallation
-  - **Storage Strategy**: UserDefaults (primary) + iCloud Key-Value Store (backup)
-  - **Load Priority**: UserDefaults first, fallback to iCloud if missing
-  - **Save Strategy**: Write to UserDefaults immediately, mirror to iCloud in background
-  - **Zero Config**: Works automatically, no user action required
-  - **Files**: `BlackList.swift`
-- 📄 Updated [FEATURES.md](./FEATURES.md) - BlackList description
-- 📄 Updated [NETWORK_RESILIENCE.md](./NETWORK_RESILIENCE.md) - Added BlackList system section
-
-### October 17, 2025
-- ✅ **CRITICAL RESOLVED**: Port-Independent Playlist Caching
-  - **Root cause identified**: Cached HLS playlists contained full URLs with port numbers
-  - **Solution**: Cache playlists with absolute paths only (no scheme/host/port)
-  - **Implementation**: Strip URLs to paths when caching, inject current port when serving
-  - **Result**: Videos work reliably after backgrounding regardless of server port
-  - **Files**: `LocalHTTPServer.swift` (stripPlaylistToRelativePaths, rewritePlaylistURLs)
-- ✅ **CRITICAL**: Fixed videos unmuted on startup
-  - Mute-at-inception pattern: `player.isMuted = true` immediately after creation
-  - Mode-based unmuting in `configurePlayer()`
-- ✅ Verified all fixes on real iPhone device in Release mode
-- 📘 **Log Access Documentation**: Updated with correct `idevicesyslog` usage
-- 📄 Added [fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md](./fixes/PORT_INDEPENDENT_PLAYLIST_CACHING_FIX.md)
-- 📄 Added [fixes/SESSION_SUMMARY_OCT_17_2025.md](./fixes/SESSION_SUMMARY_OCT_17_2025.md)
-- 📄 Updated [fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md](./fixes/BACKGROUND_VIDEO_BLACK_SCREEN_FIX.md)
-- 📄 Updated [fixes/VIDEO_MUTE_STATE_FIX.md](./fixes/VIDEO_MUTE_STATE_FIX.md)
-
-### October 14, 2025
-- ✅ Upload dialog now appears immediately when user taps Publish
-- ✅ Consolidated upload documentation into single UPLOAD_SYSTEM.md
-- ✅ Consolidated video documentation into single VIDEO_SYSTEM.md
-- ✅ Organized archive structure (sessions, fixes, old-implementations)
-
-### October 13, 2025
-- ✅ Fixed video upload dialog showing "Uploading image" for videos
-- ✅ Simplified upload progress messages
-- ✅ Fixed CID vs UUID issue for image attachments
-
-### October 11, 2025
-- ✅ Implemented comprehensive upload progress system
-- ✅ Added multi-attachment support with sequential upload
-- ✅ Implemented background polling for video processing
-
----
-
-## 📝 Contributing to Documentation
-
-### Adding New Documentation
-1. Create file in `/docs/`
-2. Use appropriate naming convention
-3. Add entry to this INDEX.md
-4. Include standard sections
-
-### Updating Existing Documentation
-1. Update "Last Updated" date
-2. Document changes in "Recent Updates"
-3. Update status label if needed
-
-### Documentation Organization
-1. Place new docs in appropriate subfolder (`architecture/`, `performance/`, `features/`, etc.)
-2. Update INDEX.md with new entries
-3. Archive outdated docs to `/docs/archive/` subdirectories
-4. Remove truly redundant documentation
-
----
-
-## 💡 Tips
-
-- **Search this index** for keywords to find relevant documentation
-- **Check archive** if looking for historical context
-- **Main docs are authoritative** - archive is for reference only
-- **Keep this index updated** when adding/removing documentation
+Most archived docs reference the old SwiftUI feed architecture replaced by pure UIKit cells in Feb 2026 (Phases 1-5).
