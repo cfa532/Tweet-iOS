@@ -437,6 +437,12 @@ class MediaGridUIView: UIView {
         }
     }
 
+    func showVideoThumbnailsForBackground() {
+        for cell in cellViews {
+            cell.showThumbnailForBackground()
+        }
+    }
+
     func prepareForReuse() {
         clearCells()
         cancellables.removeAll()

@@ -708,6 +708,13 @@ class TweetCellContentView: UIView {
         }
     }
 
+    func showVideoThumbnailsForBackground() {
+        bodyView.mediaGridView.showVideoThumbnailsForBackground()
+        if !embeddedTweetWrapper.isHidden {
+            embeddedTweetView.showVideoThumbnailsForBackground()
+        }
+    }
+
     // MARK: - Reuse
 
     func prepareForReuse() {

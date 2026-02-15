@@ -346,13 +346,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         performImmediateBackgroundCheck()
 
         // CRITICAL: Aggressive memory cleanup to prevent iOS termination
+        // Note: TweetTableViewController's background handler shows cached thumbnails
+        // on visible video cells before this runs, preventing black player layers.
 
-        // 1. Capture video frames and show thumbnails BEFORE releasing video memory.
-        // This ensures visible video cells display a thumbnail instead of a black AVPlayerLayer
-        // in the app switcher snapshot.
-        NotificationCenter.default.post(name: .captureVideoFramesForBackground, object: nil)
-
-        // 2. Release video memory but keep player shells for fast recovery
+        // 1. Release video memory but keep player shells for fast recovery
         // This releases heavy video buffers while keeping AVPlayer objects for quick resume
         print("💾 [AppDelegate] Releasing video memory (keeping player shells)")
         SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()

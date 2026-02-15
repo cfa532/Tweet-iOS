@@ -299,12 +299,12 @@ class TweetTableViewController: UITableViewController {
             // Save the current scroll position before backgrounding
             self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
 
-            // MEMORY CLEANUP - Video players are now released by AppDelegate
-            // DON'T clear SwiftUI view cache or reload table - this causes gray placeholders
-            // in app switcher preview. Keep current view state for smooth background snapshot.
-
-            // Video player cleanup (now handled by AppDelegate.handleAppDidEnterBackground)
-            // SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery() is called there
+            // Show cached thumbnails on visible video cells before AppDelegate releases video memory.
+            // This prevents black AVPlayerLayer in the app switcher snapshot.
+            for cell in self.tableView.visibleCells {
+                guard let tweetCell = cell as? TweetTableViewCell else { continue }
+                tweetCell.tweetContentView.showVideoThumbnailsForBackground()
+            }
 
             // End background task after a short delay to allow cleanup to complete
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in

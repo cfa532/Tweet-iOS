@@ -189,7 +189,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private var imageLoadTask: Task<Void, Never>?
     private var foregroundObserver: NSObjectProtocol?
-    private var backgroundObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
     private var timerHideTask: DispatchWorkItem?
     private var isShowingFullscreen: Bool = false
@@ -1399,21 +1398,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 (videoCoordinator ?? .shared).registerDelegate(self, forIdentifier: id)
             }
 
-            // Setup lifecycle observers for images and videos
+            // Setup foreground observer for images and videos
             setupForegroundObserver()
-            setupBackgroundObserver()
         } else {
             // Cancel image loads
             GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
 
-            // Clean up lifecycle observers
+            // Clean up foreground observer
             if let observer = foregroundObserver {
                 NotificationCenter.default.removeObserver(observer)
                 foregroundObserver = nil
-            }
-            if let observer = backgroundObserver {
-                NotificationCenter.default.removeObserver(observer)
-                backgroundObserver = nil
             }
 
             // Unregister delegate (by identifier — won't accidentally remove another cell's delegate)
@@ -1507,39 +1501,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
-    private func setupBackgroundObserver() {
-        guard backgroundObserver == nil else { return }
-        backgroundObserver = NotificationCenter.default.addObserver(
-            forName: .captureVideoFramesForBackground,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self, self.isVideoAttachment, self.isVisible else { return }
-            guard self.videoCellState == .playing || self.videoCellState == .paused || self.videoCellState == .playerReady else { return }
-
-            // Try cached frame first, then capture a new one synchronously
-            var thumbnail: UIImage?
-            if let mid = self.attachment?.mid {
-                thumbnail = VideoLastFrameCache.shared.image(for: mid)
-            }
-            if thumbnail == nil, let player = self.player, let output = self.videoOutput {
-                let t = player.currentTime()
-                if t.isValid, !t.seconds.isNaN,
-                   let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: nil),
-                   let img = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720),
-                   !VideoFrameExtractor.isMostlyBlack(img) {
-                    thumbnail = img
-                    if let mid = self.attachment?.mid {
-                        VideoLastFrameCache.shared.set(img, for: mid)
-                    }
-                }
-            }
-
-            if let thumbnail {
-                self.imageView.image = thumbnail
-                self.transitionTo(.thumbnail)
-            }
-        }
+    /// Show cached thumbnail over the video player layer before background cleanup.
+    /// Called by TweetTableViewController for all visible cells before video memory is released.
+    func showThumbnailForBackground() {
+        guard isVideoAttachment, isVisible else { return }
+        guard videoCellState == .playing || videoCellState == .paused || videoCellState == .playerReady else { return }
+        guard let mid = attachment?.mid,
+              let thumbnail = VideoLastFrameCache.shared.image(for: mid) else { return }
+        imageView.image = thumbnail
+        transitionTo(.thumbnail)
     }
 
     /// Re-attach player and seek to force AVPlayerLayer to render after foreground.
@@ -1692,10 +1662,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             NotificationCenter.default.removeObserver(observer)
             foregroundObserver = nil
         }
-        if let observer = backgroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-            backgroundObserver = nil
-        }
 
         // Reset UI
         imageView.image = nil
@@ -1721,9 +1687,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     deinit {
         if let observer = foregroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        if let observer = backgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         if let o = stopAllObserver {
