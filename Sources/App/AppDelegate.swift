@@ -346,17 +346,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         performImmediateBackgroundCheck()
 
         // CRITICAL: Aggressive memory cleanup to prevent iOS termination
-        // Note: iOS takes the app snapshot BEFORE didEnterBackground, so clearing
-        // caches here won't affect the app switcher preview
 
-        // 1. Release video memory but keep player shells for fast recovery
+        // 1. Capture video frames and show thumbnails BEFORE releasing video memory.
+        // This ensures visible video cells display a thumbnail instead of a black AVPlayerLayer
+        // in the app switcher snapshot.
+        NotificationCenter.default.post(name: .captureVideoFramesForBackground, object: nil)
+
+        // 2. Release video memory but keep player shells for fast recovery
         // This releases heavy video buffers while keeping AVPlayer objects for quick resume
         print("💾 [AppDelegate] Releasing video memory (keeping player shells)")
         SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
-
-        // 2. Clear video last frame cache (snapshot already taken)
-        print("🧹 [AppDelegate] Clearing video frame cache")
-        VideoLastFrameCache.shared.clearAll()
 
         // 3. Clear video state cache
         print("🧹 [AppDelegate] Clearing video state cache")

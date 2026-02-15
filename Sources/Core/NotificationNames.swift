@@ -103,6 +103,9 @@ extension Notification.Name {
     static let imageCached = Notification.Name("ImageCached")
     
     // MARK: - Video Related
+    /// Posted just before video memory is released on background entry.
+    /// Video cells should capture their current frame and show a thumbnail.
+    static let captureVideoFramesForBackground = Notification.Name("CaptureVideoFramesForBackground")
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
     /// Posted when the main feed view appears (for restarting video playback after navigation)
