@@ -333,7 +333,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             loadingSpinner.stopAnimating()
         case .playing, .paused:
             videoPlayerView.isHidden = false
-            loadingSpinner.stopAnimating()
+            // Show spinner while player is buffering (told to play but waiting for data)
+            if state == .playing && player?.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+                loadingSpinner.startAnimating()
+            } else {
+                loadingSpinner.stopAnimating()
+            }
             // Keep thumbnail as cover until player layer is actually rendering frames.
             // This prevents black flash when resuming from background.
             if videoPlayerView.isLayerReadyForDisplay {
@@ -1087,12 +1092,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         }
 
-        // KVO: timeControlStatus — safety net to stop spinner when video starts playing
+        // KVO: timeControlStatus — show spinner while buffering, stop when actually playing
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if player.timeControlStatus == .playing {
                     self.loadingSpinner.stopAnimating()
+                } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                          self.videoCellState == .playing {
+                    // Player was told to play but is buffering — show spinner
+                    self.loadingSpinner.startAnimating()
                 }
             }
         }

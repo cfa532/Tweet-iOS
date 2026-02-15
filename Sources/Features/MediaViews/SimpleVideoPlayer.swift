@@ -3415,12 +3415,14 @@ struct SimpleVideoPlayer: View {
                     .transition(.opacity)
                 }
                 
-                // Loading indicator - show until video starts playing in fullscreen
-                // Show spinner when: loading OR (fullscreen AND ready to play but not started yet)
-                let showInitialLoadingSpinner = loadingState.isLoading || 
-                    (mode == .mediaBrowser && 
-                     player.rate == 0 && 
-                     (player.currentItem?.currentTime().seconds ?? 0) < 0.1)
+                // Loading indicator - show until video actually starts playing
+                // Show spinner when: loading, OR player is buffering after play() was called
+                let showInitialLoadingSpinner = loadingState.isLoading ||
+                    (mode == .mediaBrowser &&
+                     player.rate == 0 &&
+                     (player.currentItem?.currentTime().seconds ?? 0) < 0.1) ||
+                    ((mode == .mediaBrowser || mode == .tweetDetail) &&
+                     player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
                 
                 if showInitialLoadingSpinner {
                     ZStack {
