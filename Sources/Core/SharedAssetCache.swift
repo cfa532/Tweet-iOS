@@ -105,7 +105,7 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Player Creation Throttling
     private var activeCreations = 0
-    private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, continuation: CheckedContinuation<AVPlayer, Error>)] = []
+    private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, isHighPriority: Bool, continuation: CheckedContinuation<AVPlayer, Error>)] = []
     private let maxPendingCreations = 10 // MEMORY LEAK FIX: Limit queue size to prevent unbounded continuation buildup
     
     // MARK: - Cache Persistence
@@ -828,19 +828,21 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Get cached player or create new one with asset
-    func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
+    /// - Parameter isHighPriority: When true, can use reserved creation slots (for visible cells / detail views).
+    ///   Preloads should pass false so they don't block visible content.
+    func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil, isHighPriority: Bool = true) async throws -> AVPlayer {
         guard let mediaID = extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
-        
+
         // ✅ CHECK BLACKLIST FIRST - Don't waste resources on known-bad videos
         let mimeiId = MimeiId(mediaID)
         if BlackList.shared.isBlacklisted(mimeiId) {
             print("🚫 [VIDEO BLACKLIST] Skipping blacklisted video: \(mediaID)")
-            throw NSError(domain: "SharedAssetCache", code: -2, 
+            throw NSError(domain: "SharedAssetCache", code: -2,
                          userInfo: [NSLocalizedDescriptionKey: "Video is blacklisted due to repeated failures"])
         }
-        
+
         // CRITICAL: Cache key must ALWAYS be the mediaID (video attachment mid).
         // tweetId must never affect player caching; it caused incorrect reuse/eviction behavior.
         let cacheKey = mediaID
@@ -867,11 +869,12 @@ class SharedAssetCache: ObservableObject {
                 return cachedPlayer
             }
         }
-        
-        // NEW: Throttle concurrent player creation to prevent memory spikes
+
+        // Throttle concurrent player creation to prevent memory spikes
+        // Last reservedHighPrioritySlots slot(s) are reserved for high-priority (visible) requests
         return try await withCheckedThrowingContinuation { continuation in
             Task { @MainActor in
-                if self.activeCreations < self.maxConcurrentCreations {
+                if self.canStartCreation(isHighPriority: isHighPriority) {
                     // Can create immediately
                     self.activeCreations += 1
 
@@ -892,8 +895,12 @@ class SharedAssetCache: ObservableObject {
                         }
                     }
                 } else if self.pendingCreations.count < self.maxPendingCreations {
-                    // Queue for later (with size limit to prevent unbounded growth)
-                    self.pendingCreations.append((url, tweetId, mediaType, continuation))
+                    // Queue for later — high priority goes to front, low priority to back
+                    if isHighPriority {
+                        self.pendingCreations.insert((url, tweetId, mediaType, true, continuation), at: 0)
+                    } else {
+                        self.pendingCreations.append((url, tweetId, mediaType, false, continuation))
+                    }
                 } else {
                     // MEMORY LEAK FIX: Reject when queue is full to prevent unbounded continuation buildup
                     print("⚠️ [SharedAssetCache] Rejecting player creation - pending queue full (\(self.pendingCreations.count))")
@@ -903,15 +910,29 @@ class SharedAssetCache: ObservableObject {
             }
         }
     }
-    
+
+    /// Check if a new player creation can start given priority-based slot reservation.
+    /// Last slot is reserved for high-priority (visible) requests.
+    @MainActor
+    private func canStartCreation(isHighPriority: Bool) -> Bool {
+        if isHighPriority {
+            return activeCreations < maxConcurrentCreations
+        }
+        // Low priority (preloads): leave 2 slots reserved for visible content
+        return activeCreations < maxConcurrentCreations - 2
+    }
+
     /// Process next pending creation when a slot opens
     @MainActor
     private func processNextPendingCreation() {
-        guard !pendingCreations.isEmpty, activeCreations < maxConcurrentCreations else { return }
-        
+        guard !pendingCreations.isEmpty else { return }
+
+        let nextIsHighPriority = pendingCreations.first!.isHighPriority
+        guard canStartCreation(isHighPriority: nextIsHighPriority) else { return }
+
         let next = pendingCreations.removeFirst()
         activeCreations += 1
-        
+
         Task {
             do {
                 let player = try await self.createPlayerNow(for: next.url, tweetId: next.tweetId, mediaType: next.mediaType)
@@ -1610,15 +1631,15 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: cacheKey)
             }
             do {
-                _ = try await getOrCreatePlayer(for: url)
+                _ = try await getOrCreatePlayer(for: url, isHighPriority: false)
             } catch {
                 // Handle error silently
             }
         }
-        
+
         preloadTasks[cacheKey] = task
     }
-    
+
     /// Preload asset only (for background loading - lower priority)
     func preloadAsset(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) {
         // Use mediaID as cache key (stable identifier), not URL which can change
@@ -1676,7 +1697,7 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: mediaID)
             }
             do {
-                let player = try await getOrCreatePlayer(for: url, tweetId: tweetId, mediaType: mediaType)
+                let player = try await getOrCreatePlayer(for: url, tweetId: tweetId, mediaType: mediaType, isHighPriority: false)
                 // Pause immediately — this is a preloaded player, not for playback yet
                 await MainActor.run {
                     player.pause()

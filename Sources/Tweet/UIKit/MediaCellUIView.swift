@@ -607,7 +607,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 try Task.checkCancellation()
 
                 let loadTime = Date().timeIntervalSince(startTime)
-                await MainActor.run {
+                await MainActor.run { [weak self] in
                     guard let self else { return }
                     print("\(self.logPrefix) ✓ Player created (async) - loadTime: \(String(format: "%.2f", loadTime))s")
                 }
@@ -892,7 +892,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     private func startPlaybackWithFade(_ player: AVPlayer) {
-        guard let mid = attachment?.mid else { return }
+        guard (attachment?.mid) != nil else { return }
 
         // If showing spinner (no thumbnail in .playerLoading), wait for layer to be ready
         if videoCellState == .playerLoading && imageView.image == nil {
@@ -1031,7 +1031,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerItemStatusObserver = playerItem.observe(\.status, options: [.old, .new]) { [weak self] item, change in
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard let mid = self.attachment?.mid else { return }
+                guard (self.attachment?.mid) != nil else { return }
 
                 let oldStatus = change.oldValue?.rawValue ?? -1
                 let newStatus = item.status.rawValue
