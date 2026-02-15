@@ -478,6 +478,9 @@ struct TweetActionButtonsView: View {
                     // Show spinner immediately when button is tapped (synchronous on main thread)
                     isPreparingShare = true
 
+                    // Capture the current video frame BEFORE overlay pauses the video
+                    captureVideoFrameBeforePause()
+
                     // CRITICAL FIX: Register overlay BEFORE presenting sheet to ensure proper timing
                     // This ensures videos know they're covered before willResignActiveNotification fires
                     OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet", source: "TweetActionButtonsView")
@@ -635,9 +638,15 @@ struct TweetActionButtonsView: View {
     }
     
     private func shareActivityItems() -> [Any] {
-        // Only return the single CustomShareItem — its LPLinkMetadata already provides
-        // the preview image. Adding a separate CustomShareImage breaks WeChat sharing.
-        return [createCustomShareItem()]
+        var items: [Any] = [createCustomShareItem()]
+
+        // Add image as separate item — WeChat ignores LPLinkMetadata and needs
+        // a standalone image to show the correct preview in its share sheet.
+        if let previewImage = attachmentPreviewImage {
+            items.append(CustomShareImage(image: previewImage))
+        }
+
+        return items
     }
     
     private func cachedAttachmentBaseURL(for sourceTweet: Tweet) -> URL? {
@@ -816,14 +825,91 @@ struct TweetActionButtonsView: View {
         return nil
     }
     
+    /// Synchronously capture the current video frame before overlay pauses playback.
+    /// Uses the AVPlayerItemVideoOutput already attached by MediaCellUIView.
+    /// Sets attachmentPreviewImage directly so the async load is skipped.
+    private func captureVideoFrameBeforePause() {
+        // Resolve the source tweet (retweet → original)
+        let sourceTweet: Tweet
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            sourceTweet = tweet
+        } else if let originalTweetId = tweet.originalTweetId,
+                  let original = Tweet.getInstance(for: originalTweetId),
+                  let attachments = original.attachments, !attachments.isEmpty {
+            sourceTweet = original
+        } else {
+            return
+        }
+
+        guard let firstAttachment = sourceTweet.attachments?.first,
+              (firstAttachment.type == .video || firstAttachment.type == .hls_video) else { return }
+
+        let mediaID = firstAttachment.mid
+
+        // For detail view, capture from DetailVideoManager
+        if isInDetailView,
+           let player = DetailVideoManager.shared.currentPlayer,
+           DetailVideoManager.shared.currentVideoMid == mediaID {
+            if let frame = Self.syncCaptureFrame(from: player) {
+                VideoLastFrameCache.shared.set(frame, for: mediaID)
+                attachmentPreviewImage = cropToCenter(image: frame)
+            }
+            return
+        }
+
+        // For fullscreen, capture from FullScreenVideoManager
+        if isFullScreen,
+           let player = FullScreenVideoManager.shared.singletonPlayer {
+            if let frame = Self.syncCaptureFrame(from: player) {
+                VideoLastFrameCache.shared.set(frame, for: mediaID)
+                attachmentPreviewImage = cropToCenter(image: frame)
+            }
+            return
+        }
+
+        // For feed, get player from SharedAssetCache
+        guard let player = SharedAssetCache.shared.getCachedPlayer(for: mediaID) else { return }
+        if let frame = Self.syncCaptureFrame(from: player) {
+            VideoLastFrameCache.shared.set(frame, for: mediaID)
+            attachmentPreviewImage = cropToCenter(image: frame)
+        }
+    }
+
+    /// Synchronously grab the current frame from a player's existing video output.
+    private static func syncCaptureFrame(from player: AVPlayer) -> UIImage? {
+        guard let playerItem = player.currentItem,
+              playerItem.status == .readyToPlay,
+              !playerItem.loadedTimeRanges.isEmpty else { return nil }
+
+        // Find the AVPlayerItemVideoOutput already attached by MediaCellUIView
+        guard let videoOutput = playerItem.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first else { return nil }
+
+        let currentTime = playerItem.currentTime()
+        guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else { return nil }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0, width < 10000, height < 10000 else { return nil }
+
+        return VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720)
+    }
+
     private func generateVideoPreviewImage(for url: URL, isHLS: Bool = false) async -> UIImage? {
         print("DEBUG: [SHARE] Starting video preview generation for: \(url.absoluteString), isHLS: \(isHLS)")
         let startTime = Date()
-        
+
         // Extract mediaID from URL
         let mediaID = extractMediaID(from: url)
         print("DEBUG: [SHARE] Extracted mediaID: \(mediaID)")
-        
+
+        // Check VideoLastFrameCache — populated by captureVideoFrameBeforePause()
+        // at the moment the share button was tapped, before the overlay paused videos.
+        if let cachedFrame = VideoLastFrameCache.shared.image(for: mediaID) {
+            let elapsed = Date().timeIntervalSince(startTime)
+            print("DEBUG: [SHARE] Using VideoLastFrameCache frame for \(mediaID) in \(String(format: "%.2f", elapsed))s")
+            return cropToCenter(image: cachedFrame)
+        }
+
         // If we're in fullscreen, try to use the fullscreen singleton player first
         if isFullScreen,
            let fullPlayer = FullScreenVideoManager.shared.singletonPlayer,
@@ -1110,9 +1196,8 @@ struct TweetActionButtonsView: View {
             }
         } // swiftlint:disable:this line_length
         
-        // Try capturing at different time positions: 0.1s, 0.3s, 0.5s from the requested time
-        // This increases the chance of finding a valid frame, especially for HLS videos
-        let retryTimes = [0.1, 0.3, 0.5]
+        // Try capturing at exact position first, then with small offsets
+        let retryTimes = [0.0, 0.1, 0.3, 0.5]
         
         for retryOffset in retryTimes {
             // CRITICAL FIX: Check if player item was replaced during capture

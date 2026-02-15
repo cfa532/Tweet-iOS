@@ -421,6 +421,11 @@ class TweetActionBarView: UIView {
         shareSpinner.startAnimating()
         shareButton.alpha = 0.3
 
+        // Capture the current video frame BEFORE overlay pauses the video.
+        // The MediaCellUIView already has an AVPlayerItemVideoOutput attached to the player,
+        // so we can grab the pixel buffer synchronously via playerItem.outputs.
+        captureVideoFrameBeforePause(for: tweet)
+
         // Register overlay for video coordination
         OverlayVisibilityCoordinator.shared.beginOverlay(id: "shareSheet_\(tweet.mid)", source: "TweetActionBarView")
 
@@ -497,10 +502,15 @@ class TweetActionBarView: UIView {
         let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, isInDetailView: isInDetailView, parentTweet: effectiveParentTweet)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
-        // Only return the single CustomShareItem — its LPLinkMetadata already provides
-        // the preview image. Adding a separate CustomShareImage breaks WeChat sharing
-        // because WeChat can't handle multiple UIActivityItemSource objects.
-        return [customItem]
+        var items: [Any] = [customItem]
+
+        // Add image as separate item — WeChat ignores LPLinkMetadata and needs
+        // a standalone image to show the correct preview in its share sheet.
+        if let previewImage = attachmentPreviewImage {
+            items.append(CustomShareImage(image: previewImage))
+        }
+
+        return items
     }
 
     /// Build share text for a tweet
@@ -681,7 +691,72 @@ class TweetActionBarView: UIView {
 
     // MARK: - Video Preview Generation
 
+    /// Synchronously capture the current video frame before overlay pauses playback.
+    /// Uses the AVPlayerItemVideoOutput already attached by MediaCellUIView.
+    /// Sets attachmentPreviewImage directly so the async load is skipped.
+    private func captureVideoFrameBeforePause(for tweet: Tweet) {
+        // Resolve the source tweet (retweet → original)
+        let sourceTweet: Tweet
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            sourceTweet = tweet
+        } else if let originalTweetId = tweet.originalTweetId,
+                  let original = Tweet.getInstance(for: originalTweetId),
+                  let attachments = original.attachments, !attachments.isEmpty {
+            sourceTweet = original
+        } else {
+            return
+        }
+
+        guard let firstAttachment = sourceTweet.attachments?.first,
+              (firstAttachment.type == .video || firstAttachment.type == .hls_video) else { return }
+
+        let mediaID = firstAttachment.mid
+
+        // For detail view, capture from DetailVideoManager
+        if isInDetailView,
+           let player = DetailVideoManager.shared.currentPlayer,
+           DetailVideoManager.shared.currentVideoMid == mediaID {
+            if let frame = Self.syncCaptureFrame(from: player, mediaID: mediaID) {
+                VideoLastFrameCache.shared.set(frame, for: mediaID)
+                attachmentPreviewImage = cropToCenter(image: frame)
+            }
+            return
+        }
+
+        // For feed, get player from SharedAssetCache
+        guard let player = SharedAssetCache.shared.getCachedPlayer(for: mediaID) else { return }
+        if let frame = Self.syncCaptureFrame(from: player, mediaID: mediaID) {
+            VideoLastFrameCache.shared.set(frame, for: mediaID)
+            attachmentPreviewImage = cropToCenter(image: frame)
+        }
+    }
+
+    /// Synchronously grab the current frame from a player's existing video output.
+    private static func syncCaptureFrame(from player: AVPlayer, mediaID: String) -> UIImage? {
+        guard let playerItem = player.currentItem,
+              playerItem.status == .readyToPlay,
+              !playerItem.loadedTimeRanges.isEmpty else { return nil }
+
+        // Find the AVPlayerItemVideoOutput already attached by MediaCellUIView
+        guard let videoOutput = playerItem.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first else { return nil }
+
+        let currentTime = playerItem.currentTime()
+        guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else { return nil }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0, width < 10000, height < 10000 else { return nil }
+
+        return VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720)
+    }
+
     private func generateVideoPreviewImage(for url: URL, mediaID: String, isHLS: Bool = false, tweet: Tweet) async -> UIImage? {
+
+        // Check VideoLastFrameCache — populated by captureVideoFrameBeforePause()
+        // at the moment the share button was tapped, before the overlay paused videos.
+        if let cachedFrame = VideoLastFrameCache.shared.image(for: mediaID) {
+            return cropToCenter(image: cachedFrame)
+        }
 
         // Check DetailVideoManager when in detail view
         if isInDetailView,
@@ -827,10 +902,10 @@ class TweetActionBarView: UIView {
             }
         }
 
-        // Try capturing at different time positions
-        let retryTimes = [0.1, 0.3, 0.5]
+        // Try capturing at current position first, then with small offsets
+        let retryOffsets = [0.0, 0.1, 0.3, 0.5]
 
-        for retryOffset in retryTimes {
+        for retryOffset in retryOffsets {
             let currentItem = await MainActor.run { player.currentItem }
             guard currentItem === playerItem else { return nil }
 
