@@ -11,13 +11,14 @@ class TweetHeightCache {
     private var heights: [String: CGFloat] = [:]
 
     private init() {
-        loadFromDisk()
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(saveToDisk),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
+        // Disk persistence disabled for testing — heights are in-memory only this session
+        // loadFromDisk()
+        // NotificationCenter.default.addObserver(
+        //     self,
+        //     selector: #selector(saveToDisk),
+        //     name: UIApplication.didEnterBackgroundNotification,
+        //     object: nil
+        // )
     }
 
     func getHeight(for mid: String) -> CGFloat? {

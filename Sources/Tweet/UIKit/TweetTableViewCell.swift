@@ -30,7 +30,16 @@ class TweetTableViewCell: UITableViewCell {
         super.layoutSubviews()
 
         let currentHeight = bounds.height
-        if currentHeight > 0 && abs(currentHeight - lastNotifiedHeight) > 1 {
+        guard currentHeight > 0 else { return }
+
+        if lastNotifiedHeight == 0 {
+            // Initial layout after reuse — record height without firing callback.
+            // This prevents a spurious beginUpdates/endUpdates on every first display.
+            lastNotifiedHeight = currentHeight
+            return
+        }
+
+        if abs(currentHeight - lastNotifiedHeight) > 1 {
             lastNotifiedHeight = currentHeight
             onHeightChanged?()
         }

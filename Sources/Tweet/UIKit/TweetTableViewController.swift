@@ -1147,6 +1147,17 @@ class TweetTableViewController: UITableViewController {
         return Self.calculateTweetHeight(for: tweet)
     }
 
+    /// Shared UILabel for text height measurement — matches UILabel's exact rendering.
+    /// Using boundingRect() with .byWordWrapping/.byTruncatingTail can disagree with
+    /// UILabel's TextKit2 layout by ~1pt (constant) or ~20pt (line-break differences).
+    private static let measurementLabel: UILabel = {
+        let label = UILabel()
+        label.font = TweetBodyUIView.contentFont
+        label.numberOfLines = TweetBodyUIView.maxContentLines
+        label.lineBreakMode = .byTruncatingTail
+        return label
+    }()
+
     /// Deterministic height calculation matching TweetCellContentView's Auto Layout.
     static func calculateTweetHeight(for tweet: Tweet) -> CGFloat {
         // Determine if this is a pure retweet (show original content) or regular/quoted
@@ -1174,8 +1185,10 @@ class TweetTableViewController: UITableViewController {
             height += 16
         }
 
-        // Header (~24pt: single-line label + menu button height of 24)
-        height += 24
+        // Header: stackView height = tallest label's single-line height.
+        // Uses .preferredFont(.headline) which varies with Dynamic Type.
+        let headerHeight = ceil(UIFont.preferredFont(forTextStyle: .headline).lineHeight)
+        height += headerHeight
 
         // spacing after header: 0
         // Body: text + media
@@ -1203,14 +1216,10 @@ class TweetTableViewController: UITableViewController {
                 displayTweet.cachedContentAttributedString = attrString
                 displayTweet.cachedContentWidth = contentWidth
             }
-            // Measure the already-truncated attributed string (no 7-line clamp needed)
-            let maxSize = CGSize(width: contentWidth, height: .greatestFiniteMagnitude)
-            let textRect = attrString.boundingRect(
-                with: maxSize,
-                options: [.usesLineFragmentOrigin, .usesFontLeading],
-                context: nil
-            )
-            bodyHeight += ceil(textRect.height)
+            // Use shared UILabel for exact height matching (avoids boundingRect vs UILabel diffs)
+            Self.measurementLabel.attributedText = attrString
+            let textSize = Self.measurementLabel.sizeThatFits(CGSize(width: contentWidth, height: .greatestFiniteMagnitude))
+            bodyHeight += ceil(textSize.height)
         }
 
         // Media attachments (filter to media-only, matching TweetBodyUIView)
@@ -1300,13 +1309,9 @@ class TweetTableViewController: UITableViewController {
                         embeddedTweet.cachedContentAttributedString = attrString
                         embeddedTweet.cachedContentWidth = embeddedWidth
                     }
-                    let maxSize = CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude)
-                    let textRect = attrString.boundingRect(
-                        with: maxSize,
-                        options: [.usesLineFragmentOrigin, .usesFontLeading],
-                        context: nil
-                    )
-                    embeddedBodyH += ceil(textRect.height)
+                    Self.measurementLabel.attributedText = attrString
+                    let textSize = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude))
+                    embeddedBodyH += ceil(textSize.height)
                     embeddedBodyH += 4 // spacing after contentLabel to mediaContainer
                 }
 
@@ -1317,8 +1322,8 @@ class TweetTableViewController: UITableViewController {
                     }
                 }
 
-                // textStack = header(24) + bodyView
-                let textStackH = 24 + embeddedBodyH
+                // textStack = header + bodyView (same font as main header)
+                let textStackH = headerHeight + embeddedBodyH
                 let contentStackH = max(40, textStackH)
 
                 // Bottom padding: 0 when media present without caption, 8 otherwise
@@ -1366,16 +1371,12 @@ class TweetTableViewController: UITableViewController {
         }
 
         // Use cached height if available (set by willDisplay from actual Auto Layout).
-        // Only trust in-memory cachedHeight — it was verified by Auto Layout this session.
-        // Do NOT use persisted TweetHeightCache here: returning a stale fixed height
-        // prevents Auto Layout from running, locking in wrong heights for cells that
-        // didn't fully render when they were cached.
         if let cachedHeight = tweet.cachedHeight {
             return cachedHeight
         }
 
-        // Let Auto Layout determine the exact cell height.
-        // willDisplay will cache the actual height for future use,
+        // Let Auto Layout determine the exact cell height on first display.
+        // willDisplay caches the actual height for future use,
         // ensuring estimate == actual on subsequent displays (no scroll jumps).
         return UITableView.automaticDimension
     }
@@ -1422,7 +1423,6 @@ class TweetTableViewController: UITableViewController {
                     tweet.cachedHeight = cell.frame.height
                     TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
                 } else {
-                    // Clear stale persisted height so it doesn't poison future sessions
                     tweet.cachedHeight = nil
                     TweetHeightCache.shared.removeHeight(for: tweet.mid)
                 }

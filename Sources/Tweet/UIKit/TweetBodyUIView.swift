@@ -336,8 +336,17 @@ class TweetBodyUIView: UIView {
 
     // MARK: - Truncation with "More>>" indicator
 
-    private static let contentFont = UIFont.systemFont(ofSize: 16)
-    private static let maxContentLines = 7
+    static let contentFont = UIFont.systemFont(ofSize: 16)
+    static let maxContentLines = 7
+
+    /// Shared UILabel for truncation detection — matches UILabel's TextKit2 rendering.
+    /// NSLayoutManager (TextKit1) and UILabel (TextKit2) can disagree on line breaking,
+    /// so we trust UILabel since that's what actually renders the text in cells.
+    private static let truncationCheckLabel: UILabel = {
+        let label = UILabel()
+        label.font = contentFont
+        return label
+    }()
 
     /// Build attributed text. If text exceeds maxContentLines, truncate and append accent-colored " More>>".
     static func makeContentAttributedString(content: String, availableWidth: CGFloat) -> NSAttributedString {
@@ -354,7 +363,34 @@ class TweetBodyUIView: UIView {
             .paragraphStyle: paragraphStyle
         ]
 
-        // Use TextKit to measure line count
+        // Use UILabel to detect whether text actually exceeds maxLines.
+        // NSLayoutManager (TextKit1) and UILabel (TextKit2) can disagree on line breaking,
+        // so we trust UILabel since that's what renders the text.
+        let checkLabel = truncationCheckLabel
+        let attrText = NSAttributedString(string: content, attributes: textAttributes)
+        checkLabel.attributedText = attrText
+        let fitSize = CGSize(width: availableWidth, height: .greatestFiniteMagnitude)
+
+        checkLabel.numberOfLines = 0
+        let fullHeight = checkLabel.sizeThatFits(fitSize).height
+        checkLabel.numberOfLines = maxLines
+        let clampedHeight = checkLabel.sizeThatFits(fitSize).height
+
+        let needsTruncation = fullHeight > clampedHeight + 1 // 1pt tolerance
+
+        // No truncation needed — return plain text
+        guard needsTruncation else {
+            let ps = NSMutableParagraphStyle()
+            ps.lineSpacing = 1
+            ps.lineBreakMode = .byWordWrapping
+            return NSAttributedString(string: content, attributes: [
+                .font: font,
+                .foregroundColor: UIColor.label,
+                .paragraphStyle: ps
+            ])
+        }
+
+        // UILabel says truncation is needed — use TextKit to find the truncation point
         let textStorage = NSTextStorage(string: content, attributes: textAttributes)
         let textContainer = NSTextContainer(size: CGSize(width: availableWidth, height: .greatestFiniteMagnitude))
         textContainer.lineFragmentPadding = 0
@@ -373,11 +409,12 @@ class TweetBodyUIView: UIView {
             glyphIndex = NSMaxRange(lineRange)
         }
 
-        // No truncation needed — return plain text
+        // Edge case: UILabel says truncation needed but NSLayoutManager disagrees.
+        // Return plain text — UILabel will naturally truncate via numberOfLines=7.
         guard lineGlyphRanges.count > maxLines else {
             let ps = NSMutableParagraphStyle()
             ps.lineSpacing = 1
-            ps.lineBreakMode = .byTruncatingTail
+            ps.lineBreakMode = .byWordWrapping
             return NSAttributedString(string: content, attributes: [
                 .font: font,
                 .foregroundColor: UIColor.label,
