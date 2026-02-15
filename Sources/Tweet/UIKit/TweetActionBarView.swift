@@ -497,17 +497,10 @@ class TweetActionBarView: UIView {
         let shareText = Self.buildShareText(tweet: tweet, hproseInstance: hproseInstance, isInDetailView: isInDetailView, parentTweet: effectiveParentTweet)
         let customItem = CustomShareItem(shareText: shareText, tweet: tweet, previewImage: attachmentPreviewImage)
 
-        var items: [Any] = [customItem]
-
-        if let previewImage = attachmentPreviewImage {
-            items.append(CustomShareImage(image: previewImage))
-            print("DEBUG: [SHARE] Added preview image to share items")
-        } else if let appIcon = UIImage(named: "ic_splash") {
-            items.append(CustomShareImage(image: appIcon))
-            print("DEBUG: [SHARE] Added app icon as default image")
-        }
-
-        return items
+        // Only return the single CustomShareItem — its LPLinkMetadata already provides
+        // the preview image. Adding a separate CustomShareImage breaks WeChat sharing
+        // because WeChat can't handle multiple UIActivityItemSource objects.
+        return [customItem]
     }
 
     /// Build share text for a tweet

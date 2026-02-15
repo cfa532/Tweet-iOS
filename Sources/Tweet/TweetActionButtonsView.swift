@@ -635,21 +635,9 @@ struct TweetActionButtonsView: View {
     }
     
     private func shareActivityItems() -> [Any] {
-        var items: [Any] = [createCustomShareItem()]
-        print("DEBUG: [SHARE] Creating share items, preview image: \(attachmentPreviewImage != nil ? "YES" : "NO")")
-        if let previewImage = attachmentPreviewImage {
-            items.append(CustomShareImage(image: previewImage))
-            print("DEBUG: [SHARE] Added CustomShareImage to share items")
-        } else {
-            // No attachment preview - use app icon as default
-            if let appIcon = UIImage(named: "ic_splash") {
-                items.append(CustomShareImage(image: appIcon))
-                print("DEBUG: [SHARE] Added app icon as default image (no attachments)")
-            } else {
-                print("DEBUG: [SHARE] No preview image to share and app icon not found")
-            }
-        }
-        return items
+        // Only return the single CustomShareItem — its LPLinkMetadata already provides
+        // the preview image. Adding a separate CustomShareImage breaks WeChat sharing.
+        return [createCustomShareItem()]
     }
     
     private func cachedAttachmentBaseURL(for sourceTweet: Tweet) -> URL? {
