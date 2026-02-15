@@ -21,6 +21,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     // Track ongoing infrastructure restart to prevent overlapping restarts
     private var infrastructureRestartTask: Task<Void, Never>?
     private var isRestartingInfrastructure = false
+
+    // Deferred aggressive cleanup: server stop + player item removal delayed 5s
+    // If app returns before it fires, we cancel it for instant video recovery
+    private var deferredCleanupWorkItem: DispatchWorkItem?
+    /// True once the deferred aggressive cleanup has actually executed.
+    /// When false on foreground return, players and server are still intact → fast path.
+    private(set) static var didPerformAggressiveCleanup = false
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         // Configure FFmpegKit to suppress verbose logs (only show errors)
@@ -345,28 +352,42 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("[AppDelegate] 🚀 Performing IMMEDIATE background message check on app background")
         performImmediateBackgroundCheck()
 
-        // CRITICAL: Aggressive memory cleanup to prevent iOS termination
         // Note: TweetTableViewController's background handler shows cached thumbnails
         // on visible video cells before this runs, preventing black player layers.
 
-        // 1. Release video memory but keep player shells for fast recovery
-        // This releases heavy video buffers while keeping AVPlayer objects for quick resume
-        print("💾 [AppDelegate] Releasing video memory (keeping player shells)")
-        SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
-
-        // 3. Clear video state cache
-        print("🧹 [AppDelegate] Clearing video state cache")
+        // Phase 1 (immediate): Lightweight cleanup — pause players, clear caches
+        // Players keep their items so health checks pass on quick foreground return
+        print("💾 [AppDelegate] Phase 1: Lightweight cleanup (pausing players, clearing caches)")
+        SharedAssetCache.shared.pauseAllPlayers()
         VideoStateCache.shared.clearAllCache()
-
-        // 4. Clear image memory cache (keep disk cache for fast reload)
-        print("🧹 [AppDelegate] Clearing image memory cache")
         ImageCacheManager.shared.clearMemoryCache()
 
-        // 5. Stop LocalHTTPServer to release network resources
-        print("🔌 [AppDelegate] Stopping LocalHTTPServer")
-        LocalHTTPServer.shared.stop()
+        AppDelegate.didPerformAggressiveCleanup = false
 
-        print("✅ [AppDelegate] Background cleanup complete - memory released, player shells preserved")
+        // Phase 2 (deferred 5s): Aggressive cleanup — release player items + stop server
+        // If app returns before this fires, we cancel it for instant video recovery
+        deferredCleanupWorkItem?.cancel()
+        let cleanupItem = DispatchWorkItem { [weak self] in
+            guard self != nil else { return }
+            print("🔥 [AppDelegate] Phase 2: Deferred aggressive cleanup")
+
+            SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
+
+            // Kill orphaned upstream proxy connections whose player items were
+            // just stripped — prevents them from clogging the connection pool
+            // for the next foreground cycle.
+            LocalHTTPServer.shared.resetAllConnectionsImmediately()
+
+            print("🔌 [AppDelegate] Stopping LocalHTTPServer")
+            LocalHTTPServer.shared.stop()
+
+            AppDelegate.didPerformAggressiveCleanup = true
+            print("✅ [AppDelegate] Deferred aggressive cleanup complete")
+        }
+        deferredCleanupWorkItem = cleanupItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: cleanupItem)
+
+        print("✅ [AppDelegate] Phase 1 complete — Phase 2 deferred 5s")
     }
     
     /// Handle app returning to foreground from background state
@@ -405,29 +426,74 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("🚀 [AppDelegate] App still launching - skipping recovery (server starting in didFinishLaunching)")
             return
         }
-        
+
+        // Cancel deferred aggressive cleanup if it hasn't fired yet
+        deferredCleanupWorkItem?.cancel()
+        deferredCleanupWorkItem = nil
+
+        // FAST PATH: Deferred cleanup didn't run — server & players are intact
+        // Safety: if process was suspended before deferred cleanup could fire AND we were
+        // gone >5 minutes, the NWListener is likely dead. Fall through to slow path.
+        if !AppDelegate.didPerformAggressiveCleanup {
+            let timeInBackground: Int
+            if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
+                timeInBackground = Int(Date().timeIntervalSince(backgroundDate))
+            } else {
+                timeInBackground = 0
+            }
+
+            if timeInBackground < 300 {
+                print("⚡ [AppDelegate] Fast recovery (\(timeInBackground)s) — server & players preserved")
+
+                // CRITICAL: Synchronously kill ALL stale upstream connections before
+                // any video cell tries to load.  The async resetConnectionPool() can be
+                // delayed if the server queue is blocked by in-flight timeout requests.
+                LocalHTTPServer.shared.resetAllConnectionsImmediately()
+                AppDelegate.isVideoInfrastructureReady = true
+
+                // Notify coordinator to resume playback on visible videos
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+
+                // Refresh IP and check messages in background (non-blocking)
+                Task {
+                    print("[AppDelegate] 📬 Checking for new messages on foreground return")
+                    await checkMessagesForBadgeOnly()
+                }
+                Task.detached(priority: .background) { [weak self] in
+                    await self?.refreshAppUserIP()
+                }
+                return
+            } else {
+                // Process was frozen before deferred cleanup ran, but >5min elapsed
+                // NWListener likely dead — force aggressive cleanup flag and fall through
+                print("⚠️ [AppDelegate] Long suspension (\(timeInBackground)s) without cleanup — forcing slow path")
+                AppDelegate.didPerformAggressiveCleanup = true
+            }
+        }
+
+        // SLOW PATH: Aggressive cleanup already happened — need full recovery
         // Check how long app was in background
         if let backgroundDate = UserDefaults.standard.object(forKey: "lastBackgroundTimestamp") as? Date {
             let timeInBackground = Date().timeIntervalSince(backgroundDate)
-            print("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background")
-            
+            print("☀️ [AppDelegate] App returning from \(Int(timeInBackground))s background (aggressive cleanup performed)")
+
             // CRITICAL: Use DURATION-based recovery, not isRunning check
             // isRunning can be TRUE even when NWListener is suspended by iOS (overnight)
             if timeInBackground > 300 {  // 5 minutes
                 // LONG background - ALWAYS do full restart
                 // Even if isRunning=true, the listener may be suspended and unresponsive
                 print("🔄 [AppDelegate] Long background (\(Int(timeInBackground))s) - forcing full restart")
-                
+
                 // Check if already restarting
                 if isRestartingInfrastructure {
                     print("[AppDelegate] Infrastructure restart already in progress, skipping")
                     return
                 }
-                
+
                 // Show loading indicator (non-blocking - allows user to scroll)
                 showLoadingOverlay()
                 AppDelegate.isVideoInfrastructureReady = false
-                
+
                 // Restart infrastructure asynchronously (non-blocking)
                 // Videos will show loading state until server is ready, but UI remains interactive
                 infrastructureRestartTask = Task.detached(priority: .userInitiated) {
@@ -436,15 +502,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
                     await self.refreshAppUserIP()
                     print("[AppDelegate] ✅ AppUser IP refresh complete")
-                    
+
                     // Restart server in background
                     await self.restartVideoInfrastructureAsync()
-                    
+
                     // Hide loading indicator and notify visible videos to reload
                     await MainActor.run {
                         self.hideLoadingOverlay()
                         AppDelegate.isVideoInfrastructureReady = true
-                        
+
                         // Post notification for visible videos to reload
                         // Coordinator will intelligently decide whether to preserve or reset state
                         NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
@@ -452,55 +518,45 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     }
                 }
             } else {
-                // SHORT background (<5min) - SMART recovery: only clear if server restarted
-                print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - smart recovery")
-                
-                // CRITICAL: Refresh IP FIRST, then do video recovery
-                // Videos must not reload with stale IPs or they will timeout
+                // SHORT background (<5min) but aggressive cleanup happened
+                print("🔄 [AppDelegate] Short background (\(Int(timeInBackground))s) - recovery after aggressive cleanup")
+
                 Task.detached(priority: .userInitiated) {
                     print("[AppDelegate] 🔄 Refreshing appUser IP before video recovery...")
                     await self.refreshAppUserIP()
                     print("[AppDelegate] ✅ AppUser IP refresh complete")
-                    
-                    // Check if server is still running on the same port
+
+                    // Server was stopped by deferred cleanup - restart it
                     let wasServerRunning = LocalHTTPServer.shared.isRunning
                     let oldPort = LocalHTTPServer.shared.currentPort
-                    
+
                     if !wasServerRunning {
-                        // Server died - need full recovery
                         print("⚠️ [AppDelegate] Server not running, restarting...")
-                        
+
                         await MainActor.run {
                             AppDelegate.isVideoInfrastructureReady = false
-                            // Clear players because server will restart on a new port
                             SharedAssetCache.shared.clearVideoPlayersForBackgroundRecovery()
                         }
-                        
-                        // Restart server (async - doesn't block!)
+
                         await LocalHTTPServer.shared.startAndWaitAsync()
 
                         let newPort = LocalHTTPServer.shared.currentPort
                         print("✅ [AppDelegate] Server restarted - port changed from \(oldPort ?? 0) to \(newPort ?? 0)")
-                        
+
                         await MainActor.run {
                             AppDelegate.isVideoInfrastructureReady = true
-
-                            // Post notification for visible videos to reload with new port
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Posted reloadVisibleVideosOnly after port change")
                         }
                     } else {
-                        // Server still running - KEEP PLAYERS INTACT!
                         print("✅ [AppDelegate] Server still running on port \(oldPort ?? 0) - KEEPING PLAYERS INTACT")
-                        
+
                         await MainActor.run {
-                            // Just refresh video layers and reset connection pool
                             SharedAssetCache.shared.refreshVideoLayersForShortBackground()
                             LocalHTTPServer.shared.resetConnectionPool()
-                            
+
                             print("✅ [AppDelegate] Short background recovery complete - players preserved")
-                            
-                            // Still post notification to refresh any stale players
+
                             NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
                             print("[AppDelegate] Posted reloadVisibleVideosOnly for stale player check")
                         }
@@ -509,26 +565,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             }
         } else {
             // No background timestamp - this means app was just launched or killed
-            // Server should already be started in didFinishLaunchingWithOptions
-            // Just ensure it's running, but don't do full recovery
             print("🚀 [AppDelegate] App startup or crash recovery - ensuring server is running")
             if !LocalHTTPServer.shared.isRunning {
-                // Fast non-blocking start for app startup
                 LocalHTTPServer.shared.start()
             } else {
                 print("✅ [AppDelegate] Server already running - no recovery needed")
             }
             AppDelegate.isVideoInfrastructureReady = true
         }
-        
+
         // Check for new messages when returning to foreground (only updates badge, no notifications)
-        // Run this in background, doesn't need to block video recovery
         Task {
             print("[AppDelegate] 📬 Checking for new messages on foreground return")
             await checkMessagesForBadgeOnly()
         }
-        
-        // Foreground handling is now done by SimpleVideoPlayer's notification observers
     }
     
     /// Refresh appUser's provider IP when app returns from background

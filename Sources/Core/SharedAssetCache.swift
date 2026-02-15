@@ -2199,6 +2199,14 @@ class SharedAssetCache: ObservableObject {
         // But we need to verify players are still healthy (no action needed, just validation)
     }
     
+    /// Lightweight pause for immediate background entry — keeps player items intact.
+    /// Players can resume instantly on quick foreground return without server restart.
+    func pauseAllPlayers() {
+        for (_, player) in playerCache {
+            player.pause()
+        }
+    }
+
     /// Clear video players for background recovery after long background periods
     /// This is called when app returns from extended background (>5 minutes)
     /// Release video memory but keep AVPlayer shells for fast recovery

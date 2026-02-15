@@ -68,17 +68,21 @@ class LightweightVideoPlayerView: UIView {
         }
     }
     
-    /// Start observing isReadyForDisplay. Fires `onReadyForDisplay` immediately if already ready,
-    /// otherwise waits for the layer to become ready. Can be called multiple times safely.
+    /// Start observing isReadyForDisplay. Fires `onReadyForDisplay` **once** — either
+    /// immediately (if already ready) or when the layer first renders a frame.
+    /// The callback is consumed after firing to prevent re-entrant loops
+    /// (setPlayer → observeReadyForDisplay → callback → setPlayer …).
     func observeReadyForDisplay() {
         readyForDisplayObserver?.invalidate()
         readyForDisplayObserver = nil
 
         guard let playerLayer else { return }
 
-        // Already rendering — fire immediately
+        // Already rendering — fire immediately (one-shot: nil out before calling)
         if playerLayer.isReadyForDisplay {
-            onReadyForDisplay?()
+            let cb = onReadyForDisplay
+            onReadyForDisplay = nil
+            cb?()
             return
         }
 
@@ -87,7 +91,9 @@ class LightweightVideoPlayerView: UIView {
             DispatchQueue.main.async {
                 self?.readyForDisplayObserver?.invalidate()
                 self?.readyForDisplayObserver = nil
-                self?.onReadyForDisplay?()
+                let cb = self?.onReadyForDisplay
+                self?.onReadyForDisplay = nil
+                cb?()
             }
         }
     }

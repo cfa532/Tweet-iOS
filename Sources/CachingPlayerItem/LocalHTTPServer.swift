@@ -575,15 +575,38 @@ public class LocalHTTPServer: @unchecked Sendable {
     public func resetConnectionPool() {
         queue.async { [weak self] in
             guard let self = self else { return }
-            
+
             // Thread-safe reset with lock
             self.connectionPoolLock.lock()
             self._connectionPool?.invalidateAndCancel()
             self._connectionPool = nil
             self.connectionPoolLock.unlock()
-            
+
             // Next access will create a new session
         }
+    }
+
+    /// Synchronous version — immediately cancels all stale upstream connections and
+    /// streaming sessions.  Uses dedicated locks (not the server queue) so it cannot
+    /// deadlock even if the queue is blocked by in-flight requests.
+    /// Call this on foreground return BEFORE any new video loading starts.
+    public func resetAllConnectionsImmediately() {
+        // 1. Kill the shared connection pool (cancels all pending upstream requests)
+        connectionPoolLock.lock()
+        _connectionPool?.invalidateAndCancel()
+        _connectionPool = nil
+        connectionPoolLock.unlock()
+
+        // 2. Kill per-stream proxy sessions
+        streamingSessionsLock.lock()
+        for (_, session) in streamingSessions {
+            session.invalidateAndCancel()
+        }
+        streamingSessions.removeAll()
+        streamingSessionsLock.unlock()
+
+        // 3. Fire-and-forget: cancel tracked active downloads
+        Task { await activeDownloadsActor.cancelAllTasks() }
     }
 
     /// Emergency cleanup during network failures
