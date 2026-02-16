@@ -24,6 +24,7 @@ class TweetActionBarView: UIView {
         let config = UIImage.SymbolConfiguration(pointSize: 14)
         btn.setImage(UIImage(systemName: "square.and.arrow.up", withConfiguration: config), for: .normal)
         btn.tintColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
+        btn.contentHorizontalAlignment = .trailing
         return btn
     }()
     private let shareSpinner: UIActivityIndicatorView = {
@@ -73,13 +74,9 @@ class TweetActionBarView: UIView {
     }
 
     // Consume all taps within the action bar so they never fall through to the cell.
-    // Taps near the share button (to its left or right) route to shareButton.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01, self.point(inside: point, with: event) else { return nil }
         if let hit = super.hitTest(point, with: event) { return hit }
-        // Empty space to the right of share button → treat as share tap
-        let shareOrigin = shareButton.convert(CGPoint.zero, to: self)
-        if point.x >= shareOrigin.x - 20 { return shareButton }
         return self
     }
 
@@ -96,15 +93,17 @@ class TweetActionBarView: UIView {
         leftStack.distribution = .fillEqually
         leftStack.alignment = .center
 
-        // Share button container (alone at right)
+        // Share button container (alone at right) — button fills container for large tap area
         let shareContainer = UIView()
         shareContainer.addSubview(shareButton)
         shareContainer.addSubview(shareSpinner)
         shareButton.translatesAutoresizingMaskIntoConstraints = false
         shareSpinner.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            shareButton.centerYAnchor.constraint(equalTo: shareContainer.centerYAnchor),
+            shareButton.topAnchor.constraint(equalTo: shareContainer.topAnchor),
+            shareButton.leadingAnchor.constraint(equalTo: shareContainer.leadingAnchor),
             shareButton.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor, constant: -4),
+            shareButton.bottomAnchor.constraint(equalTo: shareContainer.bottomAnchor),
             shareSpinner.centerYAnchor.constraint(equalTo: shareContainer.centerYAnchor),
             shareSpinner.trailingAnchor.constraint(equalTo: shareContainer.trailingAnchor, constant: -4),
         ])
@@ -119,14 +118,13 @@ class TweetActionBarView: UIView {
             leftStack.topAnchor.constraint(equalTo: topAnchor),
             leftStack.leadingAnchor.constraint(equalTo: leadingAnchor),
             leftStack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            leftStack.trailingAnchor.constraint(equalTo: shareContainer.leadingAnchor),
-
             shareContainer.topAnchor.constraint(equalTo: topAnchor),
             shareContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
             shareContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            // First 4 buttons take more space, share button gets less
-            leftStack.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.75),
+            // Left 80%, share 20% with padding gap between them
+            leftStack.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.80),
+            shareContainer.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.20),
 
             heightAnchor.constraint(equalToConstant: 30),
         ])
