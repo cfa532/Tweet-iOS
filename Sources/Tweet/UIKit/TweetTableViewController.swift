@@ -92,7 +92,7 @@ class TweetTableViewController: UITableViewController {
     // Height cache for layout stability (prevents jumps when cells with videos load)
     // Throttling for video visibility updates (avoid expensive checks on every scroll frame)
     private var lastVideoVisibilityUpdate: CFTimeInterval = 0
-    private let videoVisibilityThrottleInterval: TimeInterval = 0.1 // 100ms - faster video starts
+    private let videoVisibilityThrottleInterval: TimeInterval = 0.15 // 150ms during active drag
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     private var lastPreloadTweetIds: Set<String> = [] // Cache last preload zone tweet IDs
     
@@ -1455,7 +1455,10 @@ class TweetTableViewController: UITableViewController {
         // Throttle video visibility updates (CACurrentMediaTime is cheaper than Date())
         let now = CACurrentMediaTime()
 
-        if now - lastVideoVisibilityUpdate >= videoVisibilityThrottleInterval {
+        // Skip video visibility updates during inertial deceleration — they compete
+        // with UIKit's scroll animation on the main thread, causing jank.
+        // A final update fires in scrollViewDidEndDecelerating instead.
+        if !isDecelerating, now - lastVideoVisibilityUpdate >= videoVisibilityThrottleInterval {
             lastVideoVisibilityUpdate = now
             updateVisibleTweetsForVideoPlayback()
         }
@@ -1535,6 +1538,9 @@ class TweetTableViewController: UITableViewController {
 
     override func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         isDecelerating = false
+
+        // Deceleration skipped video visibility updates — do one final update now
+        updateVisibleTweetsForVideoPlayback()
 
         // CRITICAL: Save scroll position immediately when scroll momentum stops
         // This ensures position is persisted even if app is killed before viewWillDisappear
