@@ -12,6 +12,12 @@ import UIKit
 // MARK: - Cache Metadata Structure
 private struct CacheMetadata: Codable {
     let cachedMediaIDs: [String: Date] // mediaID -> timestamp
+    var hlsExtensions: [String: String] // mediaID -> "master.m3u8" or "playlist.m3u8"
+
+    init(cachedMediaIDs: [String: Date], hlsExtensions: [String: String] = [:]) {
+        self.cachedMediaIDs = cachedMediaIDs
+        self.hlsExtensions = hlsExtensions
+    }
 }
 // CachingPlayerItem is now integrated directly
 
@@ -110,6 +116,7 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Cache Persistence
     private let cacheMetadataKey = "SharedAssetCache_Metadata"
+    private var hlsExtensions: [String: String] = [:] // mediaID -> "master.m3u8" or "playlist.m3u8"
     
     // MARK: - Background Cleanup
     private var cleanupTimer: Timer?
@@ -489,27 +496,41 @@ class SharedAssetCache: ObservableObject {
             if isHLSVideo {
                 // Check cancellation before HLS resolution
                 try Task.checkCancellation()
-                
-                // Resolve HLS URL (master.m3u8 or playlist.m3u8)
-                let resolvedURL = await resolveHLSURL(url)
-                
+
+                // Resolve HLS URL, using persisted extension when available
+                let cachedFilename = await MainActor.run { self.hlsExtensions[mediaID] }
+                let resolvedURL: URL
+                let resolvedFilename: String?
+                if let cachedFilename {
+                    resolvedURL = url.appendingPathComponent(cachedFilename)
+                    resolvedFilename = nil // already persisted, no need to re-save
+                } else {
+                    let networkResolvedURL = await resolveHLSURL(url)
+                    resolvedURL = networkResolvedURL
+                    resolvedFilename = (networkResolvedURL != url) ? networkResolvedURL.lastPathComponent : nil
+                }
+
                 // Check cancellation after async operation
                 try Task.checkCancellation()
-                
+
                 // For HLS videos, use CachingPlayerItem which handles LocalHTTPServer
                 LocalHTTPServer.shared.start()
-                
+
                 let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
                 asset = cachingPlayerItem.asset
-                
+
                 // Check cancellation before storing
                 try Task.checkCancellation()
-                
+
                 // Store caching player item to prevent deallocation
                 await MainActor.run {
                     // Check cancellation on main actor
                     guard !Task.isCancelled else { return }
                     self.cachingPlayerItems[mediaID] = cachingPlayerItem
+                    // Persist the resolved extension alongside the cached asset
+                    if let filename = resolvedFilename {
+                        self.hlsExtensions[mediaID] = filename
+                    }
                 }
             } else {
                 // Check cancellation before progressive video setup
@@ -1253,28 +1274,35 @@ class SharedAssetCache: ObservableObject {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
         }
                 
-        // Check if we have cached content first to avoid network requests
-        let cachedResolvedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url)
-        
-        // Resolve the HLS URL (use cached info if available, otherwise make network requests)
+        // Fast path: use persisted extension from CacheMetadata (no disk I/O or network)
         let resolvedURL: URL
-        if let cachedURL = cachedResolvedURL {
-            resolvedURL = cachedURL
+        if let cachedFilename = hlsExtensions[mediaID] {
+            resolvedURL = url.appendingPathComponent(cachedFilename)
         } else {
-            let networkResolvedURL = await resolveHLSURL(url)
-            
-            // If network resolution returns the base URL unchanged (resolution failed),
-            // try cache check ONE MORE TIME with more relaxed validation
-            if networkResolvedURL == url {
-                print("⚠️ [HLS FALLBACK] Network resolution failed, retrying cache check for mediaID: \(mediaID)")
-                if let fallbackCachedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url) {
-                    resolvedURL = fallbackCachedURL
+            // Slow path: check cached files on disk first, then network HEAD requests
+            let cachedResolvedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url)
+
+            if let cachedURL = cachedResolvedURL {
+                resolvedURL = cachedURL
+            } else {
+                let networkResolvedURL = await resolveHLSURL(url)
+
+                // If network resolution returns the base URL unchanged (resolution failed),
+                // try cache check ONE MORE TIME with more relaxed validation
+                if networkResolvedURL == url {
+                    print("⚠️ [HLS FALLBACK] Network resolution failed, retrying cache check for mediaID: \(mediaID)")
+                    if let fallbackCachedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url) {
+                        resolvedURL = fallbackCachedURL
+                    } else {
+                        print("❌ [HLS FALLBACK] Cache check retry also failed for mediaID: \(mediaID)")
+                        resolvedURL = networkResolvedURL
+                    }
                 } else {
-                    print("❌ [HLS FALLBACK] Cache check retry also failed for mediaID: \(mediaID)")
+                    // Save the resolved filename so future loads skip this lookup entirely
+                    hlsExtensions[mediaID] = networkResolvedURL.lastPathComponent
+                    saveCacheMetadata()
                     resolvedURL = networkResolvedURL
                 }
-            } else {
-                resolvedURL = networkResolvedURL
             }
         }
         
@@ -1341,13 +1369,23 @@ class SharedAssetCache: ObservableObject {
         if isHLSVideo {
             // Check cancellation before HLS resolution
             try Task.checkCancellation()
-            
-            // Create fresh HLS player item for singleton player
-            let resolvedURL = await resolveHLSURL(url)
-            
+
+            // Resolve HLS URL, using persisted extension when available
+            let resolvedURL: URL
+            if let cachedFilename = hlsExtensions[extractedMediaID] {
+                resolvedURL = url.appendingPathComponent(cachedFilename)
+            } else {
+                let networkResolvedURL = await resolveHLSURL(url)
+                if networkResolvedURL != url {
+                    hlsExtensions[extractedMediaID] = networkResolvedURL.lastPathComponent
+                    saveCacheMetadata()
+                }
+                resolvedURL = networkResolvedURL
+            }
+
             // Check cancellation after async operation
             try Task.checkCancellation()
-            
+
             LocalHTTPServer.shared.start()
             let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: extractedMediaID, avUrlAssetOptions: nil)
             
@@ -1528,10 +1566,13 @@ class SharedAssetCache: ObservableObject {
         
         // Clear disk cache status
         diskCacheStatus.removeAll()
-        
+
+        // Clear HLS extension cache
+        hlsExtensions.removeAll()
+
         // Clear disk cache using the cleanup manager
         DiskCacheCleanupManager.shared.clearAllCache()
-        
+
     }
     
     /// Cancel all active loading tasks to free memory immediately
@@ -2327,11 +2368,12 @@ class SharedAssetCache: ObservableObject {
         let validMediaIDs = metadata.cachedMediaIDs
         
         cacheTimestamps = validMediaIDs
+        hlsExtensions = metadata.hlsExtensions
     }
-    
+
     /// Save cache metadata to UserDefaults
     private func saveCacheMetadata() {
-        let metadata = CacheMetadata(cachedMediaIDs: cacheTimestamps)
+        let metadata = CacheMetadata(cachedMediaIDs: cacheTimestamps, hlsExtensions: hlsExtensions)
         if let data = try? JSONEncoder().encode(metadata) {
             UserDefaults.standard.set(data, forKey: cacheMetadataKey)
         }
