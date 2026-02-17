@@ -899,9 +899,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func startPlaybackWithFade(_ player: AVPlayer) {
         guard (attachment?.mid) != nil else { return }
 
-        // If showing spinner (no thumbnail in .playerLoading), wait for layer to be ready
-        if videoCellState == .playerLoading && imageView.image == nil {
-            print("\(logPrefix) ⏳ Deferring playback - waiting for layer (no thumbnail)")
+        // If we have a thumbnail, defer until the layer decodes its first frame so the
+        // thumbnail covers the layer during decode (prevents black flash).
+        // Do NOT defer when there is no thumbnail: isReadyForDisplay only fires after
+        // play() or seek(), so deferring with no thumbnail creates a deadlock (stuck black screen).
+        if videoCellState == .playerLoading && imageView.image != nil {
+            print("\(logPrefix) ⏳ Deferring playback - waiting for layer (have thumbnail)")
             videoPlayerView.onReadyForDisplay = { [weak self] in
                 guard let self, self.coordinatorWantsToPlay else { return }
                 print("\(self.logPrefix) ✓ Layer ready - starting deferred playback")
