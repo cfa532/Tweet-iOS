@@ -1455,10 +1455,9 @@ class TweetTableViewController: UITableViewController {
         // Throttle video visibility updates (CACurrentMediaTime is cheaper than Date())
         let now = CACurrentMediaTime()
 
-        // Skip video visibility updates during inertial deceleration — they compete
-        // with UIKit's scroll animation on the main thread, causing jank.
-        // A final update fires in scrollViewDidEndDecelerating instead.
-        if !isDecelerating, now - lastVideoVisibilityUpdate >= videoVisibilityThrottleInterval {
+        // Update video visibility during all scroll phases (drag + deceleration).
+        // Throttle limits frequency to avoid excessive work.
+        if now - lastVideoVisibilityUpdate >= videoVisibilityThrottleInterval {
             lastVideoVisibilityUpdate = now
             updateVisibleTweetsForVideoPlayback()
         }
