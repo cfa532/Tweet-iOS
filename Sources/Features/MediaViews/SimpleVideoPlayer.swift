@@ -3416,13 +3416,15 @@ struct SimpleVideoPlayer: View {
                 }
                 
                 // Loading indicator - show until video actually starts playing
-                // Show spinner when: loading, OR player is buffering after play() was called
+                // Show spinner when: loading, OR player is buffering after play() was called,
+                // OR tweetDetail hasn't started playback yet (covers gap between player creation and first frame)
                 let showInitialLoadingSpinner = loadingState.isLoading ||
                     (mode == .mediaBrowser &&
                      player.rate == 0 &&
                      (player.currentItem?.currentTime().seconds ?? 0) < 0.1) ||
                     ((mode == .mediaBrowser || mode == .tweetDetail) &&
-                     player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+                     player.timeControlStatus == .waitingToPlayAtSpecifiedRate) ||
+                    (mode == .tweetDetail && playbackState == .notStarted)
                 
                 if showInitialLoadingSpinner {
                     ZStack {
@@ -4308,8 +4310,7 @@ struct SimpleVideoPlayer: View {
         // This ensures the view's player binding is set when reusing cached players
         self.player = player
         // DON'T set loadingState = .loaded here! Let the KVO observers handle it based on actual readiness
-        // CRITICAL: Don't overwrite .loaded state (tweetDetail sets it before calling this)
-        // BUT: If player is already ready with data, set to .loaded immediately to prevent stuck spinner
+        // If player is already ready with data, set to .loaded immediately to prevent stuck spinner
         if let playerItem = player.currentItem,
            playerItem.status == .readyToPlay,
            !playerItem.loadedTimeRanges.isEmpty {
