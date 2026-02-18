@@ -158,9 +158,13 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         
         if let error = error {
             let nsError = error as NSError
-            if nsError.code == NSURLErrorCancelled {
-                // Don't count cancellations (e.g. from emergency cleanup or scroll-away) as real failures
-                print("⚠️ [PROGRESSIVE STREAM] Cancelled for \(mediaID) - not recording as failure")
+            let isTransient = nsError.code == NSURLErrorCancelled ||
+                              nsError.code == NSURLErrorTimedOut ||
+                              nsError.code == NSURLErrorNetworkConnectionLost ||
+                              nsError.code == NSURLErrorNotConnectedToInternet
+            if isTransient {
+                // Don't BlackList transient errors — AVPlayer will re-request remaining bytes
+                print("⚠️ [PROGRESSIVE STREAM] Transient error for \(mediaID) (code \(nsError.code)): \(error.localizedDescription)")
             } else {
                 print("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
                 BlackList.shared.recordFailure(mediaID)
@@ -1150,7 +1154,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Create the actual download task
         let downloadTask = Task {
-            // Wait for fetchAndServe to complete
+            // Wait for fetchAndServe to complete (retry logic is inside fetchAndServe)
             await withCheckedContinuation { continuation in
                 fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
                     continuation.resume()
@@ -1159,9 +1163,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
             let _ = Date().timeIntervalSince(downloadStartTime)
 
-            if FileManager.default.fileExists(atPath: cachePath) {
-                let _ = (try? FileManager.default.attributesOfItem(atPath: cachePath)[.size] as? Int) ?? 0
-            } else {
+            if !FileManager.default.fileExists(atPath: cachePath) {
                 print("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
             }
 
@@ -1173,6 +1175,52 @@ public class LocalHTTPServer: @unchecked Sendable {
         await activeDownloadsActor.setTask(downloadTask, for: downloadKey)
     }
     
+    private func fetchHEADWithRetry(url: URL, mediaID: String, attempt: Int = 1, maxAttempts: Int = 3, completion: @escaping (HTTPURLResponse?) -> Void) {
+        var headRequest = URLRequest(url: url)
+        headRequest.httpMethod = "HEAD"
+        headRequest.timeoutInterval = 10
+
+        let headTask = connectionPool.dataTask(with: headRequest) { [weak self] _, response, error in
+            guard let self = self else {
+                completion(nil)
+                return
+            }
+
+            if let error = error {
+                let nsError = error as NSError
+                let isRetryable = nsError.code == NSURLErrorTimedOut ||
+                                  nsError.code == NSURLErrorNetworkConnectionLost ||
+                                  nsError.code == NSURLErrorNotConnectedToInternet
+
+                if nsError.code != NSURLErrorCancelled && attempt < maxAttempts && isRetryable {
+                    let delay = Double(attempt)
+                    print("🔄 [PROGRESSIVE HEAD] Retry \(attempt)/\(maxAttempts - 1) for \(mediaID) after \(delay)s")
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.fetchHEADWithRetry(url: url, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
+                    }
+                    return
+                }
+
+                print("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
+                if nsError.code != NSURLErrorCancelled {
+                    BlackList.shared.recordFailure(mediaID)
+                }
+                completion(nil)
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                print("❌ [PROGRESSIVE HEAD] Bad status for \(mediaID)")
+                BlackList.shared.recordFailure(mediaID)
+                completion(nil)
+                return
+            }
+
+            completion(httpResponse)
+        }
+        headTask.resume()
+    }
+
     private func handleProgressiveVideoRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String, requestHeaders: [String]) {
         // Parse Range header from client request
         var rangeHeader: String? = nil
@@ -1246,30 +1294,14 @@ public class LocalHTTPServer: @unchecked Sendable {
         // STREAMING: First get file size with HEAD, then stream data in chunks
         let requestedStart = rangeStart ?? 0
         
-        var headRequest = URLRequest(url: fullRealURL)
-        headRequest.httpMethod = "HEAD"
-        headRequest.timeoutInterval = 10
-        
-        
-        let headTask = connectionPool.dataTask(with: headRequest) { [weak self] _, response, error in
+        self.fetchHEADWithRetry(url: fullRealURL, mediaID: mediaID) { [weak self] httpResponse in
             guard let self = self else { return }
-            
-            if let error = error {
-                print("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
-                if (error as NSError).code != NSURLErrorCancelled {
-                    BlackList.shared.recordFailure(mediaID)
-                }
+
+            guard let httpResponse = httpResponse else {
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
-            
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                print("❌ [PROGRESSIVE HEAD] Bad status for \(mediaID)")
-                BlackList.shared.recordFailure(mediaID)
-                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
-                return
-            }
-            
+
             // Get total file size
             var totalFileSize: Int64?
             if let contentLength = httpResponse.allHeaderFields["Content-Length"] as? String, let size = Int64(contentLength) {
@@ -1476,8 +1508,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
             })
         }
-        
-        headTask.resume()
     }
     
     // MARK: - Progressive Video Cache Helpers
@@ -2014,67 +2044,86 @@ public class LocalHTTPServer: @unchecked Sendable {
             completion?()
             return
         }
-        
-        let startTime = Date()
-        
+
+        // Extract mediaID from cachePath for BlackList tracking
+        let pathComponents = cachePath.components(separatedBy: "/")
+        let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
+        let isSegment = cachePath.hasSuffix(".ts")
+        let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
+
+        fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: 1, maxAttempts: maxAttempts, completion: completion)
+    }
+
+    private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
+
         let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
-            let _ = Date().timeIntervalSince(startTime)
             guard let self = self else { return }
-            
+
             // MEMORY FIX: Use autoreleasepool for large segment downloads (4-5MB each)
             autoreleasepool {
-                // Extract mediaID from cachePath for BlackList tracking
-                let pathComponents = cachePath.components(separatedBy: "/")
-                let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
-                
+                // Check for retryable errors (timeout, network lost, etc.)
                 if let error = error {
-                    // Don't count cancellations (e.g. from emergency cleanup) as real failures
-                    if !mediaID.isEmpty, (error as NSError).code != NSURLErrorCancelled {
-                        BlackList.shared.recordFailure(mediaID)
+                    let nsError = error as NSError
+                    let isRetryable = nsError.code == NSURLErrorTimedOut ||
+                                      nsError.code == NSURLErrorNetworkConnectionLost ||
+                                      nsError.code == NSURLErrorNotConnectedToInternet
+
+                    if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
+                        let delay = Double(attempt) // 1s, 2s backoff
+                        print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                            self.fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
+                        }
+                        return
                     }
 
+                    // Final failure — record and respond
+                    if !mediaID.isEmpty, nsError.code != NSURLErrorCancelled {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                     completion?()
                     return
                 }
-                
+
                 // CRITICAL: Validate HTTP response status
                 guard let httpResponse = response as? HTTPURLResponse else {
-                    
-                    // Record failure for invalid response
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
                     }
-                    
                     self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                     completion?()
                     return
                 }
-                
+
+                // Retry on server errors (5xx)
+                if httpResponse.statusCode >= 500, attempt < maxAttempts {
+                    let delay = Double(attempt)
+                    print("🔄 [LocalHTTPServer] Retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
+                    }
+                    return
+                }
+
                 guard (200...299).contains(httpResponse.statusCode) else {
-                    
-                    // Record failure for error status
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
                     }
-                    
                     self.sendResponse(connection: connection, statusCode: httpResponse.statusCode, headers: [:], body: nil)
                     completion?()
                     return
                 }
-                
+
                 guard let data = data, !data.isEmpty else {
-                    
-                    // Record failure for empty data
                     if !mediaID.isEmpty {
                         BlackList.shared.recordFailure(mediaID)
                     }
-                    
                     self.sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                     completion?()
                     return
                 }
-                
+
                 // For playlists, strip to relative paths for caching (port-independent!)
                 var dataToCache = data
                 var finalData = data
@@ -2084,14 +2133,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                     if let relativeData = relativePlaylist.data(using: .utf8) {
                         dataToCache = relativeData
                     }
-                    
+
                     // Rewrite with current port for serving
                     let modifiedPlaylist = self.rewritePlaylistURLs(relativePlaylist, mediaID: mediaID, baseURL: url)
                     if let modifiedData = modifiedPlaylist.data(using: .utf8) {
                         finalData = modifiedData
                     }
                 }
-                
+
                 // CRITICAL FIX: Write synchronously so file exists when fetchAndServe returns
                 // This ensures deduplication polling finds the file immediately
                 // autoreleasepool still protects memory during write
@@ -2101,12 +2150,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                 } catch {
                     print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
                 }
-                
+
                 // Record successful fetch for this mediaID
                 if !mediaID.isEmpty {
                     BlackList.shared.recordSuccess(mediaID)
                 }
-                
+
                 // Serve it
                 let mimeType = self.getMimeType(for: cachePath)
                 let headers: [String: String] = [
@@ -2114,14 +2163,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                     "Content-Length": "\(finalData.count)",
                     "Accept-Ranges": "bytes"
                 ]
-                
+
                 if method == "HEAD" {
                     self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: nil)
                 } else {
                     self.sendResponse(connection: connection, statusCode: 200, headers: headers, body: finalData)
                 }
                 // MEMORY FIX: All Data objects released when autoreleasepool exits
-                
+
                 // CRITICAL: Call completion AFTER file is written and served
                 completion?()
             }
