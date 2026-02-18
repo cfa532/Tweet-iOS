@@ -105,6 +105,9 @@ extension Notification.Name {
     // MARK: - Video Related
     /// Posted to stop all videos in the tweet list when entering full screen
     static let stopAllVideos = Notification.Name("StopAllVideos")
+    /// Posted when a loaned player is returned from fullscreen back to the feed cell.
+    /// userInfo: ["videoMid": String]
+    static let playerLoanReturned = Notification.Name("PlayerLoanReturned")
     /// Posted when the main feed view appears (for restarting video playback after navigation)
     static let feedViewDidAppear = Notification.Name("FeedViewDidAppear")
     /// Posted when app content is covered/uncovered by an overlay (sheet/fullScreenCover/login/share).

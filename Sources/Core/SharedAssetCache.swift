@@ -685,7 +685,6 @@ class SharedAssetCache: ObservableObject {
 
             // If no buffered data, force preroll to reload from disk cache
             if !hasBufferedData && playerItem.status == .readyToPlay {
-                playerItem.preferredForwardBufferDuration = 5.0  // Prefetch for feed inline playback
                 player.preroll(atRate: 1.0) { success in
                     if !success {
                         print("⚠️ [PLAYER HEALTH] Preroll failed for \(mediaID.prefix(8))")
@@ -977,7 +976,14 @@ class SharedAssetCache: ObservableObject {
         guard let mediaID = extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID"])
         }
-        
+
+        // Re-check cache before creating — another creation may have completed while we were queued
+        if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: mediaID) }),
+           cachedPlayer.currentItem != nil {
+            print("✅ [SharedAssetCache] createPlayerNow(\(mediaID.prefix(8))) - found cached player on re-check, skipping duplicate creation")
+            return cachedPlayer
+        }
+
         // Clean up cache BEFORE creating new player — evict to make room for incoming player
         await MainActor.run {
             self.managePlayerCacheSize(reserveSlots: 1)
@@ -1129,7 +1135,6 @@ class SharedAssetCache: ObservableObject {
         
         // Optimize buffering for progressive video playback
         player.automaticallyWaitsToMinimizeStalling = false
-        playerItem.preferredForwardBufferDuration = 10.0  // Buffer 10 seconds ahead for feed inline playback
         
         // Cache the player
         await MainActor.run { 
@@ -1332,7 +1337,6 @@ class SharedAssetCache: ObservableObject {
         
         // Optimize buffering for HLS playback
         player.automaticallyWaitsToMinimizeStalling = false
-        cachingPlayerItem.preferredForwardBufferDuration = 5.0  // Buffer 5 seconds ahead for feed inline HLS playback
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
         // Cache the player using mediaID (video attachment mid)

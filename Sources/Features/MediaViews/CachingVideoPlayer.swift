@@ -147,20 +147,6 @@ struct CachingVideoPlayer: View {
         }
         .onChange(of: isVisible) { _, visible in
             if visible {
-                // CRITICAL FIX: Restore buffering settings when video becomes visible again
-                // This allows videos to buffer properly when they come back into view
-                if let playerItem = player?.currentItem {
-                    if let cachingPlayerItem = playerItem as? CachingPlayerItem {
-                        cachingPlayerItem.preferredForwardBufferDuration = 5.0  // Restore feed inline HLS buffering
-                        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible video: \(mid)")
-                    } else {
-                        // For progressive videos, restore buffer duration
-                        playerItem.preferredForwardBufferDuration = 10.0
-                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible progressive video: \(mid)")
-                    }
-                }
-
                 // When view becomes visible, always attempt recovery to ensure video works properly
                 // Videos that have been scrolled out of view may need recovery even if they appear healthy
                 print("DEBUG: [CachingVideoPlayer] View became visible for \(mid), attempting recovery...")

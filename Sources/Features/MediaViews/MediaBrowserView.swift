@@ -14,6 +14,7 @@ struct MediaBrowserView: View {
     let tweet: Tweet
     let initialIndex: Int
     let cellTweetId: String? // The visible cell's tweet ID (could be retweet or quoting tweet)
+    let videoCoordinator: VideoPlaybackCoordinator? // The feed's coordinator for fullscreen navigation
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int
     @State private var currentTweet: Tweet // Allow changing tweet for auto-advance
@@ -54,10 +55,11 @@ struct MediaBrowserView: View {
             ?? HproseInstance.baseUrl
     }
 
-    init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil) {
+    init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil, videoCoordinator: VideoPlaybackCoordinator? = nil) {
         self.tweet = tweet
         self.initialIndex = initialIndex
         self.cellTweetId = cellTweetId
+        self.videoCoordinator = videoCoordinator
         self._currentIndex = State(initialValue: initialIndex)
         self._currentTweet = State(initialValue: tweet)
         self._currentCellTweetId = State(initialValue: cellTweetId ?? tweet.mid)
@@ -103,7 +105,7 @@ struct MediaBrowserView: View {
             )
             .onAppear {
                 // Activate manager first to register lifecycle observers
-                FullScreenVideoManager.shared.activateForFullscreen()
+                FullScreenVideoManager.shared.activateForFullscreen(coordinator: videoCoordinator)
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
 
@@ -288,6 +290,7 @@ struct MediaBrowserView: View {
                                 
                                 // Swipe up: next video (in this tweet if available, otherwise next tweet's video)
                                 if value.translation.height < -swipeThreshold || value.velocity.height < -velocityThreshold {
+                                    print("🔍 [SWIPE] Swipe up detected - checking for next video in tweet (currentIndex: \(currentIndex), attachments: \(attachments.count))")
                                     if let nextVideoIndex = nextVideoIndexInThisTweet(after: currentIndex) {
                                         // Vertical transition: suppress TabView paging animation.
                                         suppressTabPagingAnimation = true
@@ -318,6 +321,7 @@ struct MediaBrowserView: View {
                                         }
                                     } else {
                                         // No more videos in this tweet, move to next tweet's video.
+                                        print("🔍 [SWIPE] No more videos in this tweet, calling navigateToNext()")
                                         FullScreenVideoManager.shared.navigateToNext()
                                     }
                                 }

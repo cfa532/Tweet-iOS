@@ -110,6 +110,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         v.backgroundColor = UIColor.black.withAlphaComponent(0.4)
         v.clipsToBounds = true
         v.isHidden = true
+        v.isUserInteractionEnabled = false // Don't block taps during loading
         return v
     }()
 
@@ -136,6 +137,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Notification observers
     private var videoCompletionObserver: NSObjectProtocol?
     private var stopAllObserver: NSObjectProtocol?
+    private var loanReturnObserver: NSObjectProtocol?
     private var shouldPlayObserver: NSObjectProtocol?
     private var shouldPauseObserver: NSObjectProtocol?
     private var shouldStopObserver: NSObjectProtocol?
@@ -151,6 +153,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Whether the player item is loaded and ready to play
     private var isPlayerLoaded: Bool = false
+
+    /// True when this cell's player has been loaned to fullscreen.
+    /// While loaned, coordinator commands are ignored (fullscreen controls the player).
+    private var isLoanedOut: Bool = false
 
     /// Prevent duplicate finish handling
     private var isHandlingFinishEvent: Bool = false
@@ -524,10 +530,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         }
 
-        // Tap gesture for fullscreen
+        // Tap gesture for fullscreen — added to self (not videoPlayerView) so it works
+        // in all states: thumbnail, playerLoading, and playerReady (where videoPlayerView may be hidden)
         let tap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
-        videoPlayerView.addGestureRecognizer(tap)
-        videoPlayerView.isUserInteractionEnabled = true
+        self.addGestureRecognizer(tap)
 
         // Listen for .stopAllVideos (posted by non-coordinator code like handleVideoTap)
         stopAllObserver = NotificationCenter.default.addObserver(
@@ -536,11 +542,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             self?.handleStopAllVideos()
         }
 
+        // Listen for loaned player return from fullscreen
+        loanReturnObserver = NotificationCenter.default.addObserver(
+            forName: .playerLoanReturned, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let mid = notification.userInfo?["videoMid"] as? String,
+                  mid == self.attachment?.mid else { return }
+            print("\(self.logPrefix) 🔙 Loaned player returned from fullscreen")
+            self.isLoanedOut = false
+        }
+
         // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
             .receive(on: DispatchQueue.main)
             .sink { [weak self] muted in
-                self?.player?.isMuted = muted
+                guard let self, !self.isLoanedOut else { return }
+                self.player?.isMuted = muted
             }
             .store(in: &cancellables)
 
@@ -759,6 +777,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func handleCoordinatorPlayCommand() {
         guard let mid = attachment?.mid else { return }
+        guard !isLoanedOut else { return }
 
         print("\(logPrefix) ▶️ Coordinator play command - state: \(videoCellState), hasPlayer: \(player != nil), isLoaded: \(isPlayerLoaded)")
 
@@ -817,6 +836,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func handleCoordinatorPauseCommand() {
         guard let mid = attachment?.mid else { return }
+        guard !isLoanedOut else { return }
         print("\(logPrefix) ⏸️ Coordinator pause command")
         coordinatorWantsToPlay = false
 
@@ -840,6 +860,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func handleCoordinatorStopCommand() {
         guard let mid = attachment?.mid else { return }
+        guard !isLoanedOut else { return }
         print("\(logPrefix) ⏹️ Coordinator stop command")
         coordinatorWantsToPlay = false
 
@@ -858,6 +879,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     private func handleStopAllVideos() {
         guard isVideoAttachment else { return }
+        guard !isLoanedOut else { return }
         coordinatorWantsToPlay = false
 
         if let player = player {
@@ -1300,7 +1322,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let browserView = MediaBrowserView(
             tweet: parentTweet,
             initialIndex: attachmentIndex,
-            cellTweetId: cellTweetId ?? parentTweet.mid
+            cellTweetId: cellTweetId ?? parentTweet.mid,
+            videoCoordinator: videoCoordinator
         )
         let hostingVC = UIHostingController(rootView: browserView)
         hostingVC.modalPresentationStyle = .fullScreen
@@ -1312,16 +1335,30 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     private func handleVideoTap() {
-        guard let parentTweet, let parentVC = parentViewController else { return }
+        guard let parentTweet, let parentVC = parentViewController, let attachment else { return }
 
         // Save video position before fullscreen
         saveVideoPositionForFullscreen()
+
+        // Loan the player to fullscreen if it's loaded and ready
+        if let player = self.player, isPlayerLoaded, player.currentItem != nil {
+            print("\(logPrefix) 🎬 Loaning player to fullscreen")
+            isLoanedOut = true
+            FullScreenVideoManager.shared.setLoanedPlayer(
+                player,
+                mid: attachment.mid,
+                tweetId: parentTweet.mid,
+                cellTweetId: cellTweetId ?? parentTweet.mid,
+                videoIndex: attachmentIndex,
+                mediaType: attachment.type
+            )
+        }
 
         // Show loading overlay
         fullscreenOverlay.isHidden = false
         fullscreenSpinner.startAnimating()
 
-        // Post stop all to pause feed videos
+        // Post stop all to pause feed videos (loaned cell ignores this)
         NotificationCenter.default.post(name: .stopAllVideos, object: nil)
 
         // Delay to allow spinner to render
@@ -1329,7 +1366,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             let browserView = MediaBrowserView(
                 tweet: parentTweet,
                 initialIndex: self?.attachmentIndex ?? 0,
-                cellTweetId: self?.cellTweetId ?? parentTweet.mid
+                cellTweetId: self?.cellTweetId ?? parentTweet.mid,
+                videoCoordinator: self?.videoCoordinator
             )
             let hostingVC = UIHostingController(rootView: browserView)
             hostingVC.modalPresentationStyle = .fullScreen
@@ -1628,6 +1666,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         if let o = stopAllObserver { NotificationCenter.default.removeObserver(o) }
         stopAllObserver = nil
+        if let o = loanReturnObserver { NotificationCenter.default.removeObserver(o) }
+        loanReturnObserver = nil
         if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
         shouldPlayObserver = nil
         if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }
@@ -1650,12 +1690,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Detach player from view
         videoPlayerView.setPlayer(nil)
         videoPlayerView.isHidden = true
-        videoPlayerView.gestureRecognizers?.forEach { videoPlayerView.removeGestureRecognizer($0) }
+        // Remove video tap gesture from self (added in setupVideoCell)
+        self.gestureRecognizers?.forEach { gesture in
+            if gesture is UITapGestureRecognizer {
+                self.removeGestureRecognizer(gesture)
+            }
+        }
         player = nil
 
         // Reset state
         coordinatorWantsToPlay = false
         isPlayerLoaded = false
+        isLoanedOut = false
         isHandlingFinishEvent = false
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast

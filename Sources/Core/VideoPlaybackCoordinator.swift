@@ -117,6 +117,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
 
+    /// Public count for debug logging
+    var allVideosCount: Int { allVideos.count }
+
     /// Store current tweet list for embedded tweet lookup
     private var currentTweets: [Tweet] = []
 
@@ -534,6 +537,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Use allVideos in its current order (approximately feed order)
         let feedOrderedVideos = allVideos
 
+        print("🔍 [FIND-NEXT] Searching \(feedOrderedVideos.count) videos for cellTweetId=\(cellTweetId.prefix(8)), attachIdx=\(currentAttachmentIndex), mid=\(currentVideoMid?.prefix(8) ?? "nil")")
+
         // Find the current position in the list.
         let startIndex: Int?
         let mid = currentVideoMid
@@ -558,7 +563,14 @@ class VideoPlaybackCoordinator: ObservableObject {
         ?? feedOrderedVideos.firstIndex(where: { $0.cellTweetId == cellTweetId })
         ?? feedOrderedVideos.firstIndex(where: { $0.mediaTweetId == cellTweetId })
 
-        guard let startIndex else { return nil }
+        guard let startIndex else {
+            // Debug: print first few allVideos entries to help diagnose mismatch
+            let sample = feedOrderedVideos.prefix(5).map { "(\($0.cellTweetId.prefix(8)),\($0.mediaTweetId.prefix(8)),att:\($0.attachmentIndex),mid:\($0.videoMid.prefix(8)))" }.joined(separator: " ")
+            print("🔍 [FIND-NEXT] ❌ Current video NOT found in allVideos! First entries: \(sample)")
+            return nil
+        }
+
+        print("🔍 [FIND-NEXT] Found current at index \(startIndex)/\(feedOrderedVideos.count-1), scanning forward...")
 
         // Scan forward for the next playable entry
         for nextIdx in (startIndex + 1)..<feedOrderedVideos.count {
@@ -573,6 +585,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                   let attachments = mediaTweet.attachments,
                   candidate.attachmentIndex >= 0,
                   candidate.attachmentIndex < attachments.count else {
+                print("🔍 [FIND-NEXT] Skipping candidate[\(nextIdx)]: mediaTweet=\(mediaTweet?.mid.prefix(8) ?? "nil"), attachments=\(mediaTweet?.attachments?.count ?? -1)")
                 continue
             }
 
@@ -580,9 +593,11 @@ class VideoPlaybackCoordinator: ObservableObject {
             let attachment = attachments[candidate.attachmentIndex]
             guard attachment.type == .video || attachment.type == .hls_video else { continue }
 
+            print("🔍 [FIND-NEXT] ✅ Found next at index \(nextIdx): mediaTweet=\(mediaTweet.mid.prefix(8)), att:\(candidate.attachmentIndex)")
             return (tweet: mediaTweet, videoIndex: candidate.attachmentIndex, cellTweetId: candidate.cellTweetId)
         }
 
+        print("🔍 [FIND-NEXT] No more videos after index \(startIndex)")
         return nil
     }
 
