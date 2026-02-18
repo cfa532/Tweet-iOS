@@ -3227,6 +3227,7 @@ struct SimpleVideoPlayer: View {
                 do {
                     let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
                         for: url,
+                        mediaID: mid,
                         tweetId: parentTweetId,
                         mediaType: mediaType
                     )
@@ -3729,10 +3730,9 @@ struct SimpleVideoPlayer: View {
             // Check if singleton already has this exact video playing
             if let existingPlayer = DetailVideoManager.shared.currentPlayer,
                DetailVideoManager.shared.currentVideoMid == mid {
-                self.player = existingPlayer
-                self.loadingState = .loaded
                 // For tweetDetail mode, always unmute and ensure restore happens before any playback.
                 existingPlayer.isMuted = false
+                // DON'T set self.player before configurePlayer — let it detect playerChanged
                 self.configurePlayer(existingPlayer)
                 return
             }
@@ -3741,67 +3741,24 @@ struct SimpleVideoPlayer: View {
             // IMPORTANT: Do NOT reuse SharedAssetCache's cached AVPlayer here, otherwise MediaCell's
             // onDisappear() will pause the same player instance and TweetDetail will "play briefly then stop".
             
-            // CRITICAL: Check for cached player and reuse its asset to avoid network timeout
-            // Preserve playback position to prevent black screen during transition
+            // Reuse cached player's asset to avoid re-downloading
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
                let cachedPlayerItem = cachedPlayer.currentItem {
                 let asset = cachedPlayerItem.asset
-                let currentTime = cachedPlayer.currentTime()
-                let wasPlaying = cachedPlayer.rate > 0
-                
                 let playerItem = AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 newPlayer.isMuted = false
-                
-                // Created independent AVPlayer, storing in singleton
-                
+
                 // Stop old singleton player if exists
                 DetailVideoManager.shared.currentPlayer?.pause()
-                
-                // Store new player in singleton
                 DetailVideoManager.shared.currentPlayer = newPlayer
                 DetailVideoManager.shared.currentVideoMid = mid
-                
-                self.player = newPlayer
-                
-                // Wait for playerItem to be ready before marking as loaded to prevent black screen
-                if playerItem.status == .readyToPlay {
-                    self.loadingState = .loaded
-                    self.configurePlayer(newPlayer)
-                    // Seek to preserved position immediately
-                    newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                        if finished && wasPlaying {
-                            newPlayer.play()
-                        }
-                    }
-                } else {
-                    // PlayerItem not ready yet - wait for it and then seek
-                    self.loadingState = .loading
-                    self.configurePlayer(newPlayer)
-                    
-                    // Observe playerItem status to know when it's ready
-                    // Use a Task to wait for ready status with timeout
-                    Task { @MainActor in
-                        var attempts = 0
-                        while playerItem.status != .readyToPlay && attempts < 100 {
-                            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
-                            attempts += 1
-                        }
-                        
-                        if playerItem.status == .readyToPlay {
-                            self.loadingState = .loaded
-                            // Seek to preserved position once ready
-                            newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                                if finished && wasPlaying {
-                                    newPlayer.play()
-                                }
-                            }
-                        } else {
-                            // Timeout - mark as loaded anyway to prevent infinite loading
-                            self.loadingState = .loaded
-                        }
-                    }
-                }
+
+                // DON'T set self.player before configurePlayer — configurePlayer checks
+                // `self.player !== player` to decide whether to increment representableId.
+                // If we set self.player first, playerChanged is false, representableId doesn't
+                // increment, and SwiftUI reuses the old AVPlayerViewController (audio-only bug).
+                self.configurePlayer(newPlayer)
                 return
             }
             
@@ -3826,18 +3783,14 @@ struct SimpleVideoPlayer: View {
                     newPlayer.isMuted = false
                     
                     await MainActor.run {
-                        // Check if task was cancelled while we were waiting
                         guard !Task.isCancelled else { return }
-                        
-                        // Stop old singleton player if exists
+
                         DetailVideoManager.shared.currentPlayer?.pause()
-                        
-                        // Store new player in singleton
                         DetailVideoManager.shared.currentPlayer = newPlayer
                         DetailVideoManager.shared.currentVideoMid = mid
-                        
-                        self.player = newPlayer
-                        self.loadingState = .loaded
+
+                        // DON'T set self.player before configurePlayer — let configurePlayer
+                        // detect playerChanged and increment representableId for fresh AVPlayerViewController
                         self.configurePlayer(newPlayer)
                         self.setupPlayerTask = nil
                     }
@@ -3938,7 +3891,7 @@ struct SimpleVideoPlayer: View {
                 try Task.checkCancellation()
                 
                 // Use uniquePlayerURL to ensure each tweet gets its own player instance
-                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, tweetId: parentTweetId, mediaType: mediaType)
+                let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(for: uniquePlayerURL, mediaID: mid, tweetId: parentTweetId, mediaType: mediaType)
 
                 // Check cancellation again after async operation
                 try Task.checkCancellation()
@@ -4303,46 +4256,15 @@ struct SimpleVideoPlayer: View {
         // This prevents flicker from multiple playback attempts
         if !hasRecoveredThisCycle {
             // TweetDetail: restore saved position BEFORE any playback to prevent "play then jump back".
-            // For tweetDetail mode, wait for player item to be ready before checking if video finished
             if mode == .tweetDetail {
-                // If player item is ready, check immediately
                 if let playerItem = player.currentItem,
                    playerItem.status == .readyToPlay {
                     if startTweetDetailRestoreIfNeeded(for: player) {
                         return
                     }
-                } else {
-                    // Player item not ready yet - set up observer to check when ready
-                    let playerItem = player.currentItem
-                    if playerItem != nil {
-                        // Wait for player item to become ready, then check
-                        let capturedPlayer = player
-                        Task { @MainActor in
-                            var attempts = 0
-                            while attempts < 50 {
-                                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                                if let item = self.player?.currentItem,
-                                   item.status == .readyToPlay,
-                                   self.player === capturedPlayer {
-                                    // If restore starts an async seek, it will re-trigger playback later.
-                                    if self.startTweetDetailRestoreIfNeeded(for: capturedPlayer) {
-                                        return
-                                    }
-                                    // No restore needed (or restore was a no-op): now that we're ready,
-                                    // re-run playback conditions to ensure autoplay actually starts.
-                                    self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
-                                    return
-                                }
-                                attempts += 1
-                            }
-                            // If still not ready after waiting, give normal playback a chance (it will gate on readiness).
-                            if self.player === capturedPlayer {
-                                self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
-                            }
-                        }
-                        return // Don't proceed with normal playback yet
-                    }
                 }
+                // If item not ready, the KVO playerItemStatusObserver will trigger
+                // checkPlaybackConditions when it becomes readyToPlay.
             }
             // Start playback if needed (normal flow, not recovery)
             checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
@@ -4548,10 +4470,9 @@ struct SimpleVideoPlayer: View {
             }
         }
         
-        // Simple approach: Tell AVPlayer what to do and let IT handle the rest
-        // For MediaCell mode, observe when player is ready and react accordingly
-        if mode == .mediaCell || mode == .embeddedDetail {
-            let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
+        // Observe playerItem status to trigger playback when ready.
+        if mode == .mediaCell || mode == .embeddedDetail || mode == .tweetDetail {
+            let shouldAutoPlay = (mode == .tweetDetail) ? true : (self.currentAutoPlay && self.isVisible && self.shouldLoadVideo)
             
             // Observe player status to know when it's ready
             playerItemStatusObserver = playerItem.observe(\.status, options: [.new, .initial]) { item, change in
@@ -4590,27 +4511,27 @@ struct SimpleVideoPlayer: View {
                 // Player ready
                 
                 DispatchQueue.main.async {
-                    // CRITICAL: Hide spinner if we have buffered data (buffer observer might have already fired)
+                    // Hide spinner when we have enough data (or for tweetDetail, readyToPlay is sufficient
+                    // since AVPlayer handles buffering via automaticallyWaitsToMinimizeStalling)
                     let wasLoading = loadingState.isLoading
-                    if hasBufferedData && loadingState.isLoading {
-                        // Data already buffered, hiding spinner
+                    if loadingState.isLoading && (hasBufferedData || self.mode == .tweetDetail) {
                         loadingState = .loaded
-                        retryAttempts = 0  // Reset retry counter on successful load
+                        retryAttempts = 0
                     }
-                    
+
                     // For embedded videos in detail views, check autoplay when loading completes
                     if wasLoading && !loadingState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
                         checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: isVisible)
                         return
                     }
-                    
+
                     if shouldAutoPlay {
                         // CRITICAL: For MediaCell mode, NEVER auto-play on status ready
                         // VideoPlaybackCoordinator controls all playback via notifications
                         if self.mode == .mediaCell {
                             // NOT auto-playing - waiting for coordinator
-                        } else if self.mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
-                            // Embedded video in detail view - use checkPlaybackConditions
+                        } else if self.mode == .tweetDetail || (self.mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive) {
+                            // Detail/embedded video - use checkPlaybackConditions
                             self.checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: self.isVisible)
                         } else {
                             // Non-MediaCell modes: use old auto-play logic
@@ -5514,23 +5435,17 @@ struct SimpleVideoPlayer: View {
             }
             
             func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-                // CRITICAL: Detach player first, then re-attach
-                // This ensures the player's layer is not attached to any other view
-                
-                // Check if player instance changed before detaching
+                // Only update if the player instance actually changed.
+                // Detaching/reattaching on every SwiftUI update disrupts the video rendering pipeline
+                // and can cause audio-only playback (video layer fails to reattach).
                 let playerChanged = uiViewController.player !== player
-                
-                // Detach and reattach to force fresh layer connection
-                uiViewController.player = nil
+                guard playerChanged else { return }
+
                 uiViewController.player = player
-                
-                // Reset logging flag if player changed
-                if playerChanged {
-                    context.coordinator.hasLoggedPlayingStart = false
-                }
-                
-                // Update timeControlStatus observer only if player changed
-                if let player = player, playerChanged {
+                context.coordinator.hasLoggedPlayingStart = false
+
+                // Update timeControlStatus observer for the new player
+                if let player = player {
                     context.coordinator.timeControlObserver?.invalidate()
                     context.coordinator.timeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
                         DispatchQueue.main.async {
