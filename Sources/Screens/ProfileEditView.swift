@@ -443,11 +443,6 @@ struct ProfileEditView: View {
                         print("✅ [Avatar Upload] Updated appUser.avatar to: \(hproseInstance.appUser.avatar ?? "nil")")
                     }
                     
-                    // CRITICAL: Save synchronously to ensure Core Data has new avatar
-                    print("💾 [Avatar Upload] Saving appUser to Core Data...")
-                    TweetCacheManager.shared.saveUserAndWait(hproseInstance.appUser)
-                    print("✅ [Avatar Upload] Saved to Core Data (appUser IS the singleton, no need to update separately)")
-                    
                     // Pre-cache the uploaded image locally so Avatar doesn't show spinner
                     let avatarAttachment = MimeiFileType(mid: confirmedAvatar, mediaType: .image)
                     _ = ImageCacheManager.shared.cacheImageData(data, for: avatarAttachment)

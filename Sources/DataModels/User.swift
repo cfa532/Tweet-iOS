@@ -9,12 +9,34 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Properties
     @Published var mid: MimeiId
-    @Published var baseUrl: URL?
+    @Published var baseUrl: URL? {
+        didSet {
+            let userId = mid
+            Task { @MainActor in
+                if baseUrl != oldValue {
+                    if userId == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
     @Published var writableUrl: URL?
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
-    @Published var avatar: MimeiId? // MimeiId
+    @Published var avatar: MimeiId? {
+        didSet {
+            let userId = mid
+            Task { @MainActor in
+                if avatar != oldValue {
+                    if userId == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
     @Published var email: String?
     @Published var profile: String?
     @Published var timestamp: Date

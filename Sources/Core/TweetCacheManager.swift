@@ -803,21 +803,6 @@ extension TweetCacheManager {
         }
     }
     
-    /// Synchronous save - blocks until complete (use for critical updates like avatar)
-    func saveUserAndWait(_ user: User) {
-        context.performAndWait {
-            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            request.predicate = NSPredicate(format: "mid == %@", user.mid)
-            let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
-            cdUser.mid = user.mid
-            cdUser.timeCached = Date()
-            if let userData = try? JSONEncoder().encode(user) {
-                cdUser.userData = userData
-                print("DEBUG: [saveUserAndWait] Saved user \(user.mid) with avatar: \(user.avatar ?? "nil")")
-            }
-            try? self.context.save()
-        }
-    }
 
     func deleteExpiredUsers() {
         context.performAndWait {
