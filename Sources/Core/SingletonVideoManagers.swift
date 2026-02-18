@@ -248,6 +248,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         // If a loaned player was set before activation, start playback now that the view is visible
         if isPlayerLoaned, let player = singletonPlayer {
+            player.isMuted = false
             player.play()
             isPlaying = true
             print("🎬 [FullScreenVideoManager] Activated with loaned player - started playback, coordinator: \(coordinator != nil ? "per-feed" : "shared")")
@@ -327,6 +328,17 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let duration = player.currentItem?.duration ?? .invalid
             PersistentVideoStateManager.shared.saveState(videoMid: videoMid ?? "", currentTime: currentTime, wasPlaying: wasPlaying, context: .fullScreen, duration: duration)
             PersistentVideoStateManager.shared.saveState(videoMid: videoMid ?? "", currentTime: currentTime, wasPlaying: wasPlaying, context: .mediaCell, duration: duration)
+
+            // Save to VideoStateCache so playWithVolumeFadeIn() seeks to exact fullscreen position
+            if let mid = videoMid {
+                VideoStateCache.shared.cacheVideoState(
+                    for: mid,
+                    player: player,
+                    time: currentTime,
+                    wasPlaying: false,
+                    originalMuteState: MuteState.shared.isMuted
+                )
+            }
         }
 
         // Restore feed cell settings
@@ -715,9 +727,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         }
                     }
                 } else {
-                    self.isPlaying = true // Mark as "should be playing"
-                    
-                    // CRITICAL: Observe playerItem status to start playback when it becomes ready
+                    // Item not ready yet — call play() so the player actively buffers data.
+                    self.singletonPlayer?.play()
+                    self.isPlaying = true
+
+                    // CRITICAL: Observe playerItem status to handle position restoration when ready
                     self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
                         guard let self = self else { return }
                         
@@ -731,6 +745,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             
                             print("✅ [FullScreenVideoManager] Cached playerItem became ready, starting playback")
                             
+                            // Mark restored so updateBufferingState doesn't do a redundant restore
+                            self.hasRestoredPosition = true
+
                             // Check if video finished in mediaCell - if so, restart from beginning
                             let duration = item.duration
                             if duration.isValid && duration.seconds > 0 {
@@ -741,48 +758,35 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                         Task { @MainActor in
                                             self.singletonPlayer?.play()
                                             self.isPlaying = true
-                                            print("▶️ [FullScreenVideoManager] Restarted finished video from beginning")
                                         }
                                     }
                                     return
                                 }
                             }
-                            
+
                             // Check for saved position and restore it
                             if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
                                let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen) {
-                                // CRITICAL: Validate saved time before seeking to prevent crash
                                 guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
-                                    print("⚠️ [FullScreenVideoManager] Invalid saved time (\(savedState.currentTime.seconds)s) - clearing and starting normally")
                                     PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .fullScreen)
                                     self.checkAndRewindIfAtEnd {
                                         self.singletonPlayer?.play()
                                         self.isPlaying = true
-                                        print("▶️ [FullScreenVideoManager] Started playback after invalid state cleared")
                                     }
                                     return
                                 }
-                                
-                                print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s (deferred)")
-                                
+
                                 self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                                     guard finished, let self = self else { return }
-                                    
                                     Task { @MainActor in
-                                        print("✅ [FullScreenVideoManager] Restored position to \(savedState.currentTime.seconds)s (deferred)")
-                                        
-                                        // CRITICAL: Fullscreen should always auto-play, regardless of wasPlaying state
                                         self.singletonPlayer?.play()
                                         self.isPlaying = true
-                                        print("▶️ [FullScreenVideoManager] Started playback from saved position (deferred)")
                                     }
                                 }
                             } else {
-                                // No saved state, check position and rewind if at end before playing
                                 self.checkAndRewindIfAtEnd {
                                     self.singletonPlayer?.play()
                                     self.isPlaying = true
-                                    print("▶️ [FullScreenVideoManager] Started playback with cached playerItem (deferred)")
                                 }
                             }
                             
@@ -803,7 +807,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         print("🎬 [FullScreenVideoManager] loadVideo(\(mid.prefix(8))) - NON-CACHED path: awaiting getOrCreatePlayer")
         Task.detached(priority: .userInitiated) {
             do {
-                let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, tweetId: tweetId, mediaType: mediaType)
+                let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: mid, tweetId: tweetId, mediaType: mediaType)
                 print("🎬 [FullScreenVideoManager] loadVideo(\(mid.prefix(8))) - getOrCreatePlayer returned, extracting asset")
                 guard let cachedAsset = await MainActor.run(body: { player.currentItem?.asset }) else {
                     throw NSError(domain: "FullScreenVideoManager", code: -1,
@@ -912,9 +916,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             }
                         }
                     } else {
-                        self.isPlaying = true // Mark as "should be playing"
+                        // Item not ready yet — call play() so the player actively buffers data.
+                        // With automaticallyWaitsToMinimizeStalling=true, the player enters
+                        // .waitingToPlayAtSpecifiedRate and auto-transitions to .playing when ready.
+                        self.singletonPlayer?.play()
+                        self.isPlaying = true
+                        print("🎬 [FullScreenVideoManager] loadVideo(\(mid.prefix(8))) - NON-CACHED: item not ready, calling play() to trigger buffering")
                     }
-                    
+
                 }
             } catch {
                 await MainActor.run {
@@ -1467,11 +1476,22 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     context: .mediaCell,
                     duration: duration
                 )
+
+                // Save to VideoStateCache so feed cell's playWithVolumeFadeIn() restores position
+                VideoStateCache.shared.cacheVideoState(
+                    for: videoMid,
+                    player: player,
+                    time: currentTime,
+                    wasPlaying: false,
+                    originalMuteState: MuteState.shared.isMuted
+                )
             }
 
-            // Fully release the player — AVPlayer() creation is lightweight
+            // Pause and release reference — DON'T destroy currentItem.
+            // The player is already in SharedAssetCache.playerCache from getOrCreatePlayer(),
+            // so the feed cell will find it immediately when it re-acquires.
             singletonPlayer?.pause()
-            singletonPlayer?.replaceCurrentItem(with: nil)
+            singletonPlayer?.isMuted = MuteState.shared.isMuted  // Restore feed mute state
             singletonPlayer = nil
         }
 
@@ -1958,7 +1978,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 // Create independent player with disk caching support
                 // Get the asset from SharedAssetCache (which uses CachingPlayerItem for HLS)
                 // but create our own independent player instance
-                let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: mid)
+                let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mid, tweetId: mid)
                 let playerItem = await AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 
@@ -2016,15 +2036,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
     }
     
-    /// Clear current video
+    /// Clear current video — donates the loaded player to SharedAssetCache so the feed cell
+    /// can reuse it instantly instead of re-downloading.
     func clearCurrentVideo() {
-        // CRITICAL: Save playback state before clearing
+        // Save playback state and donate player to caches for feed cell reuse
         if let player = currentPlayer,
            let videoMid = currentVideoMid {
             let wasPlaying = player.rate > 0
             let currentTime = player.currentTime()
             let duration = player.currentItem?.duration ?? .invalid
-            
+
+            // Save to PersistentVideoStateManager (detail context)
             PersistentVideoStateManager.shared.saveState(
                 videoMid: videoMid,
                 currentTime: currentTime,
@@ -2032,50 +2054,44 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 context: .detailView,
                 duration: duration
             )
-            print("💾 [DETAIL VIDEO MANAGER] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+
+            // Save to VideoStateCache so feed cell's playWithVolumeFadeIn() can seek to the right position
+            VideoStateCache.shared.cacheVideoState(
+                for: videoMid,
+                player: player,
+                time: currentTime,
+                wasPlaying: false,
+                originalMuteState: MuteState.shared.isMuted
+            )
+
+            // Donate the loaded player to SharedAssetCache so getOrCreatePlayer() finds it immediately
+            SharedAssetCache.shared.cachePlayer(player, for: videoMid)
+
+            print("💾 [DETAIL VIDEO MANAGER] Donated player to cache: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+
+            // Notify feed cells — they may have already received a coordinator play command
+            // but found no donated player (SwiftUI onAppear fires before onDisappear)
+            NotificationCenter.default.post(name: .videoPlayerDonated, object: nil, userInfo: ["videoMid": videoMid])
         }
-        
+
         // Remove KVO observer before clearing (only if it was added)
         if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
             playerItem.removeObserver(self, forKeyPath: "status")
             hasKVOObserver = false
         }
-        
+
         // Remove video completion observer
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
         }
-        
-        // Get the cache key before clearing the reference
-        let cacheKey = currentVideoMid.map { "tweetDetail_\($0)" }
-        
-        // CRITICAL: Replace currentItem with nil to completely stop playback
-        // Just calling pause() is not enough - AVPlayerViewController can restart it
+
+        // Pause and release reference — DON'T destroy currentItem, the player is cached for reuse
         currentPlayer?.pause()
-        currentPlayer?.replaceCurrentItem(with: nil)
-        print("DEBUG: [DetailVideoManager] Replaced player item with nil to stop playback")
+        currentPlayer?.isMuted = MuteState.shared.isMuted  // Restore feed mute state
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
-        
-        // CRITICAL FIX: Remove the player from SharedAssetCache AND cancel all downloads
-        // This ensures complete isolation and prevents memory leaks from timed-out downloads
-        // Since MediaCell uses a different cache key, removing the "tweetDetail_" prefixed key won't affect MediaCell.
-        if let rawMediaID = currentVideoMid {
-            Task { @MainActor in
-                // Cancel ALL downloads and clear player (prevents 90s timeout memory leak!)
-                SharedAssetCache.shared.clearPlayerForMediaID(rawMediaID)
-                print("DEBUG: [DetailVideoManager] Cancelled downloads and removed player for: \(rawMediaID)")
-            }
-        }
-        
-        // Also remove the prefixed cache key
-        if let key = cacheKey {
-            Task { @MainActor in
-                SharedAssetCache.shared.removeInvalidPlayer(for: key)
-            }
-        }
     }
     
     /// Setup video completion observer
@@ -2429,7 +2445,7 @@ class ChatVideoManager: ObservableObject {
         }
 
         do {
-            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaType: attachment.type)
+            let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaID: attachment.mid, mediaType: attachment.type)
             chatVideoPlayers[messageId] = player
             return player
         } catch {

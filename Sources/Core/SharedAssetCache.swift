@@ -111,7 +111,7 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Player Creation Throttling
     private var activeCreations = 0
-    private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, isHighPriority: Bool, continuation: CheckedContinuation<AVPlayer, Error>)] = []
+    private var pendingCreations: [(url: URL, mediaID: String, tweetId: String?, mediaType: MediaType?, isHighPriority: Bool, continuation: CheckedContinuation<AVPlayer, Error>)] = []
     private let maxPendingCreations = 10 // MEMORY LEAK FIX: Limit queue size to prevent unbounded continuation buildup
     
     // MARK: - Cache Persistence
@@ -419,37 +419,8 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Extract mediaID from URL
-    func extractMediaID(from url: URL) -> String? {
-        let urlString = url.absoluteString        
-        // Look for IPFS hash pattern (Qm...)
-        // IPFS hashes typically start with Qm and are 46 characters long
-        if let range = urlString.range(of: "Qm[A-Za-z0-9]{44}") {
-            let mediaID = String(urlString[range])
-            return mediaID
-        }
-        
-        // Also try to extract from /ipfs/ path
-        if urlString.contains("/ipfs/") {
-            let components = urlString.components(separatedBy: "/ipfs/")
-            if components.count > 1 {
-                let afterIpfs = components[1]
-                // Extract the hash part (before any additional path or query parameters)
-                let hashPart = afterIpfs.components(separatedBy: CharacterSet(charactersIn: "/?&")).first ?? afterIpfs
-                if hashPart.hasPrefix("Qm") && hashPart.count >= 46 {
-                    let mediaID = String(hashPart.prefix(46))
-                    return mediaID
-                }
-            }
-        }
-        
-        return nil
-    }
-    
     /// Get cached asset or create new one
-    @MainActor func getAsset(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVAsset {
-        guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
-        }
+    @MainActor func getAsset(for url: URL, mediaID: String, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVAsset {
         let cacheKey = mediaID
         
         // Track mediaID for tweet if provided
@@ -613,27 +584,12 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    /// Cache a player instance for immediate reuse
+    /// Cache a player instance for immediate reuse (e.g., detail view donates its player to the feed cell).
     func cachePlayer(_ player: AVPlayer, for mediaID: String) {
-        // Remove old player if exists - do this asynchronously to avoid blocking
-        if let oldPlayer = playerCache[mediaID] {
-            Task.detached {
-                oldPlayer.pause()
-            }
-        }
-        
+        guard player.currentItem != nil else { return }
+
         playerCache[mediaID] = player
         cacheTimestamps[mediaID] = Date()
-        
-        // Save cache metadata to persist across app restarts
-        saveCacheMetadata()
-        
-        // Manage cache size asynchronously
-        Task.detached {
-            await MainActor.run {
-                self.managePlayerCacheSize()
-            }
-        }
     }
     
     /// Check if a player is in a healthy, usable state
@@ -850,11 +806,7 @@ class SharedAssetCache: ObservableObject {
     /// Get cached player or create new one with asset
     /// - Parameter isHighPriority: When true, can use reserved creation slots (for visible cells / detail views).
     ///   Preloads should pass false so they don't block visible content.
-    func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil, isHighPriority: Bool = true) async throws -> AVPlayer {
-        guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
-        }
-
+    func getOrCreatePlayer(for url: URL, mediaID: String, tweetId: String? = nil, mediaType: MediaType? = nil, isHighPriority: Bool = true) async throws -> AVPlayer {
         // ✅ CHECK BLACKLIST FIRST - Don't waste resources on known-bad videos
         let mimeiId = MimeiId(mediaID)
         if BlackList.shared.isBlacklisted(mimeiId) {
@@ -900,7 +852,7 @@ class SharedAssetCache: ObservableObject {
 
                     Task {
                         do {
-                            let player = try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
+                            let player = try await self.createPlayerNow(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
                             await MainActor.run {
                                 self.activeCreations -= 1
                                 self.processNextPendingCreation()
@@ -917,9 +869,9 @@ class SharedAssetCache: ObservableObject {
                 } else if self.pendingCreations.count < self.maxPendingCreations {
                     // Queue for later — high priority goes to front, low priority to back
                     if isHighPriority {
-                        self.pendingCreations.insert((url, tweetId, mediaType, true, continuation), at: 0)
+                        self.pendingCreations.insert((url, mediaID, tweetId, mediaType, true, continuation), at: 0)
                     } else {
-                        self.pendingCreations.append((url, tweetId, mediaType, false, continuation))
+                        self.pendingCreations.append((url, mediaID, tweetId, mediaType, false, continuation))
                     }
                 } else {
                     // MEMORY LEAK FIX: Reject when queue is full to prevent unbounded continuation buildup
@@ -955,7 +907,7 @@ class SharedAssetCache: ObservableObject {
 
         Task {
             do {
-                let player = try await self.createPlayerNow(for: next.url, tweetId: next.tweetId, mediaType: next.mediaType)
+                let player = try await self.createPlayerNow(for: next.url, mediaID: next.mediaID, tweetId: next.tweetId, mediaType: next.mediaType)
                 await MainActor.run {
                     self.activeCreations -= 1
                     self.processNextPendingCreation()
@@ -972,11 +924,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Actually create the player (called after throttling check)
-    private func createPlayerNow(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
-        guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID"])
-        }
-
+    private func createPlayerNow(for url: URL, mediaID: String, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
         // Re-check cache before creating — another creation may have completed while we were queued
         if let cachedPlayer = await MainActor.run(body: { getCachedPlayer(for: mediaID) }),
            cachedPlayer.currentItem != nil {
@@ -1151,7 +1099,7 @@ class SharedAssetCache: ObservableObject {
         
         do {
             // Try to create player (tries master.m3u8 then playlist.m3u8)
-            let player = try await createCachingPlayer(for: url, tweetId: tweetId)
+            let player = try await createCachingPlayer(for: url, mediaID: mediaID, tweetId: tweetId)
             return player
         } catch let originalError {
             // Only retry ONCE with baseUrl refresh
@@ -1159,26 +1107,26 @@ class SharedAssetCache: ObservableObject {
                 await MainActor.run {
                     videoRetryCount[mediaID] = 1
                 }
-                
+
                 print("🔄 [HLS VIDEO RETRY] Attempt #1 for: \(mediaID) - refreshing author baseUrl...")
-                
+
                 // CRITICAL: Refresh author's baseUrl before retry
                 let refreshed = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: tweetId)
-                
+
                 if refreshed {
                     print("✅ [HLS VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
                 } else {
                     print("⚠️ [HLS VIDEO RETRY] Could not refresh author baseUrl, retrying anyway")
                 }
-                
+
                 // Check if cancelled
                 if Task.isCancelled {
                     throw CancellationError()
                 }
-                
+
                 // Retry ONCE with (potentially) refreshed baseUrl
                 do {
-                    return try await createCachingPlayer(for: url, tweetId: tweetId)
+                    return try await createCachingPlayer(for: url, mediaID: mediaID, tweetId: tweetId)
                 } catch {
                     print("❌ [HLS VIDEO] Failed after 1 retry with baseUrl refresh: \(mediaID)")
                     // Reset retry count for next time
@@ -1274,11 +1222,7 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Create CachingPlayerItem for HLS videos only
-    private func createCachingPlayer(for url: URL, tweetId: String?) async throws -> AVPlayer {
-        guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
-        }
-                
+    private func createCachingPlayer(for url: URL, mediaID: String, tweetId: String?) async throws -> AVPlayer {
         // Fast path: use persisted extension from CacheMetadata (no disk I/O or network)
         let resolvedURL: URL
         if let cachedFilename = hlsExtensions[mediaID] {
@@ -1357,11 +1301,7 @@ class SharedAssetCache: ObservableObject {
     func getOrCreatePlayerItem(for url: URL, mediaID: String, mediaType: MediaType? = nil) async throws -> AVPlayerItem {
         // Check cancellation before starting
         try Task.checkCancellation()
-        
-        guard let extractedMediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
-        }
-        
+
         // Determine if this is HLS
         let isHLSVideo: Bool
         if let mediaType = mediaType {
@@ -1376,12 +1316,12 @@ class SharedAssetCache: ObservableObject {
 
             // Resolve HLS URL, using persisted extension when available
             let resolvedURL: URL
-            if let cachedFilename = hlsExtensions[extractedMediaID] {
+            if let cachedFilename = hlsExtensions[mediaID] {
                 resolvedURL = url.appendingPathComponent(cachedFilename)
             } else {
                 let networkResolvedURL = await resolveHLSURL(url)
                 if networkResolvedURL != url {
-                    hlsExtensions[extractedMediaID] = networkResolvedURL.lastPathComponent
+                    hlsExtensions[mediaID] = networkResolvedURL.lastPathComponent
                     saveCacheMetadata()
                 }
                 resolvedURL = networkResolvedURL
@@ -1391,7 +1331,7 @@ class SharedAssetCache: ObservableObject {
             try Task.checkCancellation()
 
             LocalHTTPServer.shared.start()
-            let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: extractedMediaID, avUrlAssetOptions: nil)
+            let cachingPlayerItem = CachingPlayerItem(hlsURL: resolvedURL, mediaID: mediaID, avUrlAssetOptions: nil)
             
             // Create delegate but DON'T cache it (singleton manages its own lifecycle)
             let delegate = CachingPlayerItemDelegateImpl()
@@ -1406,7 +1346,7 @@ class SharedAssetCache: ObservableObject {
             LocalHTTPServer.shared.start()
             
             // Register with LocalHTTPServer (handles mediaID-based caching and IP changes)
-            let localURL = LocalHTTPServer.shared.registerAndGetURL(for: extractedMediaID, realURL: url)
+            let localURL = LocalHTTPServer.shared.registerAndGetURL(for: mediaID, realURL: url)
             
             // Check cancellation before creating asset
             try Task.checkCancellation()
@@ -1661,9 +1601,7 @@ class SharedAssetCache: ObservableObject {
     // MARK: - Enhanced Preloading Methods
     
     /// Preload video for immediate display (high priority)
-    func preloadVideo(for url: URL, tweetId: String? = nil) {
-        // Use mediaID as cache key (stable identifier), not URL which can change
-        guard let mediaID = extractMediaID(from: url) else { return }
+    func preloadVideo(for url: URL, mediaID: String, tweetId: String? = nil) {
         let cacheKey = mediaID
         
         // Cancel existing preload task if any
@@ -1676,7 +1614,7 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: cacheKey)
             }
             do {
-                _ = try await getOrCreatePlayer(for: url, isHighPriority: false)
+                _ = try await getOrCreatePlayer(for: url, mediaID: mediaID, isHighPriority: false)
             } catch {
                 // Handle error silently
             }
@@ -1686,9 +1624,7 @@ class SharedAssetCache: ObservableObject {
     }
 
     /// Preload asset only (for background loading - lower priority)
-    func preloadAsset(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) {
-        // Use mediaID as cache key (stable identifier), not URL which can change
-        guard let mediaID = extractMediaID(from: url) else { return }
+    func preloadAsset(for url: URL, mediaID: String, tweetId: String? = nil, mediaType: MediaType? = nil) {
         let cacheKey = mediaID
 
         // Skip if asset already cached
@@ -1707,7 +1643,7 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: cacheKey)
             }
             do {
-                _ = try await getAsset(for: url, tweetId: tweetId, mediaType: mediaType)
+                _ = try await getAsset(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType)
             } catch {
                 // Handle error silently
             }
@@ -1719,8 +1655,7 @@ class SharedAssetCache: ObservableObject {
     /// Preload player (not just asset) for upcoming video in scroll direction.
     /// Creates an AVPlayer, generates a first-frame thumbnail, and caches both
     /// so the cell has a poster image and an instantly-available player.
-    func preloadPlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) {
-        guard let mediaID = extractMediaID(from: url) else { return }
+    func preloadPlayer(for url: URL, mediaID: String, tweetId: String? = nil, mediaType: MediaType? = nil) {
 
         // Skip if player already cached
         if playerCache[mediaID] != nil {
@@ -1742,7 +1677,7 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: mediaID)
             }
             do {
-                let player = try await getOrCreatePlayer(for: url, tweetId: tweetId, mediaType: mediaType, isHighPriority: false)
+                let player = try await getOrCreatePlayer(for: url, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType, isHighPriority: false)
                 // Pause immediately — this is a preloaded player, not for playback yet
                 await MainActor.run {
                     player.pause()
@@ -1808,39 +1743,10 @@ class SharedAssetCache: ObservableObject {
         }
     }
 
-    /// Cancel preload for specific URL
-    func cancelPreload(for url: URL) {
-        // Use mediaID as cache key (stable identifier), not URL which can change
-        guard let mediaID = extractMediaID(from: url) else { return }
+    /// Cancel preload for specific media
+    func cancelPreload(mediaID: String) {
         preloadTasks[mediaID]?.cancel()
         preloadTasks.removeValue(forKey: mediaID)
-    }
-    
-    /// Preload multiple videos with priority management
-    func preloadVideos(_ urls: [URL], priority: PreloadPriority = .normal) {
-        for (index, url) in urls.enumerated() {
-            let delay = priority.delay(for: index)
-            
-            Task {
-                // Preload immediately if delay is 0, otherwise use async timing
-                if delay > 0 {
-                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                }
-                
-                guard !Task.isCancelled else { return }
-                
-                switch priority {
-                case .high:
-                    await MainActor.run {
-                        preloadVideo(for: url)
-                    }
-                case .normal, .low:
-                    await MainActor.run {
-                        preloadAsset(for: url)
-                    }
-                }
-            }
-        }
     }
     
     // MARK: - Cache Management

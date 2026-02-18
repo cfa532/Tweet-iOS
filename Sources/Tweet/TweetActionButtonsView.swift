@@ -760,7 +760,7 @@ struct TweetActionButtonsView: View {
             if let url = resolvedAttachmentURL(for: attachment, baseURL: baseURL) {
                 print("DEBUG: [SHARE] Generating video preview from URL: \(url.absoluteString)")
                 let isHLS = attachment.type == .hls_video
-                let preview = await generateVideoPreviewImage(for: url, isHLS: isHLS)
+                let preview = await generateVideoPreviewImage(for: url, mediaID: attachment.mid, isHLS: isHLS)
                 print("DEBUG: [SHARE] Video preview generated: \(preview != nil ? "YES" : "NO")")
                 return preview
             }
@@ -894,13 +894,9 @@ struct TweetActionButtonsView: View {
         return VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720)
     }
 
-    private func generateVideoPreviewImage(for url: URL, isHLS: Bool = false) async -> UIImage? {
+    private func generateVideoPreviewImage(for url: URL, mediaID: String, isHLS: Bool = false) async -> UIImage? {
         print("DEBUG: [SHARE] Starting video preview generation for: \(url.absoluteString), isHLS: \(isHLS)")
         let startTime = Date()
-
-        // Extract mediaID from URL
-        let mediaID = extractMediaID(from: url)
-        print("DEBUG: [SHARE] Extracted mediaID: \(mediaID)")
 
         // Check VideoLastFrameCache — populated by captureVideoFrameBeforePause()
         // at the moment the share button was tapped, before the overlay paused videos.
@@ -1040,7 +1036,7 @@ struct TweetActionButtonsView: View {
         // Fallback: use asset loading if no cached player
         do {
             let mediaType: MediaType = isHLS ? .hls_video : .video
-            let asset = try await SharedAssetCache.shared.getAsset(for: url, tweetId: tweet.mid, mediaType: mediaType)
+            let asset = try await SharedAssetCache.shared.getAsset(for: url, mediaID: mediaID, tweetId: tweet.mid, mediaType: mediaType)
             
             // Load duration and tracks to ensure video is ready
             async let durationLoad = asset.load(.duration)
@@ -1079,18 +1075,6 @@ struct TweetActionButtonsView: View {
             print("DEBUG: [SHARE] Failed to load asset for preview after \(String(format: "%.2f", elapsed))s: \(error.localizedDescription)")
         }
         return nil
-    }
-    
-    private func extractMediaID(from url: URL) -> String {
-        // Extract mediaID from URL path
-        // Format: http://baseurl/ipfs/MEDIAID or http://baseurl/ipfs/MEDIAID/master.m3u8
-        let pathComponents = url.pathComponents
-        if let ipfsIndex = pathComponents.firstIndex(of: "ipfs"),
-           ipfsIndex + 1 < pathComponents.count {
-            return pathComponents[ipfsIndex + 1]
-        }
-        // Fallback: use last path component
-        return url.lastPathComponent
     }
     
     // Track active captures per player to prevent concurrent captures

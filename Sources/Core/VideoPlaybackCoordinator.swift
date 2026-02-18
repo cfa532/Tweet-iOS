@@ -1046,7 +1046,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func preloadVideoAsset(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
 
-        SharedAssetCache.shared.preloadAsset(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        SharedAssetCache.shared.preloadAsset(for: resolved.url, mediaID: video.videoMid, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
         preloadedVideoMids.insert(video.videoMid)
     }
 
@@ -1055,7 +1055,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func preloadVideoPlayer(_ video: VideoPlaybackInfo) {
         guard let resolved = resolveVideoURL(video) else { return }
 
-        SharedAssetCache.shared.preloadPlayer(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
+        SharedAssetCache.shared.preloadPlayer(for: resolved.url, mediaID: video.videoMid, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
         preloadedVideoMids.insert(video.videoMid)
     }
 
@@ -1085,10 +1085,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // regardless of whether they were just preloaded or preloaded earlier
         var playerPreloadMids = Set<String>()
         for video in allNextVideos.prefix(playerPreloadCount) {
-            if let resolved = resolveVideoURL(video),
-               let mediaID = SharedAssetCache.shared.extractMediaID(from: resolved.url) {
-                playerPreloadMids.insert(mediaID)
-            }
+            playerPreloadMids.insert(video.videoMid)
         }
 
         // Filter to only videos that still need preloading

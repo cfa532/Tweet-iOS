@@ -170,11 +170,9 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             updateEffectiveBaseUrl()
 
             // MEMORY FIX: Mark video as visible to prevent eviction
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
-                SharedAssetCache.shared.markAsVisible(mediaID)
+            if isVideoAttachment {
+                SharedAssetCache.shared.markAsVisible(attachment.mid)
                 VideoStateCache.shared.markAsVisible(attachment.mid)
-                print("👁️ [MediaCell] Marked video as visible: \(attachment.mid) (mediaID: \(mediaID))")
             }
 
             // For embedded videos, viewport visibility is checked via GeometryReader in videoPlayerViewContent
@@ -214,18 +212,14 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
 
             // MEMORY FIX: Mark video as not visible when cell disappears
             // Cleanup is handled by background timer (every 10s) to preserve preloading
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
-
+            if isVideoAttachment {
                 // Mark as not visible (allows cleanup after grace period)
-                SharedAssetCache.shared.markAsNotVisible(mediaID)
+                SharedAssetCache.shared.markAsNotVisible(attachment.mid)
                 VideoStateCache.shared.markAsNotVisible(attachment.mid)
 
                 // Cancel active loading tasks to stop wasting bandwidth/memory
                 // But DON'T release the player yet - it might be in preload window
                 SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet.mid)
-
-                print("🔄 [MediaCell] Marked not visible, stopped loading for \(attachment.mid) (mediaID: \(mediaID))")
             }
         }
         .onChange(of: isVisible) { _, newValue in
@@ -655,15 +649,15 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         
         if let url = attachment.getUrl(effectiveBaseUrl) {
             // Clear player cache
-            SharedAssetCache.shared.removeInvalidPlayer(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
-            
+            SharedAssetCache.shared.removeInvalidPlayer(for: attachment.mid)
+
             // Clear video state cache
             VideoStateCache.shared.clearCache(for: attachment.mid)
-            
+
             // Clear asset cache
             Task {
                 await MainActor.run {
-                    SharedAssetCache.shared.clearAssetCache(for: SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid)
+                    SharedAssetCache.shared.clearAssetCache(for: attachment.mid)
                     print("DEBUG: [VIDEO RELOAD] Cleared all caches for \(attachment.mid)")
                 }
             }

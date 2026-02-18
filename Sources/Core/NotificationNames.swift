@@ -108,6 +108,10 @@ extension Notification.Name {
     /// Posted when a loaned player is returned from fullscreen back to the feed cell.
     /// userInfo: ["videoMid": String]
     static let playerLoanReturned = Notification.Name("PlayerLoanReturned")
+    /// Posted when detail/fullscreen donates a loaded player to the cache.
+    /// Feed cells listen for this to swap from a stale loading player to the donated one.
+    /// userInfo: ["videoMid": String]
+    static let videoPlayerDonated = Notification.Name("VideoPlayerDonated")
     /// Posted when the main feed view appears (for restarting video playback after navigation)
     static let feedViewDidAppear = Notification.Name("FeedViewDidAppear")
     /// Posted when app content is covered/uncovered by an overlay (sheet/fullScreenCover/login/share).

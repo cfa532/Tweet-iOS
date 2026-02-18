@@ -141,6 +141,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var shouldPlayObserver: NSObjectProtocol?
     private var shouldPauseObserver: NSObjectProtocol?
     private var shouldStopObserver: NSObjectProtocol?
+    private var playerDonatedObserver: NSObjectProtocol?
 
     /// Async player acquisition task
     private var setupPlayerTask: Task<Void, Never>?
@@ -514,18 +515,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         } else {
             transitionTo(.noContent)
             // Try to generate thumbnail from cached asset
-            if let mediaID = SharedAssetCache.shared.extractMediaID(from: url) {
-                SharedAssetCache.shared.generateThumbnailIfNeeded(for: mediaID) { [weak self] image in
-                    guard let self, self.attachment?.mid == attachment.mid else { return }
-                    self.imageView.image = image
-                    switch self.videoCellState {
-                    case .noContent:
-                        self.transitionTo(.thumbnail)
-                    case .playerLoading:
-                        self.transitionTo(.playerLoading)  // re-evaluate: shows thumbnail, stops spinner
-                    default:
-                        break  // player already rendering
-                    }
+            SharedAssetCache.shared.generateThumbnailIfNeeded(for: attachment.mid) { [weak self] image in
+                guard let self, self.attachment?.mid == attachment.mid else { return }
+                self.imageView.image = image
+                switch self.videoCellState {
+                case .noContent:
+                    self.transitionTo(.thumbnail)
+                case .playerLoading:
+                    self.transitionTo(.playerLoading)  // re-evaluate: shows thumbnail, stops spinner
+                default:
+                    break  // player already rendering
                 }
             }
         }
@@ -551,6 +550,33 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                   mid == self.attachment?.mid else { return }
             print("\(self.logPrefix) 🔙 Loaned player returned from fullscreen")
             self.isLoanedOut = false
+        }
+
+        // Listen for donated player from detail/fullscreen view exit.
+        // Handles timing: SwiftUI onAppear (feed) fires before onDisappear (detail),
+        // so the coordinator play command may arrive before the player is donated.
+        playerDonatedObserver = NotificationCenter.default.addObserver(
+            forName: .videoPlayerDonated, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let mid = notification.userInfo?["videoMid"] as? String,
+                  mid == self.attachment?.mid,
+                  self.coordinatorWantsToPlay,
+                  self.player != nil, !self.isPlayerLoaded,
+                  let cachedState = VideoStateCache.shared.getCachedState(for: mid),
+                  cachedState.player !== self.player,
+                  cachedState.player.currentItem?.status == .readyToPlay else { return }
+            print("\(self.logPrefix) ✓ Received donated player notification - swapping")
+            self.setupPlayerTask?.cancel()
+            self.setupPlayerTask = nil
+            self.removePlayerObservers()
+            self.removePlayerTimeObserver()
+            let donatedPlayer = cachedState.player
+            donatedPlayer.isMuted = MuteState.shared.isMuted
+            if donatedPlayer.rate > 0 { donatedPlayer.pause() }
+            self.player = nil
+            self.isPlayerLoaded = false
+            self.configurePlayer(donatedPlayer)
         }
 
         // Observe MuteState changes → forward to player
@@ -617,6 +643,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
         let tweetId = parentTweet.mid
+        let mediaID = attachment.mid
         let mediaType = attachment.type
 
         setupPlayerTask?.cancel()
@@ -625,7 +652,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 try Task.checkCancellation()
                 let startTime = Date()
                 let newPlayer = try await SharedAssetCache.shared.getOrCreatePlayer(
-                    for: uniqueURL, tweetId: tweetId, mediaType: mediaType
+                    for: uniqueURL, mediaID: mediaID, tweetId: tweetId, mediaType: mediaType
                 )
                 try Task.checkCancellation()
 
@@ -787,6 +814,27 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
+            // Check if a loaded player was donated to the cache (e.g., from detail view).
+            // This handles the case where the feed cell's player is still loading but
+            // the detail view already loaded and donated its player on exit.
+            if self.player != nil, !isPlayerLoaded,
+               let cachedState = VideoStateCache.shared.getCachedState(for: mid),
+               cachedState.player !== self.player,
+               cachedState.player.currentItem?.status == .readyToPlay {
+                print("\(logPrefix) ✓ Found donated player in cache - swapping")
+                setupPlayerTask?.cancel()
+                setupPlayerTask = nil
+                removePlayerObservers()
+                removePlayerTimeObserver()
+                let donatedPlayer = cachedState.player
+                donatedPlayer.isMuted = MuteState.shared.isMuted
+                if donatedPlayer.rate > 0 { donatedPlayer.pause() }
+                self.player = nil
+                isPlayerLoaded = false
+                configurePlayer(donatedPlayer)
+                return
+            }
+
             print("\(logPrefix) Player not ready - will play when ready")
 
             // Show loading state (spinner if no thumbnail, thumbnail if available)
@@ -1446,11 +1494,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Mark video as visible for cache preservation
             if isVideoAttachment {
-                if let url = attachment.getUrl(effectiveBaseUrl) {
-                    let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
-                    SharedAssetCache.shared.markAsVisible(mediaID)
-                    VideoStateCache.shared.markAsVisible(attachment.mid)
-                }
+                SharedAssetCache.shared.markAsVisible(attachment.mid)
+                VideoStateCache.shared.markAsVisible(attachment.mid)
             }
 
             // Register delegate for video coordination (keyed by identifier so
@@ -1482,15 +1527,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Video-specific invisible handling
             if isVideoAttachment {
-                if let url = attachment.getUrl(effectiveBaseUrl) {
-                    let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
-                    SharedAssetCache.shared.markAsNotVisible(mediaID)
-                    VideoStateCache.shared.markAsNotVisible(attachment.mid)
-                    SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet?.mid ?? "")
-                }
+                SharedAssetCache.shared.markAsNotVisible(attachment.mid)
+                VideoStateCache.shared.markAsNotVisible(attachment.mid)
+                SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet?.mid ?? "")
 
                 // Capture frame, save position, pause, stop buffering
-                if let player = player {
+                if let player = player, !isLoanedOut {
                     captureLastFrameIfPossible(reason: "becameInvisible")
                     if player.rate > 0 || coordinatorWantsToPlay {
                         saveCurrentPosition(player: player, wasPlaying: player.rate > 0)
@@ -1668,6 +1710,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         stopAllObserver = nil
         if let o = loanReturnObserver { NotificationCenter.default.removeObserver(o) }
         loanReturnObserver = nil
+        if let o = playerDonatedObserver { NotificationCenter.default.removeObserver(o) }
+        playerDonatedObserver = nil
         if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
         shouldPlayObserver = nil
         if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }
@@ -1775,6 +1819,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             NotificationCenter.default.removeObserver(o)
         }
         if let o = shouldStopObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        if let o = playerDonatedObserver {
             NotificationCenter.default.removeObserver(o)
         }
         playerItemStatusObserver?.invalidate()
