@@ -13,14 +13,15 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private let cacheFilePath: String?
     private let initialCachedSize: Int64
     private let contiguousSizeUpdate: (Int64) -> Void
-    
+    private let sessionCleanup: () -> Void
+
     private var sentBytesCount: Int64 = 0
     private var cachedBytesCount: Int64
     private let maxCacheSize: Int64 = 50 * 1024 * 1024  // 50MB safety cap
     private let writeLock = NSLock()
     private var lastPersistedContiguousSize: Int64
     private let persistInterval: Int64 = 512 * 1024
-    
+
     init(
         connection: NWConnection,
         mediaID: String,
@@ -30,7 +31,8 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         cacheFileHandle: FileHandle?,
         cacheFilePath: String?,
         initialCachedSize: Int64,
-        contiguousSizeUpdate: @escaping (Int64) -> Void
+        contiguousSizeUpdate: @escaping (Int64) -> Void,
+        sessionCleanup: @escaping () -> Void
     ) {
         self.connection = connection
         self.mediaID = mediaID
@@ -42,8 +44,9 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         self.initialCachedSize = initialCachedSize
         self.cachedBytesCount = initialCachedSize
         self.contiguousSizeUpdate = contiguousSizeUpdate
+        self.sessionCleanup = sessionCleanup
         self.lastPersistedContiguousSize = initialCachedSize
-        
+
         if !isProbeRequest && cacheStart > initialCachedSize {
             // Non-contiguous request - streaming only, no caching
         }
@@ -134,7 +137,7 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     // Handle completion
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         var finalSizeToPersist: Int64?
-        
+
         defer {
             // Close file handle
             writeLock.lock()
@@ -150,12 +153,15 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             }
             try? cacheFileHandle?.close()
             writeLock.unlock()
-            
+
             if let size = finalSizeToPersist {
                 contiguousSizeUpdate(size)
             }
+
+            // Clean up the streaming session entry
+            sessionCleanup()
         }
-        
+
         if let error = error {
             let nsError = error as NSError
             let isTransient = nsError.code == NSURLErrorCancelled ||
@@ -201,29 +207,44 @@ private actor ActiveDownloadsActor {
 
 public class LocalHTTPServer: @unchecked Sendable {
     public static let shared = LocalHTTPServer()
-    
+
     private var listener: NWListener?
     public private(set) var port: UInt16 = 8080  // Public read, private write
     private var mediaCache: [String: String] = [:] // mediaID -> cachePath
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
+    private let mediaLock = NSLock() // Protects mediaCache and mediaRealURLs
     private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
     private var preferenceHelper: PreferenceHelper?
-    private var isStarting = false  // Track if server is currently starting
-    public private(set) var isRunning = false   // Track if server is running (public read)
-    private var isStopping = false  // Track if server is currently stopping
-    
+    private let stateLock = NSLock() // Protects isStarting, isRunning, isStopping
+    private var _isStarting = false
+    private var _isRunning = false
+    private var _isStopping = false
+
+    private var isStarting: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isStarting }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _isStarting = newValue }
+    }
+    public var isRunning: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isRunning }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _isRunning = newValue }
+    }
+    private var isStopping: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isStopping }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _isStopping = newValue }
+    }
+
     // Computed property for current port (returns nil if not running)
     public var currentPort: UInt16? {
         return isRunning ? port : nil
     }
-    
+
     // DEDUPLICATION: Track active downloads to prevent duplicates
     private let activeDownloadsActor = ActiveDownloadsActor()
-    
+
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
     private let streamingSessionsLock = NSLock()
-    
+
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
 
@@ -236,7 +257,8 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let connectionPoolLock = NSLock()
 
     // Network failure tracking for emergency cleanup
-    private var consecutiveNetworkFailures: Int = 0
+    private let networkFailureLock = NSLock()
+    private var _consecutiveNetworkFailures: Int = 0
     private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
     private var connectionPool: URLSession {
         connectionPoolLock.lock()
@@ -274,12 +296,16 @@ public class LocalHTTPServer: @unchecked Sendable {
             return true
         }
         
-        if let mediaID = mediaID,
-           let registeredURL = mediaRealURLs[mediaID],
-           let host = registeredURL.host,
-           !host.isEmpty,
-           host != "127.0.0.1" {
-            return true
+        if let mediaID = mediaID {
+            mediaLock.lock()
+            let registeredURL = mediaRealURLs[mediaID]
+            mediaLock.unlock()
+            if let registeredURL = registeredURL,
+               let host = registeredURL.host,
+               !host.isEmpty,
+               host != "127.0.0.1" {
+                return true
+            }
         }
         
         if let baseHost = HproseInstance.shared.appUser.baseUrl?.host,
@@ -408,18 +434,17 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func restart() async {
+        // Stop current instance synchronously (no dispatch — already on queue or safe context)
+        stopInternal()
 
-        // Stop current instance
-        stop()
-
-        // Small delay to ensure clean shutdown
+        // Small delay to ensure port release
         try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        isStopping = false
 
         // Start fresh
         await startServer()
 
-        if isRunning {
-        } else {
+        if !isRunning {
             print("[LocalHTTPServer] ✗ Server restart failed")
         }
     }
@@ -553,23 +578,24 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
+    /// Internal stop that runs on the caller's context (must be called from `queue` or restart)
+    private func stopInternal() {
+        if self.listener != nil {
+            self.isStopping = true
+            self.listener?.cancel()
+            self.listener = nil
+            self.isRunning = false
+            self.isStarting = false
+        }
+    }
+
     public func stop() {
         queue.async { [weak self] in
             guard let self = self else { return }
-            
-            if self.listener != nil {
-                self.isStopping = true
-                self.listener?.cancel()
-                self.listener = nil
-                self.isRunning = false
-                self.isStarting = false
-                
-                // OPTIMIZATION: Reduced wait time for faster recovery
-                // Port release is usually fast - 0.1s is typically enough
-                Task {
-                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-                    self.isStopping = false
-                }
+            self.stopInternal()
+            Task {
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                self.isStopping = false
             }
         }
     }
@@ -644,24 +670,26 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     public func registerMedia(mediaID: String, cachePath: String) {
-        queue.async { [weak self] in
-            self?.mediaCache[mediaID] = cachePath
-            // Removed repetitive registration log
-        }
+        mediaLock.lock()
+        mediaCache[mediaID] = cachePath
+        mediaLock.unlock()
     }
-    
+
     public func registerAndGetURL(for mediaID: String, realURL: URL) -> URL {
-        // Store the mapping (synchronous to ensure it's available immediately)
-        queue.sync {
-            mediaRealURLs[mediaID] = realURL
-        }
+        mediaLock.lock()
+        mediaRealURLs[mediaID] = realURL
+        mediaLock.unlock()
 
         // Return localhost URL: http://localhost:8080/ipfs/mediaID (clean format without redundancy)
         // AVPlayer will request this, and we'll serve from cache or fetch from realURL
-        let localhostURL = URL(string: "\(Constants.LOCAL_HOST):\(port)\(realURL.path)")!
+        guard let localhostURL = URL(string: "\(Constants.LOCAL_HOST):\(port)\(realURL.path)") else {
+            // Fallback: percent-encode the path for URLs with special characters
+            let encodedPath = realURL.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? realURL.path
+            return URL(string: "\(Constants.LOCAL_HOST):\(port)\(encodedPath)")!
+        }
         return localhostURL
     }
-    
+
     public func getLocalURL(for mediaID: String) -> URL? {
         return URL(string: "http://localhost:\(port)/media/\(mediaID)/")
     }
@@ -842,13 +870,20 @@ public class LocalHTTPServer: @unchecked Sendable {
                     // when AVPlayer closes/reopens local connections.
                     let isBenign = (nwCode == 54 || nwCode == 89 || nwCode == NSURLErrorCancelled)
                     if !isBenign {
-                        consecutiveNetworkFailures += 1
-                        print("DEBUG: [LocalHTTPServer] Network failure count: \(consecutiveNetworkFailures)/\(maxConsecutiveFailures)")
+                        var shouldCleanup = false
+                        self.networkFailureLock.lock()
+                        self._consecutiveNetworkFailures += 1
+                        let count = self._consecutiveNetworkFailures
+                        if count >= self.maxConsecutiveFailures {
+                            shouldCleanup = true
+                            self._consecutiveNetworkFailures = 0
+                        }
+                        self.networkFailureLock.unlock()
 
-                        if consecutiveNetworkFailures >= maxConsecutiveFailures {
+                        print("DEBUG: [LocalHTTPServer] Network failure count: \(count)/\(self.maxConsecutiveFailures)")
+                        if shouldCleanup {
                             print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
-                            handleNetworkFailureCleanup()
-                            consecutiveNetworkFailures = 0
+                            self.handleNetworkFailureCleanup()
                         }
                     }
 
@@ -858,7 +893,9 @@ public class LocalHTTPServer: @unchecked Sendable {
                     }
                 } else {
                     // Reset network failure counter on successful receive
-                    consecutiveNetworkFailures = 0
+                    self.networkFailureLock.lock()
+                    self._consecutiveNetworkFailures = 0
+                    self.networkFailureLock.unlock()
                 }
 
                 if let data = data, !data.isEmpty {
@@ -963,7 +1000,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             // No filename specified - this is a progressive video request, skip cache
             // (Progressive videos use range requests and aren't fully cached as single files)
             // Continue to real URL handling below
-            guard let realURL = mediaRealURLs[mediaID] else {
+            mediaLock.lock()
+            let realURL = mediaRealURLs[mediaID]
+            mediaLock.unlock()
+            guard let realURL = realURL else {
                 sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                 completion()
                 return
@@ -1028,7 +1068,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // CACHE MISS - need real URL to fetch from network
-        guard let realURL = mediaRealURLs[mediaID] else {
+        mediaLock.lock()
+        let realURL = mediaRealURLs[mediaID]
+        mediaLock.unlock()
+        guard let realURL = realURL else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
             return
@@ -1586,6 +1629,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                         }
                     }
                     
+                    let sessionKey = mediaID + "_\(streamStart)"
+                    let sessionCleanup: () -> Void = { [weak self] in
+                        guard let self = self else { return }
+                        self.streamingSessionsLock.lock()
+                        self.streamingSessions.removeValue(forKey: sessionKey)
+                        self.streamingSessionsLock.unlock()
+                    }
+
                     let delegate = StreamingDownloadDelegate(
                         connection: connection,
                         mediaID: mediaID,
@@ -1595,13 +1646,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                         cacheFileHandle: cacheFileHandle,
                         cacheFilePath: cacheFilePath,
                         initialCachedSize: initialCachedSize,
-                        contiguousSizeUpdate: contiguousUpdate
+                        contiguousSizeUpdate: contiguousUpdate,
+                        sessionCleanup: sessionCleanup
                     )
-                    
+
                     let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-                    
+
                     self.streamingSessionsLock.lock()
-                    self.streamingSessions[mediaID + "_\(streamStart)"] = session
+                    self.streamingSessions[sessionKey] = session
                     self.streamingSessionsLock.unlock()
                     
                     let streamTask = session.dataTask(with: streamRequest)
@@ -1912,98 +1964,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             )
             return true
         }
-        
-        // Legacy fallback: check old range-based cache (no validation - legacy files may be partial)
-        return serveLegacyProgressiveCacheIfAvailable(
-            mediaID: mediaID,
-            start: start,
-            end: end,
-            rangeHeader: rangeHeader,
-            method: method,
-            connection: connection
-        )
-    }
-    
-    private func serveLegacyProgressiveCacheIfAvailable(
-        mediaID: String,
-        start: Int64,
-        end: Int64?,
-        rangeHeader: String?,
-        method: String,
-        connection: NWConnection
-    ) -> Bool {
-        let cacheDir = progressiveCacheDirectory(for: mediaID).appendingPathComponent("ranges")
-        guard FileManager.default.fileExists(atPath: cacheDir.path),
-              let files = try? FileManager.default.contentsOfDirectory(atPath: cacheDir.path) else {
-            return false
-        }
-        
-        let requestEnd = end ?? Int64.max
-        for file in files where file.hasPrefix("r_") {
-            let components = file.dropFirst(2).split(separator: "_")
-            guard components.count == 2,
-                  let cachedStart = Int64(components[0]) else {
-                continue
-            }
-            
-            let cachedEnd: Int64
-            if components[1] == "end" {
-                cachedEnd = Int64.max
-            } else if let parsed = Int64(components[1]) {
-                cachedEnd = parsed
-            } else {
-                continue
-            }
-            
-            let overlaps = cachedStart <= start && cachedEnd >= start
-            if overlaps {
-                let cachePath = cacheDir.appendingPathComponent(file)
-                guard let fullData = try? Data(contentsOf: cachePath) else {
-                    continue
-                }
-                
-                let offset = Int(start - cachedStart)
-                let availableLength = fullData.count - offset
-                guard offset >= 0, availableLength > 0 else {
-                    continue
-                }
-                
-                // Cap response size to prevent connection timeouts (same as new cache system)
-                let maxChunkSize = 2 * 1024 * 1024 // 2MB max per response
-                let cappedLength = min(availableLength, maxChunkSize)
-                
-                let requestedLength = end != nil ? Int(min(Int64(cappedLength), requestEnd - start + 1)) : cappedLength
-                guard requestedLength > 0 else {
-                    continue
-                }
-                
-                let endIndex = min(offset + requestedLength, fullData.count)
-                let subrange = fullData.subdata(in: offset..<endIndex)
-                let actualEnd = start + Int64(subrange.count) - 1
-                let totalSize = Int64(fullData.count)
-                
-                var headers: [String: String] = [
-                    "Content-Type": "video/mp4",
-                    "Content-Length": "\(subrange.count)",
-                    "Accept-Ranges": "bytes"
-                ]
-                
-                if rangeHeader != nil {
-                    headers["Content-Range"] = "bytes \(start)-\(actualEnd)/\(totalSize)"
-                }
-                
-                let statusCode = rangeHeader != nil ? 206 : 200
-                let _ = rangeHeader != nil ? "\(start)-\(actualEnd)" : "full-file"
-                
-                if method == "HEAD" {
-                    sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: nil)
-                } else {
-                    sendResponse(connection: connection, statusCode: statusCode, headers: headers, body: subrange)
-                }
-                return true
-            }
-        }
-        
+
         return false
     }
     
@@ -2589,9 +2550,11 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func getStatusText(_ statusCode: Int) -> String {
         switch statusCode {
         case 200: return "OK"
+        case 206: return "Partial Content"
         case 404: return "Not Found"
         case 405: return "Method Not Allowed"
         case 500: return "Internal Server Error"
+        case 503: return "Service Unavailable"
         default: return "Unknown"
         }
     }
