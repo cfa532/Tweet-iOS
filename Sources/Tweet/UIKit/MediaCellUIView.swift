@@ -936,7 +936,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             player.pause()
             player.isMuted = MuteState.shared.isMuted
+
+            // Stop network activity so feed downloads don't compete with fullscreen
+            if let playerItem = player.currentItem {
+                playerItem.preferredForwardBufferDuration = 1
+            }
         }
+
+        // Cancel in-flight player creation
+        setupPlayerTask?.cancel()
+        setupPlayerTask = nil
     }
 
     // MARK: - Playback
@@ -992,6 +1001,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Transition to playing — keeps thumbnail as cover until layer confirms rendering
         transitionTo(.playing)
+
+        // Reset buffer limit (may have been capped by stopAllVideos)
+        player.currentItem?.preferredForwardBufferDuration = 0
 
         player.isMuted = MuteState.shared.isMuted
         player.volume = 0
@@ -1385,8 +1397,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         saveVideoPositionForFullscreen()
 
         // Loan the player to fullscreen if it's loaded and ready
-        if let player = self.player, isPlayerLoaded, player.currentItem != nil {
-            print("\(logPrefix) 🎬 Loaning player to fullscreen")
+        if let player = self.player, player.currentItem != nil {
+            print("\(logPrefix) 🎬 Loaning player to fullscreen (loaded: \(isPlayerLoaded))")
             isLoanedOut = true
             FullScreenVideoManager.shared.setLoanedPlayer(
                 player,
