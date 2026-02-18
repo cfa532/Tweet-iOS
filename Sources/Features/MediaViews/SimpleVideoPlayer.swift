@@ -945,6 +945,16 @@ struct SimpleVideoPlayer: View {
                 .onChange(of: player) { _, newPlayer in handlePlayerChange(newPlayer: newPlayer) }
                 .onChange(of: shouldLoadVideo) { _, newShouldLoadVideo in handleLoadingStateChange(newShouldLoadVideo: newShouldLoadVideo) }
                 .onChange(of: loadingState) { oldState, newState in
+                    // For tweetDetail, check playback conditions when loading completes
+                    // This ensures playbackState transitions to .playing so the spinner hides
+                    if oldState.isLoading && !newState.isLoading && mode == .tweetDetail && currentAutoPlay && isVisible {
+                        if let player = player {
+                            if !startTweetDetailRestoreIfNeeded(for: player) {
+                                checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
+                            }
+                        }
+                    }
+
                     // For embedded videos in detail views, check autoplay when loading completes
                     if oldState.isLoading && !newState.isLoading && mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive && currentAutoPlay && isVisible {
                         checkPlaybackConditions(autoPlay: currentAutoPlay, isVisible: isVisible)
