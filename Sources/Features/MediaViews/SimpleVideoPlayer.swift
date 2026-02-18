@@ -1281,16 +1281,11 @@ struct SimpleVideoPlayer: View {
                 // Applied mute state on disappear
             }
             
-            // CRITICAL FIX: Stop buffering when video goes out of sight to prevent performance degradation
-            // This stops CachingPlayerItem from continuing to download segments in the background
+            // Stop network usage when video goes out of sight
             if let playerItem = player?.currentItem {
-                // Reduce buffer duration to stop aggressive buffering
-                playerItem.preferredForwardBufferDuration = 0.0
-                // Ensure network resources are not used while paused
                 if let cachingPlayerItem = playerItem as? CachingPlayerItem {
                     cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 }
-                // Stopped buffering for out-of-sight video
             }
             
             // Also cancel loading tasks in SharedAssetCache for this video
@@ -1513,16 +1508,10 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
-            // CRITICAL FIX: Restore buffering settings when video becomes visible again
-            // This allows videos to buffer properly when they come back into view
+            // Restore buffering when video becomes visible again
             if mode == .mediaCell, let playerItem = player?.currentItem {
-                // Restore buffer duration for proper buffering
                 if let cachingPlayerItem = playerItem as? CachingPlayerItem {
-                    cachingPlayerItem.preferredForwardBufferDuration = 5.0  // Restore feed inline HLS buffering
-                    cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Keep this false
-                } else {
-                    // For progressive videos, restore buffer duration
-                    playerItem.preferredForwardBufferDuration = 10.0
+                    cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
                 }
             }
             
@@ -4235,22 +4224,11 @@ struct SimpleVideoPlayer: View {
     }
     
     private func configureAutomaticWaiting(for player: AVPlayer) {
-        if mediaType == .video {
-            player.automaticallyWaitsToMinimizeStalling = true
-            if let item = player.currentItem {
-                applyProgressiveBufferTarget(to: item)
-            }
-        } else {
-            player.automaticallyWaitsToMinimizeStalling = false
-        }
+        // Let AVPlayer use its default buffer management
     }
 
     private func applyProgressiveBufferTarget(to item: AVPlayerItem?) {
-        guard mediaType == .video, let item = item else { return }
-        let target = max(progressiveForwardBufferDuration, firstFrameMinimumBuffer)
-        if item.preferredForwardBufferDuration < target - 0.05 {
-            item.preferredForwardBufferDuration = target
-        }
+        // Let AVPlayer use its default preferredForwardBufferDuration
     }
 
     private func bumpProgressiveBufferTarget(for item: AVPlayerItem?) {
@@ -5469,17 +5447,7 @@ struct SimpleVideoPlayer: View {
             }
             
             private func applyAutomaticWaiting(for player: AVPlayer) {
-                if mediaType == .video {
-                    player.automaticallyWaitsToMinimizeStalling = true
-                    if let item = player.currentItem {
-                        item.preferredForwardBufferDuration = max(
-                            item.preferredForwardBufferDuration,
-                            progressiveForwardBufferDuration
-                        )
-                    }
-                } else {
-                    player.automaticallyWaitsToMinimizeStalling = false
-                }
+                // Let AVPlayer use its default buffer management
             }
             
             func makeUIViewController(context: Context) -> AVPlayerViewController {
@@ -5542,11 +5510,6 @@ struct SimpleVideoPlayer: View {
                             
                             if hasBufferedData {
                                 applyAutomaticWaiting(for: player)
-                            } else if mediaType == .video {
-                                playerItem.preferredForwardBufferDuration = max(
-                                    playerItem.preferredForwardBufferDuration,
-                                    progressiveForwardBufferDuration
-                                )
                             }
                             
                             // Use DispatchQueue to ensure this happens after view is fully set up
@@ -5561,12 +5524,6 @@ struct SimpleVideoPlayer: View {
                             // Set buffering state while waiting (defer to avoid state modification during view update)
                             DispatchQueue.main.async {
                                 context.coordinator.isBuffering = true
-                            }
-                            if mediaType == .video {
-                                playerItem.preferredForwardBufferDuration = max(
-                                    playerItem.preferredForwardBufferDuration,
-                                    progressiveForwardBufferDuration
-                                )
                             }
                         } else {
                             // Player item in failed state
@@ -5646,8 +5603,6 @@ struct SimpleVideoPlayer: View {
                             DispatchQueue.main.async {
                                 context.coordinator.isBuffering = true
                             }
-                            let bufferTarget = mediaType == .video ? progressiveForwardBufferDuration : 15.0
-                            playerItem.preferredForwardBufferDuration = max(playerItem.preferredForwardBufferDuration, bufferTarget)
                             player.preroll(atRate: 1.0) { success in
                                 DispatchQueue.main.async {
                                     applyAutomaticWaiting(for: player)
@@ -5663,13 +5618,6 @@ struct SimpleVideoPlayer: View {
                         DispatchQueue.main.async {
                             context.coordinator.isBuffering = true
                         }
-                        if mediaType == .video {
-                            playerItem.preferredForwardBufferDuration = max(
-                                playerItem.preferredForwardBufferDuration,
-                                progressiveForwardBufferDuration
-                            )
-                        }
-                        
                         // Invalidate old observer if any
                         context.coordinator.statusObserver?.invalidate()
                         

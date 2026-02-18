@@ -968,16 +968,11 @@ struct SingletonVideoPlayerView: View {
                 }
             }
             .onAppear {
-                    // If player is nil, broken (no currentItem), or doesn't match current video, reload it
-                    // CRITICAL: After background release, singletonPlayer may exist but currentItem is nil
-                    let isPlayerBroken = manager.singletonPlayer != nil && manager.singletonPlayer?.currentItem == nil
-                    if manager.singletonPlayer == nil || isPlayerBroken || manager.currentVideoMid != mid {
+                    // Load if no item or wrong video is loaded
+                    // Player is pre-created (never nil) — idle state is player with no currentItem
+                    if manager.singletonPlayer?.currentItem == nil || manager.currentVideoMid != mid {
                         if !hasAttemptedReload {
                             hasAttemptedReload = true
-                            if isPlayerBroken {
-                                print("🔧 [FULLSCREEN] Player exists but broken (no currentItem) - reloading video \(mid)")
-                            }
-                            // Reload the video
                             manager.loadVideo(
                                 url: url,
                                 mid: mid,

@@ -395,11 +395,8 @@ class SharedAssetCache: ObservableObject {
                 preloadTasks.removeValue(forKey: mediaID)
             }
             
-            // Stop buffering for CachingPlayerItem if it exists
+            // Stop network usage for CachingPlayerItem if it exists
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
-                // Reduce buffer duration to stop aggressive buffering
-                cachingPlayerItem.preferredForwardBufferDuration = 0.0
-                // Ensure network resources are not used while paused
                 cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             }
         }
@@ -685,7 +682,6 @@ class SharedAssetCache: ObservableObject {
 
             // If no buffered data, force preroll to reload from disk cache
             if !hasBufferedData && playerItem.status == .readyToPlay {
-                playerItem.preferredForwardBufferDuration = 5.0  // Prefetch for feed inline playback
                 player.preroll(atRate: 1.0) { success in
                     if !success {
                         print("⚠️ [PLAYER HEALTH] Preroll failed for \(mediaID.prefix(8))")
@@ -751,9 +747,8 @@ class SharedAssetCache: ObservableObject {
             print("🚫 [IMMEDIATE RELEASE] Canceled preload task for \(mediaID)")
         }
 
-        // Stop buffering on CachingPlayerItem if it exists
+        // Stop network usage on CachingPlayerItem if it exists
         if let cachingPlayerItem = cachingPlayerItems[mediaID] {
-            cachingPlayerItem.preferredForwardBufferDuration = 0.0
             cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             cachingPlayerItem.asset.cancelLoading()
             print("🚫 [IMMEDIATE RELEASE] Stopped buffering for \(mediaID)")
@@ -1127,10 +1122,6 @@ class SharedAssetCache: ObservableObject {
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
         
-        // Optimize buffering for progressive video playback
-        player.automaticallyWaitsToMinimizeStalling = false
-        playerItem.preferredForwardBufferDuration = 10.0  // Buffer 10 seconds ahead for feed inline playback
-        
         // Cache the player
         await MainActor.run { 
             cachePlayer(player, for: mediaID)
@@ -1330,9 +1321,6 @@ class SharedAssetCache: ObservableObject {
         player.isMuted = true
 
         
-        // Optimize buffering for HLS playback
-        player.automaticallyWaitsToMinimizeStalling = false
-        cachingPlayerItem.preferredForwardBufferDuration = 5.0  // Buffer 5 seconds ahead for feed inline HLS playback
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
         // Cache the player using mediaID (video attachment mid)
@@ -1874,9 +1862,6 @@ class SharedAssetCache: ObservableObject {
         // MEMORY LEAK FIX: Cancel any active downloads in CachingPlayerItem before releasing
         // This prevents buffered video data from staying in memory
         if let currentItem = player.currentItem {
-            // Reduce buffer to 0 to release buffered data
-            currentItem.preferredForwardBufferDuration = 0.0
-
             // Clear any cached frames/thumbnails that might be held
             currentItem.asset.cancelLoading()
 

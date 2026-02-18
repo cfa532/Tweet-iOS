@@ -658,12 +658,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let assetURL = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
         print("\(logPrefix) Configure player - itemStatus: \(itemStatus), url: \(assetURL)")
 
-        // Configure automatic waiting based on type
-        if attachment?.type == .video {
-            newPlayer.automaticallyWaitsToMinimizeStalling = true
-        } else {
-            newPlayer.automaticallyWaitsToMinimizeStalling = false
-        }
 
         // Pause if playing (prevent audio bleed in feed)
         if newPlayer.rate > 0 { newPlayer.pause() }
@@ -1317,6 +1311,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Save video position before fullscreen
         saveVideoPositionForFullscreen()
 
+        // Build video list from the feed's coordinator and pass to fullscreen manager
+        let coordinator = videoCoordinator ?? VideoPlaybackCoordinator.shared
+        let fullscreenList = coordinator.getVideoListForFullscreen()
+        let myMid = attachment?.mid
+        let myCellTweetId = cellTweetId
+        let startIndex = fullscreenList.firstIndex(where: {
+            $0.videoMid == myMid && $0.cellTweetId == myCellTweetId
+        }) ?? fullscreenList.firstIndex(where: {
+            $0.videoMid == myMid
+        }) ?? 0
+        FullScreenVideoManager.shared.setVideoList(fullscreenList, startIndex: startIndex)
+
         // Show loading overlay
         fullscreenOverlay.isHidden = false
         fullscreenSpinner.startAnimating()
@@ -1460,10 +1466,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     player.pause()
                     player.isMuted = MuteState.shared.isMuted
 
-                    // Stop buffering to prevent background network usage
-                    if let playerItem = player.currentItem {
-                        playerItem.preferredForwardBufferDuration = 0.0
-                    }
                 }
                 coordinatorWantsToPlay = false
             }

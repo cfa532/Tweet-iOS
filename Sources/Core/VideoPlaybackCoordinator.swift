@@ -525,6 +525,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
+    /// Returns a snapshot of the ordered video list for fullscreen browsing.
+    func getVideoListForFullscreen() -> [VideoPlaybackInfo] {
+        return allVideos
+    }
+
     /// Canonical "next video" lookup for fullscreen browsing.
     /// Returns the tweet that owns the attachments (mediaTweet) + the attachment index + the next cell tweet id.
     ///
