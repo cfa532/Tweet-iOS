@@ -641,6 +641,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard shouldLoadVideo else { return }
         isPlayerLoaded = false
 
+        // AVPlayer won't render the same URL in two player layers simultaneously.
+        // When the same video appears in a tweet + its retweet on screen, the query
+        // param makes each URL unique per parent tweet so both can render.
         let uniqueURL = buildUniquePlayerURL(url: url, parentTweetId: parentTweet.mid)
         let tweetId = parentTweet.mid
         let mediaID = attachment.mid

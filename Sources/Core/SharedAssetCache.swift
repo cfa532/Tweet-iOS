@@ -590,6 +590,7 @@ class SharedAssetCache: ObservableObject {
 
         playerCache[mediaID] = player
         cacheTimestamps[mediaID] = Date()
+        saveCacheMetadata()
     }
     
     /// Check if a player is in a healthy, usable state
