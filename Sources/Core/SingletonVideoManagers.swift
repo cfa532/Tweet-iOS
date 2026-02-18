@@ -633,6 +633,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
             self.singletonPlayer = cachedPlayer
             self.singletonPlayer?.isMuted = false
+            // Reset buffer limit — feed cell may have capped it via stopAllVideos
+            cachedPlayer.currentItem?.preferredForwardBufferDuration = 0
+
+            // Position is already correct (feed cell's position) — skip observer-based restoration
+            self.hasRestoredPosition = true
+            self.isSeekingToRestoredPosition = false
 
             if let item = cachedPlayer.currentItem {
                 self.setupVideoCompletionObserver(item)
@@ -640,7 +646,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             self.setupTimeControlStatusObserver()
             self.startRetryMonitoring()
 
-            // Position is already where the feed cell left it; observers handle restoration
             self.singletonPlayer?.play()
             self.isPlaying = true
             return
@@ -663,6 +668,12 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     // Use the player directly — it already has its CachingPlayerItem with buffered data
                     self.singletonPlayer = player
                     self.singletonPlayer?.isMuted = false
+                    // Reset buffer limit — feed cell may have capped it via stopAllVideos
+                    player.currentItem?.preferredForwardBufferDuration = 0
+
+                    // Position is already correct — skip observer-based restoration
+                    self.hasRestoredPosition = true
+                    self.isSeekingToRestoredPosition = false
 
                     if let item = player.currentItem {
                         self.setupVideoCompletionObserver(item)
