@@ -706,13 +706,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let assetURL = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
         print("\(logPrefix) Configure player - itemStatus: \(itemStatus), url: \(assetURL)")
 
-        // Configure automatic waiting based on type
-        if attachment?.type == .video {
-            newPlayer.automaticallyWaitsToMinimizeStalling = true
-        } else {
-            newPlayer.automaticallyWaitsToMinimizeStalling = false
-        }
-
         // Pause if playing (prevent audio bleed in feed)
         if newPlayer.rate > 0 { newPlayer.pause() }
 

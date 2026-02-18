@@ -974,7 +974,10 @@ struct SingletonVideoPlayerView: View {
             .onAppear {
                     // If player is nil, broken (no currentItem), or doesn't match current video, reload it
                     // CRITICAL: After background release, singletonPlayer may exist but currentItem is nil
-                    let isPlayerBroken = manager.singletonPlayer != nil && manager.singletonPlayer?.currentItem == nil
+                    // But skip "broken" detection if loadVideo() is actively loading this video
+                    // (the prewarmed empty AVPlayer hasn't received its item from the async Task yet)
+                    let isActivelyLoading = manager.loadingMid == mid
+                    let isPlayerBroken = !isActivelyLoading && manager.singletonPlayer != nil && manager.singletonPlayer?.currentItem == nil
                     if manager.singletonPlayer == nil || isPlayerBroken || manager.currentVideoMid != mid {
                         if !hasAttemptedReload {
                             hasAttemptedReload = true

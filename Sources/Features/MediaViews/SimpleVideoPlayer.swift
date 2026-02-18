@@ -1276,13 +1276,7 @@ struct SimpleVideoPlayer: View {
             // CRITICAL FIX: Stop buffering when video goes out of sight to prevent performance degradation
             // This stops CachingPlayerItem from continuing to download segments in the background
             if let playerItem = player?.currentItem {
-                // Reduce buffer duration to stop aggressive buffering
                 playerItem.preferredForwardBufferDuration = 0.0
-                // Ensure network resources are not used while paused
-                if let cachingPlayerItem = playerItem as? CachingPlayerItem {
-                    cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-                }
-                // Stopped buffering for out-of-sight video
             }
             
             // Also cancel loading tasks in SharedAssetCache for this video
@@ -4165,11 +4159,7 @@ struct SimpleVideoPlayer: View {
     }
     
     private func configureAutomaticWaiting(for player: AVPlayer) {
-        if mediaType == .video {
-            player.automaticallyWaitsToMinimizeStalling = true
-        } else {
-            player.automaticallyWaitsToMinimizeStalling = false
-        }
+        // Let AVPlayer use its default behavior (automaticallyWaitsToMinimizeStalling = true)
     }
 
     private func configurePlayer(_ player: AVPlayer) {
@@ -5339,11 +5329,7 @@ struct SimpleVideoPlayer: View {
             }
             
             private func applyAutomaticWaiting(for player: AVPlayer) {
-                if mediaType == .video {
-                    player.automaticallyWaitsToMinimizeStalling = true
-                } else {
-                    player.automaticallyWaitsToMinimizeStalling = false
-                }
+                // Let AVPlayer use its default behavior
             }
             
             func makeUIViewController(context: Context) -> AVPlayerViewController {

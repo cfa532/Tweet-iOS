@@ -397,10 +397,7 @@ class SharedAssetCache: ObservableObject {
             
             // Stop buffering for CachingPlayerItem if it exists
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
-                // Reduce buffer duration to stop aggressive buffering
                 cachingPlayerItem.preferredForwardBufferDuration = 0.0
-                // Ensure network resources are not used while paused
-                cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             }
         }
     }
@@ -710,7 +707,6 @@ class SharedAssetCache: ObservableObject {
         // Stop buffering on CachingPlayerItem if it exists
         if let cachingPlayerItem = cachingPlayerItems[mediaID] {
             cachingPlayerItem.preferredForwardBufferDuration = 0.0
-            cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             cachingPlayerItem.asset.cancelLoading()
             print("🚫 [IMMEDIATE RELEASE] Stopped buffering for \(mediaID)")
         }
@@ -1082,9 +1078,6 @@ class SharedAssetCache: ObservableObject {
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
         
-        // Optimize buffering for progressive video playback
-        player.automaticallyWaitsToMinimizeStalling = false
-        
         // Cache the player
         await MainActor.run { 
             cachePlayer(player, for: mediaID)
@@ -1279,10 +1272,6 @@ class SharedAssetCache: ObservableObject {
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
 
-        
-        // Optimize buffering for HLS playback
-        player.automaticallyWaitsToMinimizeStalling = false
-        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
         
         // Cache the player using mediaID (video attachment mid)
         await MainActor.run { 

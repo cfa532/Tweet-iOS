@@ -301,9 +301,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         AudioSessionManager.shared.activateForVideoPlayback()
         player.isMuted = false
         if let item = player.currentItem {
-            if mediaType == .video {
-                player.automaticallyWaitsToMinimizeStalling = true
-            }
             setupVideoCompletionObserver(item)
         }
         setupTimeControlStatusObserver()
@@ -440,10 +437,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     private func ensurePlayerInitialized() {
         guard singletonPlayer == nil else { return }
         singletonPlayer = AVPlayer()
-        singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
         singletonPlayer?.isMuted = false
     }
-    
+
     func pausePlayer() {
         pause()
     }
@@ -508,7 +504,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var loadGeneration: Int = 0
-    private var loadingMid: String?
+    private(set) var loadingMid: String?
 
     // MARK: - Navigation Debounce
     /// Prevent multiple rapid swipe-ups (or duplicate gesture endings) from racing navigation.
@@ -537,7 +533,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         
         // Create empty player instance to warm up AVFoundation infrastructure
         singletonPlayer = AVPlayer()
-        singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
         singletonPlayer?.isMuted = false
         
     }
@@ -655,16 +650,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.singletonPlayer?.replaceCurrentItem(with: playerItem)
                 }
                 
-                // Configure fullscreen-specific buffering behavior
-                if mediaType == .video {
-                    self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = true
-                } else {
-                    self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
-                }
-                
                 // Always unmuted in fullscreen
                 self.singletonPlayer?.isMuted = false
-                
+
                 // CRITICAL: Setup fullscreen's unique functionality
                 // These observers are essential for auto-advance, retry monitoring, and buffering detection
                 self.setupVideoCompletionObserver(playerItem)
@@ -831,13 +819,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         self.singletonPlayer = AVPlayer(playerItem: playerItem)
                     } else {
                         self.singletonPlayer?.replaceCurrentItem(with: playerItem)
-                    }
-
-                    // Configure buffering behavior based on media type
-                    if mediaType == .video {
-                        self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = true
-                    } else {
-                        self.singletonPlayer?.automaticallyWaitsToMinimizeStalling = false
                     }
 
                     // Always unmuted in fullscreen
