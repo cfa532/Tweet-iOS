@@ -1132,20 +1132,136 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Wait for existing task if there is one
         if let existingTask = existingTask {
+            // CRITICAL: Check connection state before waiting
+            // If connection is already closed, don't wait
+            let initialConnectionState = connection.state
+            switch initialConnectionState {
+            case .cancelled, .failed:
+                print("⚠️ [LocalHTTPServer] Connection already closed before waiting for segment: \(fullRealURL.lastPathComponent)")
+                return
+            default:
+                break
+            }
+            
             // Another request is already downloading this segment
-            // Wait for it to complete, then serve the cached file
-            await existingTask.value
+            // Wait for it to complete, but with timeout to prevent indefinite waits
+            // AVPlayer typically times out around 30 seconds, so we use 15s as safety margin
+            let waitTask = Task {
+                await existingTask.value
+            }
+            
+            let timeoutTask = Task {
+                try? await Task.sleep(nanoseconds: 15_000_000_000) // 15 seconds
+            }
+            
+            // Race between download completion and timeout
+            // Use Task.select to wait for whichever completes first
+            enum WaitResult {
+                case completed
+                case timeout
+            }
+            
+            let result = await withTaskGroup(of: WaitResult.self) { group in
+                group.addTask {
+                    await waitTask.value
+                    timeoutTask.cancel()
+                    return .completed
+                }
+                
+                group.addTask {
+                    await timeoutTask.value
+                    waitTask.cancel()
+                    return .timeout
+                }
+                
+                // Return first result
+                return await group.next() ?? .timeout
+            }
+
+            // Check connection state after wait - if closed, remove stuck task and start fresh
+            let finalConnectionState = connection.state
+            var shouldRemoveStuckTask = false
+            
+            switch finalConnectionState {
+            case .cancelled, .failed:
+                print("⚠️ [LocalHTTPServer] Connection closed while waiting for segment: \(fullRealURL.lastPathComponent)")
+                shouldRemoveStuckTask = true
+            default:
+                break
+            }
+            
+            if result == .timeout {
+                print("⚠️ [LocalHTTPServer] Timeout waiting for segment download: \(fullRealURL.lastPathComponent)")
+                // Check if file exists anyway (might have completed just before timeout)
+                if !FileManager.default.fileExists(atPath: cachePath) {
+                    // File doesn't exist - the download is stuck, remove it and start fresh
+                    shouldRemoveStuckTask = true
+                }
+            }
+
+            // If download is stuck (timeout or connection closed), remove it from active downloads
+            // This allows us to start a fresh download instead of waiting forever
+            if shouldRemoveStuckTask {
+                await activeDownloadsActor.removeTask(for: downloadKey)
+                print("🔄 [LocalHTTPServer] Removed stuck download task for: \(fullRealURL.lastPathComponent)")
+            }
 
             // Now check if the file exists and serve it
             if FileManager.default.fileExists(atPath: cachePath) {
                 autoreleasepool {
                     serveFile(path: cachePath, connection: connection, method: method)
                 }
-            } else {
-                // File still doesn't exist - something went wrong with the download
-                // Start our own download as fallback
-                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
+                return
             }
+            
+            // File doesn't exist - check connection state before proceeding
+            // If connection is already closed, just return - AVPlayer will retry
+            switch connection.state {
+            case .cancelled, .failed:
+                // Connection already closed - start background download but don't try to respond
+                print("⚠️ [LocalHTTPServer] Connection closed after timeout, starting background download: \(fullRealURL.lastPathComponent)")
+                
+                // Start download-only task in background WITHOUT tracking it
+                // AVPlayer will retry and get cached file when ready
+                Task.detached(priority: .userInitiated) {
+                    await withCheckedContinuation { continuation in
+                        self.downloadAndCacheOnly(url: fullRealURL, cachePath: cachePath) {
+                            continuation.resume()
+                        }
+                    }
+                    
+                    if FileManager.default.fileExists(atPath: cachePath) {
+                        print("✅ [BACKGROUND DOWNLOAD] Successfully cached: \(fullRealURL.lastPathComponent)")
+                    }
+                }
+                return // Connection closed, can't send response
+            default:
+                break // Connection still alive, proceed
+            }
+            
+            // Connection is still alive - start background download and send 503
+            print("🔄 [LocalHTTPServer] Starting untracked background download after timeout: \(fullRealURL.lastPathComponent)")
+            
+            // Start download-only task in background WITHOUT tracking it
+            // This way, if AVPlayer retries, it won't wait for this download - it will check cache first
+            // If cache miss, it will start a fresh tracked download
+            Task.detached(priority: .userInitiated) {
+                await withCheckedContinuation { continuation in
+                    // Download and cache only - no serving (connection might be closing)
+                    self.downloadAndCacheOnly(url: fullRealURL, cachePath: cachePath) {
+                        continuation.resume()
+                    }
+                }
+                
+                if !FileManager.default.fileExists(atPath: cachePath) {
+                    print("⚠️ [BACKGROUND DOWNLOAD] Download completed but file not found: \(fullRealURL.lastPathComponent)")
+                } else {
+                    print("✅ [BACKGROUND DOWNLOAD] Successfully cached: \(fullRealURL.lastPathComponent)")
+                }
+            }
+            
+            // Send 503 immediately so AVPlayer retries (will get cached file on retry if download completes)
+            sendResponse(connection: connection, statusCode: 503, headers: ["Retry-After": "1"], body: nil)
             return
         }
 
@@ -2052,6 +2168,123 @@ public class LocalHTTPServer: @unchecked Sendable {
         let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
 
         fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: 1, maxAttempts: maxAttempts, completion: completion)
+    }
+    
+    /// Download and cache file without serving (for background downloads when connection is closing)
+    private func downloadAndCacheOnly(url: URL, cachePath: String, completion: (() -> Void)? = nil) {
+        // CRITICAL: Block NEW network requests until app initialized
+        guard canBypassInitialization(url: url) else {
+            print("⚠️ [LocalHTTPServer] App not initialized, refusing download for \(url.path)")
+            completion?()
+            return
+        }
+
+        // Extract mediaID from cachePath for BlackList tracking
+        let pathComponents = cachePath.components(separatedBy: "/")
+        let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
+        let isSegment = cachePath.hasSuffix(".ts")
+        let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
+
+        downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: 1, maxAttempts: maxAttempts, completion: completion)
+    }
+    
+    /// Download and cache without serving (used when connection is closing)
+    private func downloadWithRetry(url: URL, cachePath: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {
+        let task = connectionPool.dataTask(with: url) { [weak self] data, response, error in
+            guard let self = self else {
+                completion?()
+                return
+            }
+
+            // MEMORY FIX: Use autoreleasepool for large segment downloads (4-5MB each)
+            autoreleasepool {
+                // Check for retryable errors (timeout, network lost, etc.)
+                if let error = error {
+                    let nsError = error as NSError
+                    let isRetryable = nsError.code == NSURLErrorTimedOut ||
+                                      nsError.code == NSURLErrorNetworkConnectionLost ||
+                                      nsError.code == NSURLErrorNotConnectedToInternet
+
+                    if nsError.code != NSURLErrorCancelled, attempt < maxAttempts, isRetryable {
+                        let delay = Double(attempt) // 1s, 2s backoff
+                        print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) after \(delay)s")
+                        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                            self.downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
+                        }
+                        return
+                    }
+
+                    // Final failure — record but don't respond (no connection to respond to)
+                    if !mediaID.isEmpty, nsError.code != NSURLErrorCancelled {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    completion?()
+                    return
+                }
+
+                // CRITICAL: Validate HTTP response status
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    if !mediaID.isEmpty {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    completion?()
+                    return
+                }
+
+                // Retry on server errors (5xx)
+                if httpResponse.statusCode >= 500, attempt < maxAttempts {
+                    let delay = Double(attempt)
+                    print("🔄 [LocalHTTPServer] Download retry \(attempt)/\(maxAttempts - 1) for \(url.lastPathComponent) (HTTP \(httpResponse.statusCode))")
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.downloadWithRetry(url: url, cachePath: cachePath, mediaID: mediaID, attempt: attempt + 1, maxAttempts: maxAttempts, completion: completion)
+                    }
+                    return
+                }
+
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    if !mediaID.isEmpty {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    completion?()
+                    return
+                }
+
+                guard let data = data, !data.isEmpty else {
+                    if !mediaID.isEmpty {
+                        BlackList.shared.recordFailure(mediaID)
+                    }
+                    completion?()
+                    return
+                }
+
+                // For playlists, strip to relative paths for caching (port-independent!)
+                var dataToCache = data
+                if cachePath.hasSuffix(".m3u8"), let playlistString = String(data: data, encoding: .utf8) {
+                    // Strip URLs to relative paths for caching (remove scheme/host/port)
+                    let relativePlaylist = self.stripPlaylistToRelativePaths(playlistString, baseURL: url)
+                    if let relativeData = relativePlaylist.data(using: .utf8) {
+                        dataToCache = relativeData
+                    }
+                }
+
+                // CRITICAL: Write to cache (this is the only thing we do - no serving)
+                let cacheURL = URL(fileURLWithPath: cachePath)
+                do {
+                    try dataToCache.write(to: cacheURL)
+                    print("✅ [LocalHTTPServer] Downloaded and cached: \(url.lastPathComponent)")
+                } catch {
+                    print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
+                }
+
+                // Record successful fetch for this mediaID
+                if !mediaID.isEmpty {
+                    BlackList.shared.recordSuccess(mediaID)
+                }
+
+                completion?()
+            }
+        }
+        task.resume()
     }
 
     private func fetchWithRetry(url: URL, cachePath: String, connection: NWConnection, method: String, mediaID: String, attempt: Int, maxAttempts: Int, completion: (() -> Void)?) {

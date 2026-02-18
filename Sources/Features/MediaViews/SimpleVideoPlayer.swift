@@ -1795,9 +1795,18 @@ struct SimpleVideoPlayer: View {
                 
                 // Capture the last visible frame right before pausing (covers interruptions / audio session changes).
                 captureLastFrameIfPossible(reason: "stopAllVideos")
+                
+                // CRITICAL: When fullscreen/detail view opens, completely stop feed players by replacing currentItem with nil
+                // This closes all network connections and prevents connection conflicts with fullscreen player
+                // The player will be restored from SharedAssetCache when fullscreen closes and video becomes visible again
                 player.pause()
+                player.replaceCurrentItem(with: nil)
+                
                 // Keep mute state consistent with global setting instead of forcing muted
                 player.isMuted = MuteState.shared.isMuted
+                
+                // Mark player as detached so it will be reacquired when visible again
+                isPlayerDetached = true
             }
         }
         // TweetDetail and MediaBrowser: DO NOTHING
@@ -2197,6 +2206,15 @@ struct SimpleVideoPlayer: View {
             return true // No player yet, validation passes
         }
         
+        // Check 0: If player is detached (e.g., stopped for fullscreen/detail view), recreate it
+        if isPlayerDetached {
+            if !loadingState.isLoading {
+                // Player was detached - recreating
+                recoverFromInvalidPlayer()
+            }
+            return false
+        }
+        
         // Check 1: Player must have a currentItem
         guard let playerItem = player.currentItem else {
             if !loadingState.isLoading {
@@ -2233,6 +2251,7 @@ struct SimpleVideoPlayer: View {
         self.player = nil
         self.loadingState = .idle
         self.playbackState = .notStarted
+        self.isPlayerDetached = false // Reset detached flag when recreating player
         setupPlayer()
     }
     
