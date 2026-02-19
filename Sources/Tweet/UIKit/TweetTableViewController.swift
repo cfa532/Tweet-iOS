@@ -1253,6 +1253,21 @@ class TweetTableViewController: UITableViewController {
             }
         }
 
+        // Document attachments (PDFs, etc.) — hosted via SwiftUI DocumentAttachmentsView
+        let documentAttachments = displayTweet.attachments?.filter { TweetBodyUIView.isDocumentType($0.type) } ?? []
+        if !documentAttachments.isEmpty {
+            let docCount = min(documentAttachments.count, 2) // maxDocuments: 2 in feed cells
+            // Each DocumentRowView: ~32pt (14pt font + caption2 + vertical padding + background)
+            // Outer VStack: 4pt padding top/bottom, 2pt spacing between rows
+            let rowsHeight = CGFloat(docCount) * 32 + (docCount > 1 ? CGFloat(docCount - 1) * 2 : 0)
+            let ellipsisHeight: CGFloat = documentAttachments.count > 2 ? 24 : 0
+            let docHeight = rowsHeight + 8 + ellipsisHeight // 8pt = outer VStack padding (4+4)
+            if hasTextContent || !mediaAttachments.isEmpty {
+                bodyHeight += 8 // spacing before document container
+            }
+            bodyHeight += docHeight
+        }
+
         height += bodyHeight
 
         // Spacing after body (matches updateBodyToActionSpacing)
@@ -1379,10 +1394,11 @@ class TweetTableViewController: UITableViewController {
             return cachedHeight
         }
 
-        // Let Auto Layout determine the exact cell height on first display.
-        // willDisplay caches the actual height for future use,
-        // ensuring estimate == actual on subsequent displays (no scroll jumps).
-        return UITableView.automaticDimension
+        // Use deterministic calculation instead of Auto Layout.
+        // This matches estimatedHeightForRowAt's fallback, so estimate == actual → no scroll jumps.
+        // The cell still uses Auto Layout internally for content positioning;
+        // only the cell height is pre-determined.
+        return Self.calculateTweetHeight(for: tweet)
     }
 
     override func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
