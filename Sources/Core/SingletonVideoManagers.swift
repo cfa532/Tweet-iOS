@@ -1866,9 +1866,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             videoCompletionObserver = nil
         }
         
-        // Get the cache key before clearing the reference
-        let cacheKey = currentVideoMid.map { "tweetDetail_\($0)" }
-        
+        // Capture references before clearing (currentVideoMid will be set to nil below)
+        let rawMediaID = currentVideoMid
+        let cacheKey = rawMediaID.map { "tweetDetail_\($0)" }
+
         // CRITICAL: Replace currentItem with nil to completely stop playback
         // Just calling pause() is not enough - AVPlayerViewController can restart it
         currentPlayer?.pause()
@@ -1877,19 +1878,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
-        
-        // CRITICAL FIX: Remove the player from SharedAssetCache AND cancel all downloads
-        // This ensures complete isolation and prevents memory leaks from timed-out downloads
-        // Since MediaCell uses a different cache key, removing the "tweetDetail_" prefixed key won't affect MediaCell.
-        if let rawMediaID = currentVideoMid {
-            Task { @MainActor in
-                // Cancel ALL downloads and clear player (prevents 90s timeout memory leak!)
-                SharedAssetCache.shared.clearPlayerForMediaID(rawMediaID)
-                print("DEBUG: [DetailVideoManager] Cancelled downloads and removed player for: \(rawMediaID)")
-            }
-        }
-        
-        // Also remove the prefixed cache key
+
+        // Remove the prefixed cache key
         if let key = cacheKey {
             Task { @MainActor in
                 SharedAssetCache.shared.removeInvalidPlayer(for: key)

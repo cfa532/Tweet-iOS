@@ -3436,11 +3436,14 @@ struct SimpleVideoPlayer: View {
                 // Loading indicator - show until video actually starts playing
                 // Show spinner when: loading, OR player is buffering after play() was called,
                 // OR tweetDetail hasn't started playback yet (covers gap between player creation and first frame)
+                // NOTE: Do NOT check timeControlStatus for tweetDetail — SwiftUI cannot observe
+                // AVPlayer.timeControlStatus changes, so the spinner gets stuck on re-entry when
+                // a new AVPlayerItem buffers. AVPlayerViewController already shows its own buffering UI.
                 let showInitialLoadingSpinner = loadingState.isLoading ||
                     (mode == .mediaBrowser &&
                      player.rate == 0 &&
                      (player.currentItem?.currentTime().seconds ?? 0) < 0.1) ||
-                    ((mode == .mediaBrowser || mode == .tweetDetail) &&
+                    (mode == .mediaBrowser &&
                      player.timeControlStatus == .waitingToPlayAtSpecifiedRate) ||
                     (mode == .tweetDetail && playbackState == .notStarted)
                 
@@ -4369,6 +4372,12 @@ struct SimpleVideoPlayer: View {
                                 if let item = self.player?.currentItem,
                                    item.status == .readyToPlay,
                                    self.player === capturedPlayer {
+                                    // CRITICAL: Update loadingState now that item is ready.
+                                    // Without this, checkPlaybackConditions() may bail on the
+                                    // !loadingState.isLoading guard and never start playback.
+                                    if self.loadingState.isLoading {
+                                        self.loadingState = .loaded
+                                    }
                                     // If restore starts an async seek, it will re-trigger playback later.
                                     if self.startTweetDetailRestoreIfNeeded(for: capturedPlayer) {
                                         return
@@ -4382,6 +4391,9 @@ struct SimpleVideoPlayer: View {
                             }
                             // If still not ready after waiting, give normal playback a chance (it will gate on readiness).
                             if self.player === capturedPlayer {
+                                if self.loadingState.isLoading {
+                                    self.loadingState = .loaded
+                                }
                                 self.checkPlaybackConditions(autoPlay: self.currentAutoPlay, isVisible: self.isVisible)
                             }
                         }
