@@ -3421,6 +3421,23 @@ struct SimpleVideoPlayer: View {
                     }
                 }
                 
+                // TweetDetail UX: last-frame placeholder prevents black flash during player setup.
+                // AVPlayerViewControllerRepresentable renders black until the first frame is decoded;
+                // cover it with the feed cell's last captured frame until playback actually starts.
+                if mode == .tweetDetail, let frame = cachedLastFrame {
+                    let isWaitingForFirstFrame = loadingState.isLoading ||
+                        playbackState == .notStarted ||
+                        (player.currentItem?.status != .readyToPlay)
+
+                    if isWaitingForFirstFrame {
+                        Image(uiImage: frame)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .background(Color.black)
+                            .allowsHitTesting(false)
+                    }
+                }
+
                 // Show buffering spinner when buffering (fullscreen only)
                 if isBuffering && mode == .mediaBrowser {
                     ZStack {
@@ -3466,10 +3483,10 @@ struct SimpleVideoPlayer: View {
                 // Tap-through cover: let MediaCell's overlay / parent tap gestures still work
                 // even while the player is being created.
                 Group {
-                    if mode == .mediaCell, let frame = cachedLastFrame {
+                    if (mode == .mediaCell || mode == .tweetDetail), let frame = cachedLastFrame {
                         Image(uiImage: frame)
                             .resizable()
-                            .scaledToFill()
+                            .aspectRatio(contentMode: mode == .tweetDetail ? .fit : .fill)
                             .clipped()
                             .overlay(Color.black.opacity(0.10))
                     } else {
@@ -3763,11 +3780,17 @@ struct SimpleVideoPlayer: View {
             // Check if singleton already has this exact video playing
             if let existingPlayer = DetailVideoManager.shared.currentPlayer,
                DetailVideoManager.shared.currentVideoMid == mid {
-                self.player = existingPlayer
-                self.loadingState = .loaded
-                // For tweetDetail mode, always unmute and ensure restore happens before any playback.
-                existingPlayer.isMuted = false
-                self.configurePlayer(existingPlayer)
+                // Only assign to view if player item is ready (prevents black flash).
+                // If still loading from a previous Path B Task, let that Task finish.
+                if let item = existingPlayer.currentItem, item.status == .readyToPlay {
+                    self.player = existingPlayer
+                    self.loadingState = .loaded
+                    existingPlayer.isMuted = false
+                    self.configurePlayer(existingPlayer)
+                } else if self.player == nil {
+                    // Still waiting for ready — keep spinner visible, don't re-create
+                    self.loadingState = .loading
+                }
                 return
             }
             
@@ -3782,57 +3805,52 @@ struct SimpleVideoPlayer: View {
                 let asset = cachedPlayerItem.asset
                 let currentTime = cachedPlayer.currentTime()
                 let wasPlaying = cachedPlayer.rate > 0
-                
+
                 let playerItem = AVPlayerItem(asset: asset)
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 newPlayer.isMuted = false
-                
-                // Created independent AVPlayer, storing in singleton
-                
+
                 // Stop old singleton player if exists
                 DetailVideoManager.shared.currentPlayer?.pause()
-                
-                // Store new player in singleton
+
+                // Store new player in singleton (so duplicate setupPlayer calls use Path A)
                 DetailVideoManager.shared.currentPlayer = newPlayer
                 DetailVideoManager.shared.currentVideoMid = mid
-                
-                self.player = newPlayer
-                
-                // Wait for playerItem to be ready before marking as loaded to prevent black screen
+
                 if playerItem.status == .readyToPlay {
+                    // Ready immediately - assign to view, configure, and seek
+                    self.player = newPlayer
                     self.loadingState = .loaded
                     self.configurePlayer(newPlayer)
-                    // Seek to preserved position immediately
                     newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                         if finished && wasPlaying {
                             newPlayer.play()
                         }
                     }
                 } else {
-                    // PlayerItem not ready yet - wait for it and then seek
+                    // PlayerItem not ready yet - keep showing spinner/last-frame placeholder
+                    // instead of a black AVPlayerViewControllerRepresentable.
+                    // Do NOT assign self.player until the item is ready to render.
                     self.loadingState = .loading
-                    self.configurePlayer(newPlayer)
-                    
-                    // Observe playerItem status to know when it's ready
-                    // Use a Task to wait for ready status with timeout
+
                     Task { @MainActor in
                         var attempts = 0
                         while playerItem.status != .readyToPlay && attempts < 100 {
                             try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
                             attempts += 1
                         }
-                        
+
+                        // Now assign to view - either ready or timed out
+                        self.player = newPlayer
+                        self.loadingState = .loaded
+                        self.configurePlayer(newPlayer)
+
                         if playerItem.status == .readyToPlay {
-                            self.loadingState = .loaded
-                            // Seek to preserved position once ready
                             newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                                 if finished && wasPlaying {
                                     newPlayer.play()
                                 }
                             }
-                        } else {
-                            // Timeout - mark as loaded anyway to prevent infinite loading
-                            self.loadingState = .loaded
                         }
                     }
                 }
