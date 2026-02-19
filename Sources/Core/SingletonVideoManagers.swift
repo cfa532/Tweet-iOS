@@ -2102,6 +2102,9 @@ class ChatVideoManager: ObservableObject {
     // Global video player storage for chat videos - store AVPlayer directly
     private var chatVideoPlayers: [String: AVPlayer] = [:] // Key: messageId, Value: AVPlayer instance
 
+    // Track which messageIds belong to which chat session (receiptId)
+    private var chatSessionMessages: [String: Set<String>] = [:] // Key: receiptId, Value: Set of messageIds
+
     /// State for a specific chat session's videos
     struct ChatSessionVideoState {
         var playingVideos: Set<String> = [] // mids of videos currently playing
@@ -2114,21 +2117,26 @@ class ChatVideoManager: ObservableObject {
         if activeChatSessions[receiptId] == nil {
             activeChatSessions[receiptId] = ChatSessionVideoState()
             visibleVideos[receiptId] = Set<String>()
+            chatSessionMessages[receiptId] = Set<String>()
             print("DEBUG: [ChatVideoManager] Registered chat session: \(receiptId)")
         }
     }
 
     /// Unregister a chat session (cleanup when leaving chat)
     func unregisterChatSession(receiptId: String) {
-        // Stop all videos in this session
-        if let sessionState = activeChatSessions[receiptId] {
-            for videoMid in sessionState.playingVideos {
-                stopVideo(mid: videoMid, receiptId: receiptId)
+        // Pause and remove all AVPlayers for this session
+        if let messageIds = chatSessionMessages[receiptId] {
+            for messageId in messageIds {
+                if let player = chatVideoPlayers.removeValue(forKey: messageId) {
+                    player.pause()
+                }
             }
+            print("DEBUG: [ChatVideoManager] Removed \(messageIds.count) players for session: \(receiptId)")
         }
 
         activeChatSessions.removeValue(forKey: receiptId)
         visibleVideos.removeValue(forKey: receiptId)
+        chatSessionMessages.removeValue(forKey: receiptId)
         print("DEBUG: [ChatVideoManager] Unregistered chat session: \(receiptId)")
     }
 
@@ -2240,6 +2248,7 @@ class ChatVideoManager: ObservableObject {
         do {
             let player = try await SharedAssetCache.shared.getOrCreatePlayer(for: url, mediaType: attachment.type)
             chatVideoPlayers[messageId] = player
+            chatSessionMessages[receiptId, default: Set<String>()].insert(messageId)
             return player
         } catch {
             print("DEBUG: [ChatVideoManager] Failed to create player for \(messageId): \(error)")
@@ -2254,12 +2263,14 @@ class ChatVideoManager: ObservableObject {
 
     /// Clean up all video players for a chat session
     func cleanupChatSession(receiptId: String) {
-        // Remove all players for messages in this session
-        chatVideoPlayers = chatVideoPlayers.filter { messageId, _ in
-            // For now, just keep all players since we don't track which belong to which session
-            // This could be optimized later if needed
-            true
+        guard let messageIds = chatSessionMessages[receiptId] else { return }
+        for messageId in messageIds {
+            if let player = chatVideoPlayers.removeValue(forKey: messageId) {
+                player.pause()
+            }
         }
+        chatSessionMessages.removeValue(forKey: receiptId)
+        print("DEBUG: [ChatVideoManager] Cleaned up \(messageIds.count) players for session: \(receiptId)")
     }
 
     // MARK: - Private Methods
@@ -2343,17 +2354,11 @@ class ChatVideoManager: ObservableObject {
         sessionState.pausedVideos.formUnion(videosToPause)
         activeChatSessions[receiptId] = sessionState
 
-        // Notify all videos in session to pause
-        for videoMid in videosToPause {
-            NotificationCenter.default.post(
-                name: NSNotification.Name("ChatVideoShouldPlay"),
-                object: nil,
-                userInfo: [
-                    "videoMid": videoMid,
-                    "receiptId": receiptId,
-                    "shouldPlay": false
-                ]
-            )
+        // Directly pause all AVPlayers for this session
+        if let messageIds = chatSessionMessages[receiptId] {
+            for messageId in messageIds {
+                chatVideoPlayers[messageId]?.pause()
+            }
         }
 
         print("DEBUG: [ChatVideoManager] Paused all \(videosToPause.count) videos in session: \(receiptId)")

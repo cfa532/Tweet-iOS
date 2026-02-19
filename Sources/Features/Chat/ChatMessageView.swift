@@ -572,22 +572,20 @@ struct ChatVideoContainer: View {
 
     var body: some View {
         ZStack {
+            // Layer 1: Video player or loading placeholder (no hit testing)
             if let player = player {
-                // Video player view
                 VideoPlayer(player: player)
                     .aspectRatio(videoAR, contentMode: .fill)
                     .frame(width: Self.maxWidth, height: gridHeight)
                     .clipped()
+                    .disabled(true) // Disable built-in controls to prevent tap interception
                     .onAppear {
                         player.isMuted = muteState.isMuted
-                        // Determine if video should play based on visibility
                         let shouldPlay = ChatVideoManager.shared.shouldPlayVideo(mid: attachment.mid, receiptId: receiptId)
                         if shouldPlay && isChatScreenVisible {
                             player.play()
                             isPlaying = true
                         }
-                        
-                        // Observe video completion
                         setupVideoCompletionObserver(for: player)
                     }
                     .onDisappear {
@@ -596,12 +594,9 @@ struct ChatVideoContainer: View {
                         removeVideoCompletionObserver()
                     }
                     .onReceive(MuteState.shared.$isMuted) { isMuted in
-                        // Update player mute state when global mute state changes
                         player.isMuted = isMuted
-                        print("DEBUG: [ChatVideoContainer] Mute state changed to: \(isMuted) for video \(attachment.mid)")
                     }
-                
-                // Show loading spinner overlay while video is loading
+
                 if isLoading {
                     Color.black.opacity(0.5)
                         .overlay(
@@ -616,7 +611,6 @@ struct ChatVideoContainer: View {
                         )
                 }
             } else {
-                // Loading placeholder (before player is created)
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(.systemGray5))
                     .frame(width: Self.maxWidth, height: gridHeight)
@@ -632,18 +626,17 @@ struct ChatVideoContainer: View {
                     )
             }
 
-            // Clear overlay to capture taps for full-screen
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showFullScreen = true
-                }
+            // Layer 2: Interactive overlay — fullscreen tap area and button bar separated
+            VStack(spacing: 0) {
+                // Upper area: tap for fullscreen (does NOT overlap buttons)
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showFullScreen = true
+                    }
 
-            // Bottom overlay with play and mute buttons
-            VStack {
-                Spacer()
+                // Bottom bar: play/mute buttons (separate from fullscreen tap)
                 HStack {
-                    // Play/Pause button
                     Button {
                         guard let player = player else { return }
                         if isPlaying {
@@ -663,19 +656,16 @@ struct ChatVideoContainer: View {
                         }
                     }
                     .buttonStyle(PlainButtonStyle())
-                    .padding(.leading, 8)
-                    .padding(.bottom, 8)
                     .disabled(player == nil)
 
                     Spacer()
 
-                    // Mute button
                     MuteButton()
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 8)
                 }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             }
-            .frame(width: Self.maxWidth, height: gridHeight, alignment: .bottomLeading)
+            .frame(width: Self.maxWidth, height: gridHeight)
         }
         .frame(width: Self.maxWidth, height: gridHeight)
         .background(Color.black)
