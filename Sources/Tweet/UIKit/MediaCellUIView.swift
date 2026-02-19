@@ -537,15 +537,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             self?.handleStopAllVideos()
         }
 
-        // Listen for player loan: detail view borrowed our AVPlayer — release our reference
-        // so MuteState forwarding and other handlers don't interfere with the shared instance.
+        // Listen for player loan: detail view borrowed our AVPlayer — nil our reference
+        // so MuteState forwarding and other handlers become no-ops on the shared instance.
+        // IMPORTANT: Do NOT call videoPlayerView.setPlayer(nil) here — keep the player
+        // attached to the feed cell's AVPlayerLayer so it continues displaying during the
+        // push animation. The detail view's AVPlayerViewController naturally takes over.
+        // On return, the feed cell's layer resumes rendering automatically.
         playerLoanedObserver = NotificationCenter.default.addObserver(
             forName: .videoPlayerLoaned, object: nil, queue: .main
         ) { [weak self] notification in
             guard let self,
                   let loanedMid = notification.userInfo?["videoMid"] as? String,
                   loanedMid == self.attachment?.mid else { return }
-            self.videoPlayerView.setPlayer(nil)
             self.player = nil
         }
 

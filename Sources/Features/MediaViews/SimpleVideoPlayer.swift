@@ -3801,7 +3801,17 @@ struct SimpleVideoPlayer: View {
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
                cachedPlayer.currentItem != nil {
 
-                // Tell the feed cell to release its reference so its MuteState
+                // Save state to VideoStateCache so the feed cell can recover
+                // the player synchronously (tier-1 cache hit) on return.
+                VideoStateCache.shared.cacheVideoState(
+                    for: mid,
+                    player: cachedPlayer,
+                    time: cachedPlayer.currentTime(),
+                    wasPlaying: cachedPlayer.rate > 0,
+                    originalMuteState: MuteState.shared.isMuted
+                )
+
+                // Tell the feed cell to nil its reference so its MuteState
                 // subscription and other handlers don't interfere with the loaned player.
                 NotificationCenter.default.post(
                     name: .videoPlayerLoaned,
