@@ -24,8 +24,6 @@ private class BottomBarScrollObserver: NSObject {
             let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) && 
                             (contentOffsetY + scrollViewHeight >= contentHeight - 50)
             
-            // Debug: log raw scroll events
-            print("DEBUG: [BottomBarScrollObserver] Raw scroll event - y: \(y), delta: \(delta), isAtBottom: \(isAtBottom)")
             // Ensure callback runs on main thread for SwiftUI updates
             DispatchQueue.main.async {
                 self.onScrollChange?(y, delta, isAtBottom)
@@ -165,12 +163,10 @@ private struct NavBarOverlay: UIViewRepresentable {
         while let ancestor = current {
             if let scrollView = findScrollView(in: ancestor) {
                 navBar.attachToScrollView(scrollView)
-                print("DEBUG: [NavBar] UIKit nav bar attached to UIScrollView")
                 return
             }
             current = ancestor.superview
         }
-        print("DEBUG: [NavBar] UIScrollView not found, retrying...")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             findAndAttach(navBar: navBar)
         }
@@ -227,12 +223,10 @@ private struct BottomBarScrollTracker: UIViewRepresentable {
                 // Store observer in coordinator to keep it alive
                 coordinator.observer = observer
                 
-                print("DEBUG: [BottomBar] Scroll tracker attached to UIScrollView")
                 return
             }
             current = ancestor.superview
         }
-        print("DEBUG: [BottomBar] UIScrollView not found, retrying...")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             findAndAttach(view: view, coordinator: coordinator, onScrollChange: onScrollChange)
         }
@@ -1242,7 +1236,6 @@ struct TweetDetailView: View {
         
         // Ignore very large deltas - these are likely programmatic scrolls from layout changes
         if abs(delta) > maxDeltaThreshold {
-            print("DEBUG: [TweetDetailView] Ignoring large delta (\(delta)) - likely programmatic scroll")
             return
         }
         
@@ -1250,7 +1243,6 @@ struct TweetDetailView: View {
         if let lastChangeTime = lastStateChangeTime {
             let timeSinceChange = Date().timeIntervalSince(lastChangeTime)
             if timeSinceChange < stateChangeCooldown {
-                print("DEBUG: [TweetDetailView] Ignoring scroll during cooldown period (\(timeSinceChange)s)")
                 return
             }
         }
@@ -1261,9 +1253,6 @@ struct TweetDetailView: View {
         let isScrollingDown = delta > scrollThreshold
         let isScrollingUp = delta < -scrollThreshold
         
-        // Debug logging for all scroll events (can be removed later)
-        print("DEBUG: [TweetDetailView] Scroll - offset: \(offset), delta: \(delta), isScrollingDown: \(isScrollingDown), isScrollingUp: \(isScrollingUp), isNavBarVisible: \(isNavigationBarVisible), isAtBottom: \(isAtBottom)")
-        
         // Cancel any pending bottom bounce debouncer if we're not at bottom or scrolling away
         if !isAtBottom || isScrollingDown {
             bottomBounceDebouncer?.invalidate()
@@ -1273,7 +1262,6 @@ struct TweetDetailView: View {
         // Update bottom navigation bar visibility based on scroll direction
         if isScrollingDown && isNavigationBarVisible && offset > 0 {
             // Scrolling down - hide bottom navigation bar (only if we've scrolled past the top)
-            print("DEBUG: [TweetDetailView] ✅ Hiding bottom navigation bar")
             bottomBounceDebouncer?.invalidate()
             bottomBounceDebouncer = nil
             isNavigationBarVisible = false
@@ -1283,7 +1271,6 @@ struct TweetDetailView: View {
             // Scrolling up - show bottom navigation bar
             // If at bottom, use debouncer to prevent showing due to bounce effect
             if isAtBottom {
-                print("DEBUG: [TweetDetailView] At bottom with upward scroll - debouncing to prevent bounce")
                 // Cancel any existing debouncer
                 bottomBounceDebouncer?.invalidate()
                 // Set debouncer - only show nav bar if still scrolling up after delay
@@ -1291,14 +1278,12 @@ struct TweetDetailView: View {
                     DispatchQueue.main.async {
                         // Check if we're still at bottom - if so, don't show (it was just bounce)
                         // The scroll observer will call this again if user continues scrolling up
-                        print("DEBUG: [TweetDetailView] Debounce timer fired - nav bar stays hidden at bottom")
                     }
                 }
                 // Don't show nav bar when at bottom - prevents overlap with ReplyEditor
                 return
             } else {
                 // Not at bottom, show immediately
-                print("DEBUG: [TweetDetailView] ✅ Showing bottom navigation bar")
                 bottomBounceDebouncer?.invalidate()
                 bottomBounceDebouncer = nil
                 isNavigationBarVisible = true
@@ -1309,7 +1294,6 @@ struct TweetDetailView: View {
         
         // Reset to visible if at top of scroll view
         if offset <= 0 && !isNavigationBarVisible {
-            print("DEBUG: [TweetDetailView] ✅ Resetting navigation bar to visible (at top)")
             bottomBounceDebouncer?.invalidate()
             bottomBounceDebouncer = nil
             isNavigationBarVisible = true
