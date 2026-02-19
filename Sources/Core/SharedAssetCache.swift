@@ -111,6 +111,7 @@ class SharedAssetCache: ObservableObject {
     
     // MARK: - Player Creation Throttling
     private var activeCreations = 0
+    private var activeCreationTasks: [String: Task<AVPlayer, Error>] = [:] // mediaID -> creation task (for cancellation)
     private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, isHighPriority: Bool, continuation: CheckedContinuation<AVPlayer, Error>)] = []
     private let maxPendingCreations = 10 // MEMORY LEAK FIX: Limit queue size to prevent unbounded continuation buildup
     
@@ -892,24 +893,7 @@ class SharedAssetCache: ObservableObject {
             Task { @MainActor in
                 if self.canStartCreation(isHighPriority: isHighPriority) {
                     // Can create immediately
-                    self.activeCreations += 1
-
-                    Task {
-                        do {
-                            let player = try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
-                            await MainActor.run {
-                                self.activeCreations -= 1
-                                self.processNextPendingCreation()
-                            }
-                            continuation.resume(returning: player)
-                        } catch {
-                            await MainActor.run {
-                                self.activeCreations -= 1
-                                self.processNextPendingCreation()
-                            }
-                            continuation.resume(throwing: error)
-                        }
-                    }
+                    self.startCreationTask(url: url, tweetId: tweetId, mediaType: mediaType, continuation: continuation)
                 } else if self.pendingCreations.count < self.maxPendingCreations {
                     // Queue for later — high priority goes to front, low priority to back
                     if isHighPriority {
@@ -917,6 +901,13 @@ class SharedAssetCache: ObservableObject {
                     } else {
                         self.pendingCreations.append((url, tweetId, mediaType, false, continuation))
                     }
+                } else if isHighPriority, let lastLowIdx = self.pendingCreations.lastIndex(where: { !$0.isHighPriority }) {
+                    // Queue is full but this is high-priority: evict oldest low-priority request to make room
+                    let evicted = self.pendingCreations.remove(at: lastLowIdx)
+                    print("⚠️ [SharedAssetCache] Evicting low-priority pending request to make room for high-priority")
+                    evicted.continuation.resume(throwing: NSError(domain: "SharedAssetCache", code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "Evicted by higher priority request"]))
+                    self.pendingCreations.insert((url, tweetId, mediaType, true, continuation), at: 0)
                 } else {
                     // MEMORY LEAK FIX: Reject when queue is full to prevent unbounded continuation buildup
                     print("⚠️ [SharedAssetCache] Rejecting player creation - pending queue full (\(self.pendingCreations.count))")
@@ -947,37 +938,52 @@ class SharedAssetCache: ObservableObject {
         guard canStartCreation(isHighPriority: nextIsHighPriority) else { return }
 
         let next = pendingCreations.removeFirst()
+        startCreationTask(url: next.url, tweetId: next.tweetId, mediaType: next.mediaType, continuation: next.continuation)
+    }
+    
+    /// Start a tracked creation task, incrementing activeCreations and storing the Task for cancellation.
+    @MainActor
+    private func startCreationTask(url: URL, tweetId: String?, mediaType: MediaType?, continuation: CheckedContinuation<AVPlayer, Error>) {
+        let mediaID = extractMediaID(from: url) ?? url.absoluteString
         activeCreations += 1
-
+        let task = Task<AVPlayer, Error> {
+            try await self.createPlayerNow(for: url, tweetId: tweetId, mediaType: mediaType)
+        }
+        activeCreationTasks[mediaID] = task
         Task {
             do {
-                let player = try await self.createPlayerNow(for: next.url, tweetId: next.tweetId, mediaType: next.mediaType)
+                let player = try await task.value
                 await MainActor.run {
                     self.activeCreations -= 1
+                    self.activeCreationTasks.removeValue(forKey: mediaID)
                     self.processNextPendingCreation()
                 }
-                next.continuation.resume(returning: player)
+                continuation.resume(returning: player)
             } catch {
                 await MainActor.run {
                     self.activeCreations -= 1
+                    self.activeCreationTasks.removeValue(forKey: mediaID)
                     self.processNextPendingCreation()
                 }
-                next.continuation.resume(throwing: error)
+                continuation.resume(throwing: error)
             }
         }
     }
-    
+
     /// Actually create the player (called after throttling check)
     private func createPlayerNow(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVPlayer {
         guard let mediaID = extractMediaID(from: url) else {
             throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID"])
         }
-        
+
+        // Bail early if this creation was cancelled (e.g. by makeRoomForPlayers)
+        try Task.checkCancellation()
+
         // Clean up cache BEFORE creating new player — evict to make room for incoming player
         await MainActor.run {
             self.managePlayerCacheSize(reserveSlots: 1)
         }
-        
+
         // CRITICAL: Notify VideoLoadingManager that a load is starting
         await MainActor.run {
             VideoLoadingManager.shared.videoLoadStarted()
@@ -995,6 +1001,7 @@ class SharedAssetCache: ObservableObject {
         
         if isHLSVideo {
             // Use CachingPlayerItem for HLS videos WITH RETRY
+            try Task.checkCancellation()
             do {
                 let player = try await createCachingPlayerWithRetry(for: url, mediaID: mediaID, tweetId: tweetId)
                 // Notify success
@@ -1019,6 +1026,7 @@ class SharedAssetCache: ObservableObject {
             }
         } else {
             // For progressive videos, use LocalHTTPServer to proxy and fix Content-Type WITH RETRY
+            try Task.checkCancellation()
             do {
                 let player = try await createProgressivePlayerWithRetry(for: url, mediaID: mediaID, tweetId: tweetId)
                 // Notify success
@@ -1975,6 +1983,44 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
+    /// Release ALL non-visible cached players and cancel non-visible creation tasks.
+    /// Called when entering a new screen (e.g. chat) to free AVPlayer decode sessions.
+    @MainActor func releaseNonVisiblePlayers() {
+        let protected = foregroundProtectedMids
+
+        // 1. Release all non-protected cached players to free decode sessions
+        var releasedCount = 0
+        for (key, player) in playerCache {
+            guard !protected.contains(key) else { continue }
+            releasePlayer(player)
+            playerCache.removeValue(forKey: key)
+            cacheTimestamps.removeValue(forKey: key)
+            cachingPlayerItems.removeValue(forKey: key)
+            resourceLoaderDelegates.removeValue(forKey: key)
+            cleanupTweetMappings(for: key)
+            releasedCount += 1
+        }
+
+        // 2. Cancel all pending creations
+        var cancelledPending = 0
+        for entry in pendingCreations {
+            entry.continuation.resume(throwing: NSError(domain: "SharedAssetCache", code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "Released for incoming screen"]))
+            cancelledPending += 1
+        }
+        pendingCreations.removeAll()
+
+        // 3. Cancel active creation tasks for non-visible media to free creation slots
+        var cancelledActive = 0
+        for (mediaID, task) in activeCreationTasks {
+            guard !protected.contains(mediaID) else { continue }
+            task.cancel()
+            cancelledActive += 1
+        }
+
+        print("🔄 [SharedAssetCache] releaseNonVisiblePlayers: released \(releasedCount) cached, cancelled \(cancelledPending) pending, cancelled \(cancelledActive) active")
+    }
+
     private func managePlayerCacheSize(reserveSlots: Int = 0) {
         // Normal LRU eviction - enforce cache size limits
         let targetSize = maxPlayerCacheSize - reserveSlots

@@ -2141,6 +2141,8 @@ class ChatVideoManager: ObservableObject {
             activeChatSessions[receiptId] = ChatSessionVideoState()
             visibleVideos[receiptId] = Set<String>()
             chatSessionMessages[receiptId] = Set<String>()
+            // Release all non-visible feed players to free decode sessions for chat videos
+            SharedAssetCache.shared.releaseNonVisiblePlayers()
             print("DEBUG: [ChatVideoManager] Registered chat session: \(receiptId)")
         }
     }
