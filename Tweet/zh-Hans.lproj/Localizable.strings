@@ -482,6 +482,7 @@
 "Received" = "已接收";
 "Yesterday" = "昨天";
 "%@ %@" = "%@ %@";
+"No more comments" = "没有更多评论了";
 "No more messages" = "没有更多消息了";
 "No more tweets" = "没有更多推文了";
 
