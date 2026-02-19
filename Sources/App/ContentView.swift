@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
     @State private var isNavigationVisible = true
+    @State private var shouldHideHeight = false // Flag for TweetDetailView to hide height
     @State private var navigationPath = NavigationPath()
     @State private var chatNavigationPath = NavigationPath()
     @State private var isInChatScreen = false
@@ -107,7 +108,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
                 Color.clear
-                    .frame(height: (!isInChatScreen || isInProfileFromChat) ? 40 : 0)
+                    .frame(height: ((!isInChatScreen || isInProfileFromChat) && !(shouldHideHeight && !isNavigationVisible)) ? 40 : 0)
             }
             
             // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
@@ -195,14 +196,17 @@ struct ContentView: View {
             }
             .padding(.top, 16)
             .padding(.bottom, 2)
+            .frame(height: (shouldHideHeight && !isNavigationVisible) ? 0 : nil)
+            .clipped()
             .background(
                 Color(.systemBackground)
                     .opacity(isNavigationVisible ? 1.0 : 0.0)
             )
             .shadow(color: Color(.systemBlue).opacity(isNavigationVisible ? 0.3 : 0.0), radius: 1, x: 0, y: -1)
             .opacity(isNavigationVisible ? 1.0 : 0.3)
-            .allowsHitTesting(true)
+            .allowsHitTesting(isNavigationVisible)
             .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
+            .animation(.easeInOut(duration: 0.25), value: shouldHideHeight)
         }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -348,9 +352,13 @@ struct ContentView: View {
                 if let isVisible = notification.userInfo?["isVisible"] as? Bool {
                     guard self.isNavigationVisible != isVisible else { return }
                     
-                    print("[ContentView] Navigation visibility changed to: \(isVisible)")
+                    // Check if TweetDetailView wants height hidden (only affects TweetDetailView)
+                    let hideHeight = notification.userInfo?["hideHeight"] as? Bool ?? false
+                    
+                    print("[ContentView] Navigation visibility changed to: \(isVisible), hideHeight: \(hideHeight)")
                     withAnimation(.easeInOut(duration: 0.25)) {
                         self.isNavigationVisible = isVisible
+                        self.shouldHideHeight = hideHeight && !isVisible // Only hide height when hidden and flag is set
                     }
                 }
             }
