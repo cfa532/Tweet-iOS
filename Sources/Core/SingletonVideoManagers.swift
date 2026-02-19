@@ -1732,6 +1732,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     /// otherwise the feed cell's AVPlayer would be destroyed and need full recreation.
     var isPlayerLoaned = false
 
+    /// Called by the feed cell when it reclaims a loaned player.
+    /// Nils references and cancels pending cleanup so deactivate() won't pause the reclaimed player.
+    func disownLoanedPlayer() {
+        scheduledClearTask?.cancel()
+        scheduledClearTask = nil
+        currentPlayer = nil
+        currentVideoMid = nil
+        isPlaying = false
+        isPlayerLoaned = false
+    }
+
     /// Check if detail view is currently active (safe for Sendable contexts)
     @MainActor
     func isDetailViewActive() -> Bool {

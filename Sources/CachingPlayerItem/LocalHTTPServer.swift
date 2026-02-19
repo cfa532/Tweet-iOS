@@ -669,6 +669,13 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
+    /// Thread-safe lookup of a registered real URL — safe to call from async contexts.
+    private func getRealURL(for mediaID: String) -> URL? {
+        mediaLock.lock()
+        defer { mediaLock.unlock() }
+        return mediaRealURLs[mediaID]
+    }
+
     public func registerMedia(mediaID: String, cachePath: String) {
         mediaLock.lock()
         mediaCache[mediaID] = cachePath
@@ -1000,7 +1007,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             // No filename specified - this is a progressive video request, skip cache
             // (Progressive videos use range requests and aren't fully cached as single files)
             // Continue to real URL handling below
-            let realURL = mediaLock.withLock { mediaRealURLs[mediaID] }
+            let realURL = getRealURL(for: mediaID)
             guard let realURL = realURL else {
                 sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                 completion()
@@ -1066,7 +1073,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // CACHE MISS - need real URL to fetch from network
-        let realURL = mediaLock.withLock { mediaRealURLs[mediaID] }
+        let realURL = getRealURL(for: mediaID)
         guard let realURL = realURL else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()

@@ -156,6 +156,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Prevent duplicate finish handling
     private var isHandlingFinishEvent: Bool = false
 
+    /// Tracks when the player was loaned to detail view; enables fast-path reclaim on return
+    private var playerWasLoaned: Bool = false
+
     /// Video cell state machine — controls imageView/videoPlayerView/spinner visibility
     private var videoCellState: VideoCellState = .noContent
 
@@ -549,6 +552,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             guard let self,
                   let loanedMid = notification.userInfo?["videoMid"] as? String,
                   loanedMid == self.attachment?.mid else { return }
+            // Remove time observer while self.player still references the correct AVPlayer,
+            // otherwise the token survives and a different player instance would crash
+            // trying to remove it ("cannot remove a time observer added by a different instance")
+            self.removePlayerTimeObserver()
+            self.playerWasLoaned = true
             self.player = nil
         }
 
@@ -775,6 +783,38 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
+
+        // Fast path: reclaim loaned player returning from detail view.
+        // Bypasses configurePlayer() which would transition to .playerLoading and defer
+        // playback via onReadyForDisplay — but the layer already has the player attached
+        // (never detached during loan), so onReadyForDisplay would never fire.
+        if playerWasLoaned, self.player == nil {
+            playerWasLoaned = false
+            if let cachedState = VideoStateCache.shared.getCachedState(for: mid) {
+                let player = cachedState.player
+                player.isMuted = MuteState.shared.isMuted
+                self.player = player
+                isPlayerLoaded = true
+
+                // Disown from DetailVideoManager BEFORE playing — prevents the pending
+                // deactivate()/endDetailViewSession() from pausing our reclaimed player.
+                DetailVideoManager.shared.disownLoanedPlayer()
+
+                // Update VideoStateCache with current position (detail view's exit position)
+                let currentTime = player.currentTime()
+                VideoStateCache.shared.cacheVideoState(
+                    for: mid, player: player,
+                    time: currentTime,
+                    wasPlaying: false,
+                    originalMuteState: MuteState.shared.isMuted
+                )
+
+                print("\(logPrefix) ♻️ Reclaimed loaned player at \(currentTime.seconds)s")
+                actuallyStartPlayback(player)
+                return
+            }
+            // Cache miss — fall through to normal flow
+        }
 
         // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
@@ -1677,6 +1717,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
         isPlayerLoaded = false
         isHandlingFinishEvent = false
+        playerWasLoaned = false
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
     }
