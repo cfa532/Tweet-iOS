@@ -47,8 +47,6 @@ class TweetBodyUIView: UIView {
     let mediaGridView = MediaGridUIView()
     private var mediaContainerView: UIView = {
         let v = UIView()
-        v.clipsToBounds = true
-        v.layer.cornerRadius = 8
         return v
     }()
 
@@ -79,13 +77,15 @@ class TweetBodyUIView: UIView {
     private func setupViews() {
         backgroundColor = .clear
 
-        // Add media grid to its container
+        // Add media grid to its container (4pt trailing inset for right margin)
+        mediaGridView.clipsToBounds = true
+        mediaGridView.layer.cornerRadius = 8
         mediaContainerView.addSubview(mediaGridView)
         mediaGridView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             mediaGridView.topAnchor.constraint(equalTo: mediaContainerView.topAnchor),
             mediaGridView.leadingAnchor.constraint(equalTo: mediaContainerView.leadingAnchor),
-            mediaGridView.trailingAnchor.constraint(equalTo: mediaContainerView.trailingAnchor),
+            mediaGridView.trailingAnchor.constraint(equalTo: mediaContainerView.trailingAnchor, constant: -2),
             mediaGridView.bottomAnchor.constraint(equalTo: mediaContainerView.bottomAnchor),
         ])
 
@@ -180,8 +180,8 @@ class TweetBodyUIView: UIView {
                 // Embedded: cell padding (32+32) + embedded container (8+4) + avatar (40) + spacing (8) = 124
                 gridWidth = max(10, screenWidth - 124)
             } else {
-                // Regular: cell padding (32+32) = 64
-                gridWidth = max(10, screenWidth - 64)
+                // Regular: cell padding (32+32) + media trailing inset (2) = 66
+                gridWidth = max(10, screenWidth - 66)
             }
 
             let mediaHeight = MediaGridViewModel.calculateHeight(for: mediaAttachments, gridWidth: gridWidth)
