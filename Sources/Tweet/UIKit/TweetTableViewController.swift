@@ -95,6 +95,7 @@ class TweetTableViewController: UITableViewController {
     private let videoVisibilityThrottleInterval: TimeInterval = 0.15 // 150ms during active drag
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     private var lastPreloadTweetIds: Set<String> = [] // Cache last preload zone tweet IDs
+    private var lastOnScreenVideoIds: Set<String> = [] // Cache per-cell on-screen video identifiers
     
     // Cached main content rect to avoid recalculating on every visibility check
     private var cachedMainContentRect: CGRect?
@@ -1641,6 +1642,22 @@ class TweetTableViewController: UITableViewController {
             let intersection = cellRect.intersection(visibleRect)
             let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
             tweetCell.tweetContentView.setMediaVisible(ratio >= 0.5)
+        }
+
+        // Compute per-media-cell on-screen identifiers for fine-grained video switching.
+        // This allows the coordinator to detect when a specific video cell within a
+        // multi-video tweet scrolls off the viewport, even if the tweet cell is still visible.
+        var onScreenVideoIds = Set<String>()
+        for indexPath in visibleIndexPaths {
+            guard let tweetCell = tableView.cellForRow(at: indexPath) as? TweetTableViewCell else { continue }
+            let ids = tweetCell.tweetContentView.onScreenVideoIdentifiers(
+                visibleRect: visibleRect, coordinateSpace: tableView
+            )
+            onScreenVideoIds.formUnion(ids)
+        }
+        if onScreenVideoIds != lastOnScreenVideoIds {
+            lastOnScreenVideoIds = onScreenVideoIds
+            videoCoordinator.updateOnScreenMediaCells(onScreenVideoIds)
         }
 
         // Only update coordinator if visible tweets actually changed

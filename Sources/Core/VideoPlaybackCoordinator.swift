@@ -114,6 +114,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
 
+    /// Video identifiers whose media cells are currently on-screen within the viewport.
+    /// More granular than visibleTweetIds — tracks individual cells within multi-video tweets.
+    private var onScreenMediaCells: Set<String> = []
+
     /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
 
@@ -762,6 +766,30 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// and its retweet are tracked independently.
     private var previousVisibleIdentifiers: Set<String> = []
     
+    /// Update which specific media cells are on-screen within the viewport.
+    /// Called by TweetTableViewController alongside updateVisibleTweets, with per-cell granularity.
+    /// Triggers primary video switch if the current primary went off-screen.
+    func updateOnScreenMediaCells(_ identifiers: Set<String>) {
+        guard onScreenMediaCells != identifiers else { return }
+        onScreenMediaCells = identifiers
+
+        // If primary video went off-screen at the media-cell level, force switch
+        if phase == .primaryPlaying,
+           let primaryId = primaryVideoId,
+           !identifiers.contains(primaryId) {
+            // Stop current primary (immediate pause, no fade)
+            if let primary = allVideos.first(where: { $0.identifier == primaryId }),
+               let delegate = mediaCellDelegates[primary.identifier] {
+                delegate.shouldStopVideo(withMid: primary.videoMid)
+            }
+            // Reset and pick new primary
+            phase = .idle
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+            startPrimaryVideoPlayback()
+        }
+    }
+
     /// Update visible tweets (called during scrolling)
     func updateVisibleTweets(_ tweetIds: Set<String>) {
         OverlayVisibilityCoordinator.shared.verifyConsistency(source: "VideoPlaybackCoordinator.updateVisibleTweets")
@@ -919,6 +947,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         phase = .idle
         // Clear previous visible identifiers so next updateVisibleTweets sees a change
         previousVisibleIdentifiers.removeAll()
+        onScreenMediaCells.removeAll()
 
         // Direct delegate calls to stop all registered cells in this coordinator
         for (_, delegate) in mediaCellDelegates {
@@ -1227,11 +1256,27 @@ class VideoPlaybackCoordinator: ObservableObject {
         let ratios = calculateCellVisibility()
         let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
+        // First pass: prefer on-screen cells with registered delegates
         for video in candidates {
             if (ratios[video.cellTweetId] ?? 0) >= 0.5 {
+                if !onScreenMediaCells.isEmpty {
+                    guard onScreenMediaCells.contains(video.identifier) else { continue }
+                    guard mediaCellDelegates[video.identifier] != nil else { continue }
+                }
                 return video
             }
         }
+
+        // Fallback: if no on-screen candidate, try any with delegate
+        if !onScreenMediaCells.isEmpty {
+            for video in candidates {
+                if (ratios[video.cellTweetId] ?? 0) >= 0.5 &&
+                   mediaCellDelegates[video.identifier] != nil {
+                    return video
+                }
+            }
+        }
+
         return scrollDirection ? visibleVideos.first : visibleVideos.last
     }
 

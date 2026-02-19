@@ -289,6 +289,12 @@ class EmbeddedTweetUIView: UIView {
         bodyView.mediaGridView.isGridVisible = visible
     }
 
+    func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
+        bodyView.mediaGridView.onScreenVideoIdentifiers(
+            visibleRect: visibleRect, coordinateSpace: coordinateSpace
+        )
+    }
+
     func refreshVideoLayersAfterForeground() {
         bodyView.mediaGridView.refreshVideoLayersAfterForeground()
     }

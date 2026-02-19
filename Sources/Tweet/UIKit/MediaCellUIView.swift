@@ -185,7 +185,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Matches VideoPlaybackInfo.identifier format: cellTweetId_videoMid_attachmentIndex.
     /// Used to register/unregister delegate independently per feed cell, so the same video
     /// appearing in both a tweet and its retweet gets separate delegates.
-    private var videoIdentifier: String? {
+    var videoIdentifier: String? {
         guard let attachment else { return nil }
         let cell = cellTweetId ?? parentTweet?.mid ?? ""
         return "\(cell)_\(attachment.mid)_\(attachmentIndex)"
@@ -1528,7 +1528,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
-    private var isVideoAttachment: Bool {
+    var isVideoAttachment: Bool {
         guard let attachment else { return false }
         return attachment.type == .video || attachment.type == .hls_video
     }

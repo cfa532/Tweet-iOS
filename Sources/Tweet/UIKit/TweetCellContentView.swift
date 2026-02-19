@@ -711,6 +711,19 @@ class TweetCellContentView: UIView {
         }
     }
 
+    /// Returns video identifiers for on-screen media cells in both the main body and embedded tweet.
+    func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
+        var result = bodyView.mediaGridView.onScreenVideoIdentifiers(
+            visibleRect: visibleRect, coordinateSpace: coordinateSpace
+        )
+        if !embeddedTweetWrapper.isHidden {
+            result += embeddedTweetView.onScreenVideoIdentifiers(
+                visibleRect: visibleRect, coordinateSpace: coordinateSpace
+            )
+        }
+        return result
+    }
+
     func refreshVideoLayersAfterForeground() {
         bodyView.mediaGridView.refreshVideoLayersAfterForeground()
         if !embeddedTweetWrapper.isHidden {

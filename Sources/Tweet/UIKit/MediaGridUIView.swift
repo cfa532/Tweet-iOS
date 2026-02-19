@@ -431,6 +431,22 @@ class MediaGridUIView: UIView {
         moreLabel = nil
     }
 
+    /// Returns video identifiers for media cells whose frames are at least 50% within the given rect.
+    func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
+        var result: [String] = []
+        for cellView in cellViews {
+            guard cellView.isVideoAttachment,
+                  let identifier = cellView.videoIdentifier else { continue }
+            let cellFrame = cellView.convert(cellView.bounds, to: coordinateSpace)
+            let intersection = cellFrame.intersection(visibleRect)
+            let ratio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+            if ratio >= 0.5 {
+                result.append(identifier)
+            }
+        }
+        return result
+    }
+
     func refreshVideoLayersAfterForeground() {
         for cell in cellViews {
             cell.refreshVideoLayerAfterForeground()
