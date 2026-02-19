@@ -1983,23 +1983,27 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    /// Release ALL non-visible cached players and cancel non-visible creation tasks.
+    /// Release ALL feed cached players and cancel all creation tasks.
     /// Called when entering a new screen (e.g. chat) to free AVPlayer decode sessions.
-    @MainActor func releaseNonVisiblePlayers() {
-        let protected = foregroundProtectedMids
+    /// Clears feed visibility state first since the feed is no longer on screen.
+    @MainActor func releaseAllFeedPlayers() {
+        // Clear feed visibility state — feed is no longer on screen
+        let previousVisible = visibleVideoMids.count
+        let previousPreloaded = preloadedPlayerMids.count
+        visibleVideoMids.removeAll()
+        preloadedPlayerMids.removeAll()
 
-        // 1. Release all non-protected cached players to free decode sessions
+        // 1. Release ALL cached players to free decode sessions
         var releasedCount = 0
-        for (key, player) in playerCache {
-            guard !protected.contains(key) else { continue }
+        for (_, player) in playerCache {
             releasePlayer(player)
-            playerCache.removeValue(forKey: key)
-            cacheTimestamps.removeValue(forKey: key)
-            cachingPlayerItems.removeValue(forKey: key)
-            resourceLoaderDelegates.removeValue(forKey: key)
-            cleanupTweetMappings(for: key)
             releasedCount += 1
         }
+        playerCache.removeAll()
+        cacheTimestamps.removeAll()
+        cachingPlayerItems.removeAll()
+        resourceLoaderDelegates.removeAll()
+        tweetUrlMapping.removeAll()
 
         // 2. Cancel all pending creations
         var cancelledPending = 0
@@ -2010,15 +2014,14 @@ class SharedAssetCache: ObservableObject {
         }
         pendingCreations.removeAll()
 
-        // 3. Cancel active creation tasks for non-visible media to free creation slots
+        // 3. Cancel all active creation tasks
         var cancelledActive = 0
-        for (mediaID, task) in activeCreationTasks {
-            guard !protected.contains(mediaID) else { continue }
+        for (_, task) in activeCreationTasks {
             task.cancel()
             cancelledActive += 1
         }
 
-        print("🔄 [SharedAssetCache] releaseNonVisiblePlayers: released \(releasedCount) cached, cancelled \(cancelledPending) pending, cancelled \(cancelledActive) active")
+        print("🔄 [SharedAssetCache] releaseAllFeedPlayers: released \(releasedCount) cached (was \(previousVisible) visible, \(previousPreloaded) preloaded), cancelled \(cancelledPending) pending, cancelled \(cancelledActive) active")
     }
 
     private func managePlayerCacheSize(reserveSlots: Int = 0) {
