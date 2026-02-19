@@ -128,9 +128,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var cachedVisibilityRatios: [String: CGFloat] = [:]
     private let visibilityRatioThreshold: CGFloat = 0.10
 
-    /// Single debounce timer for batched visibility updates during scroll
-    private var visibilityUpdateDebounceTimer: Timer?
-
     /// Last time we preloaded videos during scroll (for throttling)
     private var lastScrollPreloadTime: Date?
     private let scrollPreloadThrottleInterval: TimeInterval = 0.3
@@ -363,7 +360,6 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Invalidate all timers
         playbackDebounceTimer?.invalidate()
-        visibilityUpdateDebounceTimer?.invalidate()
         overlayUncoverPlaybackTimer?.invalidate()
     }
     
@@ -902,37 +898,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         shouldPreserveStateOnForeground = false
     }
 
-    /// Schedule a single debounced visibility update (150ms).
-    /// Replaces multiple overlapping timers with one consolidated timer.
-    private func scheduleBatchedVisibilityUpdate() {
-        visibilityUpdateDebounceTimer?.invalidate()
-        visibilityUpdateDebounceTimer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.performBatchedVisibilityUpdate()
-            }
-        }
-        RunLoop.main.add(visibilityUpdateDebounceTimer!, forMode: .common)
-    }
-
-    /// Batched visibility update — runs synchronously on main thread.
-    /// With pure UIKit cells, all visibility calculations are cheap enough to run inline.
-    private func performBatchedVisibilityUpdate() {
-        guard !isPlaybackSuppressedByOverlay else { return }
-
-        if phase == .idle && !visibleVideos.isEmpty {
-            startPrimaryVideoPlayback()
-        } else if phase == .primaryPlaying {
-            checkAndSwitchVideoIfNeeded()
-        }
-    }
-
     /// Stop all videos and reset state
     func stopAllVideos() {
         // Cancel all timers
         playbackDebounceTimer?.invalidate()
         playbackDebounceTimer = nil
-        visibilityUpdateDebounceTimer?.invalidate()
-        visibilityUpdateDebounceTimer = nil
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
 
@@ -1563,8 +1533,6 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Cancel all timers
             playbackDebounceTimer?.invalidate()
             playbackDebounceTimer = nil
-            visibilityUpdateDebounceTimer?.invalidate()
-            visibilityUpdateDebounceTimer = nil
 
             cachedVisibilityRatios.removeAll()
             

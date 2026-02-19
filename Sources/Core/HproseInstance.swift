@@ -386,13 +386,15 @@ final class HproseInstance: ObservableObject {
         Task.detached(priority: .background) {
             print("DEBUG: [HproseInstance] Waiting for app initialization to complete...")
             
-            // Wait for app initialization to complete by polling the flag
-            while true {
+            // Wait for app initialization to complete by polling the flag (max 30s timeout)
+            var waitCount = 0
+            while waitCount < 300 {
                 let isComplete = await MainActor.run { self.isInitializationComplete }
                 if isComplete {
                     break
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000) // Check every 100ms
+                waitCount += 1
             }
             
             print("DEBUG: [HproseInstance] App initialized, starting background tasks")
