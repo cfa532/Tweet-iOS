@@ -750,9 +750,9 @@ struct ChatVideoContainer: View {
             object: player.currentItem,
             queue: .main
         ) { _ in
-            // Video finished, update play button to show play icon
+            // Video finished — seek back to start so next tap replays
             isPlaying = false
-            print("DEBUG: [ChatVideoContainer] Video finished for \(attachment.mid), resetting play button")
+            player.seek(to: .zero)
         }
     }
     
