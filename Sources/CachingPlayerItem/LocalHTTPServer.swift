@@ -1000,25 +1000,23 @@ public class LocalHTTPServer: @unchecked Sendable {
             // No filename specified - this is a progressive video request, skip cache
             // (Progressive videos use range requests and aren't fully cached as single files)
             // Continue to real URL handling below
-            mediaLock.lock()
-            let realURL = mediaRealURLs[mediaID]
-            mediaLock.unlock()
+            let realURL = mediaLock.withLock { mediaRealURLs[mediaID] }
             guard let realURL = realURL else {
                 sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
                 completion()
                 return
             }
-            
+
             // Construct full real URL
             guard var components = URLComponents(url: realURL, resolvingAgainstBaseURL: false) else {
                 sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 completion()
                 return
             }
-            
+
             components.path = relativePath
             components.query = nil
-            
+
             guard let fullRealURL = components.url else {
                 sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 completion()
@@ -1068,9 +1066,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // CACHE MISS - need real URL to fetch from network
-        mediaLock.lock()
-        let realURL = mediaRealURLs[mediaID]
-        mediaLock.unlock()
+        let realURL = mediaLock.withLock { mediaRealURLs[mediaID] }
         guard let realURL = realURL else {
             sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
             completion()
