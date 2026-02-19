@@ -3794,66 +3794,35 @@ struct SimpleVideoPlayer: View {
                 return
             }
             
-            // Different video or no singleton - create an INDEPENDENT player and store in singleton.
-            // IMPORTANT: Do NOT reuse SharedAssetCache's cached AVPlayer here, otherwise MediaCell's
-            // onDisappear() will pause the same player instance and TweetDetail will "play briefly then stop".
-            
-            // CRITICAL: Check for cached player and reuse its asset to avoid network timeout
-            // Preserve playback position to prevent black screen during transition
+            // Loan the feed cell's AVPlayer directly — it already has rendered frames,
+            // so no black flash. The player stays in SharedAssetCache; when the detail
+            // view closes, clearCurrentVideo() just pauses (does not destroy the item)
+            // and the feed cell resumes seamlessly.
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
-               let cachedPlayerItem = cachedPlayer.currentItem {
-                let asset = cachedPlayerItem.asset
-                let currentTime = cachedPlayer.currentTime()
-                let wasPlaying = cachedPlayer.rate > 0
+               cachedPlayer.currentItem != nil {
 
-                let playerItem = AVPlayerItem(asset: asset)
-                let newPlayer = AVPlayer(playerItem: playerItem)
-                newPlayer.isMuted = false
+                // Tell the feed cell to release its reference so its MuteState
+                // subscription and other handlers don't interfere with the loaned player.
+                NotificationCenter.default.post(
+                    name: .videoPlayerLoaned,
+                    object: nil,
+                    userInfo: ["videoMid": mid]
+                )
+
+                cachedPlayer.isMuted = false
 
                 // Stop old singleton player if exists
                 DetailVideoManager.shared.currentPlayer?.pause()
 
-                // Store new player in singleton (so duplicate setupPlayer calls use Path A)
-                DetailVideoManager.shared.currentPlayer = newPlayer
+                // Store loaned player in singleton
+                DetailVideoManager.shared.currentPlayer = cachedPlayer
                 DetailVideoManager.shared.currentVideoMid = mid
+                DetailVideoManager.shared.isPlayerLoaned = true
 
-                if playerItem.status == .readyToPlay {
-                    // Ready immediately - assign to view, configure, and seek
-                    self.player = newPlayer
-                    self.loadingState = .loaded
-                    self.configurePlayer(newPlayer)
-                    newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                        if finished && wasPlaying {
-                            newPlayer.play()
-                        }
-                    }
-                } else {
-                    // PlayerItem not ready yet - keep showing spinner/last-frame placeholder
-                    // instead of a black AVPlayerViewControllerRepresentable.
-                    // Do NOT assign self.player until the item is ready to render.
-                    self.loadingState = .loading
-
-                    Task { @MainActor in
-                        var attempts = 0
-                        while playerItem.status != .readyToPlay && attempts < 100 {
-                            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
-                            attempts += 1
-                        }
-
-                        // Now assign to view - either ready or timed out
-                        self.player = newPlayer
-                        self.loadingState = .loaded
-                        self.configurePlayer(newPlayer)
-
-                        if playerItem.status == .readyToPlay {
-                            newPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                                if finished && wasPlaying {
-                                    newPlayer.play()
-                                }
-                            }
-                        }
-                    }
-                }
+                // Assign immediately — player is already readyToPlay with frames
+                self.player = cachedPlayer
+                self.loadingState = .loaded
+                self.configurePlayer(cachedPlayer)
                 return
             }
             

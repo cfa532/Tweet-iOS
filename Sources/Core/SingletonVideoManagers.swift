@@ -1727,12 +1727,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published var currentVideoMid: String?
     @Published var isPlaying = false
 
+    /// When true, the current player was borrowed from the feed cell's SharedAssetCache.
+    /// clearCurrentVideo() must NOT call replaceCurrentItem(with: nil) on a loaned player,
+    /// otherwise the feed cell's AVPlayer would be destroyed and need full recreation.
+    var isPlayerLoaned = false
+
     /// Check if detail view is currently active (safe for Sendable contexts)
     @MainActor
     func isDetailViewActive() -> Bool {
         return currentPlayer != nil
     }
-    
+
     private var videoCompletionObserver: NSObjectProtocol?
     private var hasKVOObserver = false // Track if KVO observer was added
     
@@ -1866,25 +1871,32 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             videoCompletionObserver = nil
         }
         
-        // Capture references before clearing (currentVideoMid will be set to nil below)
-        let rawMediaID = currentVideoMid
-        let cacheKey = rawMediaID.map { "tweetDetail_\($0)" }
+        if isPlayerLoaned {
+            // Loaned player: just pause and restore mute — do NOT destroy the playerItem.
+            // The feed cell still references this AVPlayer and will resume on return.
+            currentPlayer?.pause()
+            currentPlayer?.isMuted = MuteState.shared.isMuted
+            print("DEBUG: [DetailVideoManager] Returned loaned player (paused, mute restored)")
+        } else {
+            // Owned player: destroy completely so AVPlayerViewController cannot restart it.
+            let rawMediaID = currentVideoMid
+            let cacheKey = rawMediaID.map { "tweetDetail_\($0)" }
 
-        // CRITICAL: Replace currentItem with nil to completely stop playback
-        // Just calling pause() is not enough - AVPlayerViewController can restart it
-        currentPlayer?.pause()
-        currentPlayer?.replaceCurrentItem(with: nil)
-        print("DEBUG: [DetailVideoManager] Replaced player item with nil to stop playback")
+            currentPlayer?.pause()
+            currentPlayer?.replaceCurrentItem(with: nil)
+            print("DEBUG: [DetailVideoManager] Replaced player item with nil to stop playback")
+
+            if let key = cacheKey {
+                Task { @MainActor in
+                    SharedAssetCache.shared.removeInvalidPlayer(for: key)
+                }
+            }
+        }
+
         currentPlayer = nil
         currentVideoMid = nil
         isPlaying = false
-
-        // Remove the prefixed cache key
-        if let key = cacheKey {
-            Task { @MainActor in
-                SharedAssetCache.shared.removeInvalidPlayer(for: key)
-            }
-        }
+        isPlayerLoaned = false
     }
     
     /// Setup video completion observer

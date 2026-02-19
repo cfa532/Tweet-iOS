@@ -110,6 +110,9 @@ extension Notification.Name {
     /// Posted when app content is covered/uncovered by an overlay (sheet/fullScreenCover/login/share).
     /// userInfo: ["isCovered": Bool, "activeCount": Int, "source": String?]
     static let overlayCoverageChanged = Notification.Name("OverlayCoverageChanged")
+    /// Posted when a feed cell's AVPlayer is loaned to the detail view.
+    /// userInfo: ["videoMid": String]. The owning MediaCellUIView should release its reference.
+    static let videoPlayerLoaned = Notification.Name("VideoPlayerLoaned")
     /// Posted to force video layer refresh after screen lock recovery
     static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
     /// Posted to reload only visible videos after foreground recovery (not all videos)
