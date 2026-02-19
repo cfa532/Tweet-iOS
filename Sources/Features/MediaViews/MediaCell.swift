@@ -25,6 +25,23 @@ class VideoVisibilityManager: ObservableObject {
     }
 }
 
+// MARK: - Video List Provider Environment Key
+
+/// Closure type for providing a video list for fullscreen navigation.
+/// Parameters: (videoMid, cellTweetId, attachmentIndex) → (list, startIndex)?
+typealias VideoListProvider = (_ videoMid: String, _ cellTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
+
+private struct VideoListProviderKey: EnvironmentKey {
+    static let defaultValue: VideoListProvider? = nil
+}
+
+extension EnvironmentValues {
+    var videoListProvider: VideoListProvider? {
+        get { self[VideoListProviderKey.self] }
+        set { self[VideoListProviderKey.self] = newValue }
+    }
+}
+
 // MARK: - MediaCell
 struct MediaCell: View, Equatable, MediaCellDelegate {
     let parentTweet: Tweet
@@ -47,6 +64,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     @State private var videoFrame: CGRect = .zero
     @State private var isInViewport: Bool = false
     @ObservedObject private var muteState = MuteState.shared
+    @Environment(\.videoListProvider) private var videoListProvider
 
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
@@ -318,7 +336,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 // Video is going into full-screen mode
                 // Pause all MediaCell videos to avoid multiple videos playing
                 NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-                
+
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
                 OverlayVisibilityCoordinator.shared.beginOverlay(
                     id: "mediaBrowserFullScreen",
@@ -326,6 +344,13 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 )
                 // Reset loading state once fullscreen is presented
                 isOpeningFullScreen = false
+
+                // Set video list for fullscreen navigation if provider is available (e.g. comments)
+                if isVideoAttachment,
+                   let provider = videoListProvider,
+                   let (list, startIndex) = provider(attachment.mid, cellTweetId ?? parentTweet.mid, attachmentIndex) {
+                    FullScreenVideoManager.shared.setVideoList(list, startIndex: startIndex)
+                }
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)

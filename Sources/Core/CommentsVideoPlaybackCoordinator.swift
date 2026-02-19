@@ -32,6 +32,11 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     /// Currently playing video identifier
     @Published private(set) var currentlyPlayingVideoId: String?
 
+    // MARK: - Video List for Fullscreen Navigation
+
+    /// Ordered list of all video attachments across comments (for fullscreen swipe-between-videos)
+    private(set) var allVideos: [VideoPlaybackInfo] = []
+
     // MARK: - Private State
 
     /// Visible comments with their video info and visibility ratios
@@ -81,10 +86,36 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         // This avoids any potential interference with feed videos when returning to the tweet list
         currentlyPlayingVideoId = nil
         visibleCommentVideos.removeAll()
+        allVideos.removeAll()
         isMainTweetVideoVisible = false
         visibilityDebounceTimer?.invalidate()
         visibilityDebounceTimer = nil
         print("📹 [CommentsVideoCoordinator] Deactivated")
+    }
+
+    /// Build the ordered video list from all comments (for fullscreen navigation)
+    /// Call whenever the comments array changes (initial load, pagination, new comment)
+    func buildVideoList(from comments: [Tweet]) {
+        var videos: [VideoPlaybackInfo] = []
+        for comment in comments {
+            guard let attachments = comment.attachments else { continue }
+            for (index, attachment) in attachments.enumerated() {
+                if attachment.type == .video || attachment.type == .hls_video {
+                    videos.append(VideoPlaybackInfo(
+                        cellTweetId: comment.mid,
+                        mediaTweetId: comment.mid,
+                        videoMid: attachment.mid,
+                        attachmentIndex: index
+                    ))
+                }
+            }
+        }
+        allVideos = videos
+    }
+
+    /// Returns the ordered video list for fullscreen navigation
+    func getVideoListForFullscreen() -> [VideoPlaybackInfo] {
+        return allVideos
     }
 
     /// Report that a comment video has become visible

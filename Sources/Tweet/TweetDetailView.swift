@@ -529,11 +529,18 @@ struct TweetDetailView: View {
             // Pass hasVideoAttachment so coordinator knows to suppress comment videos initially
             commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
 
+            // Rebuild video list on re-enter (deactivate clears it, onChange won't fire if count unchanged)
+            commentsVideoCoordinator.buildVideoList(from: comments)
+
             // Detail view playback position is persisted independently (not seeded from feed positions).
         }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
+        }
+        .onChange(of: comments.count) { _, _ in
+            // Rebuild video list for fullscreen navigation when comments change
+            commentsVideoCoordinator.buildVideoList(from: comments)
         }
         .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
@@ -720,7 +727,7 @@ struct TweetDetailView: View {
     }
     
     private var commentsListView: some View {
-        CommentListView<CommentVideoTrackingWrapper>(
+        CommentListView(
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
@@ -763,6 +770,16 @@ struct TweetDetailView: View {
                     coordinator: commentsVideoCoordinator,
                     scrollCoordinateSpace: "commentsScroll"
                 )
+                .environment(\.videoListProvider, { videoMid, cellTweetId, attachmentIndex in
+                    let list = commentsVideoCoordinator.getVideoListForFullscreen()
+                    guard !list.isEmpty else { return nil }
+                    let startIndex = list.firstIndex(where: {
+                        $0.videoMid == videoMid && $0.cellTweetId == cellTweetId
+                    }) ?? list.firstIndex(where: {
+                        $0.videoMid == videoMid
+                    }) ?? 0
+                    return (list, startIndex)
+                })
             }
         )
     }
