@@ -106,10 +106,6 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .safeAreaInset(edge: .bottom) {
-                Color.clear
-                    .frame(height: ((!isInChatScreen || isInProfileFromChat) && !(shouldHideHeight && !isNavigationVisible)) ? 40 : 0)
-            }
             
             // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
             if !isInChatScreen || isInProfileFromChat {
@@ -204,7 +200,7 @@ struct ContentView: View {
             )
             .shadow(color: Color(.systemBlue).opacity(isNavigationVisible ? 0.3 : 0.0), radius: 1, x: 0, y: -1)
             .opacity(isNavigationVisible ? 1.0 : 0.3)
-            .allowsHitTesting(isNavigationVisible)
+            .allowsHitTesting(true)
             .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
             .animation(.easeInOut(duration: 0.25), value: shouldHideHeight)
         }
