@@ -758,7 +758,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Stuck player detector — diagnose if player doesn't become ready within 5 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-            guard let self, self.player === newPlayer else { return }
+            guard let self, self.player === newPlayer, self.isVisible else { return }
             if !self.isPlayerLoaded && self.videoCellState == .playerLoading {
                 let status = newPlayer.currentItem?.status.rawValue ?? -1
                 let rate = newPlayer.rate
