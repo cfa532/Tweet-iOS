@@ -6954,6 +6954,87 @@ final class HproseInstance: ObservableObject {
         return false
     }
     
+    // MARK: - Agent Token
+    
+    /// Generates a new agent token for AI agents to post on behalf of the user.
+    /// The public key is stored on the server for verification.
+    /// Returns the exportable token string that should be given to the AI agent.
+    func generateAgentToken() async throws -> String {
+        guard !appUser.isGuest else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString("Must be logged in to generate agent token", comment: "Agent token error")
+            ])
+        }
+        
+        // Generate new token with keypair
+        guard let tokenResult = AgentTokenManager.shared.createAndExportToken(
+            for: appUser.mid,
+            scope: ["post", "comment"]
+        ) else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString("Failed to generate agent token", comment: "Agent token error")
+            ])
+        }
+        
+        // Save public key to server
+        try await updateAgentPublicKey(tokenResult.publicKey)
+        
+        // Update local user object
+        await MainActor.run {
+            self.appUser.agentPublicKey = tokenResult.publicKey
+        }
+        
+        print("DEBUG: [generateAgentToken] Generated new agent token for user \(appUser.mid)")
+        return tokenResult.tokenString
+    }
+    
+    /// Updates the user's agent public key on the server
+    private func updateAgentPublicKey(_ publicKey: String) async throws {
+        let entry = "set_author_core_data"
+        
+        // Create minimal user object with just the fields we need to update
+        let userUpdate: [String: Any] = [
+            "mid": appUser.mid,
+            "agentPublicKey": publicKey
+        ]
+        
+        guard let userJsonData = try? JSONSerialization.data(withJSONObject: userUpdate),
+              let userJsonString = String(data: userJsonData, encoding: .utf8) else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to serialize user data"
+            ])
+        }
+        
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "user": userJsonString
+        ]
+        
+        let rawResponse = appUser.hproseClient?.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        
+        guard let response = unwrappedResponse as? [String: Any] else {
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: NSLocalizedString("Failed to update agent public key", comment: "Agent token error")
+            ])
+        }
+        
+        // Check for success in v2 format
+        if let success = response["success"] as? Bool, !success {
+            let message = response["message"] as? String ?? "Unknown error"
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        
+        if let status = response["status"] as? String, status != "success" {
+            let reason = response["reason"] as? String ?? "Unknown error"
+            throw NSError(domain: "HproseInstance", code: -1, userInfo: [NSLocalizedDescriptionKey: reason])
+        }
+        
+        print("DEBUG: [updateAgentPublicKey] Successfully updated agent public key on server")
+    }
+    
     // MARK: - User Avatar
     /// Sets the user's avatar on the server and returns confirmed avatar
     func setUserAvatar(user: User, avatar: MimeiId) async throws -> String {

@@ -177,6 +177,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var hostIds: [MimeiId]? // List of MimeiId
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
+    @Published var agentPublicKey: String? // Public key for AI agent authentication
     
     public var hproseClient: HproseClient? {
         get {
@@ -494,7 +495,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort, domainToShare
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
-        case hostIds, publicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
+        case hostIds, publicKey, agentPublicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
     }
     
     // Required initializer for Codable
@@ -524,6 +525,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         
         hostIds = try container.decodeIfPresent([String].self, forKey: .hostIds)
         publicKey = try container.decodeIfPresent(String.self, forKey: .publicKey)
+        agentPublicKey = try container.decodeIfPresent(String.self, forKey: .agentPublicKey)
         
         fansList = try container.decodeIfPresent([String].self, forKey: .fansList)
         followingList = try container.decodeIfPresent([String].self, forKey: .followingList)
@@ -565,6 +567,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         
         try container.encodeIfPresent(hostIds, forKey: .hostIds)
         try container.encodeIfPresent(publicKey, forKey: .publicKey)
+        try container.encodeIfPresent(agentPublicKey, forKey: .agentPublicKey)
         
         try container.encodeIfPresent(fansList, forKey: .fansList)
         try container.encodeIfPresent(followingList, forKey: .followingList)
