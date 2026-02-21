@@ -155,6 +155,15 @@ SwiftUI `NavigationStack` with `NavigationPath` at the root. UIKit cells trigger
 - **Build:** `Tweet.xcworkspace`, Scheme: `Tweet`
 - **Dependencies (CocoaPods):** SDWebImage, ffmpeg-kit-ios, hprose
 
+## Backend / Server Code
+
+The app talks to a Leither/Hprose backend. Server code is in a **separate repository**:
+
+- **Local path:** `/Users/cfa532/Documents/GitHub/TweetBackendApp`
+- **GitHub:** same repo name under account `cfa532` (TweetBackendApp)
+
+When changing APIs, auth, or agent-token behavior, check and update the server implementation there. Key server entry points are `.js` files invoked via `lapi.RunMApp(filename, params, [])` (e.g. `add_tweet.js`, `login.js`, `verify_agent_token.js`).
+
 ## Related Documentation
 
 - [Video System](./VIDEO_SYSTEM.md) - Complete video architecture
