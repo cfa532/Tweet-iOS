@@ -420,6 +420,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.cloudDrivePort = user.cloudDrivePort
             instance.domainToShare = user.domainToShare
             instance.hostIds = user.hostIds
+            instance.publicKey = user.publicKey
+            instance.agentPublicKey = user.agentPublicKey
             
             // when user argument is from cache, do not use its baseUrl.
             if (shouldUpdateBaseUrl) {
@@ -458,6 +460,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.cloudDrivePort = user.cloudDrivePort
                 instance.domainToShare = user.domainToShare
                 instance.hostIds = user.hostIds
+                instance.publicKey = user.publicKey
+                instance.agentPublicKey = user.agentPublicKey
                 
                 // CRITICAL: Never overwrite baseUrl from user parameter - it might be from hostId[0]
                 // baseUrl should only be set via getProviderIP(user.mid) in HproseInstance

@@ -218,7 +218,7 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    /// Setup observer for feed view appearance to restart video playback after navigation
+    /// Setup observer for feed view appearance to resume video playback after navigation
     private func setupFeedViewDidAppearObserver() {
         feedViewDidAppearObserver = NotificationCenter.default.addObserver(
             forName: .feedViewDidAppear,
@@ -229,13 +229,12 @@ class TweetTableViewController: UITableViewController {
 
             Task { @MainActor in
                 print("📺 [VIDEO RESTART] Feed '\(self.feedIdentifier)' view appeared - resuming video playback")
-                // Reset coordinator state: detail view may have paused feed players
-                // (via .stopAllVideos from AudioSessionManager) while coordinator stayed
-                // in .primaryPlaying phase. stopAllVideos() resets phase to .idle and
-                // clears previousVisibleIdentifiers so updateVisibleTweets sees a change.
-                self.videoCoordinator.stopAllVideos()
+                // Do not call stopAllVideos() when returning from profile (or other navigation).
+                // That was stopping the current video; instead refresh visibility and resume
+                // the current primary if it is still visible so playback continues.
                 self.lastVisibleTweetIds = []
                 self.updateVisibleTweetsForVideoPlayback()
+                self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
             }
         }
     }

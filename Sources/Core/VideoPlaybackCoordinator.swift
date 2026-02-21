@@ -925,6 +925,20 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
+    /// Re-issue play to the current primary video if it is still visible.
+    /// Used when returning to the feed (e.g. from user profile) so the video resumes instead of stopping.
+    /// Does nothing if there is no primary, primary is no longer visible, or delegate is missing.
+    func requestResumePrimaryPlaybackIfVisible() {
+        guard phase == .primaryPlaying,
+              let primaryId = primaryVideoId,
+              let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
+              isVideoCellVisibleEnough(primary, minVisibilityRatio: 0.5),
+              let delegate = mediaCellDelegates[primaryId] else {
+            return
+        }
+        delegate.shouldPlayVideo(withMid: primary.videoMid)
+    }
+
     // MARK: - Background/Foreground Video Memory Management
 
     /// Release all video players when entering background to free memory
