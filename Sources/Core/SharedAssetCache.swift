@@ -764,6 +764,7 @@ class SharedAssetCache: ObservableObject {
         playerCache.removeValue(forKey: mediaID)
         assetCache.removeValue(forKey: mediaID)
         cacheTimestamps.removeValue(forKey: mediaID)
+        cachingPlayerDelegates.removeValue(forKey: mediaID)
         cachingPlayerItems.removeValue(forKey: mediaID)
         resourceLoaderDelegates.removeValue(forKey: mediaID)
         cleanupTweetMappings(for: mediaID)

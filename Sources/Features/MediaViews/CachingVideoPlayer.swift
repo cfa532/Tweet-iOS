@@ -473,6 +473,8 @@ struct CachingVideoPlayer: View {
         // The player is managed by SharedAssetCache and should persist
         print("DEBUG: [CachingVideoPlayer] Cleaning up observers but preserving player for \(mid)")
         
+        // Clear delegate from player item so it won't call back after view is gone (prevents stale state updates)
+        cachingPlayerItem?.delegate = nil
         // Clear local references but keep the player alive
         cachingPlayerItem = nil
         playerDelegate = nil
