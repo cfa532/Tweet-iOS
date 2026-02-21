@@ -227,14 +227,22 @@ class TweetTableViewController: UITableViewController {
         ) { [weak self] _ in
             guard let self = self else { return }
 
-            Task { @MainActor in
-                print("📺 [VIDEO RESTART] Feed '\(self.feedIdentifier)' view appeared - resuming video playback")
-                // Do not call stopAllVideos() when returning from profile (or other navigation).
-                // That was stopping the current video; instead refresh visibility and resume
-                // the current primary if it is still visible so playback continues.
-                self.lastVisibleTweetIds = []
-                self.updateVisibleTweetsForVideoPlayback()
-                self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+            // When the same video was playing on the profile we left, main feed and profile share
+            // one AVPlayer (SharedAssetCache). The profile's SimpleVideoPlayer.onDisappear runs
+            // during teardown and calls player.pause() on that shared instance. If we send our
+            // resume-play command before the profile has torn down, the profile's onDisappear
+            // can run afterward and pause the player again. Delay so teardown completes first.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self = self else { return }
+                Task { @MainActor in
+                    print("📺 [VIDEO RESTART] Feed '\(self.feedIdentifier)' view appeared - resuming video playback")
+                    // Do not call stopAllVideos() when returning from profile (or other navigation).
+                    // That was stopping the current video; instead refresh visibility and resume
+                    // the current primary if it is still visible so playback continues.
+                    self.lastVisibleTweetIds = []
+                    self.updateVisibleTweetsForVideoPlayback()
+                    self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+                }
             }
         }
     }
