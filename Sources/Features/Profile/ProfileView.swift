@@ -7,7 +7,8 @@ struct ProfileView: View {
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
 
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    /// Use singleton so ProfileView works when presented from detached view controllers (e.g. after MediaBrowserView).
+    @ObservedObject private var hproseInstance = HproseInstance.shared
     @Environment(\.dismiss) private var dismiss
     
     /// Track users that have been resynced this app session to avoid redundant long-running operations
