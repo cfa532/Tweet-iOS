@@ -765,9 +765,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             let status = newPlayer.currentItem?.status.rawValue ?? -1
             let url = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
             print("\(self.logPrefix) ⚠️ STUCK PLAYER recovery - 15s timeout, status: \(status), url: \(url)")
-            // Release the broken player and stop the spinner
+            // Release the stuck player but keep disk cache — server was slow, not corrupt.
+            // Preserving partial disk cache lets the next attempt resume where it left off
+            // instead of re-downloading all segments from scratch.
             if let mid = self.attachment?.mid {
-                SharedAssetCache.shared.clearPlayerForMediaID(mid)
+                SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
             }
             self.player = nil
             self.isPlayerLoaded = false

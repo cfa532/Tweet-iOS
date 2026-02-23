@@ -1320,7 +1320,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             // directory was deleted), which woke us up here.  Skip background retries so
             // we don't hammer the server or log confusing "file not found" warnings.
             if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
-                sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                // Player was cleared — the NWConnection is already gone.
+                // Do NOT call sendResponse here; writing to a dead connection causes
+                // nw_flow_add_write_request "cannot accept write requests" spam.
                 return
             }
 
@@ -1328,6 +1330,9 @@ public class LocalHTTPServer: @unchecked Sendable {
             // If connection is already closed, just return - AVPlayer will retry
             switch connection.state {
             case .cancelled, .failed:
+                // Connection already closed — skip background download if player was cleared.
+                if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
+
                 // Connection already closed - start background download but don't try to respond
                 print("⚠️ [LocalHTTPServer] Connection closed after timeout, starting background download: \(fullRealURL.lastPathComponent)")
 
@@ -1369,6 +1374,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                     print("✅ [BACKGROUND DOWNLOAD] Successfully cached: \(fullRealURL.lastPathComponent)")
                 }
             }
+
+            // Player may have been cleared while the dedup wait was in progress.
+            // Don't send a response to a dead connection — it causes "Broken pipe" errors.
+            if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
 
             // Send 503 immediately so AVPlayer retries (will get cached file on retry if download completes)
             sendResponse(connection: connection, statusCode: 503, headers: ["Retry-After": "1"], body: nil)

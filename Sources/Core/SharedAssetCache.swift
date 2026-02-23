@@ -809,7 +809,11 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Clear player and associated assets for a specific mediaID (for failed players)
-    @MainActor func clearPlayerForMediaID(_ mediaID: String) {
+    /// - Parameter deleteDiskCache: When true (default), also deletes the on-disk HLS segment cache.
+    ///   Pass false for stuck-player recovery (slow server, not corrupt content) so the partial
+    ///   disk cache is preserved for the next attempt. Pass true only when content is likely corrupt
+    ///   (e.g. player status == .failed) or to reclaim disk space.
+    @MainActor func clearPlayerForMediaID(_ mediaID: String, deleteDiskCache: Bool = true) {
         // CRITICAL: Properly release player to free memory (not just pause!)
         if let player = playerCache.removeValue(forKey: mediaID) {
             releasePlayer(player) // ✅ Calls replaceCurrentItem(nil) to release memory
@@ -836,19 +840,23 @@ class SharedAssetCache: ObservableObject {
         // retries that waste bandwidth even though the player is gone.
         LocalHTTPServer.shared.cancelDownloads(for: mediaID)
 
-        // CRITICAL: Delete disk cache files (segments, playlists) to free disk space
-        // This prevents memory leak from cached segments staying in memory
-        Task.detached {
-            let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            let mediaDir = cacheDir.appendingPathComponent(mediaID)
-            try? FileManager.default.removeItem(at: mediaDir)
+        if deleteDiskCache {
+            // Delete disk cache files (segments, playlists) to free disk space and force a clean
+            // retry when content is likely corrupt (.failed player status).
+            // Skipped for stuck-player recovery — server was just slow, partial cache is still
+            // valid and saves bandwidth on the next attempt.
+            Task.detached {
+                let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                let mediaDir = cacheDir.appendingPathComponent(mediaID)
+                try? FileManager.default.removeItem(at: mediaDir)
 
-            await MainActor.run {
-                CachingPlayerItem.clearHLSCache(for: mediaID)
+                await MainActor.run {
+                    CachingPlayerItem.clearHLSCache(for: mediaID)
+                }
             }
         }
 
-        print("🗑️ [MEMORY LEAK FIX] Properly released failed player and disk cache for \(mediaID)")
+        print("🗑️ [MEMORY LEAK FIX] Released player for \(mediaID) (deleteDiskCache: \(deleteDiskCache))")
     }
     
     /// Get cached player or create new one with asset
