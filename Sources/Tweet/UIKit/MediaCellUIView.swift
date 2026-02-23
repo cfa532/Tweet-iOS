@@ -334,7 +334,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 imageView.isHidden = true
                 videoPlayerView.isHidden = false
             }
-            loadingSpinner.stopAnimating()
+            // With streaming, the first frame can render before the player has buffered
+            // enough data to start continuous playback.  Keep the spinner on if the
+            // coordinator has already sent a play command so the user knows it's still loading.
+            if coordinatorWantsToPlay {
+                loadingSpinner.startAnimating()
+            } else {
+                loadingSpinner.stopAnimating()
+            }
         case .playing, .paused:
             videoPlayerView.isHidden = false
             // Show spinner while player is buffering (told to play but waiting for data)
@@ -1165,8 +1172,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 if player.timeControlStatus == .playing {
                     self.loadingSpinner.stopAnimating()
                 } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-                          self.videoCellState == .playing {
-                    // Player was told to play but is buffering — show spinner
+                          self.videoCellState == .playing || self.videoCellState == .playerReady {
+                    // Player was told to play but is buffering — show spinner.
+                    // Also covers .playerReady: streaming can render the first frame before
+                    // the player has buffered enough to actually start playback.
                     self.loadingSpinner.startAnimating()
                 }
             }
