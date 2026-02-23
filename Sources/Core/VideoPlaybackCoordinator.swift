@@ -901,9 +901,12 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
         phase = .idle
-        // Clear previous visible identifiers so next updateVisibleTweets sees a change
+        // Clear previous visible identifiers so next updateVisibleTweets sees a change.
+        // Do NOT clear onScreenMediaCells here: the overlay-dismiss 0.15s timer reads
+        // visibleVideos (filtered by onScreenMediaCells) to decide whether to resume.
+        // Clearing it would leave visibleVideos empty and break the resume path.
+        // onScreenMediaCells is managed exclusively by updateOnScreenMediaCells().
         previousVisibleIdentifiers.removeAll()
-        onScreenMediaCells.removeAll()
 
         // Direct delegate calls to stop all registered cells in this coordinator
         for (_, delegate) in mediaCellDelegates {

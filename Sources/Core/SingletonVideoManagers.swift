@@ -252,8 +252,28 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard isActive else { return }
         isActive = false
         teardownAppLifecycleNotifications()
-        clearSingletonPlayer()
-        print("🎬 [FullScreenVideoManager] Deactivated - lifecycle observers removed, player cleared")
+
+        // Save playback position so the feed cell and the next fullscreen open can restore it.
+        // Do NOT call clearSingletonPlayer() here — keeping the item alive means re-opening
+        // the same video is instant (loadVideo() short-circuits and resumes without a network
+        // round-trip). clearSingletonPlayer() is called by loadVideo() when a DIFFERENT video
+        // is requested, or by recoverFromBackground() when the player becomes broken.
+        if let player = singletonPlayer,
+           let videoMid = currentVideoMid,
+           player.currentItem != nil {
+            let wasPlaying = player.rate > 0
+            let currentTime = player.currentTime()
+            let duration = player.currentItem?.duration ?? .invalid
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: videoMid, currentTime: currentTime,
+                wasPlaying: wasPlaying, context: .fullScreen, duration: duration)
+            PersistentVideoStateManager.shared.saveState(
+                videoMid: videoMid, currentTime: currentTime,
+                wasPlaying: wasPlaying, context: .mediaCell, duration: duration)
+        }
+        singletonPlayer?.pause()
+        isPlaying = false
+        print("🎬 [FullScreenVideoManager] Deactivated - lifecycle observers removed, player preserved for re-entry")
     }
 
     /// Set the feed's video list for fullscreen browsing (called before presenting MediaBrowserView)
@@ -375,6 +395,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     @Published var currentVideoIndex: Int = 0 // Track current video index within tweet
     @Published var isPlaying = false
     @Published var isBuffering = false // Track buffering state for spinner
+    /// True once the current item has status .readyToPlay (i.e. first frame decoded).
+    /// Used by SingletonVideoPlayerView to show a thumbnail cover while the item loads.
+    @Published var isItemReady = false
     
     // Callback to navigate to next video (tweet, videoIndex, sourceTweetId)
     var onNavigateToNextVideo: ((Tweet, Int, String) -> Void)?
@@ -461,12 +484,25 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     /// Load and play a video in the singleton player
     func loadVideo(url: URL, mid: String, tweetId: String, cellTweetId: String, videoIndex: Int, mediaType: MediaType) {
 
-        // If we already have the correct item loaded, don't thrash observers / state.
+        // If we already have the correct item loaded (e.g. re-entering fullscreen after dismiss
+        // without clearSingletonPlayer()), resume playback without thrashing observers/state.
+        // Fall through if the player is broken (background stripped the pipeline) so the full
+        // reload path runs and recreates a healthy AVPlayerItem.
         if currentVideoMid == mid,
            currentTweetId == tweetId,
-           singletonPlayer?.currentItem != nil {
-            // Still ensure buffering observers are attached (covers view recreation edge cases).
+           !isPlayerBroken() {
             setupTimeControlStatusObserver()
+            if isItemReady {
+                // Item is ready — rewind if at end, then play.
+                isPlaying = true
+                let capturedPlayer = singletonPlayer
+                checkAndRewindIfAtEnd {
+                    capturedPlayer?.play()
+                }
+            } else {
+                // Item exists but not yet ready — mark intent; itemStatusObserver will play when ready.
+                isPlaying = true
+            }
             return
         }
         
@@ -476,11 +512,21 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             return
         }
         
-        // CRITICAL FIX: Clear any prewarmed item to prevent flash of wrong video
-        // This ensures we start with a clean slate when loading a new video
-        if singletonPlayer?.currentItem != nil && currentVideoMid != mid {
-            singletonPlayer?.pause()
-            singletonPlayer?.replaceCurrentItem(with: nil)
+        // Clear any previously preserved item before loading a new video.
+        // Also save position for the old video so it can be restored later.
+        if let player = singletonPlayer, player.currentItem != nil, currentVideoMid != mid {
+            if let oldMid = currentVideoMid, player.currentItem != nil {
+                let t = player.currentTime()
+                let d = player.currentItem?.duration ?? .invalid
+                PersistentVideoStateManager.shared.saveState(
+                    videoMid: oldMid, currentTime: t, wasPlaying: player.rate > 0,
+                    context: .fullScreen, duration: d)
+                PersistentVideoStateManager.shared.saveState(
+                    videoMid: oldMid, currentTime: t, wasPlaying: player.rate > 0,
+                    context: .mediaCell, duration: d)
+            }
+            player.pause()
+            player.replaceCurrentItem(with: nil)
         }
 
         // Bump generation so any prior async completions are ignored.
@@ -489,6 +535,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         loadingMid = mid
         hasRestoredPosition = false // Reset restoration flag when loading new video
         isSeekingToRestoredPosition = false // Reset seeking flag
+        isItemReady = false // Will be set true when playerItem.status becomes .readyToPlay
         
         // Remove old observer if exists
         if let observer = videoCompletionObserver {
@@ -519,11 +566,17 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // This avoids network requests while allowing the new playerItem to be associated with our player
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedPlayerItem = cachedPlayer.currentItem {
-            
-            // Create new playerItem from cached asset (fast, no network request)
-            let asset = cachedPlayerItem.asset
-            let playerItem = AVPlayerItem(asset: asset)
-            
+
+            // Create new playerItem from cached asset (fast, no network request).
+            // NOTE: Reusing cachedPlayerItem directly was attempted (loan path) but
+            // AVFoundation's XPC renderer doesn't process replaceCurrentItem(nil) before
+            // the subsequent replaceCurrentItem(item) on singletonPlayer even when both
+            // calls are in the same synchronous Task body, causing a reliable crash:
+            // "AVPlayerItem cannot be associated with more than one instance of AVPlayer"
+            // Using AVPlayerItem(asset:) gives us a fresh item that avoids this constraint
+            // while still sharing the same underlying AVURLAsset (local HTTP proxy URL).
+            let playerItem = AVPlayerItem(asset: cachedPlayerItem.asset)
+
             Task { @MainActor in
                 // Ignore stale completions (e.g. duplicated loadVideo calls from view recreations)
                 guard self.loadGeneration == generation, self.currentVideoMid == mid else {
@@ -533,7 +586,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
                 // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
                 AudioSessionManager.shared.activateForVideoPlayback()
-                
+
                 // Create or reuse singleton player (fullscreen's unique player instance)
                 if self.singletonPlayer == nil {
                     self.singletonPlayer = AVPlayer(playerItem: playerItem)
@@ -552,6 +605,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 
                 // Check if player item is ready
                 if playerItem.status == .readyToPlay {
+                    self.isItemReady = true
                     
                     // Check if video finished in mediaCell - if so, restart from beginning
                     let duration = playerItem.duration
@@ -621,6 +675,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             }
                             
                             print("✅ [FullScreenVideoManager] Cached playerItem became ready, starting playback")
+                            self.isItemReady = true
                             
                             // Check if video finished in mediaCell - if so, restart from beginning
                             let duration = item.duration
@@ -1289,7 +1344,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Keep the pre-created player alive — just remove the current item
         singletonPlayer?.pause()
         singletonPlayer?.replaceCurrentItem(with: nil)
-        
+
+        isItemReady = false
         currentVideoMid = nil
         currentTweetId = nil
         currentCellTweetId = nil

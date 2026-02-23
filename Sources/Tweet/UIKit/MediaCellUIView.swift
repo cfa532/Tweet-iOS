@@ -350,8 +350,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             } else {
                 loadingSpinner.stopAnimating()
             }
+            // Pre-load the cached last frame into imageView so it can serve as cover
+            // if the AVPlayerLayer's GPU pipeline is suspended.  This happens when a
+            // full-screen modal (fullscreen video browser) covers the feed and iOS
+            // suspends the layer rendering — on return the layer briefly shows black
+            // before it resumes, and imageView (if set) hides the flash.
+            if imageView.image == nil,
+               let mid = attachment?.mid,
+               let cachedFrame = VideoLastFrameCache.shared.image(for: mid) {
+                imageView.image = cachedFrame
+            }
             // Keep thumbnail as cover until player layer is actually rendering frames.
-            // This prevents black flash when resuming from background.
+            // This prevents black flash when resuming from background or fullscreen.
             if videoPlayerView.isLayerReadyForDisplay {
                 imageView.isHidden = true
             } else {
@@ -1149,8 +1159,22 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Release the failed player from SharedAssetCache to cancel its network
                     // connections and free memory. Without this, failed CachingPlayerItems
                     // and their URLSession tasks accumulate on every network error.
+                    //
+                    // Guard: if the fullscreen player is currently loading/showing this same
+                    // video, do NOT clear — clearPlayerForMediaID calls cancelDownloads which
+                    // would kill the fullscreen player's in-flight streaming sessions, causing
+                    // a black screen in the fullscreen view.
+                    //
+                    // Pass deleteDiskCache:false — player failure is usually transient (app
+                    // startup, IPFS slow, network blip).  Wiping the disk cache on every
+                    // failure defeats progressive caching and forces a full re-download each
+                    // time.  The stuck-recovery path already uses deleteDiskCache:false.
                     if let mid = self.attachment?.mid {
-                        SharedAssetCache.shared.clearPlayerForMediaID(mid)
+                        let fullscreenOwnsMid = OverlayVisibilityCoordinator.shared.isCovered
+                            && FullScreenVideoManager.shared.currentVideoMid == mid
+                        if !fullscreenOwnsMid {
+                            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                        }
                     }
                     self.player = nil
                     self.isPlayerLoaded = false

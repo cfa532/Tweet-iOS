@@ -447,6 +447,21 @@ class TweetTableViewController: UITableViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
 
+        // Resume video playback when returning from a UIKit full-screen modal (e.g. the
+        // MediaBrowserView fullscreen player).  TweetListView.onAppear does NOT fire for
+        // UIKit .fullScreen modal dismissal because the SwiftUI view stays in the hierarchy
+        // while the modal is presented, so the .feedViewDidAppear notification is never
+        // posted through that path.  Re-evaluate visibility here to fill the gap.
+        // The 0.25s delay lets the dismiss cross-dissolve animation complete before we
+        // start playing, which prevents audio starting while the transition is still visible.
+        if isMovingToParent == false {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self else { return }
+                self.lastVisibleTweetIds = []
+                self.updateVisibleTweetsForVideoPlayback()
+                self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+            }
+        }
 
         // Restore scroll position for same-session navigation (push/pop or VC recreation)
         if !isScrollingToTop {

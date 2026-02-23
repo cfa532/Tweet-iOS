@@ -931,7 +931,7 @@ struct SingletonVideoPlayerView: View {
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
     @State private var hasAttemptedReload = false
-    
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -953,7 +953,18 @@ struct SingletonVideoPlayerView: View {
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
                 }
-                
+
+                // While the new AVPlayerItem is loading (status not yet .readyToPlay),
+                // cover the black player surface with the cached last frame so the user
+                // sees the video image instead of black during the IPFS buffering phase.
+                if !manager.isItemReady, manager.currentVideoMid == mid,
+                   let thumbnail = VideoLastFrameCache.shared.image(for: mid) {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .allowsHitTesting(false)
+                }
+
                 // Show buffering spinner when waiting for data (non-interactive overlay)
                 if manager.isBuffering && manager.currentVideoMid == mid {
                     ZStack {
@@ -968,33 +979,29 @@ struct SingletonVideoPlayerView: View {
                 }
             }
             .onAppear {
-                    // Load if no item or wrong video is loaded
-                    // Player is pre-created (never nil) — idle state is player with no currentItem
-                    if manager.singletonPlayer?.currentItem == nil || manager.currentVideoMid != mid {
-                        if !hasAttemptedReload {
-                            hasAttemptedReload = true
-                            manager.loadVideo(
-                                url: url,
-                                mid: mid,
-                                tweetId: tweetId,
-                                cellTweetId: cellTweetId,
-                                videoIndex: videoIndex,
-                                mediaType: mediaType
-                            )
-                        }
+                    // Always call loadVideo — it handles idempotency.
+                    // When the same video is already loaded (re-entry after dismiss),
+                    // loadVideo() returns early and resumes playback without a network round-trip.
+                    if !hasAttemptedReload {
+                        hasAttemptedReload = true
+                        manager.loadVideo(
+                            url: url,
+                            mid: mid,
+                            tweetId: tweetId,
+                            cellTweetId: cellTweetId,
+                            videoIndex: videoIndex,
+                            mediaType: mediaType
+                        )
                     }
                 }
                 .onChange(of: manager.currentVideoMid) { _, newMid in
-                    // Reset reload flag when video changes OR when player is cleared (nil)
-                    // This allows retry when loading fails and clears state
-                    if newMid == mid || newMid == nil {
+                    // Reset reload flag when player is cleared (nil) so a failed load can retry.
+                    if newMid == nil {
                         hasAttemptedReload = false
                     }
                 }
                 .onChange(of: manager.singletonPlayer?.currentItem) { _, newItem in
-                    // CRITICAL: Reset reload flag when player item is cleared
-                    // This handles the case where loadVideo fails and clears the player
-                    // Allowing the view to retry loading
+                    // Reset reload flag when player item is cleared so a failed load can retry.
                     if newItem == nil && manager.currentVideoMid == nil {
                         hasAttemptedReload = false
                     }
