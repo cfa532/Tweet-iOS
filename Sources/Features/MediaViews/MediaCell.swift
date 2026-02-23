@@ -538,6 +538,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 isVisible: isVisible,
                 mediaType: attachment.type,
                 authorId: parentTweet.authorId,
+                cellTweetId: cellTweetId ?? parentTweet.mid,
+                attachmentIndex: attachmentIndex,
                 autoPlay: shouldAutoPlay,
                 onVideoFinished: onVideoFinished,
                 cellAspectRatio: CGFloat(aspectRatio),

@@ -53,18 +53,22 @@ private enum VideoPlaybackPhase {
 }
 
 /// Canonical video tracking info.
+/// A video is indexed by both the tweet (cell) id and its own id so the same video in different cells is distinct.
 ///
 /// - `cellTweetId`: The tweet ID of the *feed cell* (retweet ID for retweets, quoting tweet ID for embedded/quoted media).
 /// - `mediaTweetId`: The tweet ID that actually owns the attachments (original tweet for retweets, embedded tweet for quoted media).
+/// - `videoMid`: The attachment/media id (same video content can appear in multiple cells).
 /// - `attachmentIndex`: The index in `mediaTweetId.attachments` (can be > 3; fullscreen needs this).
 ///
+/// `identifier` = cellTweetId + "_" + videoMid + "_" + attachmentIndex is the unique key for playback (one delegate per cell instance).
 /// Feed playback coordination only considers `attachmentIndex < 4` because `MediaGridView` only renders the first 4 items.
 struct VideoPlaybackInfo: Equatable {
     let cellTweetId: String
     let mediaTweetId: String
     let videoMid: String
     let attachmentIndex: Int
-    
+
+    /// Unique key for this video instance: tweet id + video id + index (same video in different cells has different identifiers).
     var identifier: String {
         "\(cellTweetId)_\(videoMid)_\(attachmentIndex)"
     }
@@ -194,30 +198,25 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var _cachedVisibleVideos: [VideoPlaybackInfo] = []
     private var _visibleVideoCacheKey: String = ""
 
-    /// PERF FIX: Cached visibleVideos to avoid expensive filtering/sorting on every access
+    /// Visible videos for playback: derived from video (media cell) visibility only, not tweet cell.
+    /// When onScreenMediaCells is set, only videos in that set are considered visible; sorted by position.
+    /// PERF FIX: Cached to avoid expensive filtering/sorting on every access.
     private var visibleVideos: [VideoPlaybackInfo] {
-        let cacheKey = "\(visibleTweetIds.sorted().joined(separator: ","))_\(allVideos.count)"
+        // Video visibility depends on video (media cell) alone — use onScreenMediaCells as source of truth
+        let cacheKey = "\(onScreenMediaCells.sorted().joined(separator: ","))_\(allVideos.count)"
 
-        // Return cached result if inputs haven't changed
         if cacheKey == _visibleVideoCacheKey && !_cachedVisibleVideos.isEmpty {
             return _cachedVisibleVideos
         }
 
-        let filtered = allVideos.filter { visibleTweetIds.contains($0.cellTweetId) && $0.isInVisibleMediaRange }
+        let filtered = allVideos.filter { onScreenMediaCells.contains($0.identifier) && $0.isInVisibleMediaRange }
 
-        // CRITICAL: Sort by position (Y coordinate) to ensure correct playback order
-        // This ensures videos play in feed order, not array order
         guard let tableView = tableView, tableView.window != nil else {
-            // No table view (or not in hierarchy): do NOT apply any position-based ordering.
-            // Keep the coordinator's canonical order (the order `allVideos` was built in).
             _cachedVisibleVideos = filtered
             _visibleVideoCacheKey = cacheKey
             return filtered
         }
 
-        // Build a fast map of visible cell tweetId -> minY.
-        // If any visible video cannot be mapped to a visible cell, do NOT apply position-based sorting
-        // (no stable-order fallback).
         var yByCellTweetId: [String: CGFloat] = [:]
         for cell in tableView.visibleCells {
             guard let tweetCell = cell as? TweetTableViewCell else { continue }
@@ -236,11 +235,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             let y1 = yByCellTweetId[v1.cellTweetId] ?? 0
             let y2 = yByCellTweetId[v2.cellTweetId] ?? 0
             if y1 != y2 { return y1 < y2 }
-            // Same cell: order by attachment index.
             if v1.cellTweetId == v2.cellTweetId {
                 return v1.attachmentIndex < v2.attachmentIndex
             }
-            // If equal Y for different cells, keep existing order by returning false.
             return false
         }
 
@@ -265,23 +262,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         return CGRect(x: 0, y: top, width: tableView.bounds.width, height: max(0, bottom - top))
     }
 
-    /// Synchronous cell visibility calculation.
-    /// With pure UIKit cells, iterating visibleCells and computing CGRect intersection
-    /// for ~5-8 cells is trivial (nanosecond-level) — no need for background dispatch.
-    private func calculateCellVisibility() -> [String: CGFloat] {
-        guard let tableView = tableView, tableView.window != nil,
-              let visibleRect = computeVisibleRect() else { return [:] }
-
-        var ratios: [String: CGFloat] = [:]
-        for cell in tableView.visibleCells {
-            guard let tweetCell = cell as? TweetTableViewCell,
-                  let tweetId = tweetCell.tweetId else { continue }
-            let intersection = cell.frame.intersection(visibleRect)
-            ratios[tweetId] = cell.frame.height > 0 ? intersection.height / cell.frame.height : 0
-        }
-        return ratios
-    }
-    
     /// Stored observer tokens for proper cleanup
     private var notificationObservers: [NSObjectProtocol] = []
     
@@ -768,15 +748,20 @@ class VideoPlaybackCoordinator: ObservableObject {
     func updateOnScreenMediaCells(_ identifiers: Set<String>) {
         guard onScreenMediaCells != identifiers else { return }
         onScreenMediaCells = identifiers
+        invalidateVisibleVideoCache()
 
         // If primary video went off-screen at the media-cell level, force switch
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId,
            !identifiers.contains(primaryId) {
             // Stop current primary (immediate pause, no fade)
-            if let primary = allVideos.first(where: { $0.identifier == primaryId }),
-               let delegate = mediaCellDelegates[primary.identifier] {
-                delegate.shouldStopVideo(withMid: primary.videoMid)
+            if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
+                if let delegate = mediaCellDelegates[primary.identifier] {
+                    delegate.shouldStopVideo(withMid: primary.videoMid)
+                } else {
+                    // Cell may have been reused — delegate unregistered; stop cached player so it doesn't keep playing
+                    SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
+                }
             }
             // Reset and pick new primary
             phase = .idle
@@ -810,12 +795,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         let filteredTweetIds = tweetIds.intersection(tweetsWithFeedVideos)
 
         self.visibleTweetIds = filteredTweetIds
-        self.invalidateVisibleVideoCache()
         self.isScrolling = true
 
-        // Track by full identifier (cellTweetId_videoMid_attachmentIndex) so the same
-        // video appearing in both a tweet and its retweet is handled independently.
-        let currentVisibleIdentifiers = Set(visibleVideos.map { $0.identifier })
+        // Video visibility depends on video (media cell) only — use onScreenMediaCells as source of truth
+        let currentVisibleIdentifiers = onScreenMediaCells
         let visibilityChanged = previousVisibleIdentifiers != currentVisibleIdentifiers
 
         // Stop all videos if none are visible
@@ -852,6 +835,9 @@ class VideoPlaybackCoordinator: ObservableObject {
                     if !stillVisibleMids.contains(video.videoMid) {
                         if let delegate = mediaCellDelegates[video.identifier] {
                             delegate.shouldStopVideo(withMid: video.videoMid)
+                        } else {
+                            // Cell may have been reused — delegate unregistered; stop cached player so it doesn't keep playing
+                            SharedAssetCache.shared.getCachedPlayer(for: video.videoMid)?.pause()
                         }
                     }
                 }
@@ -932,8 +918,12 @@ class VideoPlaybackCoordinator: ObservableObject {
         guard phase == .primaryPlaying,
               let primaryId = primaryVideoId,
               let primary = visibleVideos.first(where: { $0.identifier == primaryId }),
-              isVideoCellVisibleEnough(primary, minVisibilityRatio: 0.5),
+              isVideoOnScreen(primary),
               let delegate = mediaCellDelegates[primaryId] else {
+            return
+        }
+        // When granular on-screen tracking is used, only resume if primary is actually on-screen.
+        if !onScreenMediaCells.isEmpty, !onScreenMediaCells.contains(primaryId) {
             return
         }
         delegate.shouldPlayVideo(withMid: primary.videoMid)
@@ -1199,6 +1189,12 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
+        // When we have granular on-screen tracking, never start playback for a video that isn't on-screen.
+        // Prevents off-screen videos from resuming after updateOnScreenMediaCells stopped them.
+        if !onScreenMediaCells.isEmpty, !onScreenMediaCells.contains(primary.identifier) {
+            return
+        }
+
         // Validate delegate exists before committing to primaryPlaying.
         // If the cell was reused or visibility changed, the delegate may be gone.
         // Stay idle so next updateVisibleTweets will retry.
@@ -1230,128 +1226,67 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Identify the primary video based on scroll direction.
-    /// Scrolling down: topmost video (lowest Y) that is ≥50% visible.
-    /// Scrolling up: bottommost video (highest Y) that is ≥50% visible.
+    /// Visibility depends on video (media cell) only — visibleVideos is already filtered by onScreenMediaCells.
+    /// Scrolling down: first (topmost) on-screen video with delegate. Scrolling up: last (bottommost).
     private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
         guard tableView?.window != nil else {
             return visibleVideos.first
         }
 
-        let ratios = calculateCellVisibility()
         let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
-        // First pass: prefer on-screen cells with registered delegates
+        // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate
         for video in candidates {
-            if (ratios[video.cellTweetId] ?? 0) >= 0.5 {
-                if !onScreenMediaCells.isEmpty {
-                    guard onScreenMediaCells.contains(video.identifier) else { continue }
-                    guard mediaCellDelegates[video.identifier] != nil else { continue }
-                }
-                return video
-            }
+            guard mediaCellDelegates[video.identifier] != nil else { continue }
+            return video
         }
 
-        // Fallback: if no on-screen candidate, try any with delegate
-        if !onScreenMediaCells.isEmpty {
-            for video in candidates {
-                if (ratios[video.cellTweetId] ?? 0) >= 0.5 &&
-                   mediaCellDelegates[video.identifier] != nil {
-                    return video
-                }
-            }
-        }
-
-        return scrollDirection ? visibleVideos.first : visibleVideos.last
+        return nil
     }
 
-    /// Check if current primary video is less than 30% visible and switch to next video if needed.
-    /// Fully synchronous — uses computeVisibleRect() for consistent inset calculation.
+    /// Check if primary video is still on-screen (video visibility only). If not, switch to next.
     private func checkAndSwitchVideoIfNeeded() {
-        clearStaleCache()
-
         guard phase == .primaryPlaying,
               let primaryId = primaryVideoId,
               let tableView = tableView,
               tableView.window != nil else { return }
 
-        // Prevent immediate re-switching (0.2s cooldown)
-        if let lastSwitchTime = lastPrimarySwitchTime,
-           Date().timeIntervalSince(lastSwitchTime) < 0.2 { return }
+        // Video visibility: primary must be in onScreenMediaCells
+        guard !onScreenMediaCells.contains(primaryId) else { return }
 
-        guard let currentPrimary = visibleVideos.first(where: { $0.identifier == primaryId }) else { return }
+        // Primary left the on-screen set — switch (updateOnScreenMediaCells may have run after this path)
+        guard let newPrimary = identifyPrimaryVideo() else {
+            stopAllVideos()
+            return
+        }
 
-        // Calculate visibility using unified visibleRect
-        guard let visibleRect = computeVisibleRect(),
-              let cell = findCell(forCellTweetId: currentPrimary.cellTweetId, in: tableView) else { return }
+        if newPrimary.identifier == primaryId {
+            stopAllVideos()
+            return
+        }
 
-        let intersection = cell.frame.intersection(visibleRect)
-        let visibilityRatio = cell.frame.height > 0 ? intersection.height / cell.frame.height : 0
+        guard let newDelegate = mediaCellDelegates[newPrimary.identifier] else { return }
 
-        let previousRatio = cachedVisibilityRatios[primaryId] ?? 0.7
-        let ratioChange = abs(visibilityRatio - previousRatio)
-        cachedVisibilityRatios[primaryId] = visibilityRatio
-
-        // Only act if ratio changed significantly or crossed the 30% hysteresis threshold
-        let crossedThreshold = (previousRatio > 0.30 && visibilityRatio <= 0.30) || (previousRatio <= 0.30 && visibilityRatio > 0.30)
-        guard crossedThreshold || ratioChange >= visibilityRatioThreshold else { return }
-
-        // Switch away if primary drops below 30%
-        if visibilityRatio < 0.30 {
-            guard let newPrimary = identifyPrimaryVideo() else {
-                stopAllVideos()
-                return
-            }
-
-            if newPrimary.identifier == primaryId {
-                stopAllVideos()
-                return
-            }
-
-            // Validate new primary's delegate exists before switching
-            guard let newDelegate = mediaCellDelegates[newPrimary.identifier] else {
-                return  // Stay with current primary — next update will retry
-            }
-
-            // Stop current primary via direct delegate
-            if let delegate = mediaCellDelegates[currentPrimary.identifier] {
+        if let currentPrimary = allVideos.first(where: { $0.identifier == primaryId }) {
+            if let delegate = mediaCellDelegates[primaryId] {
                 delegate.shouldStopVideo(withMid: currentPrimary.videoMid)
+            } else {
+                SharedAssetCache.shared.getCachedPlayer(for: currentPrimary.videoMid)?.pause()
             }
-
-            // Pause all other visible videos
-            for video in visibleVideos where video.identifier != newPrimary.identifier {
-                if let delegate = mediaCellDelegates[video.identifier] {
-                    delegate.shouldPauseVideo(withMid: video.videoMid)
-                }
-            }
-
-            // Set state and play synchronously — no asyncAfter race condition
-            primaryVideoId = newPrimary.identifier
-            currentlyPlayingVideoIds = [newPrimary.identifier]
-            cachedVisibilityRatios[newPrimary.identifier] = 0.7
-            lastPrimarySwitchTime = Date()
-
-            newDelegate.shouldPlayVideo(withMid: newPrimary.videoMid)
         }
+
+        for video in visibleVideos where video.identifier != newPrimary.identifier {
+            if let delegate = mediaCellDelegates[video.identifier] {
+                delegate.shouldPauseVideo(withMid: video.videoMid)
+            }
+        }
+
+        primaryVideoId = newPrimary.identifier
+        currentlyPlayingVideoIds = [newPrimary.identifier]
+        lastPrimarySwitchTime = Date()
+        newDelegate.shouldPlayVideo(withMid: newPrimary.videoMid)
     }
 
-    /// Find table view cell for a given feed cell tweet ID.
-    private func findCell(forCellTweetId tweetId: String, in tableView: UITableView) -> UITableViewCell? {
-        // Ensure table view is in view hierarchy before accessing visibleCells
-        guard tableView.window != nil else {
-            return nil
-        }
-
-        for cell in tableView.visibleCells {
-            // This assumes TweetTableViewCell has a way to identify its tweet
-            // We'll need to add this functionality
-            if let tweetCell = cell as? TweetTableViewCell,
-               tweetCell.tweetId == tweetId {
-                return cell
-            }
-        }
-        return nil
-    }
-    
     /// Pause a specific video
     private func pauseVideo(_ video: VideoPlaybackInfo) {
         let videoId = video.identifier
@@ -1363,18 +1298,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
-    /// Returns true if the table cell hosting this video is actually visible enough.
-    ///
-    /// `UITableView.indexPathsForVisibleRows` can include rows that are only a few pixels on-screen.
-    /// If we auto-advance into those, the next video will "play" but appear invisible to the user.
-    private func isVideoCellVisibleEnough(_ video: VideoPlaybackInfo, minVisibilityRatio: CGFloat = 0.5) -> Bool {
-        guard let tableView = tableView, tableView.window != nil,
-              let visibleRect = computeVisibleRect(),
-              let cell = findCell(forCellTweetId: video.cellTweetId, in: tableView) else { return false }
-
-        let intersection = cell.frame.intersection(visibleRect)
-        let ratio = cell.frame.height > 0 ? intersection.height / cell.frame.height : 0
-        return ratio >= minVisibilityRatio
+    /// Returns true if this video is on-screen (visibility depends on video/media cell only).
+    private func isVideoOnScreen(_ video: VideoPlaybackInfo) -> Bool {
+        onScreenMediaCells.contains(video.identifier)
     }
     
     /// Play next visible video after primary finishes
@@ -1422,7 +1348,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         var nextVideo: VideoPlaybackInfo?
         while candidateIndex >= 0 && candidateIndex < visibleVideos.count {
             let candidate = visibleVideos[candidateIndex]
-            let isVisible = isVideoCellVisibleEnough(candidate, minVisibilityRatio: 0.33)
+            let isVisible = isVideoOnScreen(candidate)
             if isVisible {
                 nextVideo = candidate
                 break
@@ -1452,17 +1378,26 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
     
-    /// Handle video finished notification
+    /// Handle video finished notification.
+    /// Match by full identifier (cellTweetId_videoMid_attachmentIndex) so the same video in different cells is distinct.
     @objc private func handleVideoFinished(_ notification: Notification) {
         guard let videoMid = notification.userInfo?["videoMid"] as? String else {
             return
         }
 
-        // If in primary playing phase, advance to next video when current finishes
+        let videoIdentifier = notification.userInfo?["videoIdentifier"] as? String
+
         if phase == .primaryPlaying,
-           let primaryId = primaryVideoId,
-           primaryId.contains(videoMid) {
-            playNextVisibleVideo()
+           let primaryId = primaryVideoId {
+            let isPrimaryFinished: Bool
+            if let vid = videoIdentifier {
+                isPrimaryFinished = (primaryId == vid)
+            } else {
+                isPrimaryFinished = primaryId.contains(videoMid)
+            }
+            if isPrimaryFinished {
+                playNextVisibleVideo()
+            }
         }
     }
     
@@ -1485,9 +1420,8 @@ class VideoPlaybackCoordinator: ObservableObject {
             shouldPreserveStateOnForeground = false
             
             if phase == .primaryPlaying, let primaryId = primaryVideoId {
-                // Resume primary video - prefer identifier match (stable across rebuilds).
-                if let primary = visibleVideos.first(where: { $0.identifier == primaryId })
-                    ?? visibleVideos.first(where: { primaryId.contains($0.videoMid) }) {
+                // Resume primary video — match by full identifier (tweet id + video id + index) only.
+                if let primary = visibleVideos.first(where: { $0.identifier == primaryId }) {
                     
                     // CRITICAL: If primary is not the first visible video, restart from first
                     // This ensures playback always starts from top when multiple videos are visible

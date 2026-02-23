@@ -394,6 +394,11 @@ struct SimpleVideoPlayer: View {
     let mediaType: MediaType // Add MediaType parameter
     let authorId: String? // Author ID for health check during retry
     
+    /// Feed cell tweet id (retweet id for retweets); with mid and attachmentIndex forms full video identifier.
+    var cellTweetId: String? = nil
+    /// Attachment index in the tweet; with cellTweetId and mid forms full video identifier.
+    var attachmentIndex: Int? = nil
+
     // MARK: Optional Parameters
     var autoPlay: Bool = true
     var onVideoFinished: (() -> Void)? = nil
@@ -5049,11 +5054,15 @@ struct SimpleVideoPlayer: View {
             captureLastFrameIfPossible(reason: "videoFinished")
         }
         
-        // Notify the coordinator that video finished (for sequential playback)
+        // Notify the coordinator that video finished (include full identifier: tweet id + video id + index when available)
+        var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweetId ?? ""]
+        if let cellId = cellTweetId ?? parentTweetId, let idx = attachmentIndex {
+            userInfo["videoIdentifier"] = "\(cellId)_\(mid)_\(idx)"
+        }
         NotificationCenter.default.post(
             name: .videoDidFinishPlaying,
             object: nil,
-            userInfo: ["videoMid": mid, "tweetId": parentTweetId ?? ""]
+            userInfo: userInfo
         )
         
         // CRITICAL: Check disableAutoRestart before calling callback

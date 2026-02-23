@@ -1198,11 +1198,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         VideoStateCache.shared.clearCachedState(for: mid)
         captureLastFrameIfPossible(reason: "videoFinished")
 
-        // Notify coordinator to advance to next video
+        // Notify coordinator to advance to next video (include full identifier: tweet id + video id + index)
+        var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
+        if let id = videoIdentifier { userInfo["videoIdentifier"] = id }
         NotificationCenter.default.post(
             name: .videoDidFinishPlaying,
             object: nil,
-            userInfo: ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
+            userInfo: userInfo
         )
 
         VideoStateCache.shared.clearCache(for: mid, force: true)
