@@ -184,15 +184,20 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 // MARK: - Active Downloads Actor (Swift 6 Concurrency-Safe)
 private actor ActiveDownloadsActor {
     private var activeDownloads: [String: Task<Void, Never>] = [:]
-    
+
+    /// MediaIDs whose players have been cleared.  Any pending dedup waiter or background
+    /// retry for these mediaIDs should be skipped immediately rather than retried.
+    /// Cleared when a new player is registered for the same mediaID (fresh start).
+    private var cancelledMediaIDs: Set<String> = []
+
     func getTask(for key: String) -> Task<Void, Never>? {
         return activeDownloads[key]
     }
-    
+
     func setTask(_ task: Task<Void, Never>, for key: String) {
         activeDownloads[key] = task
     }
-    
+
     func removeTask(for key: String) {
         activeDownloads.removeValue(forKey: key)
     }
@@ -202,6 +207,33 @@ private actor ActiveDownloadsActor {
             task.cancel()
         }
         activeDownloads.removeAll()
+    }
+
+    /// Cancel all active download tasks whose cache-path key contains the given mediaID
+    /// and mark the mediaID as cancelled so that any still-running URLSession download
+    /// that completes after cancellation does NOT spawn a new background retry.
+    func cancelTasks(for mediaID: String) {
+        cancelledMediaIDs.insert(mediaID)
+        var keysToRemove: [String] = []
+        for (key, task) in activeDownloads {
+            if key.contains(mediaID) {
+                task.cancel()
+                keysToRemove.append(key)
+            }
+        }
+        for key in keysToRemove {
+            activeDownloads.removeValue(forKey: key)
+        }
+    }
+
+    /// Returns true if the player for this mediaID was cleared while a download was in-flight.
+    func isMediaIDCancelled(_ mediaID: String) -> Bool {
+        return cancelledMediaIDs.contains(mediaID)
+    }
+
+    /// Clear the cancelled state when a fresh player is registered for a mediaID.
+    func clearCancelledMediaID(_ mediaID: String) {
+        cancelledMediaIDs.remove(mediaID)
     }
 }
 
@@ -669,6 +701,24 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
     
+    /// Cancel all active downloads (HLS segment tasks + progressive streaming sessions)
+    /// for a specific mediaID.  Call this before deleting the media's disk cache so that
+    /// in-flight writes don't fail with "file not found" and pending dedup waiters don't
+    /// spawn untracked background retries.
+    public func cancelDownloads(for mediaID: String) {
+        // 1. Cancel tracked HLS segment download tasks
+        Task { await activeDownloadsActor.cancelTasks(for: mediaID) }
+
+        // 2. Cancel progressive streaming sessions for this mediaID
+        streamingSessionsLock.lock()
+        let sessionKeysToRemove = streamingSessions.keys.filter { $0.hasPrefix(mediaID) }
+        for key in sessionKeysToRemove {
+            streamingSessions[key]?.invalidateAndCancel()
+            streamingSessions.removeValue(forKey: key)
+        }
+        streamingSessionsLock.unlock()
+    }
+
     /// Thread-safe lookup of a registered real URL — safe to call from async contexts.
     private func getRealURL(for mediaID: String) -> URL? {
         mediaLock.lock()
@@ -686,6 +736,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         mediaLock.lock()
         mediaRealURLs[mediaID] = realURL
         mediaLock.unlock()
+
+        // A new player is being created for this mediaID — clear any cancelled state so
+        // fresh downloads for this media are served normally.
+        Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
 
         // Return localhost URL: http://localhost:8080/ipfs/mediaID (clean format without redundancy)
         // AVPlayer will request this, and we'll serve from cache or fetch from realURL
@@ -1260,13 +1314,23 @@ public class LocalHTTPServer: @unchecked Sendable {
                 return
             }
             
+            // If the player for this mediaID was cleared while the download was in-flight,
+            // the cache directory no longer exists and any retry is pointless.  The
+            // still-running URLSession completed (possibly with a write error because the
+            // directory was deleted), which woke us up here.  Skip background retries so
+            // we don't hammer the server or log confusing "file not found" warnings.
+            if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
+                sendResponse(connection: connection, statusCode: 404, headers: [:], body: nil)
+                return
+            }
+
             // File doesn't exist - check connection state before proceeding
             // If connection is already closed, just return - AVPlayer will retry
             switch connection.state {
             case .cancelled, .failed:
                 // Connection already closed - start background download but don't try to respond
                 print("⚠️ [LocalHTTPServer] Connection closed after timeout, starting background download: \(fullRealURL.lastPathComponent)")
-                
+
                 // Start download-only task in background WITHOUT tracking it
                 // AVPlayer will retry and get cached file when ready
                 Task.detached(priority: .userInitiated) {
@@ -1275,7 +1339,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                             continuation.resume()
                         }
                     }
-                    
+
                     if FileManager.default.fileExists(atPath: cachePath) {
                         print("✅ [BACKGROUND DOWNLOAD] Successfully cached: \(fullRealURL.lastPathComponent)")
                     }
@@ -1284,10 +1348,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             default:
                 break // Connection still alive, proceed
             }
-            
+
             // Connection is still alive - start background download and send 503
             print("🔄 [LocalHTTPServer] Starting untracked background download after timeout: \(fullRealURL.lastPathComponent)")
-            
+
             // Start download-only task in background WITHOUT tracking it
             // This way, if AVPlayer retries, it won't wait for this download - it will check cache first
             // If cache miss, it will start a fresh tracked download
@@ -1298,14 +1362,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                         continuation.resume()
                     }
                 }
-                
+
                 if !FileManager.default.fileExists(atPath: cachePath) {
                     print("⚠️ [BACKGROUND DOWNLOAD] Download completed but file not found: \(fullRealURL.lastPathComponent)")
                 } else {
                     print("✅ [BACKGROUND DOWNLOAD] Successfully cached: \(fullRealURL.lastPathComponent)")
                 }
             }
-            
+
             // Send 503 immediately so AVPlayer retries (will get cached file on retry if download completes)
             sendResponse(connection: connection, statusCode: 503, headers: ["Retry-After": "1"], body: nil)
             return
@@ -1326,7 +1390,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             let _ = Date().timeIntervalSince(downloadStartTime)
 
             if !FileManager.default.fileExists(atPath: cachePath) {
-                print("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
+                // Only warn when the player is still active — missing file after
+                // clearPlayerForMediaID (cancelled) is expected, not a bug.
+                let wasCancelled = await self.activeDownloadsActor.isMediaIDCancelled(mediaID)
+                if !wasCancelled {
+                    print("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
+                }
             }
 
             // Remove the completed task from active downloads
@@ -2233,6 +2302,11 @@ public class LocalHTTPServer: @unchecked Sendable {
 
                 // CRITICAL: Write to cache (this is the only thing we do - no serving)
                 let cacheURL = URL(fileURLWithPath: cachePath)
+                // Skip silently if the parent directory was deleted (clearPlayerForMediaID)
+                guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
+                    completion?()
+                    return
+                }
                 do {
                     try dataToCache.write(to: cacheURL)
                     print("✅ [LocalHTTPServer] Downloaded and cached: \(url.lastPathComponent)")
@@ -2342,6 +2416,12 @@ public class LocalHTTPServer: @unchecked Sendable {
                 // This ensures deduplication polling finds the file immediately
                 // autoreleasepool still protects memory during write
                 let cacheURL = URL(fileURLWithPath: cachePath)
+                // Skip silently if the parent directory was deleted (clearPlayerForMediaID)
+                // while this download was in-flight — avoids spurious "file not found" warnings.
+                guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
+                    completion?()
+                    return
+                }
                 do {
                     try dataToCache.write(to: cacheURL)
                 } catch {

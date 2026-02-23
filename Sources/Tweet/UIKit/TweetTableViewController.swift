@@ -493,6 +493,13 @@ class TweetTableViewController: UITableViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
 
+        // Stop all feed videos when navigating away (detail view push, profile tap, etc.).
+        // Without this the feed keeps active AVPlayer XPC sessions alive while the destination
+        // view tries to open its own, hitting the system's concurrent-player limit and causing
+        // PlayerRemoteXPC -12860 errors that prevent the destination video from playing.
+        // Playback is restored by the .feedViewDidAppear handler when the feed becomes visible again.
+        videoCoordinator.stopAllVideos()
+
         // Save current scroll position when view disappears (backup to scroll delegate methods)
         saveScrollPositionIfNeeded()
     }

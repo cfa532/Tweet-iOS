@@ -756,20 +756,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             self.ensureVideoOutputAttached(for: newPlayer)
         }
 
-        // Stuck player detector — diagnose if player doesn't become ready within 5 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+        // Stuck player detector — recover if player stays in .playerLoading beyond 15 seconds.
+        // This handles cases where CachingPlayerItem's resource loader stalls (server reachable
+        // for HEAD but never delivers the m3u8 data), leaving the item in .unknown forever.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
             guard let self, self.player === newPlayer, self.isVisible else { return }
-            if !self.isPlayerLoaded && self.videoCellState == .playerLoading {
-                let status = newPlayer.currentItem?.status.rawValue ?? -1
-                let rate = newPlayer.rate
-                let hasItem = newPlayer.currentItem != nil
-                let url = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
-                print("\(self.logPrefix) ⚠️ STUCK PLAYER - 5s timeout - status: \(status), hasItem: \(hasItem), rate: \(rate)")
-                print("\(self.logPrefix) ⚠️ STUCK URL: \(url)")
-                if let error = newPlayer.currentItem?.error {
-                    print("\(self.logPrefix) ⚠️ STUCK ERROR: \(error)")
-                }
+            guard !self.isPlayerLoaded && self.videoCellState == .playerLoading else { return }
+            let status = newPlayer.currentItem?.status.rawValue ?? -1
+            let url = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
+            print("\(self.logPrefix) ⚠️ STUCK PLAYER recovery - 15s timeout, status: \(status), url: \(url)")
+            // Release the broken player and stop the spinner
+            if let mid = self.attachment?.mid {
+                SharedAssetCache.shared.clearPlayerForMediaID(mid)
             }
+            self.player = nil
+            self.isPlayerLoaded = false
+            self.loadingSpinner.stopAnimating()
+            self.videoCellState = .noContent
         }
     }
 
@@ -1134,6 +1137,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         print("\(self.logPrefix) ❌ Error detail: domain=\(nsError.domain), code=\(nsError.code)")
                     }
                     self.loadingSpinner.stopAnimating()
+                    // Release the failed player from SharedAssetCache to cancel its network
+                    // connections and free memory. Without this, failed CachingPlayerItems
+                    // and their URLSession tasks accumulate on every network error.
+                    if let mid = self.attachment?.mid {
+                        SharedAssetCache.shared.clearPlayerForMediaID(mid)
+                    }
+                    self.player = nil
+                    self.isPlayerLoaded = false
                 } else if item.status == .unknown {
                     // Log unknown status to diagnose why player is stuck
                     if let asset = item.asset as? AVURLAsset {

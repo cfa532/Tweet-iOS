@@ -830,13 +830,19 @@ class SharedAssetCache: ObservableObject {
             task.cancel()
         }
 
+        // Cancel active LocalHTTPServer downloads for this mediaID BEFORE deleting disk cache.
+        // Without this, in-flight segment writes fail with "file not found" (directory deleted
+        // while download was writing), and dedup waiters time out and spawn untracked background
+        // retries that waste bandwidth even though the player is gone.
+        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+
         // CRITICAL: Delete disk cache files (segments, playlists) to free disk space
         // This prevents memory leak from cached segments staying in memory
         Task.detached {
             let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             let mediaDir = cacheDir.appendingPathComponent(mediaID)
             try? FileManager.default.removeItem(at: mediaDir)
-            
+
             await MainActor.run {
                 CachingPlayerItem.clearHLSCache(for: mediaID)
             }
@@ -1294,8 +1300,13 @@ class SharedAssetCache: ObservableObject {
                     if let fallbackCachedURL = await checkCachedHLSPlaylist(for: mediaID, baseURL: url) {
                         resolvedURL = fallbackCachedURL
                     } else {
-                        print("❌ [HLS FALLBACK] Cache check retry also failed for mediaID: \(mediaID)")
-                        resolvedURL = networkResolvedURL
+                        // Both network HEAD requests timed out and no disk cache exists.
+                        // Throw instead of creating CachingPlayerItem with an unresolved base URL,
+                        // which would leave the player stuck in .unknown status with the spinner
+                        // showing forever.
+                        print("❌ [HLS FALLBACK] Network resolution and cache check both failed for mediaID: \(mediaID) — server unreachable")
+                        throw NSError(domain: "SharedAssetCache", code: -5,
+                            userInfo: [NSLocalizedDescriptionKey: "HLS URL resolution failed: server did not respond to master.m3u8 or playlist.m3u8"])
                     }
                 } else {
                     // Save the resolved filename so future loads skip this lookup entirely
