@@ -1629,45 +1629,19 @@ final class HproseInstance: ObservableObject {
             print("ERROR: [getProviderIP] Refusing to get provider IP for GUEST_ID")
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot get provider IP for GUEST_ID"])
         }
-        
-        do {
-            // Try to get provider IP - may throw network exception or return nil (user not found)
-            let providerIP = try await _getProviderIP(mid, v4Only: v4Only)
-            if (providerIP != nil) {
-                return providerIP
-            }
-            
-            // providerIP is nil - user not found or no healthy IPs
-            // For non-appUser, return nil (don't try fallback)
-            if (mid != appUser.mid) {
-                print("DEBUG: [getProviderIP] No provider IP found for \(mid) - user not found or all IPs unhealthy")
-                return nil
-            }
-            
-            // For appUser only, try entry IP fallback
-            guard let entryIP = try await findEntryIP() else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
-            }
-            return try await _getProviderIP(mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
-        } catch {
-            // Network exception from _getProviderIP - check if we should try fallback
-            if (mid == appUser.mid) {
-                // For appUser, try entry IP fallback
-                print("DEBUG: [getProviderIP] Network error for appUser, trying entry IP fallback")
-                guard let entryIP = try await findEntryIP() else {
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
-                }
-                let ip = try await _getProviderIP(appUser.mid, v4Only: v4Only, hproseClient: clientPool.getClientByIP(for: entryIP))
-                if let ip = ip {
-                    appUser.baseUrl = URL(string: "http://\(ip)")
-                }
-                return try await _getProviderIP(mid, v4Only: v4Only)
-            } else {
-                // For non-appUser, re-throw network exception to trigger retry
-                print("WARNING: [getProviderIP] Network error for \(mid) - re-throwing to trigger retry")
-                throw error
-            }
+
+        // get_provider_ips is a discovery operation — always use the entry node,
+        // not appUser.hproseClient which may point to a provider node after login/logout.
+        guard let entryIP = try await findEntryIP() else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Failed to initialize app entry with any URL", comment: "App initialization error")])
         }
+        let entryClient = clientPool.getClientByIP(for: entryIP)
+
+        let providerIP = try await _getProviderIP(mid, v4Only: v4Only, hproseClient: entryClient)
+        if providerIP == nil {
+            print("DEBUG: [getProviderIP] No provider IP found for \(mid) - user not found or all IPs unhealthy")
+        }
+        return providerIP
     }
     
     private func _getProviderIP(

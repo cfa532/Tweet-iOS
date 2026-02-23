@@ -506,6 +506,12 @@ struct TweetListView: View {
                 }
             }
 
+            // Yield so SwiftUI/UIKit can render cached tweets before we start the server fetch.
+            // Without this, the server Task can run immediately and the list may not show cache first.
+            if hasCachedContent {
+                await Task.yield()
+            }
+
             // Prewarm singleton players based on the first available cached video (best-effort).
             // Defer during initial startup to prevent hangs
             Task.detached(priority: .background) {
