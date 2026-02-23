@@ -273,7 +273,45 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         }
         singletonPlayer?.pause()
         isPlaying = false
-        print("🎬 [FullScreenVideoManager] Deactivated - lifecycle observers removed, player preserved for re-entry")
+
+        // Cancel all timers and observers that could wake the player back up.
+        // Without this, retryWorkItem fires after 3 s, sees rate==0, and calls
+        // player.play() — causing audio to bleed into the feed after dismiss.
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        bufferObserver?.invalidate()
+        bufferObserver = nil
+        cleanupObservers()         // removes timeControlStatus, buffer, loaded-ranges KVO
+        if let observer = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoCompletionObserver = nil
+        }
+        isBuffering = false
+
+        // Capture a still frame from the singleton player so the feed cell has a
+        // thumbnail cover while its own player layer re-initialises on return.
+        // This matters most when the feed cell was still loading when fullscreen
+        // opened — VideoLastFrameCache will be empty but the fullscreen played
+        // the video, so we can extract a frame from its (already-buffered) asset.
+        if let player = singletonPlayer,
+           let asset = player.currentItem?.asset,
+           let videoMid = currentVideoMid,
+           VideoLastFrameCache.shared.image(for: videoMid) == nil {
+            let captureTime = player.currentTime()
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 720, height: 720)
+            Task.detached(priority: .utility) {
+                if let cgImage = try? generator.copyCGImage(at: captureTime, actualTime: nil) {
+                    let image = UIImage(cgImage: cgImage)
+                    await MainActor.run {
+                        VideoLastFrameCache.shared.set(image, for: videoMid)
+                    }
+                }
+            }
+        }
+
+        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, player preserved for re-entry")
     }
 
     /// Set the feed's video list for fullscreen browsing (called before presenting MediaBrowserView)
@@ -1151,6 +1189,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Check if player is stalled and retry
     private func checkAndRetryIfStalled() {
+        // Don't retry if fullscreen is no longer active — player was intentionally paused.
+        guard isActive else { return }
         guard let player = singletonPlayer, let playerItem = player.currentItem else { return }
         
         // If player is stuck (not playing and rate is 0), force a seek to trigger reload

@@ -315,10 +315,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             let hasThumbnail = imageView.image != nil
             imageView.isHidden = !hasThumbnail
             videoPlayerView.isHidden = false
-            if hasThumbnail {
-                loadingSpinner.stopAnimating()
-            } else {
+            // Show spinner when coordinator wants to play (primary video) even if
+            // a thumbnail is already visible — the thumbnail is just a cover while
+            // the player initialises, and the user needs feedback that loading is
+            // in progress.  For non-primary videos preloading in the background,
+            // keep the spinner off to avoid distracting chrome.
+            if coordinatorWantsToPlay || !hasThumbnail {
                 loadingSpinner.startAnimating()
+            } else {
+                loadingSpinner.stopAnimating()
             }
         case .playerReady:
             // Keep showing thumbnail for non-primary videos to avoid black screen
