@@ -2207,11 +2207,70 @@ public class LocalHTTPServer: @unchecked Sendable {
         let pathComponents = cachePath.components(separatedBy: "/")
         let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
         let isSegment = cachePath.hasSuffix(".ts")
-        let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
 
+        // Stream .ts segments to AVPlayer as bytes arrive from IPFS.
+        // AVPlayer can render the first frame after the initial keyframe (~100–300 KB)
+        // instead of waiting for the full 4–5 MB segment to download.
+        // HEAD requests are routed through fetchWithRetry (we only need headers, not a stream).
+        if isSegment && method == "GET" {
+            streamSegmentAndServe(url: url, cachePath: cachePath, connection: connection, mediaID: mediaID, completion: completion ?? {})
+            return
+        }
+
+        let maxAttempts = isSegment ? 3 : 1  // Retry segment downloads (like ExoPlayer)
         fetchWithRetry(url: url, cachePath: cachePath, connection: connection, method: method, mediaID: mediaID, attempt: 1, maxAttempts: maxAttempts, completion: completion)
     }
     
+    /// Stream a `.ts` segment from IPFS to `connection` byte-by-byte as the download progresses,
+    /// then write the completed segment to disk for caching.
+    ///
+    /// Unlike `fetchWithRetry` (which buffers the whole response before serving), this method
+    /// forwards `URLSessionDataDelegate.didReceive data` chunks directly to the `NWConnection`
+    /// so AVPlayer can start rendering the first video frame as soon as the initial keyframe
+    /// bytes arrive (~100–300 KB), rather than waiting for the full 4–5 MB segment.
+    ///
+    /// The session is registered in `streamingSessions` so `cancelDownloads(for:)` can cancel
+    /// it when the player is cleared.
+    private func streamSegmentAndServe(url: URL, cachePath: String, connection: NWConnection, mediaID: String, completion: @escaping () -> Void) {
+        let filename = URL(fileURLWithPath: cachePath).lastPathComponent
+        let sessionKey = "\(mediaID)/stream/\(filename)"
+
+        let delegate = SegmentStreamDelegate(
+            connection: connection,
+            cachePath: cachePath,
+            mediaID: mediaID,
+            sessionKey: sessionKey,
+            buildHeaders: { [weak self] statusCode, headers in
+                self?.buildHTTPHeaderData(statusCode: statusCode, headers: headers) ?? Data()
+            },
+            sendFallbackError: { [weak self] conn in
+                self?.sendResponse(connection: conn, statusCode: 500, headers: [:], body: nil)
+            },
+            removeSession: { [weak self] key in
+                self?.streamingSessionsLock.lock()
+                self?.streamingSessions.removeValue(forKey: key)
+                self?.streamingSessionsLock.unlock()
+            },
+            completion: completion
+        )
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 300
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+
+        // Track session so cancelDownloads(for: mediaID) can invalidate it.
+        streamingSessionsLock.lock()
+        streamingSessions[sessionKey] = session
+        streamingSessionsLock.unlock()
+
+        session.dataTask(with: url).resume()
+        // `session` and `delegate` are kept alive by the running task until completion.
+    }
+
     /// Download and cache file without serving (for background downloads when connection is closing)
     private func downloadAndCacheOnly(url: URL, cachePath: String, completion: (() -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
@@ -2684,10 +2743,128 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             print("⚠️ [PROGRESSIVE CACHE] No moov atom found in first \(buffer.count) bytes - file may not be streamable")
             return false
-            
+
         } catch {
             print("⚠️ [PROGRESSIVE CACHE] Failed to validate cache file: \(error.localizedDescription)")
             return false
         }
+    }
+}
+
+// MARK: - SegmentStreamDelegate
+
+/// `URLSessionDataDelegate` that pipes MPEG-TS segment bytes from IPFS to an AVPlayer
+/// `NWConnection` as they arrive, rather than buffering the whole download first.
+///
+/// **Why this matters for IPFS**: A typical HLS segment is 4–5 MB.  On a slow IPFS node
+/// the full download can take 20–30 s, keeping `AVPlayerItem.status` stuck at `.unknown`
+/// (black screen) the whole time.  By forwarding each `didReceive data` chunk immediately,
+/// AVPlayer sees real bytes and can transition to `.readyToPlay` once it has decoded the
+/// first keyframe — usually within the first 100–300 KB (~1–3 s on a slow connection).
+///
+/// Disk caching still happens: the full segment is written to disk after the download
+/// finishes so subsequent requests are served instantly from cache.
+private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
+    private let connection: NWConnection
+    private let cachePath: String
+    private let mediaID: String
+    private let sessionKey: String
+    /// Returns the raw bytes for an HTTP response status line + headers.
+    private let buildHeaders: (Int, [String: String]) -> Data
+    /// Sends an error response on `connection` when the download fails before any bytes
+    /// were forwarded (so AVPlayer knows to stop waiting rather than hanging).
+    private let sendFallbackError: (NWConnection) -> Void
+    /// Removes this session from `LocalHTTPServer.streamingSessions` on completion.
+    private let removeSession: (String) -> Void
+    private let completion: () -> Void
+
+    private var diskBuffer = Data()
+    private var headersSent = false
+    private var contentLength: Int64 = -1
+
+    init(connection: NWConnection,
+         cachePath: String,
+         mediaID: String,
+         sessionKey: String,
+         buildHeaders: @escaping (Int, [String: String]) -> Data,
+         sendFallbackError: @escaping (NWConnection) -> Void,
+         removeSession: @escaping (String) -> Void,
+         completion: @escaping () -> Void) {
+        self.connection = connection
+        self.cachePath = cachePath
+        self.mediaID = mediaID
+        self.sessionKey = sessionKey
+        self.buildHeaders = buildHeaders
+        self.sendFallbackError = sendFallbackError
+        self.removeSession = removeSession
+        self.completion = completion
+    }
+
+    // MARK: URLSessionDataDelegate
+
+    func urlSession(_ session: URLSession,
+                    dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            sendFallbackError(connection)
+            completionHandler(.cancel)
+            completion()
+            return
+        }
+
+        contentLength = http.expectedContentLength
+        var headers: [String: String] = [
+            "Content-Type": "video/mp2t",
+            "Accept-Ranges": "bytes"
+        ]
+        if contentLength > 0 {
+            headers["Content-Length"] = "\(contentLength)"
+        }
+
+        // Send HTTP response headers to AVPlayer immediately.
+        // AVPlayer starts reading the body stream and will render the first frame
+        // as soon as it receives enough bytes to decode the initial keyframe.
+        let headerData = buildHeaders(200, headers)
+        connection.send(content: headerData, isComplete: false, completion: .contentProcessed { _ in })
+        headersSent = true
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession,
+                    dataTask: URLSessionDataTask,
+                    didReceive data: Data) {
+        diskBuffer.append(data)
+        // NWConnection queues sends internally and delivers them in order over TCP.
+        connection.send(content: data, isComplete: false, completion: .contentProcessed { _ in })
+    }
+
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    didCompleteWithError error: Error?) {
+        defer {
+            removeSession(sessionKey)
+            completion()
+        }
+
+        if let error = error {
+            let nsError = error as NSError
+            // If headers were never sent, tell AVPlayer the request failed so it retries.
+            // If headers were already sent we can't do anything — the connection will close
+            // and AVPlayer will detect the incomplete response on its own.
+            if !headersSent && nsError.code != NSURLErrorCancelled {
+                sendFallbackError(connection)
+                BlackList.shared.recordFailure(mediaID)
+            }
+            return
+        }
+
+        // Write the fully-downloaded segment to disk for instant cache hits on future requests.
+        let cacheURL = URL(fileURLWithPath: cachePath)
+        guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
+            return // Cache directory was deleted by clearPlayerForMediaID — skip write
+        }
+        try? diskBuffer.write(to: cacheURL)
+        BlackList.shared.recordSuccess(mediaID)
     }
 }
