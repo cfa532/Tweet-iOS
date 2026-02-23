@@ -947,8 +947,16 @@ struct SingletonVideoPlayerView: View {
                             }
                         )
                 } else {
-                    // Loading placeholder or broken player - attempt to reload
-                    Color.black
+                    // No player, no item, or different video — show lastframe as placeholder.
+                    // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
+                    // and the initial loading state before the first item is attached.
+                    if let thumbnail = VideoLastFrameCache.shared.image(for: mid) {
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        Color.black
+                    }
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
@@ -957,7 +965,9 @@ struct SingletonVideoPlayerView: View {
                 // While the new AVPlayerItem is loading (status not yet .readyToPlay),
                 // cover the black player surface with the cached last frame so the user
                 // sees the video image instead of black during the IPFS buffering phase.
-                if !manager.isItemReady, manager.currentVideoMid == mid,
+                // currentVideoMid check dropped — the item may not yet be assigned but
+                // this video's thumbnail should still cover the transient black flash.
+                if !manager.isItemReady,
                    let thumbnail = VideoLastFrameCache.shared.image(for: mid) {
                     Image(uiImage: thumbnail)
                         .resizable()

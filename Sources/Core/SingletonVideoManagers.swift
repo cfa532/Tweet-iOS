@@ -254,10 +254,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         teardownAppLifecycleNotifications()
 
         // Save playback position so the feed cell and the next fullscreen open can restore it.
-        // Do NOT call clearSingletonPlayer() here — keeping the item alive means re-opening
-        // the same video is instant (loadVideo() short-circuits and resumes without a network
-        // round-trip). clearSingletonPlayer() is called by loadVideo() when a DIFFERENT video
-        // is requested, or by recoverFromBackground() when the player becomes broken.
         if let player = singletonPlayer,
            let videoMid = currentVideoMid,
            player.currentItem != nil {
@@ -271,8 +267,17 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 videoMid: videoMid, currentTime: currentTime,
                 wasPlaying: wasPlaying, context: .mediaCell, duration: duration)
         }
-        singletonPlayer?.pause()
+
+        // CRITICAL: Set intent flags to false BEFORE calling pause().
+        // AVFoundation fires KVO callbacks (timeControlStatus, loadedTimeRanges, etc.)
+        // on background threads when the player pauses. Those callbacks run
+        // updateBufferingState which checks isPlaying/wasPlayingBeforeWaiting to decide
+        // whether to call player.play(). If we set these flags AFTER pause(), a background
+        // callback can race and see isPlaying=true, then call player.play() — restarting
+        // audio right after we intentionally stopped it. Setting them first prevents this.
         isPlaying = false
+        wasPlayingBeforeWaiting = false
+        singletonPlayer?.pause()
 
         // Cancel all timers and observers that could wake the player back up.
         // Without this, retryWorkItem fires after 3 s, sees rate==0, and calls
@@ -290,9 +295,6 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
 
         // Capture a still frame from the singleton player so the feed cell has a
         // thumbnail cover while its own player layer re-initialises on return.
-        // This matters most when the feed cell was still loading when fullscreen
-        // opened — VideoLastFrameCache will be empty but the fullscreen played
-        // the video, so we can extract a frame from its (already-buffered) asset.
         if let player = singletonPlayer,
            let asset = player.currentItem?.asset,
            let videoMid = currentVideoMid,
@@ -311,7 +313,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             }
         }
 
-        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, player preserved for re-entry")
+        // Clear the current item so the player truly stops: no decoding, no buffers, no resource use.
+        // Re-opening fullscreen will reattach an item (from cache when possible).
+        singletonPlayer?.replaceCurrentItem(with: nil)
+
+        print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, player item cleared")
     }
 
     /// Set the feed's video list for fullscreen browsing (called before presenting MediaBrowserView)
@@ -1204,9 +1210,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // Force seek to current position to trigger segment download
             player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player, weak playerItem] finished in
                 guard finished, let self = self, let player = player, let item = playerItem else { return }
-                
+
                 Task { @MainActor in
-                    
+                    // Bail if fullscreen was dismissed while seek was in flight.
+                    guard self.isActive else { return }
+
                     // Wait for buffered data before calling play()
                     self.bufferObserver = item.observe(\.loadedTimeRanges, options: [.new]) { [weak self, weak player] observedItem, _ in
                         let hasData = !observedItem.loadedTimeRanges.isEmpty
@@ -1215,32 +1223,38 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             let timeRange = observedItem.loadedTimeRanges[0].timeRangeValue
                             bufferedDuration = CMTimeGetSeconds(timeRange.duration)
                         }
-                        
+
                         // Only resume when we have at least 1 second of buffer
                         if hasData && bufferedDuration >= 1.0 {
                             Task { @MainActor in
                                 guard let self = self, let player = player else { return }
-                                
+                                // Bail if fullscreen was dismissed while waiting for buffer.
+                                // deactivate() sets isActive=false + pauses the player, but the
+                                // KVO callback may already be enqueued on the main actor — this
+                                // guard prevents the stale play() call from re-starting audio.
+                                guard self.isActive else { return }
+
                                 // Clean up observer
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
-                                
+
                                 // Resume playback
                                 if player.rate == 0 {
                                     player.play()
                                 }
-                                
+
                                 // Continue monitoring for future stalls
                                 self.startRetryMonitoring()
                             }
                         } else if hasData {
                         }
                     }
-                    
+
                     // Safety timeout: if no data after 20 seconds, give up this retry and continue monitoring
                     DispatchQueue.main.asyncAfter(deadline: .now() + 20.0) { [weak self] in
                         Task { @MainActor in
                             guard let self = self else { return }
+                            guard self.isActive else { return }
                             if self.bufferObserver != nil {
                                 self.bufferObserver?.invalidate()
                                 self.bufferObserver = nil
