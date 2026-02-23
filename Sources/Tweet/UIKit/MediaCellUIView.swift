@@ -750,10 +750,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Set up KVO + notification observers
         setupPlayerObservers(newPlayer)
 
-        // If item is already ready, handle immediately
+        // If item is already ready (e.g. cached player, or returning from fullscreen), update UI immediately.
+        // Otherwise we stay in .playerLoading until onReadyForDisplay fires, which may not fire for re-attached layers.
         if let item = newPlayer.currentItem,
            item.status == .readyToPlay {
             isPlayerLoaded = true
+            transitionTo(.playerReady)
             if coordinatorWantsToPlay {
                 if isVideoAtEnd(newPlayer) {
                     newPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
@@ -765,8 +767,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
             } else {
                 // Not going to play — seek to force AVPlayerLayer to decode a frame.
-                // onReadyForDisplay will fire → .playerReady
-                // Seek to 0.01s to force decode (seeking to current position is no-op)
+                // onReadyForDisplay will fire → .playerReady (if not already)
                 let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
                 newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
             }
