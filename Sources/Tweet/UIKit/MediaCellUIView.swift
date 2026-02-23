@@ -795,8 +795,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             self.player = nil
             self.isPlayerLoaded = false
-            self.loadingSpinner.stopAnimating()
-            self.videoCellState = .noContent
+            // Keep placeholder/lastframe visible — same logic as the .failed path.
+            if self.imageView.image != nil {
+                self.transitionTo(.thumbnail)
+            } else {
+                self.loadingSpinner.stopAnimating()
+                self.videoPlayerView.isHidden = true
+                self.videoCellState = .thumbnail
+            }
         }
     }
 
@@ -847,8 +853,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard let player = player, isPlayerLoaded else {
             print("\(logPrefix) Player not ready - will play when ready")
 
-            // Show loading state (spinner if no thumbnail, thumbnail if available)
-            if videoCellState == .noContent || videoCellState == .thumbnail {
+            // Show loading state whenever primary and not yet playing. Re-evaluate .playerLoading
+            // so spinner is on (coordinatorWantsToPlay is true). Include .playerReady so that when
+            // we scroll back and the cell was in .playerReady with spinner off, we show spinner again.
+            if videoCellState == .noContent || videoCellState == .thumbnail || videoCellState == .playerLoading || videoCellState == .playerReady {
                 transitionTo(.playerLoading)
             }
 
@@ -1183,6 +1191,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     }
                     self.player = nil
                     self.isPlayerLoaded = false
+                    // Keep placeholder/lastframe visible — don't leave a black rectangle.
+                    // If thumbnail is in imageView, transition to .thumbnail (hides videoPlayerView).
+                    // If no thumbnail, at minimum hide the black videoPlayerView.
+                    if self.imageView.image != nil {
+                        self.transitionTo(.thumbnail)
+                    } else {
+                        self.videoPlayerView.isHidden = true
+                        self.videoCellState = .thumbnail
+                    }
                 } else if item.status == .unknown {
                     // Log unknown status to diagnose why player is stuck
                     if let asset = item.asset as? AVURLAsset {

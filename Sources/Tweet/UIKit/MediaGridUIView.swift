@@ -415,7 +415,7 @@ class MediaGridUIView: UIView {
     }
 
     private func handleBecameInvisible() {
-        // Managed by individual cell visibility
+        // Managed by VideoPlaybackCoordinator and individual cell visibility.
     }
 
     // MARK: - Cleanup
