@@ -1745,6 +1745,42 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Cleanup
 
     private func cleanupVideoPlayer() {
+        // Capture last frame synchronously before tearing down the player,
+        // so re-rendered cells show the cached thumbnail instead of a black screen.
+        if isVideoAttachment,
+           let player = player,
+           let output = videoOutput,
+           let item = player.currentItem,
+           item.status == .readyToPlay,
+           let mid = attachment?.mid {
+            let playerTime = player.currentTime()
+            let hostItemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+            var pixelBuffer: CVPixelBuffer?
+            var displayTime = CMTime.zero
+            for d in [0.0, -0.08, -0.20, -0.40] {
+                let t = CMTime(seconds: max(0, playerTime.seconds + d), preferredTimescale: 600)
+                if t.isValid, let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) {
+                    pixelBuffer = pb
+                    break
+                }
+            }
+            if pixelBuffer == nil, hostItemTime.isValid {
+                pixelBuffer = output.copyPixelBuffer(forItemTime: hostItemTime, itemTimeForDisplay: &displayTime)
+            }
+            if let pixelBuffer {
+                Task.detached(priority: .utility) {
+                    let width = CVPixelBufferGetWidth(pixelBuffer)
+                    let height = CVPixelBufferGetHeight(pixelBuffer)
+                    guard width > 0, height > 0, width < 10000, height < 10000 else { return }
+                    guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else { return }
+                    if VideoFrameExtractor.isMostlyBlack(image) { return }
+                    await MainActor.run {
+                        VideoLastFrameCache.shared.set(image, for: mid)
+                    }
+                }
+            }
+        }
+
         if isVideoAttachment {
             print("\(logPrefix) 🧹 Cleanup video player")
         }
