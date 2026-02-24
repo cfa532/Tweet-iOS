@@ -182,14 +182,10 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 }
 
 // MARK: - Active Downloads Actor (Swift 6 Concurrency-Safe)
+/// Tracks which segment downloads are in progress using a simple Set.
+/// Waiters poll with Task.sleep — no CheckedContinuation, no leak risk.
 private actor ActiveDownloadsActor {
-    struct DownloadEntry {
-        let task: Task<Void, Never>
-        var waiters: [CheckedContinuation<Void, Never>] = []
-        var isCompleted: Bool = false
-    }
-
-    private var activeDownloads: [String: DownloadEntry] = [:]
+    private var activeDownloads: Set<String> = []
 
     /// MediaIDs whose players have been cleared.  Any pending dedup waiter or background
     /// retry for these mediaIDs should be skipped immediately rather than retried.
@@ -197,66 +193,26 @@ private actor ActiveDownloadsActor {
     private var cancelledMediaIDs: Set<String> = []
 
     func hasDownload(for key: String) -> Bool {
-        return activeDownloads[key] != nil
+        return activeDownloads.contains(key)
     }
 
-    func createEntry(for key: String, task: Task<Void, Never>) {
-        activeDownloads[key] = DownloadEntry(task: task)
+    func markDownloadStarted(for key: String) {
+        activeDownloads.insert(key)
     }
 
-    func addWaiter(for key: String, continuation: CheckedContinuation<Void, Never>) {
-        if activeDownloads[key]?.isCompleted == true {
-            // Download already finished — resume immediately
-            continuation.resume()
-        } else if activeDownloads[key] != nil {
-            activeDownloads[key]!.waiters.append(continuation)
-        } else {
-            // Entry was removed (cancelled) while waiter was being set up
-            continuation.resume()
-        }
-    }
-
-    /// Signal download completion: wake all waiters and remove the entry.
-    func completeDownload(for key: String) {
-        guard let entry = activeDownloads.removeValue(forKey: key) else { return }
-        for waiter in entry.waiters {
-            waiter.resume()
-        }
-    }
-
-    /// Cancel and remove a single entry, waking all waiters.
-    func removeTask(for key: String) {
-        guard let entry = activeDownloads.removeValue(forKey: key) else { return }
-        entry.task.cancel()
-        for waiter in entry.waiters {
-            waiter.resume()
-        }
+    func markDownloadCompleted(for key: String) {
+        activeDownloads.remove(key)
     }
 
     func cancelAllTasks() {
-        for (_, entry) in activeDownloads {
-            entry.task.cancel()
-            for waiter in entry.waiters {
-                waiter.resume()
-            }
-        }
         activeDownloads.removeAll()
     }
 
-    /// Cancel all active download tasks whose cache-path key contains the given mediaID
-    /// and mark the mediaID as cancelled so that any still-running URLSession download
-    /// that completes after cancellation does NOT spawn a new background retry.
+    /// Remove all active download keys containing the given mediaID
+    /// and mark it as cancelled so in-flight URLSession completions don't retry.
     func cancelTasks(for mediaID: String) {
         cancelledMediaIDs.insert(mediaID)
-        var keysToRemove: [String] = []
-        for (key, _) in activeDownloads {
-            if key.contains(mediaID) {
-                keysToRemove.append(key)
-            }
-        }
-        for key in keysToRemove {
-            removeTask(for: key)
-        }
+        activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
     }
 
     /// Returns true if the player for this mediaID was cleared while a download was in-flight.
@@ -1261,8 +1217,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }) ?? "unknown"
 
         // DEDUPLICATION: Check if another request is already downloading this segment.
-        // Waiters register a CheckedContinuation that the downloader wakes on completion.
-        // No empty placeholder Task {} — waiters are woken by the real download finishing.
+        // Waiters poll with Task.sleep — no CheckedContinuation, no leak risk.
         let hasExisting = await activeDownloadsActor.hasDownload(for: downloadKey)
 
         if hasExisting {
@@ -1274,39 +1229,39 @@ public class LocalHTTPServer: @unchecked Sendable {
                 break
             }
 
-            // Wait for existing download to complete (with 15s timeout)
-            let completed = await withTaskGroup(of: Bool.self) { group in
-                group.addTask {
-                    await withCheckedContinuation { continuation in
-                        Task {
-                            await self.activeDownloadsActor.addWaiter(for: downloadKey, continuation: continuation)
-                        }
+            // Poll until: file appears on disk, download removed from active set, or 15s timeout
+            let pollInterval: UInt64 = 500_000_000 // 0.5s
+            let maxPolls = 30 // 30 × 0.5s = 15s
+
+            for _ in 0..<maxPolls {
+                try? await Task.sleep(nanoseconds: pollInterval)
+
+                // File appeared on disk — serve it
+                if FileManager.default.fileExists(atPath: cachePath) {
+                    autoreleasepool {
+                        serveFile(path: cachePath, connection: connection, method: method)
                     }
-                    return true
+                    return
                 }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: 15_000_000_000)
-                    return false
+
+                // Download finished (removed from active set) but file missing — download failed
+                if !(await activeDownloadsActor.hasDownload(for: downloadKey)) {
+                    break
                 }
-                return await group.next() ?? false
+
+                // Player was cleared — don't retry
+                if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
+
+                // Connection closed — just return
+                switch connection.state {
+                case .cancelled, .failed: return
+                default: break
+                }
             }
 
-            // After waking, try to serve from cache
-            if FileManager.default.fileExists(atPath: cachePath) {
-                autoreleasepool {
-                    serveFile(path: cachePath, connection: connection, method: method)
-                }
-                return
-            }
-
-            // Player was cleared — don't retry
+            // After timeout or download failure, check again
             if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
 
-            if !completed {
-                print("⚠️ [LocalHTTPServer] Timeout waiting for segment download: \(fullRealURL.lastPathComponent)")
-            }
-
-            // Connection closed — just return; AVPlayer will retry
             switch connection.state {
             case .cancelled, .failed: return
             default: break
@@ -1315,27 +1270,12 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Fall through to become a new downloader (no untracked background spawns)
         }
 
-        // This request becomes the downloader — fetch from server, serve, and cache.
-        // Create the download task first, then register it atomically.
-        let downloadTask = Task {
-            await withCheckedContinuation { continuation in
-                fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
-                    continuation.resume()
-                }
-            }
+        // This request becomes the downloader — mark active, fetch, then mark completed.
+        await activeDownloadsActor.markDownloadStarted(for: downloadKey)
 
-            if !FileManager.default.fileExists(atPath: cachePath) {
-                let wasCancelled = await self.activeDownloadsActor.isMediaIDCancelled(mediaID)
-                if !wasCancelled {
-                    print("⚠️ [DEDUP] Download completed but file not found: \(fullRealURL.lastPathComponent)")
-                }
-            }
-
-            // Signal all waiters and remove entry
-            await self.activeDownloadsActor.completeDownload(for: downloadKey)
+        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
+            Task { await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey) }
         }
-
-        await activeDownloadsActor.createEntry(for: downloadKey, task: downloadTask)
     }
     
     private func fetchHEADWithRetry(url: URL, mediaID: String, attempt: Int = 1, maxAttempts: Int = 3, completion: @escaping (HTTPURLResponse?) -> Void) {

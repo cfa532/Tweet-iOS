@@ -984,16 +984,35 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
         bufferingTimeoutTask?.cancel()
         bufferingTimeoutTask = nil
+        videoRetryTask?.cancel()
+        videoRetryTask = nil
 
         if let player = player {
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "coordinatorStop")
-            if videoCellState == .playing {
+
+            if !isPlayerLoaded && videoCellState == .playerLoading {
+                // Player still loading (itemStatus unknown) — release it immediately
+                // to free network resources instead of waiting for the 15s stuck timer.
+                SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                self.player = nil
+                isPlayerLoaded = false
+                setupPlayerTask = nil
+                videoRetryCount = 0
+                if imageView.image != nil {
+                    transitionTo(.thumbnail)
+                } else {
+                    transitionTo(.noContent)
+                    loadingSpinner.stopAnimating()
+                }
+            } else if videoCellState == .playing {
                 transitionTo(.paused)
+                player.pause()
+            } else {
+                player.pause()
             }
-            player.pause()
         }
         VideoStateCache.shared.markAsStoppedByCoordinator(mid)
     }
@@ -1518,6 +1537,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             } else {
                 videoPlayerView.isHidden = true
                 videoCellState = .thumbnail
+            }
+            return
+        }
+
+        // Don't auto-retry if coordinator has stopped this video — save retries for
+        // when the coordinator actually wants to play it (scrolls back to it).
+        if !coordinatorWantsToPlay {
+            print("\(logPrefix) ❌ \(reason) - coordinator stopped, skipping retry")
+            videoRetryCount = 0  // Fresh retry budget when coordinator plays again
+            if imageView.image != nil {
+                transitionTo(.thumbnail)
+            } else {
+                transitionTo(.noContent)
+                loadingSpinner.stopAnimating()
             }
             return
         }
