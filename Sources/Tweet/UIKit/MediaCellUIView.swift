@@ -550,10 +550,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         }
 
-        // Tap gesture for fullscreen
+        // Tap gesture for fullscreen — on both videoPlayerView and imageView so that
+        // any visible video is tappable (thumbnail state or non-primary use imageView).
         let tap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
         videoPlayerView.addGestureRecognizer(tap)
         videoPlayerView.isUserInteractionEnabled = true
+        let imageTap = UITapGestureRecognizer(target: self, action: #selector(videoTapped))
+        imageView.addGestureRecognizer(imageTap)
+        imageView.isUserInteractionEnabled = true
 
         // Listen for .stopAllVideos (posted by non-coordinator code like handleVideoTap)
         stopAllObserver = NotificationCenter.default.addObserver(
@@ -1782,6 +1786,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoPlayerView.setPlayer(nil)
         videoPlayerView.isHidden = true
         videoPlayerView.gestureRecognizers?.forEach { videoPlayerView.removeGestureRecognizer($0) }
+        imageView.gestureRecognizers?.forEach { imageView.removeGestureRecognizer($0) }
         player = nil
 
         // Reset state
