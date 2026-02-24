@@ -22,6 +22,7 @@ enum VideoCellState {
     case playerReady    // Player rendered first frame, paused
     case playing        // Actively playing
     case paused         // Paused, showing last rendered frame
+    case failed         // Loading failed — showing retry button over thumbnail/dark backdrop
 }
 
 // MARK: - MediaCellUIView
@@ -61,7 +62,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let config = UIImage.SymbolConfiguration(pointSize: 28, weight: .medium)
         btn.setImage(UIImage(systemName: "arrow.clockwise.circle", withConfiguration: config), for: .normal)
         btn.tintColor = .secondaryLabel
-        btn.addTarget(self, action: #selector(retryImageLoad), for: .touchUpInside)
+        btn.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
         btn.isHidden = true
         return btn
     }()
@@ -161,6 +162,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Video cell state machine — controls imageView/videoPlayerView/spinner visibility
     private var videoCellState: VideoCellState = .noContent
+
+    /// Video retry count for automatic retry with backoff (max 2 auto-retries)
+    private var videoRetryCount: Int = 0
+
+    /// Scheduled automatic retry task (cancelled on reuse/visibility change)
+    private var videoRetryTask: DispatchWorkItem?
+
+    /// Maximum automatic retries before showing manual retry button
+    private static let maxAutoRetries = 2
+
+    /// Retry delays: 2s for first auto-retry, 5s for second
+    private static let retryDelays: [TimeInterval] = [2.0, 5.0]
 
     /// Track when player configuration started (for timing logs)
     private var playerConfigureStartTime: Date?
@@ -377,6 +390,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
                 videoPlayerView.observeReadyForDisplay()
             }
+        case .failed:
+            let hasThumbnail = imageView.image != nil
+            imageView.isHidden = !hasThumbnail
+            videoPlayerView.isHidden = true
+            loadingSpinner.stopAnimating()
+            retryButton.isHidden = false
         }
     }
 
@@ -679,11 +698,29 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
+                let nsError = error as NSError
+                let isCancellation = nsError.code == NSURLErrorCancelled || error is CancellationError
+                let isBlacklisted = nsError.domain == "SharedAssetCache" && nsError.code == -2
                 await MainActor.run { [weak self] in
                     guard let self else { return }
-                    print("\(self.logPrefix) ❌ Player creation failed: \(error)")
-                    self.loadingSpinner.stopAnimating()
-                    self.setupPlayerTask = nil
+                    if isCancellation {
+                        print("\(self.logPrefix) ⚠️ Player creation cancelled")
+                        self.setupPlayerTask = nil
+                        return
+                    }
+                    if isBlacklisted {
+                        print("\(self.logPrefix) 🚫 Video blacklisted - no retry")
+                        self.loadingSpinner.stopAnimating()
+                        self.setupPlayerTask = nil
+                        if self.imageView.image != nil {
+                            self.transitionTo(.thumbnail)
+                        } else {
+                            self.videoPlayerView.isHidden = true
+                            self.videoCellState = .thumbnail
+                        }
+                        return
+                    }
+                    self.handleVideoLoadFailure(reason: "Player creation failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -793,21 +830,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             let url = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
             print("\(self.logPrefix) ⚠️ STUCK PLAYER recovery - 15s timeout, status: \(status), url: \(url)")
             // Release the stuck player but keep disk cache — server was slow, not corrupt.
-            // Preserving partial disk cache lets the next attempt resume where it left off
-            // instead of re-downloading all segments from scratch.
             if let mid = self.attachment?.mid {
                 SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
             }
-            self.player = nil
-            self.isPlayerLoaded = false
-            // Keep placeholder/lastframe visible — same logic as the .failed path.
-            if self.imageView.image != nil {
-                self.transitionTo(.thumbnail)
-            } else {
-                self.loadingSpinner.stopAnimating()
-                self.videoPlayerView.isHidden = true
-                self.videoCellState = .thumbnail
-            }
+            self.handleVideoLoadFailure(reason: "15s stuck player timeout, status: \(status)")
         }
     }
 
@@ -857,6 +883,22 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
             print("\(logPrefix) Player not ready - will play when ready")
+
+            // If video previously failed, trigger a fresh retry cycle
+            if videoCellState == .failed {
+                print("\(logPrefix) 🔄 Coordinator play on failed video - triggering retry")
+                retryButton.isHidden = true
+                videoRetryCount = 0
+                if let mid = attachment?.mid {
+                    SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                }
+                if let att = attachment, let url = att.getUrl(effectiveBaseUrl),
+                   let parentTweet = parentTweet {
+                    transitionTo(imageView.image != nil ? .thumbnail : .noContent)
+                    acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+                }
+                return
+            }
 
             // Show loading state whenever primary and not yet playing. Re-evaluate .playerLoading
             // so spinner is on (coordinatorWantsToPlay is true). Include .playerReady so that when
@@ -1173,20 +1215,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         let nsError = error as NSError
                         print("\(self.logPrefix) ❌ Error detail: domain=\(nsError.domain), code=\(nsError.code)")
                     }
-                    self.loadingSpinner.stopAnimating()
-                    // Release the failed player from SharedAssetCache to cancel its network
-                    // connections and free memory. Without this, failed CachingPlayerItems
-                    // and their URLSession tasks accumulate on every network error.
-                    //
-                    // Guard: if the fullscreen player is currently loading/showing this same
-                    // video, do NOT clear — clearPlayerForMediaID calls cancelDownloads which
-                    // would kill the fullscreen player's in-flight streaming sessions, causing
-                    // a black screen in the fullscreen view.
-                    //
-                    // Pass deleteDiskCache:false — player failure is usually transient (app
-                    // startup, IPFS slow, network blip).  Wiping the disk cache on every
-                    // failure defeats progressive caching and forces a full re-download each
-                    // time.  The stuck-recovery path already uses deleteDiskCache:false.
+                    // Release the failed player from SharedAssetCache. Guard: don't clear
+                    // if fullscreen player owns this video (would kill its streaming).
                     if let mid = self.attachment?.mid {
                         let fullscreenOwnsMid = OverlayVisibilityCoordinator.shared.isCovered
                             && FullScreenVideoManager.shared.currentVideoMid == mid
@@ -1194,17 +1224,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
                         }
                     }
-                    self.player = nil
-                    self.isPlayerLoaded = false
-                    // Keep placeholder/lastframe visible — don't leave a black rectangle.
-                    // If thumbnail is in imageView, transition to .thumbnail (hides videoPlayerView).
-                    // If no thumbnail, at minimum hide the black videoPlayerView.
-                    if self.imageView.image != nil {
-                        self.transitionTo(.thumbnail)
-                    } else {
-                        self.videoPlayerView.isHidden = true
-                        self.videoCellState = .thumbnail
-                    }
+                    self.handleVideoLoadFailure(reason: "playerItem.status == .failed: \(errorMsg)")
                 } else if item.status == .unknown {
                     // Log unknown status to diagnose why player is stuck
                     if let asset = item.asset as? AVURLAsset {
@@ -1411,6 +1431,35 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     // MARK: - Tap Handling
 
+    @objc private func retryTapped() {
+        if isVideoAttachment {
+            retryVideoLoad()
+        } else {
+            retryImageLoad()
+        }
+    }
+
+    private func retryVideoLoad() {
+        guard isVideoAttachment,
+              let att = attachment,
+              let url = att.getUrl(effectiveBaseUrl),
+              let parentTweet = parentTweet else { return }
+
+        print("\(logPrefix) 🔄 Manual video retry")
+        retryButton.isHidden = true
+        videoRetryCount = 0
+
+        // Clear the failed player from SharedAssetCache for a fresh attempt
+        if let mid = attachment?.mid {
+            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+        }
+
+        player = nil
+        isPlayerLoaded = false
+        transitionTo(imageView.image != nil ? .thumbnail : .noContent)
+        acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+    }
+
     @objc private func retryImageLoad() {
         guard let attachment, attachment.type == .image,
               let url = attachment.getUrl(effectiveBaseUrl) else { return }
@@ -1418,6 +1467,67 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Clear permanently-failed status so GlobalImageLoadManager will retry
         GlobalImageLoadManager.shared.retryLoad(id: attachment.mid)
         loadImage(attachment: attachment, url: url)
+    }
+
+    /// Central handler for all video loading failures. Manages automatic retry
+    /// with backoff (2s, 5s), then shows retry button when exhausted.
+    private func handleVideoLoadFailure(reason: String) {
+        guard isVideoAttachment, let mid = attachment?.mid else { return }
+
+        // Cancel any pending retry
+        videoRetryTask?.cancel()
+        videoRetryTask = nil
+
+        // Clean up player state
+        loadingSpinner.stopAnimating()
+        player = nil
+        isPlayerLoaded = false
+        setupPlayerTask = nil
+
+        // Don't auto-retry if cell is not visible
+        guard isVisible else {
+            print("\(logPrefix) ❌ \(reason) - cell not visible, skipping retry")
+            if imageView.image != nil {
+                transitionTo(.thumbnail)
+            } else {
+                videoPlayerView.isHidden = true
+                videoCellState = .thumbnail
+            }
+            return
+        }
+
+        if videoRetryCount < Self.maxAutoRetries {
+            let delay = Self.retryDelays[videoRetryCount]
+            videoRetryCount += 1
+            print("\(logPrefix) 🔄 Auto-retry #\(videoRetryCount) in \(delay)s after: \(reason)")
+
+            // Show thumbnail while waiting (not .failed state yet)
+            if imageView.image != nil {
+                transitionTo(.thumbnail)
+            } else {
+                transitionTo(.noContent)
+                loadingSpinner.stopAnimating()  // Don't spin during wait
+            }
+
+            let retryWork = DispatchWorkItem { [weak self] in
+                guard let self, self.isVisible,
+                      self.attachment?.mid == mid,
+                      let att = self.attachment,
+                      let url = att.getUrl(self.effectiveBaseUrl),
+                      let parentTweet = self.parentTweet else { return }
+
+                print("\(self.logPrefix) 🔄 Executing auto-retry #\(self.videoRetryCount)")
+                SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+            }
+            videoRetryTask = retryWork
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: retryWork)
+        } else {
+            // All auto-retries exhausted — show retry button
+            print("\(logPrefix) ❌ \(reason) - showing retry button after \(videoRetryCount) auto-retries")
+            coordinatorWantsToPlay = false
+            transitionTo(.failed)
+        }
     }
 
     @objc private func imageTapped() {
@@ -1558,6 +1668,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 (videoCoordinator ?? .shared).registerDelegate(self, forIdentifier: id)
             }
 
+            // If video was in failed state, trigger a fresh retry on becoming visible again
+            if isVideoAttachment && videoCellState == .failed {
+                print("\(logPrefix) 🔄 Became visible with failed video - auto-retrying")
+                videoRetryCount = 0
+                retryButton.isHidden = true
+                SharedAssetCache.shared.clearPlayerForMediaID(attachment.mid, deleteDiskCache: false)
+                if let url = attachment.getUrl(effectiveBaseUrl), let parentTweet = parentTweet {
+                    transitionTo(imageView.image != nil ? .thumbnail : .noContent)
+                    acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
+                }
+            }
+
             // Setup foreground observer for images and videos
             setupForegroundObserver()
         } else {
@@ -1575,9 +1697,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 (videoCoordinator ?? .shared).unregisterDelegate(forIdentifier: id)
             }
 
-            // Cancel in-flight player acquisition task
+            // Cancel in-flight player acquisition task and pending retry
             setupPlayerTask?.cancel()
             setupPlayerTask = nil
+            videoRetryTask?.cancel()
+            videoRetryTask = nil
 
             // Video-specific invisible handling
             if isVideoAttachment {
@@ -1832,6 +1956,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerWasLoaned = false
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
+        videoRetryCount = 0
+        videoRetryTask?.cancel()
+        videoRetryTask = nil
     }
 
     private func removeAudioHosting() {
