@@ -960,6 +960,15 @@ class VideoPlaybackCoordinator: ObservableObject {
         failedPrimaryIdentifier = nil
     }
 
+    /// Called by media cells when a video becomes ready to play (item readyToPlay or first frame).
+    /// If the coordinator is idle (no primary), triggers primary selection.
+    /// This covers the case where the previous primary was stopped/failed and no scroll event
+    /// fires to re-evaluate — the newly-ready video can now become the primary.
+    func requestStartPlaybackIfIdle() {
+        guard phase == .idle else { return }
+        startPrimaryVideoPlayback()
+    }
+
     /// Re-issue play to the current primary video if it is still visible.
     /// Used when returning to the feed (e.g. from user profile) so the video resumes instead of stopping.
     /// Does nothing if there is no primary, primary is no longer visible, or delegate is missing.

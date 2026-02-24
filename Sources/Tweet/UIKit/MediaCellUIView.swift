@@ -351,17 +351,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 loadingSpinner.stopAnimating()
             }
         case .playerReady:
-            // Keep showing thumbnail for non-primary videos to avoid black screen
-            // Only hide thumbnail when video is about to play (coordinatorWantsToPlay)
             let hasThumbnail = imageView.image != nil
+            // Always keep thumbnail visible as cover — prevents black flash during buffering.
+            // Thumbnail is hidden only when smooth playback begins (timeControlStatus KVO).
+            imageView.isHidden = !hasThumbnail
             if hasThumbnail && !coordinatorWantsToPlay {
-                // Non-primary video: keep thumbnail visible, hide player layer
+                // Non-primary video: hide player layer (no need to decode yet)
                 print("\(logPrefix) 🖼️ Keeping thumbnail for non-primary video")
-                imageView.isHidden = false
                 videoPlayerView.isHidden = true
             } else {
-                // Primary video or no thumbnail: show player layer
-                imageView.isHidden = true
+                // Primary video or no thumbnail: show player layer (decodes underneath thumbnail)
                 videoPlayerView.isHidden = false
             }
             // With streaming, the first frame can render before the player has buffered
@@ -380,32 +379,27 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             } else {
                 loadingSpinner.stopAnimating()
             }
-            // Pre-load the cached last frame into imageView so it can serve as cover
-            // if the AVPlayerLayer's GPU pipeline is suspended.  This happens when a
-            // full-screen modal (fullscreen video browser) covers the feed and iOS
-            // suspends the layer rendering — on return the layer briefly shows black
-            // before it resumes, and imageView (if set) hides the flash.
-            if imageView.image == nil,
-               let mid = attachment?.mid,
+            // Always refresh imageView from VideoLastFrameCache — replaces any stale
+            // first-frame thumbnail with the most recently captured video frame.
+            // Also serves as GPU-suspension cover (fullscreen modal → layer briefly black).
+            if let mid = attachment?.mid,
                let cachedFrame = VideoLastFrameCache.shared.image(for: mid) {
                 imageView.image = cachedFrame
             }
-            // Keep thumbnail as cover until player layer is actually rendering frames.
-            // This prevents black flash when resuming from background or fullscreen.
+            // Keep thumbnail as cover until player is confirmed smooth-playing.
+            // This prevents black flash during buffering, retries, and fullscreen return.
             if state == .paused {
                 // Paused: always keep imageView as cover — the player layer's GPU
                 // pipeline may be suspended (e.g., during fullscreen overlay) causing
                 // black screen. imageView will be hidden when playback resumes (.playing).
                 imageView.isHidden = (imageView.image == nil)
-            } else if videoPlayerView.isLayerReadyForDisplay {
+            } else if player?.timeControlStatus == .playing, videoPlayerView.isLayerReadyForDisplay {
+                // Smooth playback confirmed and layer rendering — safe to hide thumbnail
                 imageView.isHidden = true
             } else {
+                // Buffering or layer not yet ready — keep thumbnail as cover.
+                // timeControlStatus KVO will hide it when smooth playback begins.
                 imageView.isHidden = (imageView.image == nil)
-                videoPlayerView.onReadyForDisplay = { [weak self] in
-                    guard let self else { return }
-                    self.imageView.isHidden = true
-                }
-                videoPlayerView.observeReadyForDisplay()
             }
         case .failed:
             if player != nil {
@@ -805,11 +799,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Defer capture by one run-loop cycle: isReadyForDisplay fires before
             // the GPU composites the frame into the layer's backing store.
+            // Use preserveFrameToCache() directly (not captureLastFrameIfPossible) because:
+            // 1. No throttle needed — this is a one-time capture, not periodic playback
+            // 2. preserveFrameToCache works even if player was loaned between scheduling
+            //    and execution (layer snapshot doesn't need the player reference)
             if self.imageView.image == nil {
                 print("\(self.logPrefix) 📸 No thumbnail - will capture from player layer")
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.imageView.image == nil else { return }
-                    self.captureLastFrameIfPossible(reason: "firstFrameReady")
+                    if self.preserveFrameToCache() {
+                        print("\(self.logPrefix) 📸 First-frame captured")
+                    }
                     if self.videoCellState == .playerLoading {
                         self.transitionTo(.playerLoading)
                     }
@@ -825,6 +825,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                self.videoCellState == .playerReady {
                 print("\(self.logPrefix) ▶️ Safety net: starting playback from onReadyForDisplay")
                 self.playWithVolumeFadeIn(player)
+            }
+
+            // Notify coordinator — video is ready. If coordinator is idle (no primary
+            // playing), it will re-evaluate and may pick this video.
+            if !self.coordinatorWantsToPlay {
+                (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
             }
         }
     }
@@ -1191,12 +1197,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// - Parameters:
     ///   - useVideoOutput: Set `false` for stuck players (status unknown) where video output won't work.
     ///   - async: Set `true` only for periodic captures during playback to avoid main-thread hitch.
+    ///   - skipImageView: Set `true` when capturing during active playback — skips stale imageView.image
+    ///     (which may hold an old first-frame thumbnail) and goes directly to video output for a fresh frame.
     @discardableResult
-    private func preserveFrameToCache(useVideoOutput: Bool = true, async: Bool = false) -> Bool {
+    private func preserveFrameToCache(useVideoOutput: Bool = true, async: Bool = false, skipImageView: Bool = false) -> Bool {
         guard let mid = attachment?.mid else { return false }
 
-        // Priority 1: imageView already has a frame — save to cache and we're done
-        if let existingImage = imageView.image {
+        // Priority 1: imageView already has a frame — save to cache and we're done.
+        // Skipped during active playback captures (skipImageView=true) because imageView
+        // may hold a stale first-frame thumbnail, not the current video frame.
+        if !skipImageView, let existingImage = imageView.image {
             VideoLastFrameCache.shared.set(existingImage, for: mid)
             return true
         }
@@ -1277,6 +1287,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Priority 3: Layer snapshot — captures whatever the player layer is currently showing.
         // Works even before readyToPlay (onReadyForDisplay fires before status transitions).
+        var darkSnapshot: UIImage?
         if videoPlayerView.isLayerReadyForDisplay, !videoPlayerView.isHidden,
            videoPlayerView.bounds.width > 0, videoPlayerView.bounds.height > 0 {
             let renderer = UIGraphicsImageRenderer(bounds: videoPlayerView.bounds)
@@ -1288,6 +1299,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 VideoLastFrameCache.shared.set(snapshot, for: mid)
                 return true
             }
+            darkSnapshot = snapshot  // Keep as last-resort fallback
         }
 
         // Priority 4: Restore from VideoLastFrameCache (previously captured frame)
@@ -1296,10 +1308,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return true
         }
 
+        // Priority 5: Dark layer snapshot — isMostlyBlack rejected it, but a dark frame
+        // is still better than showing a blank screen with spinner (noContent).
+        if let snapshot = darkSnapshot {
+            imageView.image = snapshot
+            VideoLastFrameCache.shared.set(snapshot, for: mid)
+            return true
+        }
+
         return false
     }
 
-    /// Throttled frame capture during playback — wraps preserveFrameToCache with 0.75s throttle.
+    /// Sync frame capture for event handlers (pause, stop, scroll-out).
+    /// Captures from video output (skips stale imageView) and updates imageView immediately.
     private func captureLastFrameIfPossible(reason: String) {
         guard isVideoAttachment else { return }
         guard player != nil, player?.currentItem != nil else { return }
@@ -1310,7 +1331,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard now.timeIntervalSince(lastFrameCaptureAt) >= 0.75 else { return }
         lastFrameCaptureAt = now
 
-        let captured = preserveFrameToCache(async: true)
+        let captured = preserveFrameToCache(skipImageView: true)
         if captured {
             print("\(logPrefix) 📸 Frame captured (\(reason))")
         }
@@ -1376,6 +1397,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                             player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
                         }
                     }
+
+                    // Notify coordinator — video data is fully ready. If coordinator is
+                    // idle (previous primary stopped/failed), it can pick this video.
+                    if !self.coordinatorWantsToPlay {
+                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
+                    }
                 } else if item.status == .failed {
                     let errorMsg = item.error?.localizedDescription ?? "Unknown error"
                     print("\(self.logPrefix) ❌ Player failed: \(errorMsg)")
@@ -1412,6 +1439,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     self.loadingSpinner.stopAnimating()
                     self.bufferingTimeoutTask?.cancel()
                     self.bufferingTimeoutTask = nil
+                    // Smooth playback confirmed — hide thumbnail cover to reveal actual video
+                    if self.videoCellState == .playing || self.videoCellState == .playerReady {
+                        if self.videoPlayerView.isLayerReadyForDisplay {
+                            self.imageView.isHidden = true
+                        } else {
+                            // Rare: timeControlStatus fires before layer renders — wait for layer
+                            self.videoPlayerView.onReadyForDisplay = { [weak self] in
+                                guard let self else { return }
+                                self.imageView.isHidden = true
+                            }
+                            self.videoPlayerView.observeReadyForDisplay()
+                        }
+                    }
                 } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                           self.videoCellState == .playing || self.videoCellState == .playerReady {
                     // Player was told to play but is buffering — show spinner.
@@ -1483,7 +1523,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         player.pause()
         player.isMuted = MuteState.shared.isMuted
         VideoStateCache.shared.clearCachedState(for: mid)
-        captureLastFrameIfPossible(reason: "videoFinished")
+        // Sync capture with skipImageView: imageView may hold a stale first-frame thumbnail,
+        // so we go directly to video output to capture the actual last rendered frame.
+        if preserveFrameToCache(skipImageView: true) {
+            print("\(logPrefix) 📸 Frame captured (videoFinished)")
+        }
 
         // Notify coordinator to advance to next video (include full identifier: tweet id + video id + index)
         var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
@@ -2194,7 +2238,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             foregroundObserver = nil
         }
 
-        // Reset UI
+        // Clean up video BEFORE clearing imageView — preserveFrameToCache needs
+        // imageView.image (Priority 1) and videoPlayerView visibility (Priority 3)
+        // to save the current frame to VideoLastFrameCache.
+        cleanupVideoPlayer()
+        removeAudioHosting()
+
+        // Reset UI (after video cleanup so frame is preserved in cache)
         imageView.image = nil
         imageView.isHidden = true
         imageView.gestureRecognizers?.forEach { imageView.removeGestureRecognizer($0) }
@@ -2204,9 +2254,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         timerLabel.isHidden = true
         fullscreenOverlay.isHidden = true
         fullscreenSpinner.stopAnimating()
-
-        cleanupVideoPlayer()
-        removeAudioHosting()
 
         // Reset state
         videoCellState = .noContent
