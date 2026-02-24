@@ -2224,7 +2224,26 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 class ChatVideoManager: ObservableObject {
     static let shared = ChatVideoManager()
 
-    private init() {}
+    private var lifecycleObservers: [NSObjectProtocol] = []
+
+    private init() {
+        lifecycleObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.releaseChatVideoMemoryForBackground()
+                }
+            }
+        )
+    }
+
+    deinit {
+        lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        lifecycleObservers.removeAll()
+    }
 
     // Track active chat sessions and their video states
     @Published var activeChatSessions: [String: ChatSessionVideoState] = [:] // Key: receiptId
@@ -2243,6 +2262,19 @@ class ChatVideoManager: ObservableObject {
         var playingVideos: Set<String> = [] // mids of videos currently playing
         var pausedVideos: Set<String> = [] // mids of videos paused due to visibility
         var isChatVisible: Bool = true // whether the chat screen is currently visible
+    }
+
+    /// Release video memory when app enters background: pause, detach items, and clear player refs.
+    /// When user returns to chat, getOrCreatePlayerForMessage will create fresh players with items.
+    private func releaseChatVideoMemoryForBackground() {
+        guard !chatVideoPlayers.isEmpty else { return }
+        let count = chatVideoPlayers.count
+        for (_, player) in chatVideoPlayers {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
+        chatVideoPlayers.removeAll()
+        print("DEBUG: [ChatVideoManager] Released \(count) chat video players for background")
     }
 
     /// Register a chat session for video management

@@ -2349,7 +2349,10 @@ class SharedAssetCache: ObservableObject {
         loadingTasks.removeAll()
         preloadTasks.removeAll()
 
-        // Keep playerCache, resourceLoaderDelegates, cacheTimestamps for fast recovery
+        // Clear resource loader delegates — they can retain URLSession/loading state
+        resourceLoaderDelegates.removeAll()
+
+        // Keep playerCache, cacheTimestamps for fast recovery
     }
 
     func clearVideoPlayersForBackgroundRecovery() {

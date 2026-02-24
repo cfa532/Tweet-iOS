@@ -22,7 +22,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private var infrastructureRestartTask: Task<Void, Never>?
     private var isRestartingInfrastructure = false
 
-    // Deferred aggressive cleanup: server stop + player item removal delayed 5s
+    // Deferred aggressive cleanup: server stop + player item removal delayed 3s
     // If app returns before it fires, we cancel it for instant video recovery
     private var deferredCleanupWorkItem: DispatchWorkItem?
     /// True once the deferred aggressive cleanup has actually executed.
@@ -364,7 +364,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
         AppDelegate.didPerformAggressiveCleanup = false
 
-        // Phase 2 (deferred 5s): Aggressive cleanup — release player items + stop server
+        // Phase 2 (deferred 3s): Aggressive cleanup — release player items + stop server
         // If app returns before this fires, we cancel it for instant video recovery
         deferredCleanupWorkItem?.cancel()
         let cleanupItem = DispatchWorkItem { [weak self] in
@@ -373,9 +373,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
             SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
 
-            // Kill orphaned upstream proxy connections whose player items were
-            // just stripped — prevents them from clogging the connection pool
-            // for the next foreground cycle.
             LocalHTTPServer.shared.resetAllConnectionsImmediately()
 
             print("🔌 [AppDelegate] Stopping LocalHTTPServer")
@@ -385,9 +382,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("✅ [AppDelegate] Deferred aggressive cleanup complete")
         }
         deferredCleanupWorkItem = cleanupItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: cleanupItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: cleanupItem)
 
-        print("✅ [AppDelegate] Phase 1 complete — Phase 2 deferred 5s")
+        print("✅ [AppDelegate] Phase 1 complete — Phase 2 deferred 3s")
     }
     
     /// Handle app returning to foreground from background state

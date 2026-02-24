@@ -353,7 +353,29 @@ class ImageCacheManager: @unchecked Sendable {
             self.memoryCachedKeys.removeAll()
             // Keep avatarCacheKeys - they'll be re-added when loaded from disk
         }
+        cancelOngoingRequestsForBackground()
         print("🧹 [ImageCacheManager] Cleared memory cache (disk cache preserved)")
+    }
+
+    /// Cancel in-flight image loads and pending avatar requests when app enters background.
+    /// Prevents stuck tasks and continuation buildup from holding memory.
+    private func cancelOngoingRequestsForBackground() {
+        requestsQueue.async(flags: .barrier) {
+            for (_, task) in self.ongoingRequests {
+                task.cancel()
+            }
+            self.ongoingRequests.removeAll()
+        }
+        avatarQueue.async(flags: .barrier) {
+            for req in self.pendingAvatarRequests {
+                req.continuation.resume(returning: nil)
+            }
+            self.pendingAvatarRequests.removeAll()
+            for (_, task) in self.activeAvatarLoads {
+                task.cancel()
+            }
+            self.activeAvatarLoads.removeAll()
+        }
     }
 
     private func getCacheKey(for attachment: MimeiFileType) -> String? {

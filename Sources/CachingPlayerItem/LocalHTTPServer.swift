@@ -618,6 +618,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             self.listener = nil
             self.isRunning = false
             self.isStarting = false
+            // Clear media registration so we don't retain metadata when server is stopped
+            mediaLock.lock()
+            mediaCache.removeAll()
+            mediaRealURLs.removeAll()
+            mediaLock.unlock()
         }
     }
 
