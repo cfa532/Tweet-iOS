@@ -224,8 +224,14 @@ class TweetTableViewController: UITableViewController {
             forName: .feedViewDidAppear,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] notification in
             guard let self = self else { return }
+
+            // Only process if this notification targets our feed
+            if let feedId = notification.userInfo?["feedIdentifier"] as? String,
+               feedId != self.feedIdentifier {
+                return
+            }
 
             // When the same video was playing on the profile we left, main feed and profile share
             // one AVPlayer (SharedAssetCache). The profile's SimpleVideoPlayer.onDisappear runs
@@ -236,12 +242,18 @@ class TweetTableViewController: UITableViewController {
                 guard let self = self else { return }
                 Task { @MainActor in
                     print("📺 [VIDEO RESTART] Feed '\(self.feedIdentifier)' view appeared - resuming video playback")
-                    // Do not call stopAllVideos() when returning from profile (or other navigation).
-                    // That was stopping the current video; instead refresh visibility and resume
-                    // the current primary if it is still visible so playback continues.
-                    self.lastVisibleTweetIds = []
-                    self.updateVisibleTweetsForVideoPlayback()
-                    self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+                    if self.videoCoordinator.primaryVideoId != nil {
+                        // A primary is already playing (overlay handler or viewWillAppear handled it).
+                        // Don't force a full re-evaluation — that can override the correct selection
+                        // with a stalling video. Just re-send the play command to the current primary.
+                        self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+                    } else {
+                        // No primary playing — full re-evaluation needed (e.g. returning from tab switch
+                        // where viewWillDisappear called stopAllVideos).
+                        self.lastVisibleTweetIds = []
+                        self.updateVisibleTweetsForVideoPlayback()
+                        self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+                    }
                 }
             }
         }
@@ -447,6 +459,8 @@ class TweetTableViewController: UITableViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
 
+        videoCoordinator.isFeedVisible = true
+
         // Resume video playback when returning from a UIKit full-screen modal (e.g. the
         // MediaBrowserView fullscreen player).  TweetListView.onAppear does NOT fire for
         // UIKit .fullScreen modal dismissal because the SwiftUI view stays in the hierarchy
@@ -457,9 +471,16 @@ class TweetTableViewController: UITableViewController {
         if isMovingToParent == false {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
                 guard let self else { return }
-                self.lastVisibleTweetIds = []
-                self.updateVisibleTweetsForVideoPlayback()
-                self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+                // Overlay dismiss timer will handle resume — don't compete
+                guard !self.videoCoordinator.isOverlayDismissPending else { return }
+                if self.videoCoordinator.primaryVideoId != nil {
+                    // Overlay handler already picked a primary — just re-send play command.
+                    self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+                } else {
+                    self.lastVisibleTweetIds = []
+                    self.updateVisibleTweetsForVideoPlayback()
+                    self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
+                }
             }
         }
 
@@ -507,6 +528,8 @@ class TweetTableViewController: UITableViewController {
     
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+
+        videoCoordinator.isFeedVisible = false
 
         // Stop all feed videos when navigating away (detail view push, profile tap, etc.).
         // Without this the feed keeps active AVPlayer XPC sessions alive while the destination

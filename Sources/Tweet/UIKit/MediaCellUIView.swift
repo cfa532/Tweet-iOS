@@ -392,7 +392,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             // Keep thumbnail as cover until player layer is actually rendering frames.
             // This prevents black flash when resuming from background or fullscreen.
-            if videoPlayerView.isLayerReadyForDisplay {
+            if state == .paused {
+                // Paused: always keep imageView as cover — the player layer's GPU
+                // pipeline may be suspended (e.g., during fullscreen overlay) causing
+                // black screen. imageView will be hidden when playback resumes (.playing).
+                imageView.isHidden = (imageView.image == nil)
+            } else if videoPlayerView.isLayerReadyForDisplay {
                 imageView.isHidden = true
             } else {
                 imageView.isHidden = (imageView.image == nil)
@@ -879,6 +884,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
 
+        // If video is in failed state, always clean up and retry regardless of player health.
+        // Buffering timeout transitions to .failed but preserves the player — simply calling
+        // play() on the same player won't fix the underlying network issue.
+        if videoCellState == .failed {
+            print("\(logPrefix) 🔄 Coordinator play on failed video - cleaning up and retrying")
+            cleanupVideoPlayer()
+            isPlayerLoaded = false
+            videoRetryCount = 0
+            retryButton.isHidden = true
+            if let att = attachment, let url = att.getUrl(effectiveBaseUrl),
+               let parentTweet = parentTweet {
+                transitionTo(imageView.image != nil ? .thumbnail : .noContent)
+                acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+            }
+            return
+        }
+
         // Fast path: reclaim loaned player returning from detail view.
         // Bypasses configurePlayer() which would transition to .playerLoading and defer
         // playback via onReadyForDisplay — but the layer already has the player attached
@@ -914,21 +936,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // If player not ready, set flag and let KVO trigger play when ready
         guard let player = player, isPlayerLoaded else {
             print("\(logPrefix) Player not ready - will play when ready")
-
-            // If video previously failed, trigger a fresh retry cycle.
-            // Don't call clearPlayerForMediaID — failure handler already cleared the
-            // player; disk cache is preserved for faster recovery.
-            if videoCellState == .failed {
-                print("\(logPrefix) 🔄 Coordinator play on failed video - triggering retry")
-                retryButton.isHidden = true
-                videoRetryCount = 0
-                if let att = attachment, let url = att.getUrl(effectiveBaseUrl),
-                   let parentTweet = parentTweet {
-                    transitionTo(imageView.image != nil ? .thumbnail : .noContent)
-                    acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
-                }
-                return
-            }
 
             // Show loading state whenever primary and not yet playing. Re-evaluate .playerLoading
             // so spinner is on (coordinatorWantsToPlay is true). Include .playerReady so that when
@@ -1808,6 +1815,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Setup foreground observer for images and videos
             setupForegroundObserver()
         } else {
+            // When a .fullScreen modal (MediaBrowserView) is presented, iOS removes the
+            // presenting VC from the window, triggering didMoveToWindow(nil) → setVisible(false).
+            // But these cells are still "logically visible" — the overlay handler will resume
+            // playback on dismiss. Skip aggressive cleanup (network cancel, delegate unregister)
+            // to keep the cell ready for instant resume. stopAllVideos() already paused players.
+            if OverlayVisibilityCoordinator.shared.isCovered {
+                if isVideoAttachment {
+                    print("\(logPrefix) Skipping aggressive cleanup — overlay is covering")
+                }
+                // Revert the isVisible flag — the cell is logically still visible
+                isVisible = true
+                return
+            }
+
             // Cancel image loads
             GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
 

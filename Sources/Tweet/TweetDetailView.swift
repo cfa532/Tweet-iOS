@@ -819,14 +819,13 @@ struct TweetDetailView: View {
             refreshTimer?.invalidate()
             refreshTimer = nil
             
-            // Cancel any pending image loads to prevent memory leaks
+            // Cancel any pending IMAGE loads to prevent memory leaks.
+            // Only cancel image-type attachments — video/audio mids belong to
+            // SharedAssetCache/VideoStateCache, not GlobalImageLoadManager.
             if let attachments = displayTweet.attachments {
-                for attachment in attachments {
-                    // ✅ FIX: Use only mid as request ID (matching loadImageHighPriority above)
+                for attachment in attachments where attachment.type == .image {
                     let mainLoadId = attachment.mid
-
-                    print("DEBUG: [TweetDetailView] Cancelling load: \(mainLoadId)")
-
+                    print("DEBUG: [TweetDetailView] Cancelling image load: \(mainLoadId)")
                     GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
                 }
             }

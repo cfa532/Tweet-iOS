@@ -281,7 +281,8 @@ struct TweetListView: View {
                 // Returning from navigation - notify to restart video playback
                 // Delay slightly to ensure layout is complete
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    NotificationCenter.default.post(name: .feedViewDidAppear, object: nil)
+                    NotificationCenter.default.post(name: .feedViewDidAppear, object: nil,
+                                                    userInfo: ["feedIdentifier": feedIdentifier])
                 }
             } else {
                 // First appearance - just mark as appeared, video will start via normal flow

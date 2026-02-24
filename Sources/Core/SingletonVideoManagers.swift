@@ -1669,6 +1669,12 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isActive = false
         teardownAppLifecycleNotifications()
 
+        // Cancel the delayed clear from endDetailViewSession() — we're about to clear immediately.
+        // Without this, the delayed task fires 0.3s later when the feed cell may have already
+        // reclaimed the loaned player, printing a confusing "Replaced player item with nil" message.
+        scheduledClearTask?.cancel()
+        scheduledClearTask = nil
+
         // CRITICAL: Clear the current video player so isDetailViewActive() returns false
         // This allows feed videos to resume playback when returning from detail view
         clearCurrentVideo()
@@ -1963,21 +1969,25 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     
     /// Clear current video
     func clearCurrentVideo() {
-        // CRITICAL: Save playback state before clearing
+        // Save playback state before clearing — but only if time is valid.
+        // Loaned players (from feed cell) may return NaN time when the HLS stream
+        // hadn't fully buffered. Saving NaN would trigger PersistentVideoStateManager
+        // to clear state for this context, losing the real position.
         if let player = currentPlayer,
            let videoMid = currentVideoMid {
-            let wasPlaying = player.rate > 0
             let currentTime = player.currentTime()
-            let duration = player.currentItem?.duration ?? .invalid
-            
-            PersistentVideoStateManager.shared.saveState(
-                videoMid: videoMid,
-                currentTime: currentTime,
-                wasPlaying: wasPlaying,
-                context: .detailView,
-                duration: duration
-            )
-            print("💾 [DETAIL VIDEO MANAGER] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+            if currentTime.isValid && currentTime.seconds.isFinite {
+                let wasPlaying = player.rate > 0
+                let duration = player.currentItem?.duration ?? .invalid
+                PersistentVideoStateManager.shared.saveState(
+                    videoMid: videoMid,
+                    currentTime: currentTime,
+                    wasPlaying: wasPlaying,
+                    context: .detailView,
+                    duration: duration
+                )
+                print("💾 [DETAIL VIDEO MANAGER] Saved playback state before clearing: \(currentTime.seconds)s, wasPlaying: \(wasPlaying)")
+            }
         }
         
         // Remove KVO observer before clearing (only if it was added)
@@ -1998,13 +2008,13 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             currentPlayer?.pause()
             currentPlayer?.isMuted = MuteState.shared.isMuted
             print("DEBUG: [DetailVideoManager] Returned loaned player (paused, mute restored)")
-        } else {
+        } else if let ownedPlayer = currentPlayer {
             // Owned player: destroy completely so AVPlayerViewController cannot restart it.
             let rawMediaID = currentVideoMid
             let cacheKey = rawMediaID.map { "tweetDetail_\($0)" }
 
-            currentPlayer?.pause()
-            currentPlayer?.replaceCurrentItem(with: nil)
+            ownedPlayer.pause()
+            ownedPlayer.replaceCurrentItem(with: nil)
             print("DEBUG: [DetailVideoManager] Replaced player item with nil to stop playback")
 
             if let key = cacheKey {

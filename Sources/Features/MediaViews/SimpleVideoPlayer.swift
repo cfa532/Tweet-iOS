@@ -3808,10 +3808,14 @@ struct SimpleVideoPlayer: View {
 
                 // Save state to VideoStateCache so the feed cell can recover
                 // the player synchronously (tier-1 cache hit) on return.
+                // Guard against NaN: very newly started HLS streams may not have
+                // established their timeline yet (currentTime returns NaN).
+                let loanTime = cachedPlayer.currentTime()
+                let safeLoanTime = (loanTime.isValid && loanTime.seconds.isFinite) ? loanTime : .zero
                 VideoStateCache.shared.cacheVideoState(
                     for: mid,
                     player: cachedPlayer,
-                    time: cachedPlayer.currentTime(),
+                    time: safeLoanTime,
                     wasPlaying: cachedPlayer.rate > 0,
                     originalMuteState: MuteState.shared.isMuted
                 )

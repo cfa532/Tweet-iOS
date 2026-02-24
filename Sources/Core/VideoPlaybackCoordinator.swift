@@ -160,6 +160,17 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// The coordinator must not emit play commands while covered, otherwise videos can start "invisibly".
     private var isPlaybackSuppressedByOverlay: Bool = false
 
+    /// Whether this coordinator's feed is currently user-visible.
+    /// Managed by TweetTableViewController: true in viewWillAppear, false in viewWillDisappear.
+    /// Prevents inactive feeds from resuming playback after overlay dismiss.
+    var isFeedVisible: Bool = false
+
+    /// True while the overlay dismiss timer is pending. Other resume paths
+    /// (viewWillAppear, updateOnScreenMediaCells) should defer during this period.
+    var isOverlayDismissPending: Bool {
+        overlayUncoverPlaybackTimer != nil
+    }
+
     /// Track an async task for proper cleanup
     /// MEMORY FIX: Tasks now self-remove on completion via UUID tracking
     /// Runs on MainActor to avoid lock requirements
@@ -362,12 +373,17 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         
         
-        // Overlay dismissed: give UIKit/SwiftUI a beat to reattach layers, then restart if needed.
-        let timer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
+        // Overlay dismissed: wait for layout to settle before restarting.
+        // 0.35s lets view transitions and cell layout complete. While this timer
+        // is pending (overlayUncoverPlaybackTimer != nil), other resume paths
+        // (viewWillAppear, updateOnScreenMediaCells) defer to avoid double-evaluation.
+        let timer = Timer(timeInterval: 0.35, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                
+                self.overlayUncoverPlaybackTimer = nil  // Settling period is over
+
                 guard !self.isPlaybackSuppressedByOverlay,
+                      self.isFeedVisible,
                       self.phase == .idle,
                       !self.visibleVideos.isEmpty,
                       let tableView = self.tableView,
@@ -757,6 +773,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         if phase == .primaryPlaying,
            let primaryId = primaryVideoId,
            !identifiers.contains(primaryId) {
+            // During overlay dismiss settling, layout transients can temporarily
+            // report the primary as off-screen. Don't switch — let the overlay
+            // timer handle it with stable layout.
+            if overlayUncoverPlaybackTimer != nil { return }
+
             // Stop current primary (immediate pause, no fade)
             if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
                 if let delegate = mediaCellDelegates[primary.identifier] {
@@ -1210,6 +1231,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Delegate existence is validated before committing state to prevent stuck `primaryPlaying`.
     private func startPrimaryVideoPlayback() {
         guard !isPlaybackSuppressedByOverlay else { return }
+        guard isFeedVisible else { return }
         guard phase == .idle else { return }
 
         guard let primary = identifyPrimaryVideo() else {
