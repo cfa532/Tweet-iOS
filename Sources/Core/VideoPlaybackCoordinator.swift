@@ -108,6 +108,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Flag to preserve state on foreground (cleared on explicit scroll)
     private var shouldPreserveStateOnForeground = false
+
+    /// Temporarily set during notifyPrimaryVideoFailed() to prevent re-picking the same video
+    private var failedPrimaryIdentifier: String?
     
     /// Timer for debouncing video playback (0.2s delay)
     private var playbackDebounceTimer: Timer?
@@ -914,6 +917,28 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
+    /// Notify coordinator that the primary video has failed (buffering timeout or retries exhausted).
+    /// Resets phase to idle and picks a new primary from remaining visible videos.
+    /// Won't re-pick the same failed video — prevents infinite retry loops.
+    func notifyPrimaryVideoFailed(identifier: String) {
+        guard phase == .primaryPlaying, primaryVideoId == identifier else { return }
+
+        phase = .idle
+        currentlyPlayingVideoIds.remove(identifier)
+        primaryVideoId = nil
+
+        // Temporarily exclude the failed video so identifyPrimaryVideo() doesn't re-pick it.
+        // This prevents: fail → coordinator picks same video → retry → fail → infinite loop.
+        // The exclusion is cleared on next scroll (updateVisibleTweets) or when the cell
+        // becomes visible again after scrolling out.
+        failedPrimaryIdentifier = identifier
+
+        // Pick a new primary from remaining visible videos
+        startPrimaryVideoPlayback()
+
+        failedPrimaryIdentifier = nil
+    }
+
     /// Re-issue play to the current primary video if it is still visible.
     /// Used when returning to the feed (e.g. from user profile) so the video resumes instead of stopping.
     /// Does nothing if there is no primary, primary is no longer visible, or delegate is missing.
@@ -1238,9 +1263,11 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
-        // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate
+        // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
+        // Skip failedPrimaryIdentifier (set during notifyPrimaryVideoFailed) to avoid infinite retry loops.
         for video in candidates {
             guard mediaCellDelegates[video.identifier] != nil else { continue }
+            if video.identifier == failedPrimaryIdentifier { continue }
             return video
         }
 

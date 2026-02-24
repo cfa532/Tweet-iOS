@@ -1320,6 +1320,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         player.pause()
                         self.coordinatorWantsToPlay = false
                         self.transitionTo(.failed)
+                        // Tell coordinator to pick a new primary video
+                        if let id = self.videoIdentifier {
+                            (self.videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: id)
+                        }
                     }
                     self.bufferingTimeoutTask = work
                     DispatchQueue.main.asyncAfter(deadline: .now() + 15.0, execute: work)
@@ -1644,6 +1648,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             print("\(logPrefix) ❌ \(reason) - showing retry button after \(videoRetryCount) auto-retries")
             coordinatorWantsToPlay = false
             transitionTo(.failed)
+            // Tell coordinator to pick a new primary video
+            if let id = videoIdentifier {
+                (videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: id)
+            }
         }
     }
 
