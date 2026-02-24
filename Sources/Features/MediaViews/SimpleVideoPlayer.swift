@@ -3339,9 +3339,10 @@ struct SimpleVideoPlayer: View {
                             isBuffering: $isBuffering,
                             mediaType: mediaType,
                             progressiveForwardBufferDuration: progressiveForwardBufferDuration,
-                            // Only fullscreen auto-plays inside AVPlayerViewController.
-                            // TweetDetail playback is driven by `checkPlaybackConditions` after we restore seek.
-                            shouldAutoPlay: mode == .mediaBrowser
+                            // Both fullscreen and detail auto-play inside AVPlayerViewController.
+                            // checkPlaybackConditions may call play() before the VC layer is attached,
+                            // so the VC must also auto-play once the layer is ready.
+                            shouldAutoPlay: mode == .mediaBrowser || mode == .tweetDetail
                         )
                             .id("\(mid)_\(representableId)") // Force recreation with representableId changes
                             .onAppear {
@@ -3806,12 +3807,9 @@ struct SimpleVideoPlayer: View {
             if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
                cachedPlayer.currentItem != nil {
 
-                // Save state to VideoStateCache so the feed cell can recover
-                // the player synchronously (tier-1 cache hit) on return.
-                // Guard against NaN: very newly started HLS streams may not have
-                // established their timeline yet (currentTime returns NaN).
                 let loanTime = cachedPlayer.currentTime()
                 let safeLoanTime = (loanTime.isValid && loanTime.seconds.isFinite) ? loanTime : .zero
+                print("📱 [DetailVideoManager] Loaning feed player for \(mid) at \(safeLoanTime.seconds)s, status: \(cachedPlayer.currentItem?.status.rawValue ?? -1)")
                 VideoStateCache.shared.cacheVideoState(
                     for: mid,
                     player: cachedPlayer,
@@ -3838,15 +3836,18 @@ struct SimpleVideoPlayer: View {
                 DetailVideoManager.shared.currentVideoMid = mid
                 DetailVideoManager.shared.isPlayerLoaned = true
 
-                // Assign immediately — player is already readyToPlay with frames
+                // Assign immediately — skip configurePlayer's .playerLoading transition
                 self.player = cachedPlayer
-                self.loadingState = .loaded
+                if cachedPlayer.currentItem?.status == .readyToPlay {
+                    self.loadingState = .loaded
+                }
+                // else: loadingState stays .loading (set at line 3779)
                 self.configurePlayer(cachedPlayer)
                 return
             }
             
             // No cached player - load fresh
-            // Use .userInitiated for detail view (not in scrolling feed, user is focused on this video)
+            print("📱 [DetailVideoManager] No cached player for \(mid) - loading fresh")
             setupPlayerTask?.cancel()
             setupPlayerTask = Task.detached(priority: .userInitiated) {
                 do {
@@ -4614,7 +4615,7 @@ struct SimpleVideoPlayer: View {
         
         // Simple approach: Tell AVPlayer what to do and let IT handle the rest
         // For MediaCell mode, observe when player is ready and react accordingly
-        if mode == .mediaCell || mode == .embeddedDetail {
+        if mode == .mediaCell || mode == .embeddedDetail || mode == .tweetDetail {
             let shouldAutoPlay = self.currentAutoPlay && self.isVisible && self.shouldLoadVideo
             
             // Observe player status to know when it's ready
@@ -4673,6 +4674,12 @@ struct SimpleVideoPlayer: View {
                         // VideoPlaybackCoordinator controls all playback via notifications
                         if self.mode == .mediaCell {
                             // NOT auto-playing - waiting for coordinator
+                        } else if self.mode == .tweetDetail {
+                            // Detail view video became ready — update loading state and start playback
+                            if loadingState.isLoading {
+                                loadingState = .loaded
+                            }
+                            self.checkPlaybackConditions(autoPlay: true, isVisible: self.isVisible)
                         } else if self.mode == .embeddedDetail && NavigationStateManager.shared.isDetailViewActive {
                             // Embedded video in detail view - use checkPlaybackConditions
                             self.checkPlaybackConditions(autoPlay: shouldAutoPlay, isVisible: self.isVisible)

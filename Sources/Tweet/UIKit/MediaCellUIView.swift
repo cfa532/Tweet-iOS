@@ -412,10 +412,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 // Video was playing — keep showing the paused frame in videoPlayerView
                 videoPlayerView.isHidden = false
                 imageView.isHidden = true
-            } else {
-                let hasThumbnail = imageView.image != nil
-                imageView.isHidden = !hasThumbnail
+            } else if imageView.image != nil {
+                imageView.isHidden = false
                 videoPlayerView.isHidden = true
+            } else {
+                // No player, no thumbnail — show videoPlayerView as black backdrop
+                // so the retry button isn't floating on a blank/transparent cell
+                imageView.isHidden = true
+                videoPlayerView.isHidden = false
             }
             loadingSpinner.stopAnimating()
             retryButton.isHidden = false
@@ -1321,16 +1325,41 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         guard let self, self.isVisible,
                               self.player === player,
                               player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
-                        print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - stuck waiting 15s, keeping player paused")
-                        // Keep the player paused at current position — don't clear it.
-                        // The video frame stays visible. Retry will call play() to resume.
+                        print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - stuck waiting 15s")
                         player.pause()
-                        self.coordinatorWantsToPlay = false
-                        self.transitionTo(.failed)
-                        // Tell coordinator to pick a new primary video
-                        if let id = self.videoIdentifier {
-                            (self.videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: id)
+                        self.removePlayerObservers()
+                        // Capture frame BEFORE clearing caches — clearPlayerForMediaID
+                        // calls replaceCurrentItem(nil) which destroys the player item,
+                        // making subsequent frame capture impossible.
+                        if self.imageView.image == nil, let mid = self.attachment?.mid {
+                            if let output = self.videoOutput,
+                               let item = player.currentItem, item.status == .readyToPlay {
+                                let currentTime = player.currentTime()
+                                var displayTime = CMTime.zero
+                                if let pb = output.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: &displayTime),
+                                   let image = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720),
+                                   !VideoFrameExtractor.isMostlyBlack(image) {
+                                    self.imageView.image = image
+                                    VideoLastFrameCache.shared.set(image, for: mid)
+                                    print("\(self.logPrefix) 📸 Captured frame before cache clear")
+                                }
+                            }
+                            // Fallback: async capture from earlier may have landed in cache
+                            if self.imageView.image == nil,
+                               let cached = VideoLastFrameCache.shared.image(for: mid) {
+                                self.imageView.image = cached
+                                print("\(self.logPrefix) 📸 Restored frame from VideoLastFrameCache")
+                            }
                         }
+                        // Clear stale player from caches so retry creates a fresh one
+                        // (preserve disk cache — segments are reusable, only the player is stale)
+                        if let mid = self.attachment?.mid {
+                            VideoStateCache.shared.clearCachedState(for: mid)
+                            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                        }
+                        // Route through handleVideoLoadFailure so auto-retry kicks in
+                        // (coordinatorWantsToPlay is still true, enabling retry)
+                        self.handleVideoLoadFailure(reason: "Buffering timeout after 15s")
                     }
                     self.bufferingTimeoutTask = work
                     DispatchQueue.main.asyncAfter(deadline: .now() + 15.0, execute: work)
