@@ -183,28 +183,62 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 
 // MARK: - Active Downloads Actor (Swift 6 Concurrency-Safe)
 private actor ActiveDownloadsActor {
-    private var activeDownloads: [String: Task<Void, Never>] = [:]
+    struct DownloadEntry {
+        let task: Task<Void, Never>
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        var isCompleted: Bool = false
+    }
+
+    private var activeDownloads: [String: DownloadEntry] = [:]
 
     /// MediaIDs whose players have been cleared.  Any pending dedup waiter or background
     /// retry for these mediaIDs should be skipped immediately rather than retried.
     /// Cleared when a new player is registered for the same mediaID (fresh start).
     private var cancelledMediaIDs: Set<String> = []
 
-    func getTask(for key: String) -> Task<Void, Never>? {
-        return activeDownloads[key]
+    func hasDownload(for key: String) -> Bool {
+        return activeDownloads[key] != nil
     }
 
-    func setTask(_ task: Task<Void, Never>, for key: String) {
-        activeDownloads[key] = task
+    func createEntry(for key: String, task: Task<Void, Never>) {
+        activeDownloads[key] = DownloadEntry(task: task)
     }
 
+    func addWaiter(for key: String, continuation: CheckedContinuation<Void, Never>) {
+        if activeDownloads[key]?.isCompleted == true {
+            // Download already finished — resume immediately
+            continuation.resume()
+        } else if activeDownloads[key] != nil {
+            activeDownloads[key]!.waiters.append(continuation)
+        } else {
+            // Entry was removed (cancelled) while waiter was being set up
+            continuation.resume()
+        }
+    }
+
+    /// Signal download completion: wake all waiters and remove the entry.
+    func completeDownload(for key: String) {
+        guard let entry = activeDownloads.removeValue(forKey: key) else { return }
+        for waiter in entry.waiters {
+            waiter.resume()
+        }
+    }
+
+    /// Cancel and remove a single entry, waking all waiters.
     func removeTask(for key: String) {
-        activeDownloads.removeValue(forKey: key)
+        guard let entry = activeDownloads.removeValue(forKey: key) else { return }
+        entry.task.cancel()
+        for waiter in entry.waiters {
+            waiter.resume()
+        }
     }
 
     func cancelAllTasks() {
-        for (_, task) in activeDownloads {
-            task.cancel()
+        for (_, entry) in activeDownloads {
+            entry.task.cancel()
+            for waiter in entry.waiters {
+                waiter.resume()
+            }
         }
         activeDownloads.removeAll()
     }
@@ -215,14 +249,13 @@ private actor ActiveDownloadsActor {
     func cancelTasks(for mediaID: String) {
         cancelledMediaIDs.insert(mediaID)
         var keysToRemove: [String] = []
-        for (key, task) in activeDownloads {
+        for (key, _) in activeDownloads {
             if key.contains(mediaID) {
-                task.cancel()
                 keysToRemove.append(key)
             }
         }
         for key in keysToRemove {
-            activeDownloads.removeValue(forKey: key)
+            removeTask(for: key)
         }
     }
 
@@ -1227,197 +1260,82 @@ public class LocalHTTPServer: @unchecked Sendable {
             component.hasSuffix("p") && component.dropLast().allSatisfy({ $0.isNumber })
         }) ?? "unknown"
 
-        // Use actor for thread-safe access
-        let existingTask = await activeDownloadsActor.getTask(for: downloadKey)
-        
-        if existingTask == nil {
-            // This is the first request for this segment - create a task placeholder
-            await activeDownloadsActor.setTask(Task {}, for: downloadKey)
-        }
+        // DEDUPLICATION: Check if another request is already downloading this segment.
+        // Waiters register a CheckedContinuation that the downloader wakes on completion.
+        // No empty placeholder Task {} — waiters are woken by the real download finishing.
+        let hasExisting = await activeDownloadsActor.hasDownload(for: downloadKey)
 
-        // Wait for existing task if there is one
-        if let existingTask = existingTask {
-            // CRITICAL: Check connection state before waiting
-            // If connection is already closed, don't wait
-            let initialConnectionState = connection.state
-            switch initialConnectionState {
+        if hasExisting {
+            // Check connection state before waiting
+            switch connection.state {
             case .cancelled, .failed:
-                print("⚠️ [LocalHTTPServer] Connection already closed before waiting for segment: \(fullRealURL.lastPathComponent)")
                 return
             default:
                 break
             }
-            
-            // Another request is already downloading this segment
-            // Wait for it to complete, but with timeout to prevent indefinite waits
-            // AVPlayer typically times out around 30 seconds, so we use 15s as safety margin
-            let waitTask = Task {
-                await existingTask.value
-            }
-            
-            let timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: 15_000_000_000) // 15 seconds
-            }
-            
-            // Race between download completion and timeout
-            // Use Task.select to wait for whichever completes first
-            enum WaitResult {
-                case completed
-                case timeout
-            }
-            
-            let result = await withTaskGroup(of: WaitResult.self) { group in
+
+            // Wait for existing download to complete (with 15s timeout)
+            let completed = await withTaskGroup(of: Bool.self) { group in
                 group.addTask {
-                    await waitTask.value
-                    timeoutTask.cancel()
-                    return .completed
+                    await withCheckedContinuation { continuation in
+                        Task {
+                            await self.activeDownloadsActor.addWaiter(for: downloadKey, continuation: continuation)
+                        }
+                    }
+                    return true
                 }
-                
                 group.addTask {
-                    await timeoutTask.value
-                    waitTask.cancel()
-                    return .timeout
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    return false
                 }
-                
-                // Return first result
-                return await group.next() ?? .timeout
+                return await group.next() ?? false
             }
 
-            // Check connection state after wait - if closed, remove stuck task and start fresh
-            let finalConnectionState = connection.state
-            var shouldRemoveStuckTask = false
-            
-            switch finalConnectionState {
-            case .cancelled, .failed:
-                print("⚠️ [LocalHTTPServer] Connection closed while waiting for segment: \(fullRealURL.lastPathComponent)")
-                shouldRemoveStuckTask = true
-            default:
-                break
-            }
-            
-            if result == .timeout {
-                print("⚠️ [LocalHTTPServer] Timeout waiting for segment download: \(fullRealURL.lastPathComponent)")
-                // Check if file exists anyway (might have completed just before timeout)
-                if !FileManager.default.fileExists(atPath: cachePath) {
-                    // File doesn't exist - the download is stuck, remove it and start fresh
-                    shouldRemoveStuckTask = true
-                }
-            }
-
-            // If download is stuck (timeout or connection closed), remove it from active downloads
-            // This allows us to start a fresh download instead of waiting forever
-            if shouldRemoveStuckTask {
-                await activeDownloadsActor.removeTask(for: downloadKey)
-                print("🔄 [LocalHTTPServer] Removed stuck download task for: \(fullRealURL.lastPathComponent)")
-            }
-
-            // Now check if the file exists and serve it
+            // After waking, try to serve from cache
             if FileManager.default.fileExists(atPath: cachePath) {
                 autoreleasepool {
                     serveFile(path: cachePath, connection: connection, method: method)
                 }
                 return
             }
-            
-            // If the player for this mediaID was cleared while the download was in-flight,
-            // the cache directory no longer exists and any retry is pointless.  The
-            // still-running URLSession completed (possibly with a write error because the
-            // directory was deleted), which woke us up here.  Skip background retries so
-            // we don't hammer the server or log confusing "file not found" warnings.
-            if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
-                // Player was cleared — the NWConnection is already gone.
-                // Do NOT call sendResponse here; writing to a dead connection causes
-                // nw_flow_add_write_request "cannot accept write requests" spam.
-                return
-            }
 
-            // File doesn't exist - check connection state before proceeding
-            // If connection is already closed, just return - AVPlayer will retry
-            switch connection.state {
-            case .cancelled, .failed:
-                // Connection already closed — skip background download if player was cleared.
-                if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
-
-                // Connection already closed - start background download but don't try to respond
-                print("⚠️ [LocalHTTPServer] Connection closed after timeout, starting background download: \(fullRealURL.lastPathComponent)")
-
-                // Start download-only task in background WITHOUT tracking it
-                // AVPlayer will retry and get cached file when ready
-                Task.detached(priority: .userInitiated) {
-                    await withCheckedContinuation { continuation in
-                        self.downloadAndCacheOnly(url: fullRealURL, cachePath: cachePath) {
-                            continuation.resume()
-                        }
-                    }
-
-                    if FileManager.default.fileExists(atPath: cachePath) {
-                        print("✅ [BACKGROUND DOWNLOAD] Successfully cached: \(fullRealURL.lastPathComponent)")
-                    }
-                }
-                return // Connection closed, can't send response
-            default:
-                break // Connection still alive, proceed
-            }
-
-            // Connection is still alive - start background download and send 503
-            print("🔄 [LocalHTTPServer] Starting untracked background download after timeout: \(fullRealURL.lastPathComponent)")
-
-            // Start download-only task in background WITHOUT tracking it
-            // This way, if AVPlayer retries, it won't wait for this download - it will check cache first
-            // If cache miss, it will start a fresh tracked download
-            Task.detached(priority: .userInitiated) {
-                await withCheckedContinuation { continuation in
-                    // Download and cache only - no serving (connection might be closing)
-                    self.downloadAndCacheOnly(url: fullRealURL, cachePath: cachePath) {
-                        continuation.resume()
-                    }
-                }
-
-                if !FileManager.default.fileExists(atPath: cachePath) {
-                    print("⚠️ [BACKGROUND DOWNLOAD] Download completed but file not found: \(fullRealURL.lastPathComponent)")
-                } else {
-                    print("✅ [BACKGROUND DOWNLOAD] Successfully cached: \(fullRealURL.lastPathComponent)")
-                }
-            }
-
-            // Player may have been cleared while the dedup wait was in progress.
-            // Don't send a response to a dead connection — it causes "Broken pipe" errors.
+            // Player was cleared — don't retry
             if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
 
-            // Send 503 immediately so AVPlayer retries (will get cached file on retry if download completes)
-            sendResponse(connection: connection, statusCode: 503, headers: ["Retry-After": "1"], body: nil)
-            return
+            if !completed {
+                print("⚠️ [LocalHTTPServer] Timeout waiting for segment download: \(fullRealURL.lastPathComponent)")
+            }
+
+            // Connection closed — just return; AVPlayer will retry
+            switch connection.state {
+            case .cancelled, .failed: return
+            default: break
+            }
+
+            // Fall through to become a new downloader (no untracked background spawns)
         }
 
-        // This request is the downloader - fetch from server and cache
-        let downloadStartTime = Date()
-
-        // Create the actual download task
+        // This request becomes the downloader — fetch from server, serve, and cache.
+        // Create the download task first, then register it atomically.
         let downloadTask = Task {
-            // Wait for fetchAndServe to complete (retry logic is inside fetchAndServe)
             await withCheckedContinuation { continuation in
                 fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
                     continuation.resume()
                 }
             }
 
-            let _ = Date().timeIntervalSince(downloadStartTime)
-
             if !FileManager.default.fileExists(atPath: cachePath) {
-                // Only warn when the player is still active — missing file after
-                // clearPlayerForMediaID (cancelled) is expected, not a bug.
                 let wasCancelled = await self.activeDownloadsActor.isMediaIDCancelled(mediaID)
                 if !wasCancelled {
-                    print("⚠️ [DEDUP] Download completed but file not found - something went wrong: \(fullRealURL.lastPathComponent)")
+                    print("⚠️ [DEDUP] Download completed but file not found: \(fullRealURL.lastPathComponent)")
                 }
             }
 
-            // Remove the completed task from active downloads
-            await self.activeDownloadsActor.removeTask(for: downloadKey)
+            // Signal all waiters and remove entry
+            await self.activeDownloadsActor.completeDownload(for: downloadKey)
         }
 
-        // Store the actual download task
-        await activeDownloadsActor.setTask(downloadTask, for: downloadKey)
+        await activeDownloadsActor.createEntry(for: downloadKey, task: downloadTask)
     }
     
     private func fetchHEADWithRetry(url: URL, mediaID: String, attempt: Int = 1, maxAttempts: Int = 3, completion: @escaping (HTTPURLResponse?) -> Void) {

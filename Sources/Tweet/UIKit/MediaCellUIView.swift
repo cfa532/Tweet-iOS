@@ -175,6 +175,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Retry delays: 2s for first auto-retry, 5s for second
     private static let retryDelays: [TimeInterval] = [2.0, 5.0]
 
+    /// Buffering timeout — triggers recovery if player stays in waitingToPlayAtSpecifiedRate for 15s
+    private var bufferingTimeoutTask: DispatchWorkItem?
+
     /// Track when player configuration started (for timing logs)
     private var playerConfigureStartTime: Date?
 
@@ -954,6 +957,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard let mid = attachment?.mid else { return }
         print("\(logPrefix) ⏸️ Coordinator pause command")
         coordinatorWantsToPlay = false
+        bufferingTimeoutTask?.cancel()
+        bufferingTimeoutTask = nil
 
         if let player = player {
             if player.rate > 0 {
@@ -977,6 +982,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard let mid = attachment?.mid else { return }
         print("\(logPrefix) ⏹️ Coordinator stop command")
         coordinatorWantsToPlay = false
+        bufferingTimeoutTask?.cancel()
+        bufferingTimeoutTask = nil
 
         if let player = player {
             if player.rate > 0 {
@@ -994,6 +1001,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleStopAllVideos() {
         guard isVideoAttachment else { return }
         coordinatorWantsToPlay = false
+        bufferingTimeoutTask?.cancel()
+        bufferingTimeoutTask = nil
 
         if let player = player {
             if player.rate > 0 {
@@ -1245,12 +1254,28 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 guard let self else { return }
                 if player.timeControlStatus == .playing {
                     self.loadingSpinner.stopAnimating()
+                    self.bufferingTimeoutTask?.cancel()
+                    self.bufferingTimeoutTask = nil
                 } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                           self.videoCellState == .playing || self.videoCellState == .playerReady {
                     // Player was told to play but is buffering — show spinner.
                     // Also covers .playerReady: streaming can render the first frame before
                     // the player has buffered enough to actually start playback.
                     self.loadingSpinner.startAnimating()
+                    // Start buffering timeout — if stuck for 15s, trigger recovery
+                    self.bufferingTimeoutTask?.cancel()
+                    let work = DispatchWorkItem { [weak self] in
+                        guard let self, self.isVisible,
+                              self.player === player,
+                              player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
+                        print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - stuck waiting 15s")
+                        if let mid = self.attachment?.mid {
+                            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                        }
+                        self.handleVideoLoadFailure(reason: "buffering timeout 15s")
+                    }
+                    self.bufferingTimeoutTask = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 15.0, execute: work)
                 }
             }
         }
@@ -1963,6 +1988,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoRetryCount = 0
         videoRetryTask?.cancel()
         videoRetryTask = nil
+        bufferingTimeoutTask?.cancel()
+        bufferingTimeoutTask = nil
     }
 
     private func removeAudioHosting() {
