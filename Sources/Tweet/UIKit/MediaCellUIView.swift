@@ -772,51 +772,44 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let assetURL = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
         print("\(logPrefix) Configure player - itemStatus: \(itemStatus), url: \(assetURL)")
 
+        preparePlayerForConfiguration(newPlayer)
+        registerFirstFrameCallback(newPlayer)
+        attachPlayerToLayer(newPlayer)
+        setupPlayerObservers(newPlayer)
+        handleAlreadyReadyPlayer(newPlayer)
+        deferVideoOutputAttachment(newPlayer)
+        scheduleStuckPlayerTimeout(newPlayer)
+    }
 
-        // Pause if playing (prevent audio bleed in feed)
+    /// Pause, mute, enable network-while-paused, assign player, transition to .playerLoading.
+    private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
         if newPlayer.rate > 0 { newPlayer.pause() }
-
-        // Apply mute state
         newPlayer.isMuted = MuteState.shared.isMuted
-
-        // Enable network loading while paused so HLS data continues arriving
-        // even when the player is paused (e.g., coordinator hasn't sent play yet,
-        // or cell briefly went invisible and came back). Default is false, which
-        // causes a deadlock: paused player can't fetch data → status stays .unknown
-        // → code waits for .readyToPlay before calling play().
+        // Enable network loading while paused so HLS data continues arriving.
+        // Default is false, causing deadlock: paused player can't fetch data →
+        // status stays .unknown → code waits for .readyToPlay before play().
         newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-
-        // Clean up old observers before setting new player
         removePlayerObservers()
-
-        // Assign player
         self.player = newPlayer
-
-        // Transition to playerLoading — shows thumbnail if available, spinner if not
         transitionTo(.playerLoading)
+    }
 
-        // When player layer renders its first frame, transition to playerReady
+    /// Register onReadyForDisplay callback for first-frame capture and state transition.
+    private func registerFirstFrameCallback(_ newPlayer: AVPlayer) {
         videoPlayerView.onReadyForDisplay = { [weak self] in
             guard let self else { return }
             let elapsed = Date().timeIntervalSince(self.playerConfigureStartTime ?? Date())
             print("\(self.logPrefix) ✓ Player layer ready - time: \(String(format: "%.2f", elapsed))s")
 
-            // onReadyForDisplay means the item decoded a frame — it MUST be readyToPlay.
-            // Set isPlayerLoaded in case the KVO observer hasn't fired yet (race condition).
-            if !self.isPlayerLoaded {
-                self.isPlayerLoaded = true
-            }
+            if !self.isPlayerLoaded { self.isPlayerLoaded = true }
 
-            // If no thumbnail yet, capture one now to avoid spinner on future visibility.
-            // Defer by one run-loop cycle: isReadyForDisplay fires synchronously when AVFoundation
-            // sets the property, but the GPU may not have composited the decoded frame into the
-            // layer's backing store yet. Capturing immediately often yields a black snapshot.
+            // Defer capture by one run-loop cycle: isReadyForDisplay fires before
+            // the GPU composites the frame into the layer's backing store.
             if self.imageView.image == nil {
                 print("\(self.logPrefix) 📸 No thumbnail - will capture from player layer")
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.imageView.image == nil else { return }
                     self.captureLastFrameIfPossible(reason: "firstFrameReady")
-                    // Re-transition to update visibility (might show thumbnail now)
                     if self.videoCellState == .playerLoading {
                         self.transitionTo(.playerLoading)
                     }
@@ -827,87 +820,63 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 self.transitionTo(.playerReady)
             }
 
-            // Safety net: if coordinator wants to play but KVO hasn't triggered it, play now.
+            // Safety net: coordinator wants to play but KVO hasn't triggered it yet.
             if self.coordinatorWantsToPlay, let player = self.player, player.rate == 0,
                self.videoCellState == .playerReady {
                 print("\(self.logPrefix) ▶️ Safety net: starting playback from onReadyForDisplay")
                 self.playWithVolumeFadeIn(player)
             }
         }
+    }
 
-        // Disable implicit CALayer animations during player attachment
+    /// Attach player to the AVPlayerLayer, suppressing implicit CALayer animations.
+    private func attachPlayerToLayer(_ newPlayer: AVPlayer) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         videoPlayerView.setPlayer(newPlayer)
         CATransaction.commit()
+    }
 
-        // Set up KVO + notification observers
-        setupPlayerObservers(newPlayer)
+    /// If item is already readyToPlay (cached player or returning from fullscreen), play or seek immediately.
+    private func handleAlreadyReadyPlayer(_ newPlayer: AVPlayer) {
+        guard let item = newPlayer.currentItem, item.status == .readyToPlay else { return }
 
-        // If item is already ready (e.g. cached player, or returning from fullscreen), update UI immediately.
-        // Otherwise we stay in .playerLoading until onReadyForDisplay fires, which may not fire for re-attached layers.
-        if let item = newPlayer.currentItem,
-           item.status == .readyToPlay {
-            isPlayerLoaded = true
-            transitionTo(.playerReady)
-            if coordinatorWantsToPlay {
-                if isVideoAtEnd(newPlayer) {
-                    newPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                        guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
-                        self.playWithVolumeFadeIn(player)
-                    }
-                } else {
-                    playWithVolumeFadeIn(newPlayer)
+        isPlayerLoaded = true
+        transitionTo(.playerReady)
+
+        if coordinatorWantsToPlay {
+            if isVideoAtEnd(newPlayer) {
+                newPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
+                    self.playWithVolumeFadeIn(player)
                 }
             } else {
-                // Not going to play — seek to force AVPlayerLayer to decode a frame.
-                // onReadyForDisplay will fire → .playerReady (if not already)
-                let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
-                newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
+                playWithVolumeFadeIn(newPlayer)
             }
+        } else {
+            // Seek to force AVPlayerLayer to decode a frame (onReadyForDisplay will fire).
+            let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
+            newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
         }
+    }
 
-        // Defer video output attachment
+    /// Defer video output attachment to next run-loop cycle.
+    private func deferVideoOutputAttachment(_ newPlayer: AVPlayer) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.player === newPlayer else { return }
             self.ensureVideoOutputAttached(for: newPlayer)
         }
+    }
 
-        // Stuck player detector — recover if player stays in .playerLoading beyond 15 seconds.
-        // This handles cases where CachingPlayerItem's resource loader stalls (server reachable
-        // for HEAD but never delivers the m3u8 data), leaving the item in .unknown forever.
+    /// Recover if player stays in .playerLoading beyond 15 seconds (resource loader stalled).
+    private func scheduleStuckPlayerTimeout(_ newPlayer: AVPlayer) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 15.0) { [weak self] in
             guard let self, self.player === newPlayer, self.isVisible else { return }
             guard !self.isPlayerLoaded && self.videoCellState == .playerLoading else { return }
             let status = newPlayer.currentItem?.status.rawValue ?? -1
             let url = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
             print("\(self.logPrefix) ⚠️ STUCK PLAYER recovery - 15s timeout, status: \(status), url: \(url)")
-            // Capture frame BEFORE soft-reset which nils the item and clears the layer
-            if self.imageView.image == nil, let mid = self.attachment?.mid {
-                if self.videoPlayerView.isLayerReadyForDisplay,
-                   !self.videoPlayerView.isHidden,
-                   self.videoPlayerView.bounds.width > 0,
-                   self.videoPlayerView.bounds.height > 0 {
-                    let renderer = UIGraphicsImageRenderer(bounds: self.videoPlayerView.bounds)
-                    let snapshot = renderer.image { ctx in
-                        self.videoPlayerView.layer.render(in: ctx.cgContext)
-                    }
-                    if !VideoFrameExtractor.isMostlyBlack(snapshot) {
-                        self.imageView.image = snapshot
-                        VideoLastFrameCache.shared.set(snapshot, for: mid)
-                        print("\(self.logPrefix) 📸 Layer snapshot before stuck-player reset")
-                    }
-                }
-                if self.imageView.image == nil,
-                   let cached = VideoLastFrameCache.shared.image(for: mid) {
-                    self.imageView.image = cached
-                }
-            }
-            // Soft-reset: remove stuck player but preserve asset/downloads — server was slow, not corrupt.
-            if let mid = self.attachment?.mid {
-                SharedAssetCache.shared.softResetPlayer(for: mid)
-            }
-            self.handleVideoLoadFailure(reason: "15s stuck player timeout, status: \(status)")
+            self.handleTimeoutRecovery(reason: "15s stuck player timeout, status: \(status)", useVideoOutput: false)
         }
     }
 
@@ -1210,62 +1179,104 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoOutputAttachedItem = item
     }
 
-    private func captureLastFrameIfPossible(reason: String) {
-        guard isVideoAttachment else { return }
-        guard let player = player, let item = player.currentItem else { return }
-        guard let mid = attachment?.mid else { return }
+    /// Unified frame capture: tries up to 4 sources in priority order and saves to VideoLastFrameCache.
+    /// Returns `true` if a frame was preserved (either captured fresh or already present in imageView).
+    ///
+    /// Priority order:
+    /// 1. If `imageView.image` already set → save to cache → return true
+    /// 2. Video output (AVPlayerItemVideoOutput) — highest quality, requires readyToPlay
+    /// 3. Layer snapshot (UIGraphicsImageRenderer) — works before readyToPlay
+    /// 4. VideoLastFrameCache fallback → restore into imageView → return true
+    ///
+    /// - Parameters:
+    ///   - useVideoOutput: Set `false` for stuck players (status unknown) where video output won't work.
+    ///   - async: Set `true` only for periodic captures during playback to avoid main-thread hitch.
+    @discardableResult
+    private func preserveFrameToCache(useVideoOutput: Bool = true, async: Bool = false) -> Bool {
+        guard let mid = attachment?.mid else { return false }
 
-        // Throttle: 0.75s minimum between captures
-        let now = Date()
-        guard now.timeIntervalSince(lastFrameCaptureAt) >= 0.75 else { return }
-        lastFrameCaptureAt = now
-
-        ensureVideoOutputAttached(for: player)
-
-        // Try video output first (higher quality) — requires readyToPlay + buffered data
-        if let output = videoOutput, item.status == .readyToPlay, !item.loadedTimeRanges.isEmpty {
-            let playerTimeNow = player.currentTime()
-            let hostTimeNow = CACurrentMediaTime()
-            let hostItemTimeNow = output.itemTime(forHostTime: hostTimeNow)
-
-            Task.detached(priority: .utility) {
-                let base = playerTimeNow
-                let backoffs: [Double] = [0.0, -0.08, -0.20, -0.40]
-                var candidateTimes: [CMTime] = []
-                for d in backoffs {
-                    let t = CMTime(seconds: max(0, base.seconds + d), preferredTimescale: 600)
-                    if t.isValid { candidateTimes.append(t) }
-                }
-                if hostItemTimeNow.isValid { candidateTimes.append(hostItemTimeNow) }
-
-                var pixelBuffer: CVPixelBuffer? = nil
-                var displayTime = CMTime.zero
-                for t in candidateTimes {
-                    if let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) {
-                        pixelBuffer = pb
-                        break
-                    }
-                }
-
-                guard let pixelBuffer else { return }
-
-                let width = CVPixelBufferGetWidth(pixelBuffer)
-                let height = CVPixelBufferGetHeight(pixelBuffer)
-                guard width > 0, height > 0, width < 10000, height < 10000 else { return }
-
-                guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else { return }
-                if VideoFrameExtractor.isMostlyBlack(image) { return }
-
-                await MainActor.run {
-                    VideoLastFrameCache.shared.set(image, for: mid)
-                }
-            }
-            return
+        // Priority 1: imageView already has a frame — save to cache and we're done
+        if let existingImage = imageView.image {
+            VideoLastFrameCache.shared.set(existingImage, for: mid)
+            return true
         }
 
-        // Fallback: snapshot the AVPlayerLayer directly. This works even when the
-        // item hasn't reached .readyToPlay yet (onReadyForDisplay fires before
-        // item.status transitions), capturing the frame the user actually sees.
+        // Priority 2: Video output capture (highest quality, requires readyToPlay + buffered data)
+        if useVideoOutput,
+           let player = player, let item = player.currentItem,
+           item.status == .readyToPlay {
+
+            ensureVideoOutputAttached(for: player)
+
+            if let output = videoOutput {
+                let playerTimeNow = player.currentTime()
+                let hostTimeNow = CACurrentMediaTime()
+                let hostItemTimeNow = output.itemTime(forHostTime: hostTimeNow)
+
+                if async {
+                    // Async path: offload pixel buffer processing to background (for periodic playback captures)
+                    Task.detached(priority: .utility) {
+                        let base = playerTimeNow
+                        let backoffs: [Double] = [0.0, -0.08, -0.20, -0.40]
+                        var candidateTimes: [CMTime] = backoffs.compactMap { d in
+                            let t = CMTime(seconds: max(0, base.seconds + d), preferredTimescale: 600)
+                            return t.isValid ? t : nil
+                        }
+                        if hostItemTimeNow.isValid { candidateTimes.append(hostItemTimeNow) }
+
+                        var displayTime = CMTime.zero
+                        var pixelBuffer: CVPixelBuffer?
+                        for t in candidateTimes {
+                            if let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) {
+                                pixelBuffer = pb
+                                break
+                            }
+                        }
+                        guard let pixelBuffer else { return }
+                        let width = CVPixelBufferGetWidth(pixelBuffer)
+                        let height = CVPixelBufferGetHeight(pixelBuffer)
+                        guard width > 0, height > 0, width < 10000, height < 10000 else { return }
+                        guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else { return }
+                        if VideoFrameExtractor.isMostlyBlack(image) { return }
+                        await MainActor.run {
+                            VideoLastFrameCache.shared.set(image, for: mid)
+                        }
+                    }
+                    return true  // Async dispatch counts as captured
+                } else {
+                    // Sync path: try to get pixel buffer on main thread (for cleanup/failure captures)
+                    let backoffs: [Double] = [0.0, -0.08, -0.20, -0.40]
+                    var candidateTimes: [CMTime] = backoffs.compactMap { d in
+                        let t = CMTime(seconds: max(0, playerTimeNow.seconds + d), preferredTimescale: 600)
+                        return t.isValid ? t : nil
+                    }
+                    if hostItemTimeNow.isValid { candidateTimes.append(hostItemTimeNow) }
+
+                    var displayTime = CMTime.zero
+                    var pixelBuffer: CVPixelBuffer?
+                    for t in candidateTimes {
+                        if let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) {
+                            pixelBuffer = pb
+                            break
+                        }
+                    }
+                    if let pixelBuffer {
+                        let width = CVPixelBufferGetWidth(pixelBuffer)
+                        let height = CVPixelBufferGetHeight(pixelBuffer)
+                        if width > 0, height > 0, width < 10000, height < 10000,
+                           let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720),
+                           !VideoFrameExtractor.isMostlyBlack(image) {
+                            imageView.image = image
+                            VideoLastFrameCache.shared.set(image, for: mid)
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+
+        // Priority 3: Layer snapshot — captures whatever the player layer is currently showing.
+        // Works even before readyToPlay (onReadyForDisplay fires before status transitions).
         if videoPlayerView.isLayerReadyForDisplay, !videoPlayerView.isHidden,
            videoPlayerView.bounds.width > 0, videoPlayerView.bounds.height > 0 {
             let renderer = UIGraphicsImageRenderer(bounds: videoPlayerView.bounds)
@@ -1273,12 +1284,35 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 videoPlayerView.layer.render(in: ctx.cgContext)
             }
             if !VideoFrameExtractor.isMostlyBlack(snapshot) {
-                VideoLastFrameCache.shared.set(snapshot, for: mid)
-                // Also set imageView directly so the frame is available immediately
-                // (not just in the async cache) for retry transitions.
                 imageView.image = snapshot
-                print("\(logPrefix) 📸 Layer snapshot captured (\(reason))")
+                VideoLastFrameCache.shared.set(snapshot, for: mid)
+                return true
             }
+        }
+
+        // Priority 4: Restore from VideoLastFrameCache (previously captured frame)
+        if let cached = VideoLastFrameCache.shared.image(for: mid) {
+            imageView.image = cached
+            return true
+        }
+
+        return false
+    }
+
+    /// Throttled frame capture during playback — wraps preserveFrameToCache with 0.75s throttle.
+    private func captureLastFrameIfPossible(reason: String) {
+        guard isVideoAttachment else { return }
+        guard player != nil, player?.currentItem != nil else { return }
+        guard let mid = attachment?.mid else { return }
+
+        // Throttle: 0.75s minimum between captures
+        let now = Date()
+        guard now.timeIntervalSince(lastFrameCaptureAt) >= 0.75 else { return }
+        lastFrameCaptureAt = now
+
+        let captured = preserveFrameToCache(async: true)
+        if captured {
+            print("\(logPrefix) 📸 Frame captured (\(reason))")
         }
     }
 
@@ -1391,60 +1425,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                               self.player === player,
                               player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
                         print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - stuck waiting 15s")
-                        player.pause()
-                        self.removePlayerObservers()
-                        // Capture frame BEFORE clearing caches — clearPlayerForMediaID
-                        // calls replaceCurrentItem(nil) which destroys the player item,
-                        // making subsequent frame capture impossible.
-                        if self.imageView.image == nil, let mid = self.attachment?.mid {
-                            if let output = self.videoOutput,
-                               let item = player.currentItem, item.status == .readyToPlay {
-                                let currentTime = player.currentTime()
-                                var displayTime = CMTime.zero
-                                if let pb = output.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: &displayTime),
-                                   let image = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720),
-                                   !VideoFrameExtractor.isMostlyBlack(image) {
-                                    self.imageView.image = image
-                                    VideoLastFrameCache.shared.set(image, for: mid)
-                                    print("\(self.logPrefix) 📸 Captured frame before cache clear")
-                                }
-                            }
-                            // Try 2: Layer snapshot — captures whatever the user sees
-                            // (works even when item.status != readyToPlay).
-                            // MUST run before softResetPlayer which nils the item and
-                            // causes the layer to go black.
-                            if self.imageView.image == nil,
-                               self.videoPlayerView.isLayerReadyForDisplay,
-                               !self.videoPlayerView.isHidden,
-                               self.videoPlayerView.bounds.width > 0,
-                               self.videoPlayerView.bounds.height > 0 {
-                                let renderer = UIGraphicsImageRenderer(bounds: self.videoPlayerView.bounds)
-                                let snapshot = renderer.image { ctx in
-                                    self.videoPlayerView.layer.render(in: ctx.cgContext)
-                                }
-                                if !VideoFrameExtractor.isMostlyBlack(snapshot) {
-                                    self.imageView.image = snapshot
-                                    VideoLastFrameCache.shared.set(snapshot, for: mid)
-                                    print("\(self.logPrefix) 📸 Layer snapshot before soft reset")
-                                }
-                            }
-                            // Try 3: Previously cached frame
-                            if self.imageView.image == nil,
-                               let cached = VideoLastFrameCache.shared.image(for: mid) {
-                                self.imageView.image = cached
-                                print("\(self.logPrefix) 📸 Restored frame from VideoLastFrameCache")
-                            }
-                        }
-                        // Soft-reset: remove stale player so retry creates a fresh one,
-                        // but preserve asset, CachingPlayerItem, and active downloads
-                        // so partially-downloaded segments aren't wasted.
-                        if let mid = self.attachment?.mid {
-                            VideoStateCache.shared.clearCachedState(for: mid)
-                            SharedAssetCache.shared.softResetPlayer(for: mid)
-                        }
-                        // Route through handleVideoLoadFailure so auto-retry kicks in
-                        // (coordinatorWantsToPlay is still true, enabling retry)
-                        self.handleVideoLoadFailure(reason: "Buffering timeout after 15s")
+                        self.handleTimeoutRecovery(reason: "Buffering timeout after 15s")
                     }
                     self.bufferingTimeoutTask = work
                     DispatchQueue.main.asyncAfter(deadline: .now() + 15.0, execute: work)
@@ -1462,6 +1443,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         resumeObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+    }
+
+    /// Shared recovery path for both buffering timeout and stuck player timeout.
+    /// Pauses player, preserves frame, soft-resets the player cache, and routes to retry logic.
+    private func handleTimeoutRecovery(reason: String, useVideoOutput: Bool = true) {
+        player?.pause()
+        removePlayerObservers()
+        preserveFrameToCache(useVideoOutput: useVideoOutput)
+        if let mid = attachment?.mid {
+            VideoStateCache.shared.clearCachedState(for: mid)
+            SharedAssetCache.shared.softResetPlayer(for: mid)
+        }
+        handleVideoLoadFailure(reason: reason)
     }
 
     // MARK: - Video Finished
@@ -1673,125 +1667,87 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         loadImage(attachment: attachment, url: url)
     }
 
-    /// Central handler for all video loading failures. Manages automatic retry
-    /// with backoff (2s, 5s), then shows retry button when exhausted.
-    private func handleVideoLoadFailure(reason: String) {
-        guard isVideoAttachment, let mid = attachment?.mid else { return }
-
-        // Cancel any pending retry
-        videoRetryTask?.cancel()
-        videoRetryTask = nil
-
-        // Preserve the last displayed frame before releasing the player.
-        // This prevents blank squares when playerItem.status == .failed mid-stream.
-        // Also ensure any existing thumbnail is saved to VideoLastFrameCache for long-term
-        // preservation (e.g., cell reuse after scrolling, future retry cycles).
-        if let existingImage = imageView.image {
-            VideoLastFrameCache.shared.set(existingImage, for: mid)
-        } else {
-            // Try 1: Video output (highest quality, requires readyToPlay)
-            if let player = player, let output = videoOutput,
-               let item = player.currentItem, item.status == .readyToPlay {
-                let currentTime = player.currentTime()
-                var displayTime = CMTime.zero
-                if let pb = output.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: &displayTime),
-                   let image = VideoFrameExtractor.makeDownscaledUIImage(from: pb, maxDimension: 720),
-                   !VideoFrameExtractor.isMostlyBlack(image) {
-                    imageView.image = image
-                    VideoLastFrameCache.shared.set(image, for: mid)
-                }
-            }
-            // Try 2: Layer snapshot (works even before readyToPlay — captures what user sees)
-            if imageView.image == nil,
-               videoPlayerView.isLayerReadyForDisplay, !videoPlayerView.isHidden,
-               videoPlayerView.bounds.width > 0, videoPlayerView.bounds.height > 0 {
-                let renderer = UIGraphicsImageRenderer(bounds: videoPlayerView.bounds)
-                let snapshot = renderer.image { ctx in
-                    videoPlayerView.layer.render(in: ctx.cgContext)
-                }
-                if !VideoFrameExtractor.isMostlyBlack(snapshot) {
-                    imageView.image = snapshot
-                    VideoLastFrameCache.shared.set(snapshot, for: mid)
-                    print("\(logPrefix) 📸 Layer snapshot preserved for retry")
-                }
-            }
-            // Try 3: Previously cached frame
-            if imageView.image == nil,
-               let cached = VideoLastFrameCache.shared.image(for: mid) {
-                imageView.image = cached
-            }
-        }
-
-        // Clean up player state
+    /// Nil player, stop spinner, clear loading flags after a failure.
+    private func cleanupFailedPlayerState() {
         loadingSpinner.stopAnimating()
         player = nil
         isPlayerLoaded = false
         setupPlayerTask = nil
+    }
 
-        // Don't auto-retry if cell is not visible
+    /// Transition to an idle visual state (thumbnail or noContent) after failure.
+    private func transitionToIdleAfterFailure() {
+        if imageView.image != nil {
+            transitionTo(.thumbnail)
+        } else {
+            transitionTo(.noContent)
+            loadingSpinner.stopAnimating()
+        }
+    }
+
+    /// Schedule an automatic retry with backoff delay.
+    private func scheduleAutoRetry(mid: String, reason: String) {
+        let delay = Self.retryDelays[videoRetryCount]
+        videoRetryCount += 1
+        print("\(logPrefix) 🔄 Auto-retry #\(videoRetryCount) in \(delay)s after: \(reason)")
+
+        transitionToIdleAfterFailure()
+
+        let retryWork = DispatchWorkItem { [weak self] in
+            guard let self, self.isVisible,
+                  self.attachment?.mid == mid,
+                  let att = self.attachment,
+                  let url = att.getUrl(self.effectiveBaseUrl),
+                  let parentTweet = self.parentTweet else { return }
+
+            print("\(self.logPrefix) 🔄 Executing auto-retry #\(self.videoRetryCount)")
+            self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+        }
+        videoRetryTask = retryWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: retryWork)
+    }
+
+    /// All auto-retries exhausted — show retry button and notify coordinator.
+    private func showRetryButton(reason: String) {
+        print("\(logPrefix) ❌ \(reason) - showing retry button after \(videoRetryCount) auto-retries")
+        coordinatorWantsToPlay = false
+        transitionTo(.failed)
+        if let id = videoIdentifier {
+            (videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: id)
+        }
+    }
+
+    /// Central handler for all video loading failures. Preserves frame, cleans up player,
+    /// then either auto-retries with backoff (2s, 5s) or shows manual retry button.
+    private func handleVideoLoadFailure(reason: String) {
+        guard isVideoAttachment, let mid = attachment?.mid else { return }
+
+        videoRetryTask?.cancel()
+        videoRetryTask = nil
+
+        preserveFrameToCache()
+        cleanupFailedPlayerState()
+
+        // Not visible — go idle without retry
         guard isVisible else {
             print("\(logPrefix) ❌ \(reason) - cell not visible, skipping retry")
-            if imageView.image != nil {
-                transitionTo(.thumbnail)
-            } else {
-                videoPlayerView.isHidden = true
-                videoCellState = .thumbnail
-            }
+            transitionToIdleAfterFailure()
             return
         }
 
-        // Don't auto-retry if coordinator has stopped this video — save retries for
-        // when the coordinator actually wants to play it (scrolls back to it).
-        if !coordinatorWantsToPlay {
+        // Coordinator stopped — go idle, reset retry budget for next play command
+        guard coordinatorWantsToPlay else {
             print("\(logPrefix) ❌ \(reason) - coordinator stopped, skipping retry")
-            videoRetryCount = 0  // Fresh retry budget when coordinator plays again
-            if imageView.image != nil {
-                transitionTo(.thumbnail)
-            } else {
-                transitionTo(.noContent)
-                loadingSpinner.stopAnimating()
-            }
+            videoRetryCount = 0
+            transitionToIdleAfterFailure()
             return
         }
 
+        // Auto-retry or show manual retry button
         if videoRetryCount < Self.maxAutoRetries {
-            let delay = Self.retryDelays[videoRetryCount]
-            videoRetryCount += 1
-            print("\(logPrefix) 🔄 Auto-retry #\(videoRetryCount) in \(delay)s after: \(reason)")
-
-            // Show thumbnail while waiting (not .failed state yet)
-            if imageView.image != nil {
-                transitionTo(.thumbnail)
-            } else {
-                transitionTo(.noContent)
-                loadingSpinner.stopAnimating()  // Don't spin during wait
-            }
-
-            let retryWork = DispatchWorkItem { [weak self] in
-                guard let self, self.isVisible,
-                      self.attachment?.mid == mid,
-                      let att = self.attachment,
-                      let url = att.getUrl(self.effectiveBaseUrl),
-                      let parentTweet = self.parentTweet else { return }
-
-                print("\(self.logPrefix) 🔄 Executing auto-retry #\(self.videoRetryCount)")
-                // Don't call clearPlayerForMediaID — the original failure handler already
-                // cleared the player. Calling it again would cancel any disk-cache-backed
-                // downloads and wipe in-memory state unnecessarily. acquirePlayer will
-                // create a fresh player that picks up from the preserved disk cache.
-                self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
-            }
-            videoRetryTask = retryWork
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: retryWork)
+            scheduleAutoRetry(mid: mid, reason: reason)
         } else {
-            // All auto-retries exhausted — show retry button
-            print("\(logPrefix) ❌ \(reason) - showing retry button after \(videoRetryCount) auto-retries")
-            coordinatorWantsToPlay = false
-            transitionTo(.failed)
-            // Tell coordinator to pick a new primary video
-            if let id = videoIdentifier {
-                (videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: id)
-            }
+            showRetryButton(reason: reason)
         }
     }
 
@@ -2148,77 +2104,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     // MARK: - Cleanup
 
     private func cleanupVideoPlayer() {
-        // Capture last frame before tearing down the player,
-        // so re-rendered cells show the cached thumbnail instead of a black screen.
-        if isVideoAttachment, let mid = attachment?.mid {
-            var captured = false
-
-            // Try 1: Video output (highest quality, requires readyToPlay + buffered data)
-            if let player = player, let output = videoOutput,
-               let item = player.currentItem, item.status == .readyToPlay {
-                let playerTime = player.currentTime()
-                let hostItemTime = output.itemTime(forHostTime: CACurrentMediaTime())
-                var pixelBuffer: CVPixelBuffer?
-                var displayTime = CMTime.zero
-                for d in [0.0, -0.08, -0.20, -0.40] {
-                    let t = CMTime(seconds: max(0, playerTime.seconds + d), preferredTimescale: 600)
-                    if t.isValid, let pb = output.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: &displayTime) {
-                        pixelBuffer = pb
-                        break
-                    }
-                }
-                if pixelBuffer == nil, hostItemTime.isValid {
-                    pixelBuffer = output.copyPixelBuffer(forItemTime: hostItemTime, itemTimeForDisplay: &displayTime)
-                }
-                if let pixelBuffer {
-                    Task.detached(priority: .utility) {
-                        let width = CVPixelBufferGetWidth(pixelBuffer)
-                        let height = CVPixelBufferGetHeight(pixelBuffer)
-                        guard width > 0, height > 0, width < 10000, height < 10000 else { return }
-                        guard let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720) else { return }
-                        if VideoFrameExtractor.isMostlyBlack(image) { return }
-                        await MainActor.run {
-                            VideoLastFrameCache.shared.set(image, for: mid)
-                        }
-                    }
-                    captured = true
-                }
-            }
-
-            // Try 2: Layer snapshot (works even when status != readyToPlay)
-            if !captured,
-               videoPlayerView.isLayerReadyForDisplay, !videoPlayerView.isHidden,
-               videoPlayerView.bounds.width > 0, videoPlayerView.bounds.height > 0 {
-                let renderer = UIGraphicsImageRenderer(bounds: videoPlayerView.bounds)
-                let snapshot = renderer.image { ctx in
-                    videoPlayerView.layer.render(in: ctx.cgContext)
-                }
-                if !VideoFrameExtractor.isMostlyBlack(snapshot) {
-                    VideoLastFrameCache.shared.set(snapshot, for: mid)
-                    captured = true
-                }
-            }
-
-            // Try 3: Save whatever imageView currently shows (could be a thumbnail from
-            // any source — network, asset generator, previous frame capture). This is the
-            // last resort to preserve SOMETHING for the cell when it scrolls back in.
-            if !captured, let existingImage = imageView.image {
-                VideoLastFrameCache.shared.set(existingImage, for: mid)
-            }
-        }
-
         if isVideoAttachment {
+            preserveFrameToCache()
             print("\(logPrefix) 🧹 Cleanup video player")
         }
+        teardownPlayerAndObservers()
+        resetVideoState()
+    }
 
-        // Cancel async tasks
+    /// Cancel tasks, remove all observers, detach player from layer, nil player.
+    private func teardownPlayerAndObservers() {
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
 
-        // Clear first-frame callback
         videoPlayerView.onReadyForDisplay = nil
 
-        // Remove observers
         removePlayerObservers()
 
         if let o = stopAllObserver { NotificationCenter.default.removeObserver(o) }
@@ -2241,17 +2141,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoOutput = nil
         videoOutputAttachedItem = nil
 
-        // Remove periodic time observer before releasing player
         removePlayerTimeObserver()
 
-        // Detach player from view
         videoPlayerView.setPlayer(nil)
         videoPlayerView.isHidden = true
         videoPlayerView.gestureRecognizers?.forEach { videoPlayerView.removeGestureRecognizer($0) }
         imageView.gestureRecognizers?.forEach { imageView.removeGestureRecognizer($0) }
         player = nil
+    }
 
-        // Reset state
+    /// Reset all video-related flags and counters to initial values.
+    private func resetVideoState() {
         coordinatorWantsToPlay = false
         isPlayerLoaded = false
         isHandlingFinishEvent = false
