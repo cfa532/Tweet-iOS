@@ -780,8 +780,27 @@ class TweetTableViewController: UITableViewController {
             }
         }
         
-        // Complex change: fallback to full reload
-        tableView.reloadData()
+        // Complex change: compute minimal diff instead of full reload.
+        // reloadData() tears down ALL visible cells (including video players),
+        // causing flicker when only a few rows were inserted/removed.
+        let diff = getNewIds().difference(from: getOldIds())
+
+        if diff.isEmpty {
+            // No structural changes - content-only updates handled by ObservableObject
+            videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
+            return
+        }
+
+        tableView.performBatchUpdates {
+            for change in diff {
+                switch change {
+                case .remove(let offset, _, _):
+                    tableView.deleteRows(at: [IndexPath(row: offset, section: 0)], with: .none)
+                case .insert(let offset, _, _):
+                    tableView.insertRows(at: [IndexPath(row: offset, section: 0)], with: .none)
+                }
+            }
+        }
         videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
     }
     
