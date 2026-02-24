@@ -809,6 +809,21 @@ class SharedAssetCache: ObservableObject {
     }
     
     /// Clear player and associated assets for a specific mediaID (for failed players)
+    /// Soft-reset a player for buffering timeout recovery. Only removes the AVPlayer
+    /// from `playerCache` (so the retry path creates a fresh one from the cached asset),
+    /// but preserves the asset, CachingPlayerItem, resource loader delegates, disk cache,
+    /// and — critically — active LocalHTTPServer downloads. This lets in-flight segment
+    /// downloads finish so the next player can use them immediately.
+    @MainActor func softResetPlayer(for mediaID: String) {
+        if let player = playerCache.removeValue(forKey: mediaID) {
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+        }
+        // Keep: assetCache, cachingPlayerItems, cachingPlayerDelegates,
+        //        resourceLoaderDelegates, diskCacheStatus, active downloads
+        print("🔄 [SOFT RESET] Player removed for \(mediaID) — asset/downloads preserved")
+    }
+
     /// - Parameter deleteDiskCache: When true (default), also deletes the on-disk HLS segment cache.
     ///   Pass false for stuck-player recovery (slow server, not corrupt content) so the partial
     ///   disk cache is preserved for the next attempt. Pass true only when content is likely corrupt

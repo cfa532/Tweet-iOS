@@ -3842,6 +3842,17 @@ struct SimpleVideoPlayer: View {
                     self.loadingState = .loaded
                 }
                 // else: loadingState stays .loading (set at line 3779)
+
+                // DEADLOCK FIX: Enable network loading while paused and proactively
+                // call play() for not-yet-ready items. Without this, a paused player
+                // with canUseNetworkResourcesForLiveStreamingWhilePaused=false (default)
+                // never fetches HLS data, so status stays .unknown forever.
+                if let item = cachedPlayer.currentItem, item.status != .readyToPlay {
+                    item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                    cachedPlayer.play()
+                    print("📱 [DetailVideoManager] Kicked data fetch on unknown-status loaned player")
+                }
+
                 self.configurePlayer(cachedPlayer)
                 return
             }
@@ -3865,21 +3876,29 @@ struct SimpleVideoPlayer: View {
                     
                     let newPlayer = AVPlayer(playerItem: playerItem)
                     newPlayer.isMuted = false
-                    
+                    // Enable network loading while paused for HLS data fetching
+                    playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+
                     await MainActor.run {
                         // Check if task was cancelled while we were waiting
                         guard !Task.isCancelled else { return }
-                        
+
                         // Stop old singleton player if exists
                         DetailVideoManager.shared.currentPlayer?.pause()
-                        
+
                         // Store new player in singleton
                         DetailVideoManager.shared.currentPlayer = newPlayer
                         DetailVideoManager.shared.currentVideoMid = mid
-                        
+
                         self.player = newPlayer
                         self.loadingState = .loaded
                         self.configurePlayer(newPlayer)
+
+                        // Kick-start data fetching if item isn't ready yet
+                        if playerItem.status != .readyToPlay {
+                            newPlayer.play()
+                        }
+
                         self.setupPlayerTask = nil
                     }
                 } catch {
@@ -4275,9 +4294,15 @@ struct SimpleVideoPlayer: View {
     }
     
     private func configurePlayer(_ player: AVPlayer) {
-        
+
         configureAutomaticWaiting(for: player)
-        
+
+        // Enable network loading while paused so HLS data continues arriving
+        // even when the player is paused. Default is false, which causes a deadlock:
+        // paused player can't fetch → status stays .unknown → code waits for
+        // .readyToPlay before calling play().
+        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+
         // MediaCell last-frame support: attach a video output so we can snapshot decoded frames
         // (for flicker-free placeholders during layer reattach / buffering).
         ensureVideoOutputAttachedIfNeeded(for: player)
