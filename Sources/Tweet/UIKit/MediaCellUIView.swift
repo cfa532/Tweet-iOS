@@ -327,7 +327,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         case .playerLoading:
             let hasThumbnail = imageView.image != nil
             imageView.isHidden = !hasThumbnail
-            videoPlayerView.isHidden = false
+            // Hide videoPlayerView when thumbnail exists — the player hasn't rendered
+            // a frame yet so it would show black on top of the thumbnail. The layer
+            // still decodes in the background; onReadyForDisplay → .playerReady will
+            // show it once the first frame is available.
+            videoPlayerView.isHidden = hasThumbnail
             // Show spinner when coordinator wants to play (primary video) even if
             // a thumbnail is already visible — the thumbnail is just a cover while
             // the player initialises, and the user needs feedback that loading is
@@ -884,14 +888,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard let player = player, isPlayerLoaded else {
             print("\(logPrefix) Player not ready - will play when ready")
 
-            // If video previously failed, trigger a fresh retry cycle
+            // If video previously failed, trigger a fresh retry cycle.
+            // Don't call clearPlayerForMediaID — failure handler already cleared the
+            // player; disk cache is preserved for faster recovery.
             if videoCellState == .failed {
                 print("\(logPrefix) 🔄 Coordinator play on failed video - triggering retry")
                 retryButton.isHidden = true
                 videoRetryCount = 0
-                if let mid = attachment?.mid {
-                    SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
-                }
                 if let att = attachment, let url = att.getUrl(effectiveBaseUrl),
                    let parentTweet = parentTweet {
                     transitionTo(imageView.image != nil ? .thumbnail : .noContent)
@@ -1449,12 +1452,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         retryButton.isHidden = true
         videoRetryCount = 0
 
-        // Clear the failed player from SharedAssetCache for a fresh attempt
-        if let mid = attachment?.mid {
-            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
-        }
-
-        player = nil
+        // Player is already nil (cleaned up by the failure handler).
+        // Don't call clearPlayerForMediaID — it would wipe cached data and
+        // cancel downloads. acquirePlayer creates a fresh player that reuses
+        // the preserved disk cache for faster recovery.
         isPlayerLoaded = false
         transitionTo(imageView.image != nil ? .thumbnail : .noContent)
         acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
@@ -1517,7 +1518,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                       let parentTweet = self.parentTweet else { return }
 
                 print("\(self.logPrefix) 🔄 Executing auto-retry #\(self.videoRetryCount)")
-                SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                // Don't call clearPlayerForMediaID — the original failure handler already
+                // cleared the player. Calling it again would cancel any disk-cache-backed
+                // downloads and wipe in-memory state unnecessarily. acquirePlayer will
+                // create a fresh player that picks up from the preserved disk cache.
                 self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
             }
             videoRetryTask = retryWork
@@ -1668,12 +1672,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 (videoCoordinator ?? .shared).registerDelegate(self, forIdentifier: id)
             }
 
-            // If video was in failed state, trigger a fresh retry on becoming visible again
+            // If video was in failed state, trigger a fresh retry on becoming visible again.
+            // Don't call clearPlayerForMediaID — disk cache is preserved for faster recovery.
             if isVideoAttachment && videoCellState == .failed {
                 print("\(logPrefix) 🔄 Became visible with failed video - auto-retrying")
                 videoRetryCount = 0
                 retryButton.isHidden = true
-                SharedAssetCache.shared.clearPlayerForMediaID(attachment.mid, deleteDiskCache: false)
                 if let url = attachment.getUrl(effectiveBaseUrl), let parentTweet = parentTweet {
                     transitionTo(imageView.image != nil ? .thumbnail : .noContent)
                     acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
