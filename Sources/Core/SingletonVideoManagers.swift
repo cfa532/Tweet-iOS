@@ -303,12 +303,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 720, height: 720)
-            Task.detached(priority: .utility) {
-                if let cgImage = try? generator.copyCGImage(at: captureTime, actualTime: nil) {
-                    let image = UIImage(cgImage: cgImage)
-                    await MainActor.run {
-                        VideoLastFrameCache.shared.set(image, for: videoMid)
-                    }
+            generator.generateCGImageAsynchronously(for: captureTime) { cgImage, _, error in
+                guard let cgImage = cgImage, error == nil else { return }
+                let image = UIImage(cgImage: cgImage)
+                Task { @MainActor in
+                    VideoLastFrameCache.shared.set(image, for: videoMid)
                 }
             }
         }
