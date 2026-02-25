@@ -1815,12 +1815,6 @@ class SharedAssetCache: ObservableObject {
         return image
     }
 
-    /// Read a cached thumbnail using URL-based mediaID extraction.
-    func cachedThumbnail(for url: URL) -> UIImage? {
-        guard let mediaID = extractMediaID(from: url) else { return nil }
-        return cachedThumbnail(for: mediaID)
-    }
-
     /// Update cached thumbnail from a runtime-captured frame (pause/stop/scroll-out).
     /// Keeps the poster in sync with the last meaningful frame so re-entry resumes visually.
     func updateCachedThumbnail(_ image: UIImage, for mediaID: String) {

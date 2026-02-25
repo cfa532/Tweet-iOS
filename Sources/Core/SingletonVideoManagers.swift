@@ -298,7 +298,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         if let player = singletonPlayer,
            let asset = player.currentItem?.asset,
            let videoMid = currentVideoMid,
-           VideoLastFrameCache.shared.image(for: videoMid) == nil {
+           SharedAssetCache.shared.cachedThumbnail(for: videoMid) == nil {
             let captureTime = player.currentTime()
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
@@ -307,7 +307,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 guard let cgImage = cgImage, error == nil else { return }
                 let image = UIImage(cgImage: cgImage)
                 Task { @MainActor in
-                    VideoLastFrameCache.shared.set(image, for: videoMid)
+                    SharedAssetCache.shared.updateCachedThumbnail(image, for: videoMid)
                 }
             }
         }

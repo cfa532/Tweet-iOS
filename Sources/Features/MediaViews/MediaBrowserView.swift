@@ -950,7 +950,7 @@ struct SingletonVideoPlayerView: View {
                     // No player, no item, or different video — show lastframe as placeholder.
                     // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
                     // and the initial loading state before the first item is attached.
-                    if let thumbnail = VideoLastFrameCache.shared.image(for: mid) {
+                    if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
                         Image(uiImage: thumbnail)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
@@ -967,8 +967,11 @@ struct SingletonVideoPlayerView: View {
                 // sees the video image instead of black during the IPFS buffering phase.
                 // currentVideoMid check dropped — the item may not yet be assigned but
                 // this video's thumbnail should still cover the transient black flash.
-                if !manager.isItemReady,
-                   let thumbnail = VideoLastFrameCache.shared.image(for: mid) {
+                if let player = manager.singletonPlayer, manager.currentVideoMid == mid,
+                   (player.currentItem?.status != .readyToPlay ||
+                    manager.isBuffering ||
+                    player.timeControlStatus == .waitingToPlayAtSpecifiedRate),
+                   let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
                     Image(uiImage: thumbnail)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
