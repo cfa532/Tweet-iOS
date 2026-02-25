@@ -89,11 +89,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Video timer label (only for single-video tweets)
     private lazy var timerLabel: UILabel = {
         let label = UILabel()
-        label.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
-        label.textColor = .white.withAlphaComponent(0.6)
+        label.font = .monospacedSystemFont(ofSize: 14, weight: .medium)
+        label.textColor = .white.withAlphaComponent(0.4)
         label.textAlignment = .center
-        label.backgroundColor = UIColor.black.withAlphaComponent(0.4)
-        label.layer.cornerRadius = 10
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.2)
+        label.layer.cornerRadius = 13
         label.clipsToBounds = true
         label.isHidden = true
         return label
@@ -291,9 +291,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Timer label: bottom-left, 12pt padding
         if !timerLabel.isHidden {
-            let timerSize = timerLabel.sizeThatFits(CGSize(width: 100, height: 20))
+            let timerSize = timerLabel.sizeThatFits(CGSize(width: 100, height: 26))
             let timerW = timerSize.width + 16
-            let timerH: CGFloat = 20
+            let timerH: CGFloat = 24
             timerLabel.frame = CGRect(
                 x: 12,
                 y: b.maxY - timerH - 12,
