@@ -291,7 +291,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Timer label: bottom-left, 12pt padding
         if !timerLabel.isHidden {
-            let timerSize = timerLabel.sizeThatFits(CGSize(width: 100, height: 26))
+            let timerSize = timerLabel.sizeThatFits(CGSize(width: 100, height: 24))
             let timerW = timerSize.width + 16
             let timerH: CGFloat = 24
             timerLabel.frame = CGRect(
@@ -836,8 +836,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func attachPlayerToLayer(_ newPlayer: AVPlayer) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        // Nil first to reset isReadyForDisplay — prevents stale `true` from old player
-        videoPlayerView.setPlayer(nil)
         videoPlayerView.setPlayer(newPlayer)
         CATransaction.commit()
     }
