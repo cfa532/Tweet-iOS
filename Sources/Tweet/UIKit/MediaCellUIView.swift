@@ -322,6 +322,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             retryButton.isHidden = true
         }
 
+        // Restore thumbnail from VideoLastFrameCache if imageView is empty.
+        // Prevents black screen when re-entering loading states (e.g., video
+        // becomes primary while still loading, retry after failure).
+        if imageView.image == nil, let mid = attachment?.mid,
+           let cached = VideoLastFrameCache.shared.image(for: mid) {
+            imageView.image = cached
+        }
+
         switch state {
         case .noContent:
             imageView.isHidden = true
@@ -387,19 +395,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             // Keep thumbnail as cover until player is confirmed smooth-playing.
             // This prevents black flash during buffering, retries, and fullscreen return.
-            if state == .paused {
-                // Paused: always keep imageView as cover — the player layer's GPU
-                // pipeline may be suspended (e.g., during fullscreen overlay) causing
-                // black screen. imageView will be hidden when playback resumes (.playing).
-                imageView.isHidden = (imageView.image == nil)
-            } else if player?.timeControlStatus == .playing, videoPlayerView.isLayerReadyForDisplay {
-                // Smooth playback confirmed and layer rendering — safe to hide thumbnail
-                imageView.isHidden = true
-            } else {
-                // Buffering or layer not yet ready — keep thumbnail as cover.
-                // timeControlStatus KVO will hide it when smooth playback begins.
-                imageView.isHidden = (imageView.image == nil)
-            }
+            // Always keep thumbnail as cover during state transitions.
+            // timeControlStatus KVO is the sole authority for hiding it
+            // once smooth playback is confirmed — prevents stale isLayerReadyForDisplay
+            // from prematurely revealing wrong frames during seek/resume.
+            imageView.isHidden = (imageView.image == nil)
         case .failed:
             if player != nil {
                 // Video was playing — keep showing the paused frame in videoPlayerView
@@ -1141,12 +1141,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func actuallyStartPlayback(_ player: AVPlayer) {
         guard let mid = attachment?.mid else { return }
 
-        // Re-attach player to layer if it was detached for background.
-        // In normal flow this is a no-op (same player already attached).
-        videoPlayerView.setPlayer(player)
+        // Show player layer (may have been hidden for non-primary .playerReady)
+        videoPlayerView.isHidden = false
 
-        // Transition to playing — keeps thumbnail as cover until layer confirms rendering
-        transitionTo(.playing)
+        // Update state directly — skip transitionTo() to avoid touching imageView.
+        // The layer already has content from preload; just let the player play.
+        // imageView stays as-is: visible (thumbnail cover) or hidden (layer showing).
+        // timeControlStatus KVO will hide the thumbnail when smooth playback starts.
+        if videoCellState != .playing {
+            print("\(logPrefix) State: \(videoCellState) → playing")
+        }
+        videoCellState = .playing
+        retryButton.isHidden = true
 
         player.isMuted = MuteState.shared.isMuted
         player.volume = 0
