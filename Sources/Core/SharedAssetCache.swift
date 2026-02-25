@@ -1753,7 +1753,7 @@ class SharedAssetCache: ObservableObject {
         if playerCache[mediaID] != nil {
             preloadedPlayerMids.insert(mediaID)
             // Still generate thumbnail if missing
-            if VideoLastFrameCache.shared.image(for: mediaID) == nil,
+            if cachedThumbnail(for: mediaID) == nil,
                let asset = assetCache[mediaID] {
                 generateThumbnail(from: asset, for: mediaID)
             }
@@ -1776,7 +1776,7 @@ class SharedAssetCache: ObservableObject {
                     self.preloadedPlayerMids.insert(mediaID)
                 }
                 // Generate first-frame thumbnail so the cell isn't black before playback
-                if VideoLastFrameCache.shared.image(for: mediaID) == nil,
+                if cachedThumbnail(for: mediaID) == nil,
                    let item = player.currentItem {
                     self.generateThumbnail(from: item.asset, for: mediaID)
                 }
@@ -1804,10 +1804,34 @@ class SharedAssetCache: ObservableObject {
         }
     }
 
+    /// Read a cached thumbnail for mediaID. Filters/clears dark frames so callers
+    /// never treat black snapshots as valid poster images.
+    func cachedThumbnail(for mediaID: String) -> UIImage? {
+        guard let image = VideoLastFrameCache.shared.image(for: mediaID) else { return nil }
+        if VideoFrameExtractor.isMostlyBlack(image) {
+            VideoLastFrameCache.shared.clear(for: mediaID)
+            return nil
+        }
+        return image
+    }
+
+    /// Read a cached thumbnail using URL-based mediaID extraction.
+    func cachedThumbnail(for url: URL) -> UIImage? {
+        guard let mediaID = extractMediaID(from: url) else { return nil }
+        return cachedThumbnail(for: mediaID)
+    }
+
+    /// Update cached thumbnail from a runtime-captured frame (pause/stop/scroll-out).
+    /// Keeps the poster in sync with the last meaningful frame so re-entry resumes visually.
+    func updateCachedThumbnail(_ image: UIImage, for mediaID: String) {
+        guard !VideoFrameExtractor.isMostlyBlack(image) else { return }
+        VideoLastFrameCache.shared.set(image, for: mediaID)
+    }
+
     /// Generate a thumbnail from a cached asset if no thumbnail exists yet.
     /// Calls completion on main thread with the generated image, or does nothing if asset isn't cached.
     func generateThumbnailIfNeeded(for mediaID: String, completion: @escaping @MainActor (UIImage) -> Void) {
-        guard VideoLastFrameCache.shared.image(for: mediaID) == nil else { return }
+        guard cachedThumbnail(for: mediaID) == nil else { return }
         guard let asset = assetCache[mediaID] else { return }
 
         let generator = AVAssetImageGenerator(asset: asset)
