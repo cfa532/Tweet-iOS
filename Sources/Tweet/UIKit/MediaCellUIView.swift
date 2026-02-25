@@ -211,7 +211,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var foregroundObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
     private var timerHideTask: DispatchWorkItem?
-    private var isShowingFullscreen: Bool = false
 
     private let imageCache = ImageCacheManager.shared
 
@@ -795,8 +794,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             let elapsed = Date().timeIntervalSince(self.playerConfigureStartTime ?? Date())
             print("\(self.logPrefix) ✓ Player layer ready - time: \(String(format: "%.2f", elapsed))s")
 
-            if !self.isPlayerLoaded { self.isPlayerLoaded = true }
-
             // Defer capture by one run-loop cycle: isReadyForDisplay fires before
             // the GPU composites the frame into the layer's backing store.
             // Use preserveFrameToCache() directly (not captureLastFrameIfPossible) because:
@@ -839,6 +836,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func attachPlayerToLayer(_ newPlayer: AVPlayer) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // Nil first to reset isReadyForDisplay — prevents stale `true` from old player
+        videoPlayerView.setPlayer(nil)
         videoPlayerView.setPlayer(newPlayer)
         CATransaction.commit()
     }
@@ -1444,7 +1443,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         if self.videoPlayerView.isLayerReadyForDisplay {
                             self.imageView.isHidden = true
                         } else {
-                            // Rare: timeControlStatus fires before layer renders — wait for layer
+                            // Layer hasn't confirmed a frame for current player — wait for it
                             self.videoPlayerView.onReadyForDisplay = { [weak self] in
                                 guard let self else { return }
                                 self.imageView.isHidden = true
@@ -1687,10 +1686,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         retryButton.isHidden = true
         videoRetryCount = 0
 
+        coordinatorWantsToPlay = true
         if let player = player, isPlayerLoaded {
             // Player still exists (buffering failure) — just resume playback.
             // AVPlayer will re-request the failed segments from LocalHTTPServer.
-            coordinatorWantsToPlay = true
             transitionTo(.playing)
             player.play()
         } else {
@@ -1852,7 +1851,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 self?.fullscreenSpinner.stopAnimating()
             }
 
-            self?.isShowingFullscreen = true
         }
     }
 
@@ -2042,7 +2040,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 if let player = self.player,
                    player.currentItem == nil || player.currentTime().seconds.isNaN {
                     self.cleanupVideoPlayer()
-                    self.isPlayerLoaded = false
                     // Re-acquire a fresh player — coordinator will send play
                     // command via updateVisibleTweets if this is the primary video.
                     // Not calling handleCoordinatorPlayCommand() here prevents
@@ -2260,7 +2257,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         attachment = nil
         parentTweet = nil
         isVisible = false
-        isShowingFullscreen = false
     }
 
     deinit {
