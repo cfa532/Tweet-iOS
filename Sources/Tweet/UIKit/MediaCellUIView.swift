@@ -878,30 +878,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 return
             }
 
-            // Primary video with decent buffer but item.status stuck at .unknown:
-            // AVPlayer sometimes won't transition to .readyToPlay until play() is
-            // called. Call play() directly — requestPlaybackStartIfNeeded would
-            // short-circuit ("Skipping duplicate") when videoCellState is already
-            // .playing from the onReadyForDisplay safety net.
-            if self.coordinatorWantsToPlay && buffered >= 3.0 && status == 0 && !self.hasAttemptedKickPlay {
-                print("\(self.logPrefix) ⏰ Buffer timeout: kick-play directly (buffer: \(String(format: "%.1f", buffered))s, status: \(status))")
-                self.hasAttemptedKickPlay = true
-                player.play()
-                // Re-arm timeout — if kick-play doesn't resolve, next timeout nukes.
-                self.startBufferingTimeout(player: player)
-                return
-            }
-
-            // Item reached readyToPlay with substantial buffer — the video is healthy.
-            // loadedTimeRanges may have stopped advancing because the active variant's
-            // segments are all downloaded (e.g. 720p complete but 480p/segment001 never
-            // fetched). isPlaybackBufferFull can still be false in this case. Don't nuke.
-            if status == 1 && buffered >= 3.0 {
-                print("\(self.logPrefix) ⏰ Buffer timeout: readyToPlay with \(String(format: "%.1f", buffered))s buffer — healthy, cancelling timeout")
+            // Ample buffer (status unknown OR readyToPlay): the player has enough data.
+            // Don't nuke — AVPlayer may still be fetching remaining segments or may
+            // transition to readyToPlay once the next segment response arrives.
+            // Calling play() at status==unknown can interfere with AVPlayer's adaptive
+            // bitrate download strategy, so we only kick play at status==readyToPlay.
+            if buffered >= 3.0 && (status == 0 || status == 1) {
+                print("\(self.logPrefix) ⏰ Buffer timeout: status \(status) with \(String(format: "%.1f", buffered))s buffer — healthy, cancelling timeout")
                 self.bufferingTimeoutTask = nil
                 self.loadingSpinner.stopAnimating()
-                // If coordinator wants play but player isn't actually playing, kick it.
-                if self.coordinatorWantsToPlay && player.timeControlStatus != .playing {
+                if status == 1 && self.coordinatorWantsToPlay && player.timeControlStatus != .playing && !self.isVideoAtEnd(player) {
                     print("\(self.logPrefix) ⏰ Kicking play on readyToPlay player")
                     player.play()
                 }
@@ -1599,6 +1585,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     }
                 } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                           self.videoCellState == .playing || self.videoCellState == .playerReady {
+                    // Video reached the end — waiting is expected, not a stall.
+                    // Don't show spinner or start timeout; the finish handler will take over.
+                    guard !self.isVideoAtEnd(player) else { return }
                     // Player was told to play but is buffering — show spinner.
                     // Also covers .playerReady: streaming can render the first frame before
                     // the player has buffered enough to actually start playback.
