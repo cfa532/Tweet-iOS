@@ -422,6 +422,19 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Register a MediaCell delegate for video control (keyed by video identifier)
     func registerDelegate(_ delegate: MediaCellDelegate, forIdentifier identifier: String) {
         mediaCellDelegates[identifier] = delegate
+
+        // At app start, cells register AFTER the initial updateVisibleTweetsForVideoPlayback()
+        // runs with empty onScreenMediaCells. The coordinator sees no visible videos and goes
+        // idle. Without a kick here, no play command is ever sent.
+        // setVisible(true) → registerDelegate only fires for cells in a window (didMoveToWindow),
+        // so this cell IS geometrically visible.
+        let wasInserted = onScreenMediaCells.insert(identifier).inserted
+        if wasInserted {
+            invalidateVisibleVideoCache()
+        }
+        if phase == .idle {
+            startPrimaryVideoPlayback()
+        }
     }
 
     /// Unregister a MediaCell delegate (keyed by video identifier)
