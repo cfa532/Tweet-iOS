@@ -133,6 +133,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var resumeObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
+    private var loadedTimeRangesObserver: NSKeyValueObservation?
+
+    /// Last buffered-end value logged (seconds) — throttles 📦 log to ≥0.1s increments.
+    private var lastLoggedBuffered: Double = -1
 
     /// Notification observers
     private var videoCompletionObserver: NSObjectProtocol?
@@ -147,6 +151,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
+    /// The player that owns timeObserverToken — must remove from the same instance.
+    private weak var timeObserverPlayer: AVPlayer?
 
     /// Frame capture throttle
     private var lastFrameCaptureAt: Date = .distantPast
@@ -737,7 +743,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         setupPlayerObservers(newPlayer)
         handleAlreadyReadyPlayer(newPlayer)
         deferVideoOutputAttachment(newPlayer)
-        scheduleStuckPlayerTimeout(newPlayer)
+        startBufferingTimeout(player: newPlayer)
     }
 
     /// Pause, mute, enable network-while-paused, assign player, transition to .playerLoading.
@@ -843,23 +849,28 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return status == .readyToPlay
     }
 
-    /// Recover if player stays in .playerLoading beyond 30 seconds (resource loader stalled).
-    private func scheduleStuckPlayerTimeout(_ newPlayer: AVPlayer) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) { [weak self] in
-            guard let self, self.player === newPlayer, self.isVisible else { return }
-            guard !self.isActuallyPlayerReady(newPlayer) else { return }
-            let status = newPlayer.currentItem?.status.rawValue ?? -1
-            // Treat both visual-loading states as recoverable stalls when playback is requested.
-            let stuckVisualState =
-                self.videoCellState == .playerLoading ||
-                (self.videoCellState == .playerReady && self.coordinatorWantsToPlay)
-            guard stuckVisualState else { return }
-            // If AVPlayerItem already reports readyToPlay, don't run stuck recovery.
-            guard status != AVPlayerItem.Status.readyToPlay.rawValue else { return }
-            let url = (newPlayer.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
-            print("\(self.logPrefix) ⚠️ STUCK PLAYER recovery - 30s timeout, status: \(status), url: \(url)")
-            self.handleTimeoutRecovery(reason: "30s stuck player timeout, status: \(status)", useVideoOutput: false)
+    /// Start (or restart) the 30s no-progress timeout.
+    /// loadedTimeRangesObserver resets this on every buffer event, so it only fires
+    /// when the download has been genuinely flat for 30 consecutive seconds.
+    private func startBufferingTimeout(player: AVPlayer) {
+        bufferingTimeoutTask?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isVisible, self.player === player else { return }
+            let status = player.currentItem?.status.rawValue ?? -1
+            let url = (player.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
+            print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - no progress in 30s, status: \(status), url: \(url)")
+            self.handleTimeoutRecovery(reason: "No buffer progress in 30s (status: \(status))")
         }
+        bufferingTimeoutTask = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0, execute: work)
+    }
+
+    /// End of the last loaded time range, in seconds. Used to detect download progress.
+    private func currentBufferedEnd(for player: AVPlayer) -> Double {
+        guard let item = player.currentItem,
+              let last = item.loadedTimeRanges.last else { return 0 }
+        let range = last.timeRangeValue
+        return CMTimeGetSeconds(CMTimeAdd(range.start, range.duration))
     }
 
     // MARK: - Coordinator Command Handlers
@@ -881,7 +892,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if !isActuallyPlayerReady(player) {
                 // This video may have become primary long after initial configure-time timeout.
                 // Re-arm stuck timeout for the "playerReady but not logically loaded" case.
-                scheduleStuckPlayerTimeout(player)
+                startBufferingTimeout(player: player)
             }
             requestPlaybackStartIfNeeded(player, reason: "coordinatorPlay-playerReady")
             return
@@ -965,7 +976,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if let existingPlayer = self.player,
                let item = existingPlayer.currentItem,
                item.status != .readyToPlay {
-                scheduleStuckPlayerTimeout(existingPlayer)
+                startBufferingTimeout(player: existingPlayer)
                 item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                 existingPlayer.play()
                 print("\(logPrefix) ▶️ Kicked data fetch on not-yet-ready player")
@@ -1259,10 +1270,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return true
         }
 
-        // Priority 2: Video output capture (highest quality, requires readyToPlay + buffered data)
+        // Priority 2: Video output capture (highest quality).
+        // We try regardless of item.status — copyPixelBuffer returns nil when no frame is
+        // available, so it's safe to call even when status is still .unknown (streaming-before-ready).
         if useVideoOutput,
-           let player = player, let item = player.currentItem,
-           item.status == .readyToPlay {
+           let player = player, player.currentItem != nil {
 
             ensureVideoOutputAttached(for: player)
 
@@ -1514,17 +1526,58 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Also covers .playerReady: streaming can render the first frame before
                     // the player has buffered enough to actually start playback.
                     self.loadingSpinner.startAnimating()
-                    // Start buffering timeout — if stuck for 30s, trigger recovery
-                    self.bufferingTimeoutTask?.cancel()
-                    let work = DispatchWorkItem { [weak self] in
-                        guard let self, self.isVisible,
-                              self.player === player,
-                              player.timeControlStatus == .waitingToPlayAtSpecifiedRate else { return }
-                        print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - stuck waiting 30s")
-                        self.handleTimeoutRecovery(reason: "Buffering timeout after 30s")
+                    // (Re-)start the 30s timeout. loadedTimeRangesObserver resets it on
+                    // every buffer event; it only fires if genuinely flat for 30s.
+                    self.startBufferingTimeout(player: player)
+                }
+            }
+        }
+
+        // KVO: loadedTimeRanges — log download progress as buffer fills.
+        loadedTimeRangesObserver = playerItem.observe(\.loadedTimeRanges, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let last = item.loadedTimeRanges.last else { return }
+                let range = last.timeRangeValue
+                let start = CMTimeGetSeconds(range.start)
+                let buffered = CMTimeGetSeconds(CMTimeAdd(range.start, range.duration))
+                // Throttle: only log when buffered end advances by ≥0.1s
+                guard buffered >= self.lastLoggedBuffered + 0.1 else { return }
+                self.lastLoggedBuffered = buffered
+                let duration = CMTimeGetSeconds(item.duration)
+                let percent = duration > 0 && duration.isFinite ? Int((buffered / duration) * 100) : 0
+                let transferredBytes = item.accessLog()?.events.reduce(0.0) {
+                    $0 + max(0, Double($1.numberOfBytesTransferred))
+                } ?? 0
+                let transferredMB = transferredBytes / 1_000_000
+                print("\(self.logPrefix) 📦 Buffered: \(String(format: "%.2f", buffered))s (\(percent)%) from \(String(format: "%.2f", start))s, transferred: \(String(format: "%.2f", transferredMB)) MB")
+
+                // Buffer changed — reset the 30s timeout so it only fires on genuine stalls.
+                if let player = self.player, self.bufferingTimeoutTask != nil {
+                    self.startBufferingTimeout(player: player)
+                }
+
+                // Proactively capture a frame while the video is actively streaming.
+                // By the time a timeout fires the player may be rebuffering and show black;
+                // capturing here (throttled 2s) ensures imageView has a frame ahead of time.
+                if self.imageView.image == nil,
+                   self.videoPlayerView.isLayerReadyForDisplay,
+                   !self.videoPlayerView.isHidden,
+                   self.videoPlayerView.bounds.width > 0 {
+                    let now = Date()
+                    if now.timeIntervalSince(self.lastFrameCaptureAt) >= 2.0 {
+                        self.lastFrameCaptureAt = now
+                        let renderer = UIGraphicsImageRenderer(bounds: self.videoPlayerView.bounds)
+                        let snapshot = renderer.image { ctx in
+                            self.videoPlayerView.layer.render(in: ctx.cgContext)
+                        }
+                        if !VideoFrameExtractor.isMostlyBlack(snapshot),
+                           let mid = self.attachment?.mid {
+                            self.imageView.image = snapshot
+                            SharedAssetCache.shared.updateCachedThumbnail(snapshot, for: mid)
+                            print("\(self.logPrefix) 📸 Proactive frame capture (bufferGrowing)")
+                        }
                     }
-                    self.bufferingTimeoutTask = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 30.0, execute: work)
                 }
             }
         }
@@ -1539,6 +1592,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         resumeObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        loadedTimeRangesObserver?.invalidate()
+        loadedTimeRangesObserver = nil
+        lastLoggedBuffered = -1
     }
 
     /// Shared recovery path for both buffering timeout and stuck player timeout.
@@ -1655,9 +1711,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func setupVideoTimer(videoMid: String) {
         timerLabel.isHidden = false
         timerLabel.text = "0:00"
-
-        // Auto-hide timer after 5 seconds
-        scheduleTimerHide()
     }
 
     /// Attach a periodic time observer to the player to drive the timer label.
@@ -1668,16 +1721,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         guard let player = player else { return }
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
+        timeObserverPlayer = player
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             self?.updateTimerLabel(currentTime: time)
         }
     }
 
     private func removePlayerTimeObserver() {
-        if let token = timeObserverToken, let player = player {
+        if let token = timeObserverToken, let player = timeObserverPlayer {
             player.removeTimeObserver(token)
         }
         timeObserverToken = nil
+        timeObserverPlayer = nil
     }
 
     private func updateTimerLabel(currentTime: CMTime) {
@@ -1692,15 +1747,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         setNeedsLayout()
     }
 
-    private func scheduleTimerHide() {
-        timerHideTask?.cancel()
-        let task = DispatchWorkItem { [weak self] in
-            self?.timerLabel.isHidden = true
-            self?.removePlayerTimeObserver()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: task)
-        timerHideTask = task
-    }
+    // scheduleTimerHide removed — timer label stays visible while video is loaded.
 
     // MARK: - Audio
 
@@ -2246,6 +2293,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerWasLoaned = false
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
+        lastLoggedBuffered = -1
         bufferingTimeoutTask?.cancel()
         bufferingTimeoutTask = nil
     }
@@ -2325,6 +2373,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerItemStatusObserver?.invalidate()
         resumeObserver?.invalidate()
         timeControlStatusObserver?.invalidate()
+        loadedTimeRangesObserver?.invalidate()
+        loadedTimeRangesObserver = nil
+        lastLoggedBuffered = -1
         removePlayerTimeObserver()
         timerHideTask?.cancel()
         setupPlayerTask?.cancel()

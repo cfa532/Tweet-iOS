@@ -1163,9 +1163,11 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
-        
+        let isCached = FileManager.default.fileExists(atPath: cachePath)
+        print("🎞️ [HLS DATA] Playlist request mediaID: \(mediaID), cached: \(isCached)")
+
         // Check cache first
-        if FileManager.default.fileExists(atPath: cachePath) {
+        if isCached {
             // Removed repetitive cache hit log
             
             // Read, rewrite URLs, and serve
@@ -1195,7 +1197,8 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
-        
+        let segmentName = URL(fileURLWithPath: cachePath).lastPathComponent
+
         // Check cache first
         if FileManager.default.fileExists(atPath: cachePath) {
             // Serve cached segment - this reads from disk, no memory bloat
@@ -1204,23 +1207,18 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             return
         }
-        
+
+        print("🎞️ [HLS DATA] Segment cache miss mediaID: \(mediaID), segment: \(segmentName), path: \(cachePath) - fetching")
+
         // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
-
-        // Extract quality level for logging (dynamic - no hardcoding!)
-        let pathComponents = cachePath.components(separatedBy: "/")
-        // Look for any component that ends with 'p' (e.g., "480p", "720p", "1080p", "4k", etc.)
-        let _ = pathComponents.first(where: { component in
-            // Matches patterns like "480p", "720p", "1080p", etc.
-            component.hasSuffix("p") && component.dropLast().allSatisfy({ $0.isNumber })
-        }) ?? "unknown"
 
         // DEDUPLICATION: Check if another request is already downloading this segment.
         // Waiters poll with Task.sleep — no CheckedContinuation, no leak risk.
         let hasExisting = await activeDownloadsActor.hasDownload(for: downloadKey)
 
         if hasExisting {
+            print("🎞️ [HLS DATA] Segment dedup wait mediaID: \(mediaID), segment: \(segmentName)")
             // Check connection state before waiting
             switch connection.state {
             case .cancelled, .failed:
@@ -1229,9 +1227,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                 break
             }
 
-            // Poll until: file appears on disk, download removed from active set, or 15s timeout
+            // Poll until: file appears on disk, download removed from active set, or 120s timeout.
+            // IPFS segments can take 30-90s due to DHT lookup overhead — 15s was too short,
+            // causing the dedup waiter to time out and leave NWConnections hanging.
             let pollInterval: UInt64 = 500_000_000 // 0.5s
-            let maxPolls = 30 // 30 × 0.5s = 15s
+            let maxPolls = 240 // 240 × 0.5s = 120s
 
             for _ in 0..<maxPolls {
                 try? await Task.sleep(nanoseconds: pollInterval)
@@ -1272,6 +1272,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // This request becomes the downloader — mark active, fetch, then mark completed.
         await activeDownloadsActor.markDownloadStarted(for: downloadKey)
+        print("🎞️ [HLS DATA] Segment download start mediaID: \(mediaID), segment: \(segmentName)")
 
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
             Task { await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey) }
@@ -2535,8 +2536,12 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func buildHTTPHeaderData(statusCode: Int, headers: [String: String]) -> Data {
         var response = "HTTP/1.1 \(statusCode) \(getStatusText(statusCode))\r\n"
-        response += "Connection: keep-alive\r\n"
-        for (key, value) in headers {
+        // Use Connection value from headers dict if provided; default to keep-alive.
+        // Callers pass Connection: close when Content-Length is unknown (IPFS chunked
+        // transfer) so AVPlayer can use TCP FIN to detect end-of-body.
+        let connectionValue = headers["Connection"] ?? "keep-alive"
+        response += "Connection: \(connectionValue)\r\n"
+        for (key, value) in headers where key != "Connection" {
             response += "\(key): \(value)\r\n"
         }
         response += "\r\n"
@@ -2683,6 +2688,12 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         ]
         if contentLength > 0 {
             headers["Content-Length"] = "\(contentLength)"
+            // Content-Length known: keep-alive is valid (default in buildHTTPHeaderData)
+        } else {
+            // No Content-Length (IPFS chunked transfer). Use Connection: close so AVPlayer
+            // uses TCP FIN to detect end-of-body instead of an ill-formed keep-alive response.
+            // Without this, AVPlayerItem.status stays stuck at .unknown indefinitely.
+            headers["Connection"] = "close"
         }
 
         // Send HTTP response headers to AVPlayer immediately.
@@ -2723,11 +2734,14 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         }
 
         // Write the fully-downloaded segment to disk for instant cache hits on future requests.
+        let segName = URL(fileURLWithPath: cachePath).lastPathComponent
+        print("🎞️ [HLS DATA] Segment download completed mediaID: \(mediaID), segment: \(segName)")
         let cacheURL = URL(fileURLWithPath: cachePath)
         guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
             return // Cache directory was deleted by clearPlayerForMediaID — skip write
         }
         try? diskBuffer.write(to: cacheURL)
+        print("✅ [SegmentCache] Wrote \(diskBuffer.count) bytes to disk: \(cachePath) (mediaID: \(mediaID))")
         BlackList.shared.recordSuccess(mediaID)
     }
 }
