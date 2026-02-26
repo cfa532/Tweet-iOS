@@ -173,8 +173,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var bufferingTimeoutTask: DispatchWorkItem?
 
     /// Guards against infinite kick-play loops in the buffering timeout.
-    /// Set to true after the timeout attempts play() instead of nuking; reset on new player config.
-    private var hasAttemptedKickPlay: Bool = false
+    /// Counts kick attempts; escalates to recovery after 2 kicks (~60s). Reset on new player config.
+    private var kickPlayAttempts: Int = 0
 
     /// Track when player configuration started (for timing logs)
     private var playerConfigureStartTime: Date?
@@ -759,7 +759,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // status stays .unknown → code waits for .readyToPlay before play().
         newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         isPlaybackStartPending = false
-        hasAttemptedKickPlay = false
+        kickPlayAttempts = 0
         removePlayerObservers()
         self.player = newPlayer
         transitionTo(.playerLoading)
@@ -888,8 +888,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 self.bufferingTimeoutTask = nil
                 self.loadingSpinner.stopAnimating()
                 if status == 1 && self.coordinatorWantsToPlay && player.timeControlStatus != .playing && !self.isVideoAtEnd(player) {
-                    print("\(self.logPrefix) ⏰ Kicking play on readyToPlay player")
-                    player.play()
+                    self.kickPlayAttempts += 1
+                    if self.kickPlayAttempts > 2 {
+                        // Kicked twice without sustained playback — escalate to recovery
+                        print("\(self.logPrefix) ⚠️ Kick-play failed after \(self.kickPlayAttempts - 1) attempts, escalating to recovery")
+                        self.kickPlayAttempts = 0
+                        self.handleTimeoutRecovery(reason: "Kick-play failed (status: \(status), buffer: \(String(format: "%.1f", buffered))s)")
+                    } else {
+                        print("\(self.logPrefix) ⏰ Kicking play on readyToPlay player (attempt \(self.kickPlayAttempts)/2)")
+                        self.requestPlaybackStartIfNeeded(player, reason: "bufferTimeout-kickPlay")
+                    }
                 }
                 return
             }
@@ -1182,21 +1190,29 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func requestPlaybackStartIfNeeded(_ player: AVPlayer, reason: String) {
         guard coordinatorWantsToPlay else { return }
 
+        // When item.status just became readyToPlay, always issue a fresh play() call.
+        // A prior play() at status==unknown only set the rate; AVPlayer may not actually
+        // start decoding until play() is called with status==readyToPlay.
+        let isStatusReady = reason.hasPrefix("statusKVO-ready")
+
         if player.timeControlStatus == .playing {
-            applyPlayingStateWithoutPlay(player)
-            print("\(logPrefix) ⏭️ Skipping duplicate playback start (\(reason))")
-            return
+            if isStatusReady {
+                // Item just became readyToPlay. The early play() at status==unknown may
+                // have caused a transient .playing that won't sustain. Proceed to full
+                // actuallyStartPlayback so the player gets a proper play() + volume fade
+                // at readyToPlay, which AVPlayer needs to commit to sustained decoding.
+                print("\(logPrefix) ▶️ Transient .playing at readyToPlay — proceeding to full start")
+            } else {
+                applyPlayingStateWithoutPlay(player)
+                print("\(logPrefix) ⏭️ Skipping duplicate playback start (\(reason))")
+                return
+            }
         }
 
         if isPlaybackStartPending {
             print("\(logPrefix) ⏭️ Start already pending (\(reason))")
             return
         }
-
-        // When item.status just became readyToPlay, always issue a fresh play() call.
-        // A prior play() at status==unknown only set the rate; AVPlayer may not actually
-        // start decoding until play() is called with status==readyToPlay.
-        let isStatusReady = reason.hasPrefix("statusKVO-ready")
 
         if !isStatusReady && player.rate > 0 {
             applyPlayingStateWithoutPlay(player)
@@ -1277,6 +1293,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         videoCellState = .playing
         retryButton.isHidden = true
+        // Player reports .playing — stop spinner. timeControlStatus KVO will
+        // restart it if the player drops back to .waitingToPlayAtSpecifiedRate.
+        loadingSpinner.stopAnimating()
         player.isMuted = MuteState.shared.isMuted
         player.volume = 1.0
         if isSingleMedia {
@@ -1568,6 +1587,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     self.loadingSpinner.stopAnimating()
                     self.bufferingTimeoutTask?.cancel()
                     self.bufferingTimeoutTask = nil
+                    self.kickPlayAttempts = 0
                     // Smooth playback confirmed — hide thumbnail cover to reveal actual video
                     // Only hide after logical readiness is confirmed; layer-ready can arrive
                     // earlier and still expose a black frame when regaining primacy.
@@ -2365,7 +2385,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         isPlaybackStartPending = false
         isHandlingFinishEvent = false
         playerWasLoaned = false
-        hasAttemptedKickPlay = false
+        kickPlayAttempts = 0
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
         lastLoggedBuffered = -1

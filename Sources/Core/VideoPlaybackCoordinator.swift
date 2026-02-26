@@ -287,6 +287,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Previous content offset to track scroll direction
     private var previousContentOffset: CGFloat = 0
+
+    /// Whether the initial (non-scroll) preload has been triggered after first visibility update
+    private var initialPreloadDone: Bool = false
     
     /// Table view reference for viewport calculations
     private weak var tableView: UITableView?
@@ -618,6 +621,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 self.cachedVisibilityRatios.removeAll()
                 self.invalidateVisibleVideoCache()
                 self.clearPreloadedTracking()
+                self.initialPreloadDone = false
 
                 // Store tweet list for embedded tweet lookup
                 self.currentTweets = pinnedTweets + tweets
@@ -630,6 +634,11 @@ class VideoPlaybackCoordinator: ObservableObject {
                 if self.phase == .idle && !self.visibleVideos.isEmpty && !self.isPlaybackSuppressedByOverlay {
                     self.startPrimaryVideoPlayback()
                 }
+
+                // NOTE: Preloading of upcoming videos is NOT triggered here because
+                // visibleTweetIds hasn't been set yet during initial load. Instead,
+                // preloadVideosInScrollDirection() is called from updateVisibleTweets()
+                // on the first visibility update (see initialPreloadDone guard).
             }
         }
     }
@@ -833,6 +842,14 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         self.visibleTweetIds = filteredTweetIds
         self.isScrolling = true
+
+        // On initial feed load there is no scroll event, so preloadVideosInScrollDirection()
+        // (guarded by previousContentOffset != 0) never fires. Trigger it once on the first
+        // visibility update when we have both allVideos and visibleTweetIds populated.
+        if !initialPreloadDone && !filteredTweetIds.isEmpty && !allVideos.isEmpty {
+            initialPreloadDone = true
+            preloadVideosInScrollDirection()
+        }
 
         // Video visibility depends on video (media cell) only — use onScreenMediaCells as source of truth
         let currentVisibleIdentifiers = onScreenMediaCells
