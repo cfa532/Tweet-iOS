@@ -172,6 +172,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Buffering timeout — triggers recovery if player stays in waitingToPlayAtSpecifiedRate for 30s
     private var bufferingTimeoutTask: DispatchWorkItem?
 
+    /// Guards against infinite kick-play loops in the buffering timeout.
+    /// Set to true after the timeout attempts play() instead of nuking; reset on new player config.
+    private var hasAttemptedKickPlay: Bool = false
+
     /// Track when player configuration started (for timing logs)
     private var playerConfigureStartTime: Date?
 
@@ -755,6 +759,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // status stays .unknown → code waits for .readyToPlay before play().
         newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         isPlaybackStartPending = false
+        hasAttemptedKickPlay = false
         removePlayerObservers()
         self.player = newPlayer
         transitionTo(.playerLoading)
@@ -857,8 +862,72 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isVisible, self.player === player else { return }
             let status = player.currentItem?.status.rawValue ?? -1
+            let buffered = self.currentBufferedEnd(for: player)
             let url = (player.currentItem?.asset as? AVURLAsset)?.url.absoluteString ?? "no-url"
-            print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - no progress in 30s, status: \(status), url: \(url)")
+
+            // Non-primary video with ample buffer: coordinator hasn't asked this
+            // video to play and it already has enough data. Cancel stalled downloads
+            // to free network slots for other videos, but keep the player and buffer
+            // intact so playback can start instantly if this video becomes primary.
+            if !self.coordinatorWantsToPlay && buffered >= 3.0 {
+                print("\(self.logPrefix) ⏰ Buffer timeout: releasing stalled downloads — not primary, buffer: \(String(format: "%.1f", buffered))s")
+                if let mid = self.attachment?.mid {
+                    LocalHTTPServer.shared.releaseStalledDownloads(for: mid)
+                }
+                self.bufferingTimeoutTask = nil
+                return
+            }
+
+            // Primary video with decent buffer but item.status stuck at .unknown:
+            // AVPlayer sometimes won't transition to .readyToPlay until play() is
+            // called. Call play() directly — requestPlaybackStartIfNeeded would
+            // short-circuit ("Skipping duplicate") when videoCellState is already
+            // .playing from the onReadyForDisplay safety net.
+            if self.coordinatorWantsToPlay && buffered >= 3.0 && status == 0 && !self.hasAttemptedKickPlay {
+                print("\(self.logPrefix) ⏰ Buffer timeout: kick-play directly (buffer: \(String(format: "%.1f", buffered))s, status: \(status))")
+                self.hasAttemptedKickPlay = true
+                player.play()
+                // Re-arm timeout — if kick-play doesn't resolve, next timeout nukes.
+                self.startBufferingTimeout(player: player)
+                return
+            }
+
+            // Item reached readyToPlay with substantial buffer — the video is healthy.
+            // loadedTimeRanges may have stopped advancing because the active variant's
+            // segments are all downloaded (e.g. 720p complete but 480p/segment001 never
+            // fetched). isPlaybackBufferFull can still be false in this case. Don't nuke.
+            if status == 1 && buffered >= 3.0 {
+                print("\(self.logPrefix) ⏰ Buffer timeout: readyToPlay with \(String(format: "%.1f", buffered))s buffer — healthy, cancelling timeout")
+                self.bufferingTimeoutTask = nil
+                self.loadingSpinner.stopAnimating()
+                // If coordinator wants play but player isn't actually playing, kick it.
+                if self.coordinatorWantsToPlay && player.timeControlStatus != .playing {
+                    print("\(self.logPrefix) ⏰ Kicking play on readyToPlay player")
+                    player.play()
+                }
+                return
+            }
+
+            // Buffer is full — AVPlayer has all available data and suspended further I/O.
+            // loadedTimeRanges stopped advancing because there's no more content to
+            // download, not because the download stalled. Don't nuke a working video.
+            // For a genuine mid-video stall the buffer would be depleted (not full).
+            if player.currentItem?.isPlaybackBufferFull == true {
+                print("\(self.logPrefix) ⏰ Buffer timeout: isPlaybackBufferFull — all content buffered (\(String(format: "%.1f", buffered))s), cancelling timeout")
+                self.bufferingTimeoutTask = nil
+                // If player is stalled near the end, seek to kick it past the gap.
+                if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+                    let currentTime = CMTimeGetSeconds(player.currentTime())
+                    if currentTime > 0 && buffered - currentTime < 1.0 {
+                        let seekTarget = CMTime(seconds: max(0, buffered - 0.1), preferredTimescale: 600)
+                        player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
+                        print("\(self.logPrefix) ⏰ Seeking to \(String(format: "%.1f", buffered - 0.1))s to nudge past end-gap")
+                    }
+                }
+                return
+            }
+
+            print("\(self.logPrefix) ⚠️ BUFFERING TIMEOUT - no progress in 30s, status: \(status), buffer: \(String(format: "%.1f", buffered))s, url: \(url)")
             self.handleTimeoutRecovery(reason: "No buffer progress in 30s (status: \(status))")
         }
         bufferingTimeoutTask = work
@@ -1127,7 +1196,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func requestPlaybackStartIfNeeded(_ player: AVPlayer, reason: String) {
         guard coordinatorWantsToPlay else { return }
 
-        if player.rate > 0 || player.timeControlStatus == .playing || videoCellState == .playing {
+        if player.timeControlStatus == .playing {
             applyPlayingStateWithoutPlay(player)
             print("\(logPrefix) ⏭️ Skipping duplicate playback start (\(reason))")
             return
@@ -1138,10 +1207,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
-        if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
-            // A prior play() (kick fetch or another callback) already moved the player
-            // into waiting/buffering. Don't issue another play(), but do sync state/UI
-            // so we don't get stuck in playerReady/playerLoading visual states.
+        // When item.status just became readyToPlay, always issue a fresh play() call.
+        // A prior play() at status==unknown only set the rate; AVPlayer may not actually
+        // start decoding until play() is called with status==readyToPlay.
+        let isStatusReady = reason.hasPrefix("statusKVO-ready")
+
+        if !isStatusReady && player.rate > 0 {
+            applyPlayingStateWithoutPlay(player)
+            print("\(logPrefix) ⏭️ Player rate > 0, skipping (\(reason))")
+            return
+        }
+
+        if !isStatusReady && player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
             applyPlayingStateWithoutPlay(player)
             print("\(logPrefix) ⏭️ Player already waiting to play (\(reason)) — synced state")
             return
@@ -1526,9 +1603,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Also covers .playerReady: streaming can render the first frame before
                     // the player has buffered enough to actually start playback.
                     self.loadingSpinner.startAnimating()
-                    // (Re-)start the 30s timeout. loadedTimeRangesObserver resets it on
-                    // every buffer event; it only fires if genuinely flat for 30s.
-                    self.startBufferingTimeout(player: player)
+                    // Don't start a timeout when all content is already buffered.
+                    // The stall is at the very end — timeout would just fire and be cancelled.
+                    if player.currentItem?.isPlaybackBufferFull != true {
+                        // (Re-)start the 30s timeout. loadedTimeRangesObserver resets it on
+                        // every buffer event; it only fires if genuinely flat for 30s.
+                        self.startBufferingTimeout(player: player)
+                    }
                 }
             }
         }
@@ -1599,7 +1680,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Shared recovery path for both buffering timeout and stuck player timeout.
     /// Pauses player, preserves frame to imageView (so retry button overlays last frame),
-    /// soft-resets player cache (preserves partial HLS downloads), then shows retry button.
+    /// cancels stuck downloads, soft-resets player cache, then shows retry button.
     private func handleTimeoutRecovery(reason: String, useVideoOutput: Bool = true) {
         player?.pause()
         removePlayerObservers()
@@ -1607,6 +1688,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         preserveFrameToCache(useVideoOutput: useVideoOutput)
         if let mid = attachment?.mid {
             VideoStateCache.shared.clearCachedState(for: mid)
+            // Cancel stuck downloads BEFORE soft reset so the dedup actor clears the
+            // active-download keys. Without this, retry attempts dedup-wait for downloads
+            // that will never complete, causing an infinite timeout→retry loop.
+            LocalHTTPServer.shared.cancelDownloads(for: mid)
             SharedAssetCache.shared.softResetPlayer(for: mid)
         }
         handleVideoLoadFailure(reason: reason)
@@ -2291,6 +2376,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         isPlaybackStartPending = false
         isHandlingFinishEvent = false
         playerWasLoaned = false
+        hasAttemptedKickPlay = false
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
         lastLoggedBuffered = -1

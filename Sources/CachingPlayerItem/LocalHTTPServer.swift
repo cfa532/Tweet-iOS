@@ -215,6 +215,13 @@ private actor ActiveDownloadsActor {
         activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
     }
 
+    /// Remove active download keys for this mediaID without marking it as permanently
+    /// cancelled. Used to free download slots for non-primary videos whose downloads
+    /// stalled — future segment requests will still be served normally.
+    func releaseStalledDownloads(for mediaID: String) {
+        activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
+    }
+
     /// Returns true if the player for this mediaID was cleared while a download was in-flight.
     func isMediaIDCancelled(_ mediaID: String) -> Bool {
         return cancelledMediaIDs.contains(mediaID)
@@ -704,6 +711,24 @@ public class LocalHTTPServer: @unchecked Sendable {
         Task { await activeDownloadsActor.cancelTasks(for: mediaID) }
 
         // 2. Cancel progressive streaming sessions for this mediaID
+        streamingSessionsLock.lock()
+        let sessionKeysToRemove = streamingSessions.keys.filter { $0.hasPrefix(mediaID) }
+        for key in sessionKeysToRemove {
+            streamingSessions[key]?.invalidateAndCancel()
+            streamingSessions.removeValue(forKey: key)
+        }
+        streamingSessionsLock.unlock()
+    }
+
+    /// Release stalled download slots for a non-primary video without marking the mediaID
+    /// as permanently cancelled.  Frees network concurrency for other videos while keeping
+    /// the existing AVPlayer and its buffer intact.  Future segment requests from AVPlayer
+    /// will still be served normally (unlike `cancelDownloads` which blocks them).
+    public func releaseStalledDownloads(for mediaID: String) {
+        // 1. Clear dedup keys so new requests aren't stuck waiting for the stalled download
+        Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
+
+        // 2. Cancel the URLSession tasks to free network slots
         streamingSessionsLock.lock()
         let sessionKeysToRemove = streamingSessions.keys.filter { $0.hasPrefix(mediaID) }
         for key in sessionKeysToRemove {
@@ -2096,8 +2121,19 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// The session is registered in `streamingSessions` so `cancelDownloads(for:)` can cancel
     /// it when the player is cleared.
     private func streamSegmentAndServe(url: URL, cachePath: String, connection: NWConnection, mediaID: String, completion: @escaping () -> Void) {
-        let filename = URL(fileURLWithPath: cachePath).lastPathComponent
-        let sessionKey = "\(mediaID)/stream/\(filename)"
+        // Use the relative path (e.g., "480p/segment000.ts") instead of just the filename
+        // to avoid session key collisions between quality variants of the same segment.
+        let cacheURL = URL(fileURLWithPath: cachePath)
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let mediaDir = cacheDir.appendingPathComponent(mediaID)
+        let relativePath: String
+        if cachePath.hasPrefix(mediaDir.path) {
+            // Strip the media directory prefix to get e.g. "480p/segment000.ts"
+            relativePath = String(cachePath.dropFirst(mediaDir.path.count + 1))
+        } else {
+            relativePath = cacheURL.lastPathComponent
+        }
+        let sessionKey = "\(mediaID)/stream/\(relativePath)"
 
         let delegate = SegmentStreamDelegate(
             connection: connection,
@@ -2477,6 +2513,16 @@ public class LocalHTTPServer: @unchecked Sendable {
                 modified.insert(contentsOf: "\n#EXT-X-PLAYLIST-TYPE:VOD", at: insertIndex)
             }
         }
+
+        // CRITICAL: Add #EXT-X-ENDLIST if missing. Without this tag AVPlayer treats the
+        // playlist as potentially live — it keeps polling for new segments, isPlaybackBufferFull
+        // stays false, buffer never reaches 100%, and the player stalls at the end.
+        if modified.contains("#EXTINF:") && !modified.contains("#EXT-X-ENDLIST") {
+            if !modified.hasSuffix("\n") {
+                modified += "\n"
+            }
+            modified += "#EXT-X-ENDLIST\n"
+        }
         
         // Rewrite .m3u8 URLs (sub-playlists) - handles both relative and absolute paths
         // Pattern matches lines like "720p/playlist.m3u8" or "/ipfs/QmHash/720p/playlist.m3u8"
@@ -2519,9 +2565,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
+        print("🎞️ [HLS PLAYLIST] Serving to AVPlayer (mediaID: \(mediaID), base: \(baseURL.lastPathComponent)):\n\(modified)")
         return modified
     }
-    
+
     private func getMimeType(for path: String) -> String {
         let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
         switch ext {
@@ -2536,11 +2583,13 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func buildHTTPHeaderData(statusCode: Int, headers: [String: String]) -> Data {
         var response = "HTTP/1.1 \(statusCode) \(getStatusText(statusCode))\r\n"
-        // Use Connection value from headers dict if provided; default to keep-alive.
-        // Callers pass Connection: close when Content-Length is unknown (IPFS chunked
-        // transfer) so AVPlayer can use TCP FIN to detect end-of-body.
-        let connectionValue = headers["Connection"] ?? "keep-alive"
-        response += "Connection: \(connectionValue)\r\n"
+        // Always use Connection: close. The proxy handles exactly one request per
+        // NWConnection — after sendResponse it never reads from the connection again.
+        // With keep-alive, AVPlayer reuses the connection for the next request (e.g.
+        // segment001.ts) but the proxy never reads it, silently losing the request.
+        // This caused segment001.ts to never be fetched, item.status to stay at
+        // .unknown, and the video to stall.
+        response += "Connection: close\r\n"
         for (key, value) in headers where key != "Connection" {
             response += "\(key): \(value)\r\n"
         }
@@ -2550,19 +2599,23 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (() -> Void)? = nil) {
         let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
-        
+
         guard let body = body, !body.isEmpty else {
-            connection.send(content: headerData, completion: .contentProcessed { _ in
-                completion?()
+            // Send headers only, then TCP FIN (Connection: close requires actual close).
+            connection.send(content: headerData, isComplete: false, completion: .contentProcessed { _ in
+                connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                               completion: .contentProcessed { _ in completion?() })
             })
             return
         }
-        
+
         var allData = Data(headerData)
         allData.append(body)
-        
-        connection.send(content: allData, completion: .contentProcessed { _ in
-            completion?()
+
+        // Send headers + body, then TCP FIN (Connection: close requires actual close).
+        connection.send(content: allData, isComplete: false, completion: .contentProcessed { _ in
+            connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                           completion: .contentProcessed { _ in completion?() })
         })
     }
     
@@ -2723,12 +2776,16 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
 
         if let error = error {
             let nsError = error as NSError
-            // If headers were never sent, tell AVPlayer the request failed so it retries.
-            // If headers were already sent we can't do anything — the connection will close
-            // and AVPlayer will detect the incomplete response on its own.
             if !headersSent && nsError.code != NSURLErrorCancelled {
+                // Headers never sent — tell AVPlayer the request failed so it retries.
                 sendFallbackError(connection)
                 BlackList.shared.recordFailure(mediaID)
+            } else if headersSent {
+                // Headers were already sent — close the connection so AVPlayer detects the
+                // incomplete response. Without this, the connection stays open and AVPlayer
+                // waits forever for more data (especially for Connection: close responses).
+                connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                               completion: .contentProcessed { _ in })
             }
             return
         }
@@ -2738,10 +2795,21 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         print("🎞️ [HLS DATA] Segment download completed mediaID: \(mediaID), segment: \(segName)")
         let cacheURL = URL(fileURLWithPath: cachePath)
         guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
+            // Signal end-of-body so AVPlayer isn't left waiting.
+            connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                           completion: .contentProcessed { _ in })
             return // Cache directory was deleted by clearPlayerForMediaID — skip write
         }
         try? diskBuffer.write(to: cacheURL)
         print("✅ [SegmentCache] Wrote \(diskBuffer.count) bytes to disk: \(cachePath) (mediaID: \(mediaID))")
         BlackList.shared.recordSuccess(mediaID)
+
+        // Signal end of HTTP response body by sending TCP FIN.
+        // All responses use Connection: close, so AVPlayer expects the TCP connection
+        // to actually close after the body. Without FIN, AVPlayer waits indefinitely
+        // for the connection to close, item.status stays at .unknown, and the video
+        // never starts playing — even if all Content-Length bytes were received.
+        connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                       completion: .contentProcessed { _ in })
     }
 }
