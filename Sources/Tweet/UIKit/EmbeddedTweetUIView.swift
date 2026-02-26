@@ -276,10 +276,6 @@ class EmbeddedTweetUIView: UIView {
             )
         }
 
-        VideoLoadingManager.shared.registerRetweetRelationship(
-            retweetId: quotingTweet.mid,
-            originalTweetId: originalTweet.mid
-        )
     }
 
     // MARK: - Visibility

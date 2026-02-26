@@ -33,7 +33,6 @@ struct MediaGridView: View, Equatable {
     @State private var videoLoadTimer: Timer?
     @State private var isVisible = false
     @State private var hasInitialized = false // Track if we've done initial setup
-    @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     
     // Cache screen-based calculations to avoid repeated UIScreen.main calls
     // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
@@ -615,30 +614,8 @@ struct MediaGridView: View, Equatable {
             let hasAudio = attachments.contains(where: { $0.type == .audio })
             let hasMedia = hasVideos || hasAudio
             
-            if hasMedia {
-                // Register this tweet as containing media (videos or audio)
-                // This is important for tweets with multiple attachments to be tracked
-                // Defer to background to avoid blocking main thread
-                Task.detached(priority: .background) {
-                    await videoLoadingManager.registerTweetWithVideos(parentTweet.mid)
-                }
-                
-                // Check if this tweet should load media based on VideoLoadingManager
-                // For embedded tweets, still check - if VideoLoadingManager says yes (e.g., it's the original
-                // of a visible retweet), then allow loading
-                // CRITICAL: Only check if shouldLoadVideo is false to avoid unnecessary state checks
-                // This prevents recomposition when scrolling up past already-loaded retweets
-                if !shouldLoadVideo {
-                    let shouldLoad = videoLoadingManager.shouldLoadVideos(for: parentTweet.mid)
-                    if shouldLoad {
-                        // Allow enabling loading even for embedded tweets if VideoLoadingManager approves
-                        // This allows videos in original tweets of visible retweets to load
-                        shouldLoadVideo = true
-                    }
-                }
-                // If shouldLoadVideo is already true, don't check or change it
-                // This keeps already-loaded videos loaded, preventing layout instability
-            }
+            // Videos load based on cell visibility (setVisible) — no gate needed
+            _ = hasMedia
             
             // Note: MediaGrid no longer sends play commands directly
             // VideoPlaybackCoordinator handles all playback decisions based on scroll position
@@ -653,24 +630,6 @@ struct MediaGridView: View, Equatable {
         }
         .onChange(of: isVisible) { _, newVisibility in
             // Visibility changes handled by global coordinator
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .cancelVideoLoading)) { notification in
-            if let tweetId = notification.userInfo?["tweetId"] as? String,
-               tweetId == parentTweet.mid {
-                // Don't cancel loading for a tweet that is currently visible.
-                // Fullscreen/login overlays can confuse global visibility/cancellation heuristics.
-                guard !isVisible else {
-                    return
-                }
-                shouldLoadVideo = false
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .triggerVideoPreloading)) { notification in
-            if let tweetId = notification.userInfo?["tweetId"] as? String,
-               tweetId == parentTweet.mid {
-                // Enable video loading for preloading
-                shouldLoadVideo = true
-            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopAllVideos)) { _ in
             // Handle audio interruptions (calls, alarms, etc.) from AudioSessionManager

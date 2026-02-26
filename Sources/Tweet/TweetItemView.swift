@@ -189,12 +189,7 @@ struct TweetItemView: View, Equatable {
                     )
                 }
                 
-                // Register retweet relationship ASAP from cache
                 if !hasRegisteredRetweetRelationship {
-                    VideoLoadingManager.shared.registerRetweetRelationship(
-                        retweetId: tweet.mid,
-                        originalTweetId: cachedTweet.mid
-                    )
                     hasRegisteredRetweetRelationship = true
                 }
             }
@@ -233,12 +228,7 @@ struct TweetItemView: View, Equatable {
                             )
                         }
 
-                        // Register retweet relationship ASAP from cache for immediate priority boost
                         if !hasRegisteredRetweetRelationship {
-                            VideoLoadingManager.shared.registerRetweetRelationship(
-                                retweetId: tweet.mid,
-                                originalTweetId: cachedTweet.mid
-                            )
                             hasRegisteredRetweetRelationship = true
                         }
                     }
@@ -250,13 +240,7 @@ struct TweetItemView: View, Equatable {
                 tweetId: originalTweetId,
                 authorId: originalAuthorId
             ) {
-                // Register relationship from server fetch only if not already registered
-                // (handles case where cache miss but server fetch succeeds)
                 if !hasRegisteredRetweetRelationship {
-                    VideoLoadingManager.shared.registerRetweetRelationship(
-                        retweetId: tweet.mid,
-                        originalTweetId: t.mid
-                    )
                     hasRegisteredRetweetRelationship = true
                 }
 

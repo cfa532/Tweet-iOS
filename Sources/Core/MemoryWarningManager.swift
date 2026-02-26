@@ -67,8 +67,8 @@ class MemoryWarningManager: ObservableObject {
     private func releaseMemoryCaches() async {
         print("DEBUG: [MemoryWarningManager] Releasing 20% of memory caches...")
         
-        // Release 20% of video caches (preserve current playing videos)
-        SharedAssetCache.shared.releasePartialCache(percentage: 20)
+        // Use LRU-based cleanup for video caches
+        SharedAssetCache.shared.forceMemoryCleanup()
         
         // Release 20% of image caches
         ImageCacheManager.shared.releasePartialCache(percentage: 20)

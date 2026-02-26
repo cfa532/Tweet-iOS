@@ -216,8 +216,8 @@ class MemoryCapManager {
     private func performPreventiveCleanup() {
         logger.info("Performing preventive memory cleanup")
         
-        // Clean up video caches (memory)
-        SharedAssetCache.shared.releasePartialCache(percentage: 30)
+        // Clean up video caches via LRU eviction
+        SharedAssetCache.shared.forceMemoryCleanup()
         
         // Clean up image caches
         ImageCacheManager.shared.cleanupOldCache()
@@ -235,8 +235,8 @@ class MemoryCapManager {
         // CRITICAL: Cancel active downloads first to stop memory growth
         SharedAssetCache.shared.cancelAllLoadingTasks()
         
-        // Clean up more video caches (memory)
-        SharedAssetCache.shared.releasePartialCache(percentage: 60)
+        // Clean up video caches via LRU eviction
+        SharedAssetCache.shared.forceMemoryCleanup()
         
         // Clean up more image caches
         ImageCacheManager.shared.cleanupOldCache()
@@ -268,8 +268,8 @@ class MemoryCapManager {
         // CRITICAL: Cancel ALL active downloads IMMEDIATELY to stop memory growth
         SharedAssetCache.shared.cancelAllLoadingTasks()
         
-        // Clear 80% of video caches - keep only most recent
-        SharedAssetCache.shared.releasePartialCache(percentage: 80)
+        // Clear video caches via LRU eviction
+        SharedAssetCache.shared.forceMemoryCleanup()
         
         // Clear image caches aggressively
         ImageCacheManager.shared.cleanupOldCache()
@@ -311,8 +311,8 @@ class MemoryCapManager {
         if percentage >= warningThreshold {
             logger.info("Memory above warning threshold, performing cleanup")
             
-            // Clean up video caches
-            SharedAssetCache.shared.releasePartialCache(percentage: 30)
+            // Clean up video caches via LRU eviction
+            SharedAssetCache.shared.forceMemoryCleanup()
             
             // Clean up image caches
             ImageCacheManager.shared.cleanupOldCache()

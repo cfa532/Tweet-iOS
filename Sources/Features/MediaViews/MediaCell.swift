@@ -187,12 +187,9 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             // Update effectiveBaseUrl in case author's baseUrl has been resolved since init
             updateEffectiveBaseUrl()
 
-            // MEMORY FIX: Mark video as visible to prevent eviction
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
-                SharedAssetCache.shared.markAsVisible(mediaID)
+            // Mark video as visible for state tracking
+            if isVideoAttachment {
                 VideoStateCache.shared.markAsVisible(attachment.mid)
-                print("👁️ [MediaCell] Marked video as visible: \(attachment.mid) (mediaID: \(mediaID))")
             }
 
             // For embedded videos, viewport visibility is checked via GeometryReader in videoPlayerViewContent
@@ -230,20 +227,10 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
             VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: videoId)
 
-            // MEMORY FIX: Mark video as not visible when cell disappears
-            // Cleanup is handled by background timer (every 10s) to preserve preloading
-            if isVideoAttachment, let url = attachment.getUrl(effectiveBaseUrl) {
-                let mediaID = SharedAssetCache.shared.extractMediaID(from: url) ?? attachment.mid
-
-                // Mark as not visible (allows cleanup after grace period)
-                SharedAssetCache.shared.markAsNotVisible(mediaID)
+            // Mark video as not visible and cancel loading
+            if isVideoAttachment {
                 VideoStateCache.shared.markAsNotVisible(attachment.mid)
-
-                // Cancel active loading tasks to stop wasting bandwidth/memory
-                // But DON'T release the player yet - it might be in preload window
-                SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet.mid)
-
-                print("🔄 [MediaCell] Marked not visible, stopped loading for \(attachment.mid) (mediaID: \(mediaID))")
+                SharedAssetCache.shared.cancelLoading(for: attachment.mid)
             }
         }
         .onChange(of: isVisible) { _, newValue in

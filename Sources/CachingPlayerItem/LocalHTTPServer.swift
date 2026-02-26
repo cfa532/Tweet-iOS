@@ -215,13 +215,6 @@ private actor ActiveDownloadsActor {
         activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
     }
 
-    /// Remove active download keys for this mediaID without marking it as permanently
-    /// cancelled. Used to free download slots for non-primary videos whose downloads
-    /// stalled — future segment requests will still be served normally.
-    func releaseStalledDownloads(for mediaID: String) {
-        activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
-    }
-
     /// Returns true if the player for this mediaID was cleared while a download was in-flight.
     func isMediaIDCancelled(_ mediaID: String) -> Bool {
         return cancelledMediaIDs.contains(mediaID)
@@ -242,7 +235,6 @@ public class LocalHTTPServer: @unchecked Sendable {
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
     private let mediaLock = NSLock() // Protects mediaCache and mediaRealURLs
     private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
-    private var preferenceHelper: PreferenceHelper?
     private let stateLock = NSLock() // Protects isStarting, isRunning, isStopping
     private var _isStarting = false
     private var _isRunning = false
@@ -276,210 +268,33 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
     private let progressiveDiskCacheLimit: Int64 = 50 * 1024 * 1024
 
-    // Log deduplication: suppress duplicate CACHE MISS logs for same mediaID+range within 3s
-    private var recentCacheMissLogs: [String: Date] = [:]
-    private let cacheMissLogLock = NSLock()
-    
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
     private let connectionPoolLock = NSLock()
 
-    // Network failure tracking for emergency cleanup
-    private let networkFailureLock = NSLock()
-    private var _consecutiveNetworkFailures: Int = 0
-    private let maxConsecutiveFailures = 3 // Trigger cleanup after 3 consecutive failures
     private var connectionPool: URLSession {
         connectionPoolLock.lock()
         defer { connectionPoolLock.unlock() }
-        
+
         if let pool = _connectionPool {
             return pool
         }
-        
+
         let config = URLSessionConfiguration.default
-        
-        // Connection pool settings for high load scenarios
-        config.httpMaximumConnectionsPerHost = 20  // Increased for better concurrent request handling
-        config.timeoutIntervalForRequest = 90     // 90 seconds per request (slow network!)
-        config.timeoutIntervalForResource = 300   // 5 minutes total
-        
-        // Enable HTTP pipelining for better throughput
-        config.httpShouldUsePipelining = true
-        
-        // Disable URLSession cache (we handle caching ourselves)
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        
+
         let pool = URLSession(configuration: config)
         _connectionPool = pool
         return pool
     }
     
-    private func canBypassInitialization(for mediaID: String? = nil, url: URL? = nil) -> Bool {
-        if HproseInstance.shared.isAppInitialized {
-            return true
-        }
-        
-        if let url = url, let host = url.host, !host.isEmpty, host != "127.0.0.1" {
-            return true
-        }
-        
-        if let mediaID = mediaID {
-            mediaLock.lock()
-            let registeredURL = mediaRealURLs[mediaID]
-            mediaLock.unlock()
-            if let registeredURL = registeredURL,
-               let host = registeredURL.host,
-               !host.isEmpty,
-               host != "127.0.0.1" {
-                return true
-            }
-        }
-        
-        if let baseHost = HproseInstance.shared.appUser.baseUrl?.host,
-           !baseHost.isEmpty {
-            return true
-        }
-        
-        return false
-    }
-    
-    // Screen lock resilience
-    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
-    private var didEnterBackground = false
-    
     private init() {
-        // Initialize preference helper for port persistence
-        self.preferenceHelper = PreferenceHelper()
-        // Load saved port from preferences
-        if let helper = preferenceHelper {
-            let savedPort = helper.getLocalHTTPServerPort()
-            self.port = savedPort
-        }
-        
-        // Setup app lifecycle listeners for screen lock resilience
-        setupLifecycleListeners()
+        self.port = 8080
     }
-    
-    private func setupLifecycleListeners() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleWillResignActive),
-            name: UIApplication.willResignActiveNotification,
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
-        
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleDidBecomeActive),
-            name: UIApplication.didBecomeActiveNotification,
-            object: nil
-        )
-    }
-    
-    @objc private func handleWillResignActive() {
-        didEnterBackground = false
-        
-        // Request background time to keep server alive during screen lock
-        if backgroundTaskID == .invalid {
-            backgroundTaskID = UIApplication.shared.beginBackgroundTask { [weak self] in
-                // If iOS needs to end our background task, end it gracefully
-                self?.endBackgroundTask()
-            }
-        }
-    }
-    
-    @objc private func handleDidEnterBackground() {
-        didEnterBackground = true
-        // Keep background task active - we need the server for quick app returns
-    }
-    
-    @objc private func handleDidBecomeActive() {
-        let _ = !didEnterBackground  // Track if this was screen lock vs background
-        
-        // End background task - no longer needed
-        endBackgroundTask()
-        
-        // Check server health and restart if needed
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.verifyServerHealth()
-        }
-    }
-    
-    private func endBackgroundTask() {
-        if backgroundTaskID != .invalid {
-            UIApplication.shared.endBackgroundTask(backgroundTaskID)
-            backgroundTaskID = .invalid
-        }
-    }
-    
-    private func verifyServerHealth() {
-        let serverState = queue.sync { () -> (Bool, NWListener.State?, UInt16) in
-            return (isRunning, listener?.state, port)
-        }
-        
-        let (running, listenerState, _) = serverState
-        
-        guard running else {
-            return
-        }
-        
-        guard let state = listenerState else {
-            print("[LocalHTTPServer] ⚠️ Listener is nil but isRunning=true, restarting")
-            queue.async { [weak self] in
-                Task {
-                    await self?.restart()
-                }
-            }
-            return
-        }
-        
-        switch state {
-        case .ready:
-            return
-        case .waiting(let error):
-            print("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error.localizedDescription)' – restarting")
-        case .failed(let error):
-            print("[LocalHTTPServer] ⚠️ Listener failed with error '\(error.localizedDescription)' – restarting")
-        case .cancelled:
-            print("[LocalHTTPServer] ⚠️ Listener was cancelled – restarting")
-        default:
-            print("[LocalHTTPServer] ⚠️ Listener state \(state) – restarting for safety")
-        }
 
-        queue.async { [weak self] in
-            Task {
-                await self?.restart()
-            }
-        }
-    }
-    
-    private func restart() async {
-        // Stop current instance synchronously (no dispatch — already on queue or safe context)
-        stopInternal()
-
-        // Small delay to ensure port release
-        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-        isStopping = false
-
-        // Start fresh
-        await startServer()
-
-        if !isRunning {
-            print("[LocalHTTPServer] ✗ Server restart failed")
-        }
-    }
-    
     deinit {
         NotificationCenter.default.removeObserver(self)
-        endBackgroundTask()
     }
     
     /// Start the server synchronously and WAIT until it's ready
@@ -634,74 +449,13 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     /// Reset the connection pool to recover from background suspension
-    /// This should be called when the app returns from a long background period
     public func resetConnectionPool() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-
-            // Thread-safe reset with lock
-            self.connectionPoolLock.lock()
-            self._connectionPool?.invalidateAndCancel()
-            self._connectionPool = nil
-            self.connectionPoolLock.unlock()
-
-            // Next access will create a new session
-        }
-    }
-
-    /// Synchronous version — immediately cancels all stale upstream connections and
-    /// streaming sessions.  Uses dedicated locks (not the server queue) so it cannot
-    /// deadlock even if the queue is blocked by in-flight requests.
-    /// Call this on foreground return BEFORE any new video loading starts.
-    public func resetAllConnectionsImmediately() {
-        // 1. Kill the shared connection pool (cancels all pending upstream requests)
         connectionPoolLock.lock()
         _connectionPool?.invalidateAndCancel()
         _connectionPool = nil
         connectionPoolLock.unlock()
-
-        // 2. Kill per-stream proxy sessions
-        streamingSessionsLock.lock()
-        for (_, session) in streamingSessions {
-            session.invalidateAndCancel()
-        }
-        streamingSessions.removeAll()
-        streamingSessionsLock.unlock()
-
-        // 3. Fire-and-forget: cancel tracked active downloads
-        Task { await activeDownloadsActor.cancelAllTasks() }
     }
 
-    /// Emergency cleanup during network failures
-    public func handleNetworkFailureCleanup() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-
-            print("DEBUG: [LocalHTTPServer] Network failure detected, performing emergency cleanup")
-
-            // Cancel all active download tasks
-            Task {
-                await self.activeDownloadsActor.cancelAllTasks()
-            }
-
-            // Reset streaming sessions
-            self.streamingSessionsLock.lock()
-            for (_, session) in self.streamingSessions {
-                session.invalidateAndCancel()
-            }
-            self.streamingSessions.removeAll()
-            self.streamingSessionsLock.unlock()
-
-            // Reset connection pool
-            self.connectionPoolLock.lock()
-            self._connectionPool?.invalidateAndCancel()
-            self._connectionPool = nil
-            self.connectionPoolLock.unlock()
-
-            print("DEBUG: [LocalHTTPServer] Emergency cleanup completed")
-        }
-    }
-    
     /// Cancel all active downloads (HLS segment tasks + progressive streaming sessions)
     /// for a specific mediaID.  Call this before deleting the media's disk cache so that
     /// in-flight writes don't fail with "file not found" and pending dedup waiters don't
@@ -711,24 +465,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         Task { await activeDownloadsActor.cancelTasks(for: mediaID) }
 
         // 2. Cancel progressive streaming sessions for this mediaID
-        streamingSessionsLock.lock()
-        let sessionKeysToRemove = streamingSessions.keys.filter { $0.hasPrefix(mediaID) }
-        for key in sessionKeysToRemove {
-            streamingSessions[key]?.invalidateAndCancel()
-            streamingSessions.removeValue(forKey: key)
-        }
-        streamingSessionsLock.unlock()
-    }
-
-    /// Release stalled download slots for a non-primary video without marking the mediaID
-    /// as permanently cancelled.  Frees network concurrency for other videos while keeping
-    /// the existing AVPlayer and its buffer intact.  Future segment requests from AVPlayer
-    /// will still be served normally (unlike `cancelDownloads` which blocks them).
-    public func releaseStalledDownloads(for mediaID: String) {
-        // 1. Clear dedup keys so new requests aren't stuck waiting for the stalled download
-        Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
-
-        // 2. Cancel the URLSession tasks to free network slots
         streamingSessionsLock.lock()
         let sessionKeysToRemove = streamingSessions.keys.filter { $0.hasPrefix(mediaID) }
         for key in sessionKeysToRemove {
@@ -791,37 +527,19 @@ public class LocalHTTPServer: @unchecked Sendable {
         isStarting = true
         defer { isStarting = false }
 
-        // Load saved port from preferences as starting point
-        let savedPort: UInt16
-        if let helper = preferenceHelper {
-            savedPort = helper.getLocalHTTPServerPort()
-        } else {
-            savedPort = 8080
-        }
-
-        // FAST PATH: Try saved port first (most common case - should succeed immediately)
-        if await tryBindToPort(savedPort) {
+        // Try port 8080 first, then search nearby ports
+        if await tryBindToPort(8080) {
             return
         }
 
-
-        // SLOW PATH: Saved port in use, search for available port
         let maxAttempts = 20
-
         for attempt in 0..<maxAttempts {
-            // Sequential search starting from saved port
-            let tryPort = savedPort + UInt16(attempt) + 1
-
-            // Skip invalid ports
-            guard tryPort <= 65535 else {
-                break
-            }
-
+            let tryPort = 8080 + UInt16(attempt) + 1
+            guard tryPort <= 65535 else { break }
             if await tryBindToPort(tryPort) {
                 return
             }
         }
-
     }
     
     /// Try to bind to a specific port - returns true if successful (async version)
@@ -879,8 +597,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                     case .ready:
                         timeoutTaskBox.cancel()
                         self.isRunning = true
-                        // Save successful port to preferences
-                        self.preferenceHelper?.setLocalHTTPServerPort(tryPort)
                         // Store the listener
                         self.listener = listener
                         resumeOnce(true)
@@ -945,37 +661,9 @@ public class LocalHTTPServer: @unchecked Sendable {
 
                 if let error = error {
                     let nwCode = (error as NSError).code
-                    // Only count non-benign errors toward emergency cleanup.
-                    // Code 54 (connection reset) and 89 (cancelled) are normal
-                    // when AVPlayer closes/reopens local connections.
-                    let isBenign = (nwCode == 54 || nwCode == 89 || nwCode == NSURLErrorCancelled)
-                    if !isBenign {
-                        var shouldCleanup = false
-                        self.networkFailureLock.lock()
-                        self._consecutiveNetworkFailures += 1
-                        let count = self._consecutiveNetworkFailures
-                        if count >= self.maxConsecutiveFailures {
-                            shouldCleanup = true
-                            self._consecutiveNetworkFailures = 0
-                        }
-                        self.networkFailureLock.unlock()
-
-                        print("DEBUG: [LocalHTTPServer] Network failure count: \(count)/\(self.maxConsecutiveFailures)")
-                        if shouldCleanup {
-                            print("DEBUG: [LocalHTTPServer] Too many consecutive network failures, triggering cleanup")
-                            self.handleNetworkFailureCleanup()
-                        }
-                    }
-
-                    // Only log non-connection-reset errors
-                    if nwCode != 54 {
+                    if nwCode != 54 {  // Skip connection reset (normal)
                         print("DEBUG: [LocalHTTPServer] Receive error (code \(nwCode)): \(error)")
                     }
-                } else {
-                    // Reset network failure counter on successful receive
-                    self.networkFailureLock.lock()
-                    self._consecutiveNetworkFailures = 0
-                    self.networkFailureLock.unlock()
                 }
 
                 if let data = data, !data.isEmpty {
@@ -1396,30 +1084,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         let rangeStr = rangeHeader != nil ? "\(effectiveStart)-\(effectiveEnd?.description ?? "end")" : "full-file"
-        // Deduplicate: suppress identical cache miss logs within 3 seconds
-        let logKey = "\(mediaID)_\(rangeStr)"
-        let now = Date()
-        cacheMissLogLock.lock()
-        let lastLog = recentCacheMissLogs[logKey]
-        let shouldLog = lastLog == nil || now.timeIntervalSince(lastLog!) >= 3.0
-        if shouldLog { recentCacheMissLogs[logKey] = now }
-        // Prune old entries periodically
-        if recentCacheMissLogs.count > 50 {
-            recentCacheMissLogs = recentCacheMissLogs.filter { now.timeIntervalSince($0.value) < 5.0 }
-        }
-        cacheMissLogLock.unlock()
-        if shouldLog {
-            print("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
-        }
-        
-        // CACHE MISS - fetch from real server
-        // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
-        guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
-            print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
-            self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            return
-        }
-        
+        print("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest)")
+
         // STREAMING: First get file size with HEAD, then stream data in chunks
         let requestedStart = rangeStart ?? 0
         
@@ -2084,14 +1750,6 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, completion: (() -> Void)? = nil) {
-        // CRITICAL: Block NEW network requests until app initialized
-        guard canBypassInitialization(url: url) else {
-            print("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
-            self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            completion?()
-            return
-        }
-
         // Extract mediaID from cachePath for BlackList tracking
         let pathComponents = cachePath.components(separatedBy: "/")
         let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
@@ -2173,13 +1831,6 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     /// Download and cache file without serving (for background downloads when connection is closing)
     private func downloadAndCacheOnly(url: URL, cachePath: String, completion: (() -> Void)? = nil) {
-        // CRITICAL: Block NEW network requests until app initialized
-        guard canBypassInitialization(url: url) else {
-            print("⚠️ [LocalHTTPServer] App not initialized, refusing download for \(url.path)")
-            completion?()
-            return
-        }
-
         // Extract mediaID from cachePath for BlackList tracking
         let pathComponents = cachePath.components(separatedBy: "/")
         let mediaID = pathComponents.first(where: { $0.starts(with: "Qm") }) ?? ""
@@ -2565,7 +2216,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        print("🎞️ [HLS PLAYLIST] Serving to AVPlayer (mediaID: \(mediaID), base: \(baseURL.lastPathComponent)):\n\(modified)")
         return modified
     }
 
