@@ -22,6 +22,10 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private var lastPersistedContiguousSize: Int64
     private let persistInterval: Int64 = 512 * 1024
 
+    // Download progress tracking
+    private let downloadStartTime = CFAbsoluteTimeGetCurrent()
+    private var lastLoggedPercent: Int = -1
+
     init(
         connection: NWConnection,
         mediaID: String,
@@ -57,12 +61,22 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         autoreleasepool {
             let chunkLength = Int64(data.count)
             guard chunkLength > 0 else { return }
-            
+
             let writeOffset = cacheStart + sentBytesCount
-            
+
             // Stream chunk to AVPlayer immediately
             connection.send(content: data, completion: .contentProcessed { _ in })
             sentBytesCount += chunkLength
+
+            // Log download progress only when integer percentage changes
+            if let total = totalExpectedSize, total > 0 {
+                let pct = Int(Double(cacheStart + sentBytesCount) / Double(total) * 100)
+                if pct > lastLoggedPercent {
+                    lastLoggedPercent = pct
+                    let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+                    print("📥 [DOWNLOAD \(shortId)] \(pct)%")
+                }
+            }
             
             // Write chunk to disk cache (if not probe request)
             guard !isProbeRequest,
@@ -162,6 +176,10 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             sessionCleanup()
         }
 
+        let elapsed = CFAbsoluteTimeGetCurrent() - downloadStartTime
+        let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+        let startLabel = cacheStart > 0 ? " @\(cacheStart / 1024)KB" : ""
+
         if let error = error {
             let nsError = error as NSError
             let isTransient = nsError.code == NSURLErrorCancelled ||
@@ -170,13 +188,13 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                               nsError.code == NSURLErrorNotConnectedToInternet
             if isTransient {
                 // Don't BlackList transient errors — AVPlayer will re-request remaining bytes
-                print("⚠️ [PROGRESSIVE STREAM] Transient error for \(mediaID) (code \(nsError.code)): \(error.localizedDescription)")
+                print("⚠️ [DOWNLOAD \(shortId)\(startLabel)] Transient error (code \(nsError.code)), \(sentBytesCount / 1024)KB sent: \(error.localizedDescription)")
             } else {
-                print("❌ [PROGRESSIVE STREAM] Failed for \(mediaID): \(error.localizedDescription)")
+                print("❌ [DOWNLOAD \(shortId)\(startLabel)] Failed: \(error.localizedDescription)")
                 BlackList.shared.recordFailure(mediaID)
             }
         } else {
-            // Stream completed successfully
+            print("✅ [DOWNLOAD \(shortId)\(startLabel)] Complete: \(sentBytesCount / 1024)KB")
         }
     }
 }
@@ -1221,8 +1239,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
-        let segmentName = URL(fileURLWithPath: cachePath).lastPathComponent
-
+        
         // Check cache first
         if FileManager.default.fileExists(atPath: cachePath) {
             // Serve cached segment - this reads from disk, no memory bloat
@@ -1623,8 +1640,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                     
                     let streamTask = session.dataTask(with: streamRequest)
                     streamTask.resume()
-                    
-                    _ = resolvedRequestedEnd.map { "\($0)" } ?? "end"
+
+                    let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+                    let totalStr = totalFileSize.map { "\($0 / 1024)KB" } ?? "unknown size"
+                    print("📡 [DOWNLOAD \(shortId)] Started progressive stream from byte \(streamStart) (\(totalStr) total)")
                 }
                 
                 if cachedSegmentLength > 0 {
@@ -2162,6 +2181,13 @@ public class LocalHTTPServer: @unchecked Sendable {
         streamingSessions[sessionKey] = session
         streamingSessionsLock.unlock()
 
+        let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+        let segmentFile = cacheURL.lastPathComponent
+        let parentDir = cacheURL.deletingLastPathComponent().lastPathComponent
+        // Include resolution folder if present (e.g. "720p/segment000.ts")
+        let segmentLabel = (parentDir != mediaID && !parentDir.isEmpty) ? "\(parentDir)/\(segmentFile)" : segmentFile
+        print("📡 [HLS SEGMENT \(shortId)] Started download: \(segmentLabel)")
+
         session.dataTask(with: url).resume()
         // `session` and `delegate` are kept alive by the running task until completion.
     }
@@ -2696,6 +2722,16 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     private var headersSent = false
     private var contentLength: Int64 = -1
 
+    // Download progress tracking
+    private let downloadStartTime = CFAbsoluteTimeGetCurrent()
+    private var lastLoggedPercent: Int = -1
+    private lazy var segmentLabel: String = {
+        let url = URL(fileURLWithPath: cachePath)
+        let file = url.lastPathComponent
+        let parent = url.deletingLastPathComponent().lastPathComponent
+        return (parent != mediaID && !parent.isEmpty) ? "\(parent)/\(file)" : file
+    }()
+
     init(connection: NWConnection,
          cachePath: String,
          mediaID: String,
@@ -2757,11 +2793,29 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         diskBuffer.append(data)
         // NWConnection queues sends internally and delivers them in order over TCP.
         connection.send(content: data, isComplete: false, completion: .contentProcessed { _ in })
+
+        // Log progress only when integer percentage changes
+        if contentLength > 0 {
+            let pct = Int(Double(diskBuffer.count) / Double(contentLength) * 100)
+            if pct > lastLoggedPercent {
+                lastLoggedPercent = pct
+                let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+                print("📥 [DOWNLOAD \(shortId)] \(pct)% \(segmentLabel)")
+            }
+        }
     }
 
     func urlSession(_ session: URLSession,
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
+        let elapsed = CFAbsoluteTimeGetCurrent() - downloadStartTime
+        let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+        let segmentPathURL = URL(fileURLWithPath: cachePath)
+        let segmentFile = segmentPathURL.lastPathComponent
+        let parentDir = segmentPathURL.deletingLastPathComponent().lastPathComponent
+        // Include resolution folder if present (e.g. "720p/segment000.ts")
+        let segmentLabel = (parentDir != mediaID && !parentDir.isEmpty) ? "\(parentDir)/\(segmentFile)" : segmentFile
+
         defer {
             removeSession(sessionKey)
             completion()
@@ -2780,11 +2834,15 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
                 connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
                                completion: .contentProcessed { _ in })
             }
+            if nsError.code != NSURLErrorCancelled {
+                print("⚠️ [HLS SEGMENT \(shortId)] \(segmentLabel) failed, \(diskBuffer.count / 1024)KB downloaded: \(error.localizedDescription)")
+            }
             return
         }
 
+        print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(diskBuffer.count / 1024)KB")
+
         // Write the fully-downloaded segment to disk for instant cache hits on future requests.
-        let segName = URL(fileURLWithPath: cachePath).lastPathComponent
         let cacheURL = URL(fileURLWithPath: cachePath)
         guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
             // Signal end-of-body so AVPlayer isn't left waiting.
