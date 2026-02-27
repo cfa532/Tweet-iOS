@@ -752,7 +752,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Notify coordinator — video is ready. If coordinator is idle (no primary
             // playing), it will re-evaluate and may pick this video.
             if !self.coordinatorWantsToPlay {
-                (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
+                (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
             }
         }
     }
@@ -1054,6 +1054,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 guard let self, self.coordinatorWantsToPlay, self.player === player else { return }
                 self.actuallyStartPlayback(player)
             }
+            // Trigger frame decode so isReadyForDisplay fires.
+            // Thumbnail covers the layer during decode (prevents black flash).
+            videoPlayerView.observeReadyForDisplay()
+            let seekTarget = CMTime(seconds: max(0.01, player.currentTime().seconds), preferredTimescale: 600)
+            player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
             return
         }
 
@@ -1316,7 +1321,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Notify coordinator — video data is fully ready. If coordinator is
                     // idle (previous primary stopped/failed), it can pick this video.
                     if !self.coordinatorWantsToPlay {
-                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
+                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
                     }
                 } else if item.status == .failed {
                     let errorMsg = item.error?.localizedDescription ?? "Unknown error"
@@ -1827,6 +1832,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 coordinatorWantsToPlay = false
             }
         }
+    }
+
+    var isActuallyPlaying: Bool {
+        guard videoCellState == .playing,
+              let player = player,
+              player.currentItem != nil,
+              player.rate > 0 else { return false }
+        return true
     }
 
     var isVideoAttachment: Bool {

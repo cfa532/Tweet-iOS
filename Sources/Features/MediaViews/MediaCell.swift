@@ -770,6 +770,8 @@ extension MediaCell {
             updateEffectiveBaseUrl()
         }
     }
+
+    var isActuallyPlaying: Bool { false }
 }
 
 // MARK: - MuteButton

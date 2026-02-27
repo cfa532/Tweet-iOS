@@ -44,6 +44,9 @@ protocol MediaCellDelegate {
 
     /// Called when user data is updated
     func userDidUpdate(userId: String)
+
+    /// Whether the video is actually playing (healthy player with rate > 0)
+    var isActuallyPlaying: Bool { get }
 }
 
 /// Video state during orchestration
@@ -409,14 +412,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             invalidateVisibleVideoCache()
         }
         if phase == .idle {
-            // Defer to next run loop — registerDelegate is called from didMoveToWindow
-            // during table view updates (reloadData/performBatchUpdates), and
-            // startPrimaryVideoPlayback accesses tableView.visibleCells which is
-            // not allowed during updates.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.phase == .idle else { return }
-                self.startPrimaryVideoPlayback()
-            }
+            startPrimaryVideoPlayback()
         }
     }
 
@@ -976,6 +972,30 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// fires to re-evaluate — the newly-ready video can now become the primary.
     func requestStartPlaybackIfIdle() {
         guard phase == .idle else { return }
+        startPrimaryVideoPlayback()
+    }
+
+    /// Called by media cells when ready. If coordinator is idle, starts playback.
+    /// If coordinator thinks primary is playing but it's actually stuck, resets and restarts.
+    func requestStartPlaybackIfStalled() {
+        if phase == .idle {
+            startPrimaryVideoPlayback()
+            return
+        }
+        guard phase == .primaryPlaying, let primaryId = primaryVideoId else { return }
+        guard let delegate = mediaCellDelegates[primaryId] else {
+            // Delegate gone — reset and restart
+            phase = .idle
+            currentlyPlayingVideoIds.removeAll()
+            primaryVideoId = nil
+            startPrimaryVideoPlayback()
+            return
+        }
+        if delegate.isActuallyPlaying { return }  // Primary is healthy — nothing to do
+        // Primary is stuck — reset and restart
+        phase = .idle
+        currentlyPlayingVideoIds.removeAll()
+        primaryVideoId = nil
         startPrimaryVideoPlayback()
     }
 
