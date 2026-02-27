@@ -781,7 +781,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 requestPlaybackStartIfNeeded(newPlayer, reason: "alreadyReady")
             }
         } else {
-            // Seek to force AVPlayerLayer to decode a frame (onReadyForDisplay will fire).
+            // Seek to force AVPlayerLayer to decode a frame.
+            videoPlayerView.observeReadyForDisplay()
             let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
             newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
         }
@@ -954,19 +955,27 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             captureLastFrameIfPossible(reason: "coordinatorStop")
 
             if !isActuallyPlayerReady(player) && videoCellState == .playerLoading {
-                // Player still loading (itemStatus unknown) — release it immediately
-                // to free network resources instead of waiting for the 15s stuck timer.
-                // Remove observers BEFORE nilling player to prevent memory leak
-                // (observers hold strong references to the player item).
-                removePlayerObservers()
-                SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
-                self.player = nil
-                setupPlayerTask = nil
-                if imageView.image != nil {
-                    transitionTo(.thumbnail)
+                if !isVisible {
+                    // Cell is off-screen — release player to free network resources
+                    // instead of waiting for the 15s stuck timer.
+                    // Remove observers BEFORE nilling player to prevent memory leak
+                    // (observers hold strong references to the player item).
+                    removePlayerObservers()
+                    SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+                    self.player = nil
+                    setupPlayerTask = nil
+                    if imageView.image != nil {
+                        transitionTo(.thumbnail)
+                    } else {
+                        transitionTo(.noContent)
+                        loadingSpinner.stopAnimating()
+                    }
                 } else {
-                    transitionTo(.noContent)
-                    loadingSpinner.stopAnimating()
+                    // Cell is still visible but no longer primary.
+                    // Keep the player so it can finish loading and show a preview frame.
+                    // When item.status reaches readyToPlay, KVO will see coordinatorWantsToPlay == false
+                    // and seek to 0.01s to decode a preview frame.
+                    player.pause()
                 }
             } else if videoCellState == .playing {
                 transitionTo(.paused)
@@ -1294,8 +1303,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                             }
                         } else if let player = self.player {
                             // Not going to play — seek to force AVPlayerLayer to decode a frame.
-                            // onReadyForDisplay will fire → .playerReady
-                            // Seek to 0.01s to force decode (seeking to current position is no-op)
+                            // Must observe isReadyForDisplay so the onReadyForDisplay callback fires.
+                            self.videoPlayerView.observeReadyForDisplay()
                             let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
                             player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
                         }
