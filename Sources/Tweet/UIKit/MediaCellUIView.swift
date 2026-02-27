@@ -752,7 +752,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Notify coordinator — video is ready. If coordinator is idle (no primary
             // playing), it will re-evaluate and may pick this video.
             if !self.coordinatorWantsToPlay {
-                (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
+                (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
             }
         }
     }
@@ -1043,25 +1043,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     private func startPlaybackWithFade(_ player: AVPlayer) {
-        guard (attachment?.mid) != nil else { return }
-
-        // If we have a thumbnail, defer until the layer decodes its first frame so the
-        // thumbnail covers the layer during decode (prevents black flash).
-        // Do NOT defer when there is no thumbnail: isReadyForDisplay only fires after
-        // play() or seek(), so deferring with no thumbnail creates a deadlock (stuck black screen).
-        if videoCellState == .playerLoading && imageView.image != nil {
-            videoPlayerView.onReadyForDisplay = { [weak self] in
-                guard let self, self.coordinatorWantsToPlay, self.player === player else { return }
-                self.actuallyStartPlayback(player)
-            }
-            // Trigger frame decode so isReadyForDisplay fires.
-            // Thumbnail covers the layer during decode (prevents black flash).
-            videoPlayerView.observeReadyForDisplay()
-            let seekTarget = CMTime(seconds: max(0.01, player.currentTime().seconds), preferredTimescale: 600)
-            player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
-            return
-        }
-
+        // No deferral needed: actuallyStartPlayback() keeps the thumbnail visible
+        // and timeControlStatus KVO hides it when smooth playback starts.
         actuallyStartPlayback(player)
     }
 
@@ -1321,7 +1304,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Notify coordinator — video data is fully ready. If coordinator is
                     // idle (previous primary stopped/failed), it can pick this video.
                     if !self.coordinatorWantsToPlay {
-                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
+                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
                     }
                 } else if item.status == .failed {
                     let errorMsg = item.error?.localizedDescription ?? "Unknown error"
@@ -1835,11 +1818,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }
 
     var isActuallyPlaying: Bool {
-        guard videoCellState == .playing,
-              let player = player,
-              player.currentItem != nil,
-              player.rate > 0 else { return false }
-        return true
+        guard let player = player,
+              player.currentItem != nil else { return false }
+        // rate > 0 means actually playing
+        if player.rate > 0 { return true }
+        // Coordinator told us to play and we have a player with item — still buffering, not stalled
+        if coordinatorWantsToPlay { return true }
+        return false
     }
 
     var isVideoAttachment: Bool {

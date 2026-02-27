@@ -68,13 +68,13 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             connection.send(content: data, completion: .contentProcessed { _ in })
             sentBytesCount += chunkLength
 
-            // Log download progress only when integer percentage changes
+            // Log only at 50% for progressive downloads (start/finish logged elsewhere)
             if let total = totalExpectedSize, total > 0 {
                 let pct = Int(Double(cacheStart + sentBytesCount) / Double(total) * 100)
-                if pct > lastLoggedPercent {
-                    lastLoggedPercent = pct
+                if pct >= 50 && lastLoggedPercent < 50 {
+                    lastLoggedPercent = 50
                     let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
-                    print("📥 [DOWNLOAD \(shortId)] \(pct)%")
+                    print("📥 [DOWNLOAD \(shortId)] 50% of \(total / 1024)KB")
                 }
             }
             
@@ -176,7 +176,6 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             sessionCleanup()
         }
 
-        let elapsed = CFAbsoluteTimeGetCurrent() - downloadStartTime
         let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
         let startLabel = cacheStart > 0 ? " @\(cacheStart / 1024)KB" : ""
 
@@ -2794,21 +2793,12 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         // NWConnection queues sends internally and delivers them in order over TCP.
         connection.send(content: data, isComplete: false, completion: .contentProcessed { _ in })
 
-        // Log progress only when integer percentage changes
-        if contentLength > 0 {
-            let pct = Int(Double(diskBuffer.count) / Double(contentLength) * 100)
-            if pct > lastLoggedPercent {
-                lastLoggedPercent = pct
-                let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
-                print("📥 [DOWNLOAD \(shortId)] \(pct)% \(segmentLabel)")
-            }
-        }
+        // HLS segment progress: only start/finish logged (see didCompleteWithError)
     }
 
     func urlSession(_ session: URLSession,
                     task: URLSessionTask,
                     didCompleteWithError error: Error?) {
-        let elapsed = CFAbsoluteTimeGetCurrent() - downloadStartTime
         let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
         let segmentPathURL = URL(fileURLWithPath: cachePath)
         let segmentFile = segmentPathURL.lastPathComponent
