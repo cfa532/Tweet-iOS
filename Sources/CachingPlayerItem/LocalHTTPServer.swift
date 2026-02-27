@@ -22,10 +22,6 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private var lastPersistedContiguousSize: Int64
     private let persistInterval: Int64 = 512 * 1024
 
-    // Download progress tracking
-    private let downloadStartTime = CFAbsoluteTimeGetCurrent()
-    private var lastLoggedPercent: Int = -1
-
     init(
         connection: NWConnection,
         mediaID: String,
@@ -68,16 +64,6 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             connection.send(content: data, completion: .contentProcessed { _ in })
             sentBytesCount += chunkLength
 
-            // Log only at 50% for progressive downloads (start/finish logged elsewhere)
-            if let total = totalExpectedSize, total > 0 {
-                let pct = Int(Double(cacheStart + sentBytesCount) / Double(total) * 100)
-                if pct >= 50 && lastLoggedPercent < 50 {
-                    lastLoggedPercent = 50
-                    let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
-                    print("📥 [DOWNLOAD \(shortId)] 50% of \(total / 1024)KB")
-                }
-            }
-            
             // Write chunk to disk cache (if not probe request)
             guard !isProbeRequest,
                   let fileHandle = cacheFileHandle,
@@ -192,9 +178,15 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                 print("❌ [DOWNLOAD \(shortId)\(startLabel)] Failed: \(error.localizedDescription)")
                 BlackList.shared.recordFailure(mediaID)
             }
-        } else {
+        } else if !isProbeRequest {
             print("✅ [DOWNLOAD \(shortId)\(startLabel)] Complete: \(sentBytesCount / 1024)KB")
         }
+
+        // Send TCP FIN so AVPlayer detects end-of-body (Connection: close).
+        // Without this, AVPlayer waits indefinitely for more data when fewer
+        // than Content-Length bytes were sent (upstream failure / slow IPFS).
+        connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                       completion: .contentProcessed { _ in })
     }
 }
 
@@ -1475,13 +1467,8 @@ public class LocalHTTPServer: @unchecked Sendable {
             
             let statusCode = rangeHeader != nil ? 206 : 200
             
-            // Send HTTP headers first
-            var headerData = Data()
-            headerData.append("HTTP/1.1 \(statusCode) \(statusCode == 200 ? "OK" : "Partial Content")\r\n".data(using: .utf8)!)
-            for (key, value) in responseHeaders {
-                headerData.append("\(key): \(value)\r\n".data(using: .utf8)!)
-            }
-            headerData.append("\r\n".data(using: .utf8)!)
+            // Send HTTP headers first (buildHTTPHeaderData adds Connection: close)
+            let headerData = self.buildHTTPHeaderData(statusCode: statusCode, headers: responseHeaders)
             
             let resolvedRequestedEnd: Int64? = {
                 if let end = rangeEnd {

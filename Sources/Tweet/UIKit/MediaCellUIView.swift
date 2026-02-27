@@ -1035,6 +1035,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Already playing — just sync UI
             videoPlayerView.isHidden = false
             if videoCellState != .playing {
+                print("\(logPrefix) State: \(videoCellState) → playing")
                 videoCellState = .playing
             }
             loadingSpinner.stopAnimating()
@@ -1067,6 +1068,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // The layer already has content from preload; just let the player play.
         // imageView stays as-is: visible (thumbnail cover) or hidden (layer showing).
         // timeControlStatus KVO will hide the thumbnail when smooth playback starts.
+        if videoCellState != .playing {
+            print("\(logPrefix) State: \(videoCellState) → playing")
+        }
         videoCellState = .playing
         retryButton.isHidden = true
 
