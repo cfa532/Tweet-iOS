@@ -223,41 +223,14 @@ class VideoPlaybackCoordinator: ObservableObject {
             return _cachedVisibleVideos
         }
 
+        // allVideos is built in feed display order (top to bottom), so filtering
+        // preserves the correct Y-position ordering without accessing tableView.visibleCells
+        // (which is not allowed during table view updates like reloadData/performBatchUpdates).
         let filtered = allVideos.filter { onScreenMediaCells.contains($0.identifier) && $0.isInVisibleMediaRange }
 
-        guard let tableView = tableView, tableView.window != nil else {
-            _cachedVisibleVideos = filtered
-            _visibleVideoCacheKey = cacheKey
-            return filtered
-        }
-
-        var yByCellTweetId: [String: CGFloat] = [:]
-        for cell in tableView.visibleCells {
-            guard let tweetCell = cell as? TweetTableViewCell else { continue }
-            guard let tweetId = tweetCell.tweetId else { continue }
-            yByCellTweetId[tweetId] = cell.frame.minY
-        }
-        for video in filtered {
-            if yByCellTweetId[video.cellTweetId] == nil {
-                _cachedVisibleVideos = filtered
-                _visibleVideoCacheKey = cacheKey
-                return filtered
-            }
-        }
-
-        let sorted = filtered.sorted { v1, v2 in
-            let y1 = yByCellTweetId[v1.cellTweetId] ?? 0
-            let y2 = yByCellTweetId[v2.cellTweetId] ?? 0
-            if y1 != y2 { return y1 < y2 }
-            if v1.cellTweetId == v2.cellTweetId {
-                return v1.attachmentIndex < v2.attachmentIndex
-            }
-            return false
-        }
-
-        _cachedVisibleVideos = sorted
+        _cachedVisibleVideos = filtered
         _visibleVideoCacheKey = cacheKey
-        return sorted
+        return filtered
     }
 
     /// Invalidate visible videos cache when table view or video list changes
@@ -436,7 +409,14 @@ class VideoPlaybackCoordinator: ObservableObject {
             invalidateVisibleVideoCache()
         }
         if phase == .idle {
-            startPrimaryVideoPlayback()
+            // Defer to next run loop — registerDelegate is called from didMoveToWindow
+            // during table view updates (reloadData/performBatchUpdates), and
+            // startPrimaryVideoPlayback accesses tableView.visibleCells which is
+            // not allowed during updates.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.phase == .idle else { return }
+                self.startPrimaryVideoPlayback()
+            }
         }
     }
 

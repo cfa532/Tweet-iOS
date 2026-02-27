@@ -132,6 +132,7 @@ class TweetTableViewController: UITableViewController {
     // Scroll state tracking to prevent direction detection jitter during deceleration
     private var isUserDragging: Bool = false
     private var isDecelerating: Bool = false
+    private var isTableViewUpdating: Bool = false
 
     init(videoCoordinator: VideoPlaybackCoordinator) {
         self.videoCoordinator = videoCoordinator
@@ -273,8 +274,10 @@ class TweetTableViewController: UITableViewController {
             NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
 
             // Force reload visible cells to reclaim memory
-            if let visibleIndexPaths = self?.tableView.indexPathsForVisibleRows {
-                self?.tableView.reloadRows(at: visibleIndexPaths, with: .none)
+            if let self, let visibleIndexPaths = self.tableView.indexPathsForVisibleRows {
+                self.isTableViewUpdating = true
+                self.tableView.reloadRows(at: visibleIndexPaths, with: .none)
+                self.isTableViewUpdating = false
             }
         }
     }
@@ -310,6 +313,7 @@ class TweetTableViewController: UITableViewController {
 
             // Show cached thumbnails on visible video cells before AppDelegate releases video memory.
             // This prevents black AVPlayerLayer in the app switcher snapshot.
+            guard !self.isTableViewUpdating else { return }
             for cell in self.tableView.visibleCells {
                 guard let tweetCell = cell as? TweetTableViewCell else { continue }
                 tweetCell.tweetContentView.showVideoThumbnailsForBackground()
@@ -364,7 +368,7 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self, self.needsVideoLayerRefresh else { return }
+            guard let self = self, self.needsVideoLayerRefresh, !self.isTableViewUpdating else { return }
             self.needsVideoLayerRefresh = false
             for cell in self.tableView.visibleCells {
                 guard let tweetCell = cell as? TweetTableViewCell else { continue }
@@ -677,6 +681,7 @@ class TweetTableViewController: UITableViewController {
         }
 
         // Reload table to reflect new pinned tweets
+        isTableViewUpdating = true
         if oldCount != tweets.count {
             // Number of rows changed, do a full reload
             tableView.reloadData()
@@ -685,6 +690,7 @@ class TweetTableViewController: UITableViewController {
             let indexPaths = (0..<oldCount).map { IndexPath(row: $0, section: 0) }
             tableView.reloadRows(at: indexPaths, with: .none)
         }
+        isTableViewUpdating = false
 
         // CRITICAL: Update visibility after reload so coordinator knows pinned videos are visible
         // Use longer delay (300ms) to ensure cells are fully rendered
@@ -721,7 +727,9 @@ class TweetTableViewController: UITableViewController {
         
         // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
+            isTableViewUpdating = true
             tableView.reloadData()
+            isTableViewUpdating = false
             videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
             
             // Trigger video detection after initial load
@@ -773,8 +781,10 @@ class TweetTableViewController: UITableViewController {
             let afterNewOnes = Array(getNewIds().dropFirst(potentialPrependCount))
             
             if afterNewOnes == getOldIds() {
+                isTableViewUpdating = true
                 let indexPaths = (0..<potentialPrependCount).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .automatic)
+                isTableViewUpdating = false
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
             }
@@ -785,24 +795,28 @@ class TweetTableViewController: UITableViewController {
             let newIdsPrefix = Array(getNewIds().prefix(oldCount))
             
             if newIdsPrefix == getOldIds() {
+                isTableViewUpdating = true
                 let indexPaths = (oldCount..<newTweets.count).map { IndexPath(row: $0, section: 0) }
                 tableView.insertRows(at: indexPaths, with: .none)
+                isTableViewUpdating = false
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
             }
         }
-        
+
         // Case 3: Single tweet removed - common for delete
         // OPTIMIZED: Use Set for O(1) lookup instead of O(n)
         if newTweets.count == oldCount - 1 {
             let newIdsSet = Set(getNewIds())
             if let removedIndex = getOldIds().firstIndex(where: { !newIdsSet.contains($0) }) {
+                isTableViewUpdating = true
                 tableView.deleteRows(at: [IndexPath(row: removedIndex, section: 0)], with: .automatic)
+                isTableViewUpdating = false
                 videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
                 return
             }
         }
-        
+
         // Complex change: compute minimal diff instead of full reload.
         // reloadData() tears down ALL visible cells (including video players),
         // causing flicker when only a few rows were inserted/removed.
@@ -814,6 +828,7 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
+        isTableViewUpdating = true
         tableView.performBatchUpdates {
             for change in diff {
                 switch change {
@@ -824,6 +839,7 @@ class TweetTableViewController: UITableViewController {
                 }
             }
         }
+        isTableViewUpdating = false
         videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
     }
     
@@ -1158,8 +1174,10 @@ class TweetTableViewController: UITableViewController {
             let currentCount = self.tableView.numberOfRows(inSection: 0)
             if expectedCount == currentCount {
                 UIView.performWithoutAnimation {
+                    self.isTableViewUpdating = true
                     self.tableView.beginUpdates()
                     self.tableView.endUpdates()
+                    self.isTableViewUpdating = false
                 }
 
                 // CRITICAL: Cache the new height immediately after re-layout
@@ -1687,6 +1705,7 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Video Playback Coordination
     
     private func updateVisibleTweetsForVideoPlayback() {
+        guard !isTableViewUpdating else { return }
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
 
         let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
