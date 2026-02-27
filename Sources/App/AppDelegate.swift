@@ -373,7 +373,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 
             SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
 
-            LocalHTTPServer.shared.resetConnectionPool()
+            LocalHTTPServer.shared.resetAllConnectionsImmediately()
 
             print("🔌 [AppDelegate] Stopping LocalHTTPServer")
             LocalHTTPServer.shared.stop()
@@ -445,7 +445,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 // CRITICAL: Synchronously kill ALL stale upstream connections before
                 // any video cell tries to load.  The async resetConnectionPool() can be
                 // delayed if the server queue is blocked by in-flight timeout requests.
-                LocalHTTPServer.shared.resetConnectionPool()
+                LocalHTTPServer.shared.resetAllConnectionsImmediately()
                 AppDelegate.isVideoInfrastructureReady = true
 
                 // Notify coordinator to resume playback on visible videos

@@ -54,6 +54,7 @@ struct TweetListView: View {
     @State private var toastMessage = ""
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
+    @StateObject private var videoLoadingManager = VideoLoadingManager.shared
     @State private var loadingStartTime: Date? = nil
     @State private var lastScrollOffset: CGFloat = 0
     @State private var didPrewarmSingletonFirstItem: Bool = false
@@ -83,20 +84,24 @@ struct TweetListView: View {
     
     // MARK: - Helper Methods
     
-    /// Periodic tweet memory cleanup (debounced)
-    private func scheduleTweetCleanupIfNeeded(delay: TimeInterval = 0) {
+    /// Update VideoLoadingManager with current tweet list
+    /// Centralized method to avoid code duplication
+    /// Debounced to prevent excessive updates during rapid scrolling
+    private func updateVideoLoadingManager(delay: TimeInterval = 0) {
         // Cancel any pending update task
         videoManagerUpdateTask?.cancel()
-
+        
         // Create new debounced task
         videoManagerUpdateTask = Task.detached(priority: .background) {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
-
+            
+            // Check if task was cancelled
             guard !Task.isCancelled else { return }
-
+            
             let tweetIds = await MainActor.run { self.tweets.map { $0.mid } }
+            await self.videoLoadingManager.updateTweetList(tweetIds)
 
             // Throttle cleanup to prevent excessive calls
             let shouldCleanup = await MainActor.run {
@@ -455,7 +460,7 @@ struct TweetListView: View {
                     hasMoreTweets = freshTweets.count >= pageSize
 
                     // Update video manager with debouncing
-                    scheduleTweetCleanupIfNeeded(delay: 0.2)
+                    updateVideoLoadingManager(delay: 0.2)
 
                     print("📱 [FOREGROUND] ✅ Merged \(validTweets.count) fresh tweets")
                 } else {
@@ -487,8 +492,8 @@ struct TweetListView: View {
                     // Set hasMoreTweets based on cache - if we got a full page, there might be more
                     hasMoreTweets = tweetsFromCache.count >= pageSize
 
-                    // Schedule cleanup with delay for startup
-                    scheduleTweetCleanupIfNeeded(delay: 1.0)
+                    // Update VideoLoadingManager with delay for startup
+                    updateVideoLoadingManager(delay: 1.0)
 
                     // Don't mark as loaded yet - wait for server fetch to complete
                     // This prevents "No tweet yet" from showing prematurely if cached tweets
@@ -508,12 +513,37 @@ struct TweetListView: View {
                 await Task.yield()
             }
 
-            // Prewarm singleton players after a short delay to avoid startup congestion
+            // Prewarm singleton players based on the first available cached video (best-effort).
+            // Defer during initial startup to prevent hangs
+            Task.detached(priority: .background) {
+                // Wait for startup phase to end before prewarming videos
+                if await MainActor.run(body: { videoLoadingManager.isInStartupPhase }) {
+                    await withCheckedContinuation { continuation in
+                        let holder = ObserverHolder(nil)
+                        holder.observer = NotificationCenter.default.addObserver(
+                            forName: .startupPhaseEnded,
+                            object: nil,
+                            queue: nil
+                        ) { _ in
+                            if let observer = holder.observer {
+                                NotificationCenter.default.removeObserver(observer)
+                            }
+                            continuation.resume()
+                        }
+                    }
+                }
+                // Defer prewarming to avoid overwhelming system when startup phase ends
+                Task.detached(priority: .background) {
+                    await MainActor.run {
+                        self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
+                    }
+                }
+            }
+
+            // End startup phase after 3 seconds
             Task.detached(priority: .background) {
                 try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                await MainActor.run {
-                    self.prewarmSingletonPlayersFromFirstVideoIfNeeded()
-                }
+                await videoLoadingManager.endStartupPhase()
             }
         } catch {
             await MainActor.run {
@@ -578,7 +608,7 @@ struct TweetListView: View {
                         self.hasMoreTweets = tweets.count >= self.pageSize
 
                         // Update video manager with debouncing (will batch multiple updates)
-                        self.scheduleTweetCleanupIfNeeded(delay: 0.2)
+                        self.updateVideoLoadingManager(delay: 0.2)
                     } else {
                         // No valid tweets - check response size
                         self.currentPage = nextPage
@@ -661,8 +691,8 @@ struct TweetListView: View {
                     // Check response size to determine if more items exist
                     hasMoreTweets = freshTweets.count >= pageSize
 
-                    // Schedule cleanup with debouncing
-                    scheduleTweetCleanupIfNeeded(delay: 0.2)
+                    // Update VideoLoadingManager with debouncing
+                    updateVideoLoadingManager(delay: 0.2)
                 } else {
                     // No valid tweets - check response size
                     hasMoreTweets = freshTweets.count >= pageSize
@@ -670,8 +700,8 @@ struct TweetListView: View {
                     // Only clear if server returned no valid tweets AND we have no cached tweets
                     if tweets.isEmpty {
                         tweets = []
-                        // Schedule cleanup with empty list
-                        scheduleTweetCleanupIfNeeded()
+                        // Update VideoLoadingManager with empty list
+                        updateVideoLoadingManager()
                     }
                     // Keep cached tweets if server returned no valid tweets
                 }
@@ -752,8 +782,8 @@ struct TweetListView: View {
                             hasMoreTweets = true
                         }
 
-                        // Schedule cleanup with debouncing
-                        scheduleTweetCleanupIfNeeded(delay: 0.2)
+                        // Update VideoLoadingManager with debouncing
+                        updateVideoLoadingManager(delay: 0.2)
                     }
                     print("✅ [PAGINATION] Loaded \(tweetsFromCache.count) tweets from cache for page \(page)")
                 }
@@ -786,7 +816,7 @@ struct TweetListView: View {
                     if let lastTweetId = capturedLastTweetId,
                        newTweetsLoaded,
                        hasMoreTweets,
-                       initialLoadComplete {
+                       !videoLoadingManager.isInStartupPhase {
                         // Use a slight delay to ensure layout is complete
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             withAnimation(.easeOut(duration: 0.25)) {
@@ -891,8 +921,8 @@ struct TweetListView: View {
                 }
             }
 
-            // Schedule cleanup with debouncing
-            scheduleTweetCleanupIfNeeded(delay: 0.2)
+            // Update VideoLoadingManager with debouncing
+            updateVideoLoadingManager(delay: 0.2)
 
             currentPage = page
 
@@ -924,8 +954,8 @@ struct TweetListView: View {
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
             if page == 0 {
                 if tweets.isEmpty {
-                    // Schedule cleanup with empty list (no debouncing needed for empty)
-                    scheduleTweetCleanupIfNeeded()
+                    // Update VideoLoadingManager with empty list (no debouncing needed for empty)
+                    updateVideoLoadingManager()
                     isLoading = false
                     initialLoadComplete = true
                 } else {

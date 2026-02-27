@@ -1121,9 +1121,10 @@ struct SimpleVideoPlayer: View {
     // MARK: - Lifecycle Handlers
     
     private func handleOnAppear() {
-        // Mark video as visible for state tracking
+        // CRITICAL: Mark video as visible to prevent cache eviction
         if mode == .mediaCell {
             VideoStateCache.shared.markAsVisible(mid)
+            SharedAssetCache.shared.markAsVisible(mid)
         }
         
         // Handle idle timer for fullscreen modes
@@ -1204,9 +1205,10 @@ struct SimpleVideoPlayer: View {
     }
     
     private func handleOnDisappear() {
-        // Mark video as not visible
+        // CRITICAL: Mark video as not visible to allow cache eviction if needed
         if mode == .mediaCell {
             VideoStateCache.shared.markAsNotVisible(mid)
+            SharedAssetCache.shared.markAsNotVisible(mid)
         }
 
         // Reset coordinator stop flag when video disappears
@@ -1291,9 +1293,12 @@ struct SimpleVideoPlayer: View {
                 }
             }
             
-            // Cancel loading tasks in SharedAssetCache for this video
+            // Also cancel loading tasks in SharedAssetCache for this video
             Task { @MainActor in
-                SharedAssetCache.shared.cancelLoading(for: mid)
+                if let parentTweetId = parentTweetId {
+                    // Cancel loading tasks even if cached content exists (video is out of sight)
+                    SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweetId)
+                }
             }
         } else if mode == .mediaBrowser {
             // Exiting fullscreen - ALWAYS pause and restore mute state for MediaCell reuse

@@ -400,8 +400,17 @@ class MediaGridUIView: UIView {
         let hasVideos = attachments.contains { $0.type == .video || $0.type == .hls_video }
         let hasAudio = attachments.contains { $0.type == .audio }
 
-        if (hasVideos || hasAudio) && !shouldLoadVideo {
-            shouldLoadVideo = true
+        if hasVideos || hasAudio {
+            Task.detached(priority: .background) {
+                await VideoLoadingManager.shared.registerTweetWithVideos(parentTweet.mid)
+            }
+
+            if !shouldLoadVideo {
+                let shouldLoad = VideoLoadingManager.shared.shouldLoadVideos(for: parentTweet.mid)
+                if shouldLoad {
+                    shouldLoadVideo = true
+                }
+            }
         }
     }
 

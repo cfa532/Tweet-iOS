@@ -94,6 +94,7 @@ class TweetTableViewController: UITableViewController {
     private var lastVideoVisibilityUpdate: CFTimeInterval = 0
     private let videoVisibilityThrottleInterval: TimeInterval = 0.15 // 150ms during active drag
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
+    private var lastPreloadTweetIds: Set<String> = [] // Cache last preload zone tweet IDs
     private var lastOnScreenVideoIds: Set<String> = [] // Cache per-cell on-screen video identifiers
     
     // Cached main content rect to avoid recalculating on every visibility check
@@ -1753,6 +1754,34 @@ class TweetTableViewController: UITableViewController {
             videoCoordinator.updateVisibleTweets(visibleTweetIds)
         }
 
+        // Compute preload zone: extend visible rows by a buffer for video preloading.
+        // This uses spatial proximity (actual row neighbors) instead of index-based
+        // adjacency in the allVideos array, which may skip many non-video tweets.
+        if let firstVisible = visibleIndexPaths.first, let lastVisible = visibleIndexPaths.last {
+            let totalRows = pinnedTweets.count + tweets.count
+            let preloadBuffer = 5
+            let preloadMin = max(0, firstVisible.row - preloadBuffer)
+            let preloadMax = min(totalRows - 1, lastVisible.row + preloadBuffer)
+
+            var preloadTweetIds = Set<String>()
+            for row in preloadMin...preloadMax {
+                // Skip rows already in the visible set
+                if row >= firstVisible.row && row <= lastVisible.row { continue }
+                if row < pinnedTweets.count {
+                    preloadTweetIds.insert(pinnedTweets[row].mid)
+                } else {
+                    let regularIndex = row - pinnedTweets.count
+                    if regularIndex < tweets.count {
+                        preloadTweetIds.insert(tweets[regularIndex].mid)
+                    }
+                }
+            }
+
+            if preloadTweetIds != lastPreloadTweetIds {
+                lastPreloadTweetIds = preloadTweetIds
+                videoCoordinator.updateNearbyTweetsForPreloading(preloadTweetIds)
+            }
+        }
     }
     
     /// Calculate the visible main content area (excluding header and footer)
