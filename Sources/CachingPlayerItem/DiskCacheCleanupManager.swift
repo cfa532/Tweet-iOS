@@ -92,7 +92,6 @@ class DiskCacheCleanupManager {
     // MARK: - Private Methods
     
     private func cleanupOldCacheFiles() {
-        print("DEBUG: [DiskCacheCleanupManager] Starting scheduled cleanup...")
         
         do {
             let contents = try FileManager.default.contentsOfDirectory(
@@ -121,7 +120,6 @@ class DiskCacheCleanupManager {
                     if isPrivate {
                         privateTweetCount += 1
                     }
-                    print("💾 [DiskCacheCleanupManager] Skipping permanent media: \(mediaID) (private: \(isPrivate), bookmarked: \(isPermanent))")
                     continue
                 }
                 
@@ -135,13 +133,11 @@ class DiskCacheCleanupManager {
                         // Remove old public tweet cache
                         try FileManager.default.removeItem(at: cacheDir)
                         cleanedCount += 1
-                        print("DEBUG: [DiskCacheCleanupManager] Removed old cache for public tweet: \(mediaID) (age: \(Int(timeSinceAccess/86400)) days)")
                     }
                     // Removed repetitive "Keeping cache" log
                 }
             }
             
-            print("DEBUG: [DiskCacheCleanupManager] Cleanup completed - removed \(cleanedCount) old caches, kept \(privateTweetCount) private tweet caches")
             
         } catch {
             print("DEBUG: [DiskCacheCleanupManager] Error during cleanup: \(error.localizedDescription)")

@@ -1189,7 +1189,6 @@ public class LocalHTTPServer: @unchecked Sendable {
     private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         let isCached = FileManager.default.fileExists(atPath: cachePath)
-        print("🎞️ [HLS DATA] Playlist request mediaID: \(mediaID), cached: \(isCached)")
 
         // Check cache first
         if isCached {
@@ -1233,7 +1232,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
 
-        print("🎞️ [HLS DATA] Segment cache miss mediaID: \(mediaID), segment: \(segmentName), path: \(cachePath) - fetching")
 
         // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
@@ -1243,7 +1241,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         let hasExisting = await activeDownloadsActor.hasDownload(for: downloadKey)
 
         if hasExisting {
-            print("🎞️ [HLS DATA] Segment dedup wait mediaID: \(mediaID), segment: \(segmentName)")
             // Check connection state before waiting
             switch connection.state {
             case .cancelled, .failed:
@@ -1297,7 +1294,6 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // This request becomes the downloader — mark active, fetch, then mark completed.
         await activeDownloadsActor.markDownloadStarted(for: downloadKey)
-        print("🎞️ [HLS DATA] Segment download start mediaID: \(mediaID), segment: \(segmentName)")
 
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
             Task { await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey) }
@@ -1409,7 +1405,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         cacheMissLogLock.unlock()
         if shouldLog {
-            print("❌ [PROGRESSIVE CACHE MISS] mediaID: \(mediaID), range: \(rangeStr), isProbe: \(isProbeRequest) - will fetch from network")
         }
         
         // CACHE MISS - fetch from real server
@@ -2277,7 +2272,6 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
                 do {
                     try dataToCache.write(to: cacheURL)
-                    print("✅ [LocalHTTPServer] Downloaded and cached: \(url.lastPathComponent)")
                 } catch {
                     print("⚠️ [LocalHTTPServer] Failed to write cache: \(error.localizedDescription)")
                 }
@@ -2565,7 +2559,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        print("🎞️ [HLS PLAYLIST] Serving to AVPlayer (mediaID: \(mediaID), base: \(baseURL.lastPathComponent)):\n\(modified)")
         return modified
     }
 
@@ -2792,7 +2785,6 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
 
         // Write the fully-downloaded segment to disk for instant cache hits on future requests.
         let segName = URL(fileURLWithPath: cachePath).lastPathComponent
-        print("🎞️ [HLS DATA] Segment download completed mediaID: \(mediaID), segment: \(segName)")
         let cacheURL = URL(fileURLWithPath: cachePath)
         guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
             // Signal end-of-body so AVPlayer isn't left waiting.
@@ -2801,7 +2793,6 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             return // Cache directory was deleted by clearPlayerForMediaID — skip write
         }
         try? diskBuffer.write(to: cacheURL)
-        print("✅ [SegmentCache] Wrote \(diskBuffer.count) bytes to disk: \(cachePath) (mediaID: \(mediaID))")
         BlackList.shared.recordSuccess(mediaID)
 
         // Signal end of HTTP response body by sending TCP FIN.
