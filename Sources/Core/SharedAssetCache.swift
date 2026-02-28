@@ -115,6 +115,8 @@ class SharedAssetCache: ObservableObject {
     private var inFlightPlayerCreations: [String: Task<AVPlayer, Error>] = [:] // mediaID -> dedup: covers queued + in-flight
     private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, isHighPriority: Bool, continuation: CheckedContinuation<AVPlayer, Error>)] = []
     private let maxPendingCreations = 10 // MEMORY LEAK FIX: Limit queue size to prevent unbounded continuation buildup
+    private var lastSlotsAvailableNotification: Date?
+    private let slotsAvailableThrottleInterval: TimeInterval = 1.0
     
     // MARK: - Cache Persistence
     private let cacheMetadataKey = "SharedAssetCache_Metadata"
@@ -999,7 +1001,19 @@ class SharedAssetCache: ObservableObject {
     /// Process next pending creation when a slot opens
     @MainActor
     private func processNextPendingCreation() {
-        guard !pendingCreations.isEmpty else { return }
+        if pendingCreations.isEmpty {
+            // No pending work — notify coordinators so they can restart
+            // cancelled nearby video preloads with the available slots
+            if canStartCreation(isHighPriority: false) {
+                let now = Date()
+                if lastSlotsAvailableNotification == nil ||
+                   now.timeIntervalSince(lastSlotsAvailableNotification!) >= slotsAvailableThrottleInterval {
+                    lastSlotsAvailableNotification = now
+                    NotificationCenter.default.post(name: .videoCreationSlotsAvailable, object: nil)
+                }
+            }
+            return
+        }
 
         let nextIsHighPriority = pendingCreations.first!.isHighPriority
         guard canStartCreation(isHighPriority: nextIsHighPriority) else { return }
@@ -1738,18 +1752,22 @@ class SharedAssetCache: ObservableObject {
         // Use mediaID as cache key (stable identifier), not URL which can change
         guard let mediaID = extractMediaID(from: url) else { return }
         let cacheKey = mediaID
-        
+
         // Cancel existing preload task if any
         preloadTasks[cacheKey]?.cancel()
         preloadTasks.removeValue(forKey: cacheKey)
-        
+
         let task = Task {
             defer {
                 // ✅ CRITICAL MEMORY FIX: Remove completed preload task
                 preloadTasks.removeValue(forKey: cacheKey)
             }
             do {
-                _ = try await getOrCreatePlayer(for: url, isHighPriority: false)
+                let player = try await getOrCreatePlayer(for: url, isHighPriority: false)
+                // Limit preload buffering to 10s to save bandwidth.
+                await MainActor.run {
+                    player.currentItem?.preferredForwardBufferDuration = 10
+                }
             } catch {
                 // Handle error silently
             }
@@ -1819,6 +1837,9 @@ class SharedAssetCache: ObservableObject {
                 // Pause immediately — this is a preloaded player, not for playback yet
                 await MainActor.run {
                     player.pause()
+                    // Limit preload buffering to 10s to save bandwidth.
+                    // The cell will clear this limit when it becomes visible.
+                    player.currentItem?.preferredForwardBufferDuration = 10
                     self.preloadedPlayerMids.insert(mediaID)
                 }
                 // Generate first-frame thumbnail so the cell isn't black before playback

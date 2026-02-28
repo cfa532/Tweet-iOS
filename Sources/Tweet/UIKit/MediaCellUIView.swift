@@ -724,6 +724,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Default is false, causing deadlock: paused player can't fetch data →
         // status stays .unknown → code waits for .readyToPlay before play().
         newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        // Clear preload buffer limit (preloadPlayer sets 10s) — let AVPlayer buffer freely for playback
+        newPlayer.currentItem?.preferredForwardBufferDuration = 0
         removePlayerObservers()
         self.player = newPlayer
         transitionTo(.playerLoading)

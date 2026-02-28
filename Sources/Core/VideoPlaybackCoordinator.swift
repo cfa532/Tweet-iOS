@@ -18,6 +18,7 @@ extension Notification.Name {
     static let shouldPauseVideo = Notification.Name("shouldPauseVideo")
     static let videoTimerUpdate = Notification.Name("videoTimerUpdate")
     static let requestVideoTimerUpdate = Notification.Name("requestVideoTimerUpdate")
+    static let videoCreationSlotsAvailable = Notification.Name("videoCreationSlotsAvailable")
 }
 
 // MARK: - Delegate-Based Communication (Phase 3)
@@ -321,6 +322,18 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
         notificationObservers.append(backgroundObserver)
+
+        // Listen for available creation slots to restart nearby video preloads
+        let slotsAvailableObserver = NotificationCenter.default.addObserver(
+            forName: .videoCreationSlotsAvailable,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.restartNearbyVideoPreloads()
+            }
+        }
+        notificationObservers.append(slotsAvailableObserver)
     }
     
     deinit {
@@ -1249,6 +1262,37 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         for video in videosToPreload {
             preloadVideoAsset(video)
+        }
+    }
+
+    /// Restart preloading for nearby videos when creation slots become available.
+    /// Called when active + pending downloads finish and free slots open up.
+    /// Re-evaluates videos in the scroll direction that were previously cancelled
+    /// (scrolled out of view) but are still within the nearby preload window.
+    private func restartNearbyVideoPreloads() {
+        // Only restart if the feed is visible and not suppressed
+        guard isFeedVisible, !isPlaybackSuppressedByOverlay else { return }
+        guard !allVideos.isEmpty else { return }
+
+        let restartCount = 4
+        let candidates = getNextVideosInScrollDirection(count: restartCount, includePreloaded: true)
+
+        // Only restart videos that have no cache at all (no memory player, no disk cache)
+        var restarted = 0
+        for video in candidates {
+            guard let resolved = resolveVideoURL(video) else { continue }
+            guard let mediaID = SharedAssetCache.shared.extractMediaID(from: resolved.url) else { continue }
+
+            // Skip if any cache exists (memory or disk)
+            if SharedAssetCache.shared.hasCachedContent(for: mediaID) { continue }
+
+            // Lightweight preload only — asset download with limited buffer
+            preloadVideoAsset(video)
+            restarted += 1
+        }
+
+        if restarted > 0 {
+            print("🔄 [RESTART PRELOAD] Restarted \(restarted) uncached video preloads (slots available)")
         }
     }
 
