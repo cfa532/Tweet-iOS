@@ -2004,10 +2004,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     // This is expected when AVPlayer cancels requests (e.g., after buffering enough or seeking)
                     let nsError = error as NSError
                     let isCancellation = nsError.domain == "Network.NWError" && nsError.code == 89
-                    
-                    if isCancellation {
-                        // Normal cancellation - don't log as warning, just close and return silently
-                        // AVPlayer often cancels requests when it has enough data or when seeking
+                    let isBrokenPipe = nsError.domain == "Network.NWError" && nsError.code == 32
+
+                    if isCancellation || isBrokenPipe {
+                        // Normal cancellation (89) or broken pipe (32) - don't log as warning
+                        // AVPlayer closes connections when it has enough data, is stopped, or replaced
                     } else {
                         // Actual error - log as warning
                         print("⚠️ [PROGRESSIVE CACHE] Send error: \(error.localizedDescription)")
