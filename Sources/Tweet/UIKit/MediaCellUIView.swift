@@ -933,7 +933,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "coordinatorPause")
-            if videoCellState == .playing {
+            // When video finished naturally, keep AVPlayerLayer showing the last
+            // rendered frame instead of revealing the lower-res imageView thumbnail.
+            // The cell will be cleaned up normally when scrolled out of view.
+            if videoCellState == .playing && !isHandlingFinishEvent {
                 transitionTo(.paused)
             }
             // Volume fade-out then pause
@@ -980,7 +983,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     player.pause()
                 }
             } else if videoCellState == .playing {
-                transitionTo(.paused)
+                // When video finished naturally, keep AVPlayerLayer showing the last
+                // rendered frame — don't reveal the lower-res imageView thumbnail.
+                if !isHandlingFinishEvent {
+                    transitionTo(.paused)
+                }
                 player.pause()
             } else {
                 player.pause()
@@ -998,7 +1005,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "stopAllVideos")
-            if videoCellState == .playing {
+            // When video finished naturally, keep AVPlayerLayer showing the last
+            // rendered frame — don't reveal the lower-res imageView thumbnail.
+            if videoCellState == .playing && !isHandlingFinishEvent {
                 transitionTo(.paused)
             }
             player.pause()
