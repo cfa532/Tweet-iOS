@@ -96,9 +96,14 @@ struct VideoPlaybackInfo: Equatable {
 @MainActor
 class VideoPlaybackCoordinator: ObservableObject {
     static let shared = VideoPlaybackCoordinator()
-    
+
+    /// Truncate an identifier (tweetId_mediaId) to 20 chars for log readability.
+    private func shortIdent(_ id: String) -> String { id.count > 20 ? String(id.prefix(20)) + "…" : id }
+    /// Truncate a videoMid to 8 chars for log readability.
+    private func shortMID(_ id: String) -> String { id.count > 8 ? String(id.prefix(8)) : id }
+
     // MARK: - Published State
-    
+
     /// Currently playing videos (can be multiple during survey phase)
     @Published private(set) var currentlyPlayingVideoIds: Set<String> = []
     
@@ -115,12 +120,19 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Temporarily set during notifyPrimaryVideoFailed() to prevent re-picking the same video
     private var failedPrimaryIdentifier: String?
+
+    /// Video that finished playing (including mismatch timeout) — skip in identifyPrimaryVideo
+    /// until cleared by next scroll update or stopAllVideos
+    private var finishedPrimaryIdentifier: String?
     
     /// Timer for debouncing video playback (0.2s delay)
     private var playbackDebounceTimer: Timer?
 
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
+
+    /// Debounce timer for cancelNonPrimaryDownloads — avoids killing downloads during fast scroll
+    private var cancelDownloadsTimer: Timer?
 
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
@@ -415,17 +427,17 @@ class VideoPlaybackCoordinator: ObservableObject {
     func registerDelegate(_ delegate: MediaCellDelegate, forIdentifier identifier: String) {
         mediaCellDelegates[identifier] = delegate
 
-        // At app start, cells register AFTER the initial updateVisibleTweetsForVideoPlayback()
-        // runs with empty onScreenMediaCells. The coordinator sees no visible videos and goes
-        // idle. Without a kick here, no play command is ever sent.
-        // setVisible(true) → registerDelegate only fires for cells in a window (didMoveToWindow),
-        // so this cell IS geometrically visible.
-        let wasInserted = onScreenMediaCells.insert(identifier).inserted
-        if wasInserted {
-            invalidateVisibleVideoCache()
-        }
+        // Do NOT insert into onScreenMediaCells here. didMoveToWindow fires for cells that
+        // UITableView prefetches below the viewport — they are in the window but NOT visible.
+        // Only updateOnScreenMediaCells (which does geometric 50% visibility checks) should
+        // manage onScreenMediaCells. Otherwise off-screen cells get selected as primary.
+        //
+        // At app start, cells register AFTER the initial updateVisibleTweetsForVideoPlayback().
+        // Use scheduleStartPrimary (0.3s debounce) to give updateOnScreenMediaCells time to
+        // populate the correct visible set before we attempt primary selection.
         if phase == .idle {
-            startPrimaryVideoPlayback()
+            print("🎬 [COORD] registerDelegate: \(shortIdent(identifier)) registered (phase=idle, kicking playback)")
+            scheduleStartPrimary()
         }
     }
 
@@ -789,6 +801,20 @@ class VideoPlaybackCoordinator: ObservableObject {
             // timer handle it with stable layout.
             if overlayUncoverPlaybackTimer != nil { return }
 
+            // Transient layout gap: old cell removed but new cell hasn't laid out yet.
+            // Don't stop the primary — its player keeps buffering. Just go idle and
+            // let scheduleStartPrimary pick up the new cell after layout settles.
+            if identifiers.isEmpty {
+                print("🎬 [COORD] onScreenUpdate: 0 cells on-screen (transient), going idle without stop")
+                phase = .idle
+                currentlyPlayingVideoIds.removeAll()
+                primaryVideoId = nil
+                scheduleStartPrimary()
+                return
+            }
+
+            print("🎬 [COORD] onScreenUpdate: primary \(shortIdent(primaryId)) left screen (\(identifiers.count) cells on-screen), switching")
+
             // Stop current primary (immediate pause, no fade)
             if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
                 if let delegate = mediaCellDelegates[primary.identifier] {
@@ -798,11 +824,11 @@ class VideoPlaybackCoordinator: ObservableObject {
                     SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
                 }
             }
-            // Reset and pick new primary
+            // Reset and schedule new primary after debounce (avoids rapid switching during fast scroll)
             phase = .idle
             currentlyPlayingVideoIds.removeAll()
             primaryVideoId = nil
-            startPrimaryVideoPlayback()
+            scheduleStartPrimary()
         }
     }
 
@@ -846,6 +872,17 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Stop all videos if none are visible
         if currentVisibleIdentifiers.isEmpty {
+            // If a primary was playing, this empty set may be a transient layout gap
+            // (old cell scrolled off, new cell hasn't laid out yet). Don't nuke
+            // everything — go idle and let scheduleStartPrimary recover when cells appear.
+            if phase == .primaryPlaying {
+                phase = .idle
+                currentlyPlayingVideoIds.removeAll()
+                primaryVideoId = nil
+                previousVisibleIdentifiers.removeAll()
+                scheduleStartPrimary()
+                return
+            }
             previousVisibleIdentifiers.removeAll()
             stopAllVideos()
             return
@@ -855,6 +892,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         if isPlaybackSuppressedByOverlay {
             previousVisibleIdentifiers = currentVisibleIdentifiers
             return
+        }
+
+        // User scrolled — clear finished exclusion so the video can be re-selected if scrolled back
+        if visibilityChanged {
+            finishedPrimaryIdentifier = nil
         }
 
         // Stop videos whose cell left the visible area
@@ -900,24 +942,22 @@ class VideoPlaybackCoordinator: ObservableObject {
                     phase = .idle
                     currentlyPlayingVideoIds.removeAll()
                     primaryVideoId = nil
-                    startPrimaryVideoPlayback()
+                    scheduleStartPrimary()
                 } else {
                     // Primary's cell still visible — check if we should switch based on position
                     checkAndSwitchVideoIfNeeded()
                 }
                 previousVisibleIdentifiers = currentVisibleIdentifiers
             } else {
-                // Primary's cell gone or idle — reset and start new primary immediately
+                // Primary's cell gone or idle — debounce to avoid rapid switching during scroll
                 phase = .idle
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil
-                playbackDebounceTimer?.invalidate()
-                playbackDebounceTimer = nil
-                startPrimaryVideoPlayback()
+                scheduleStartPrimary()
                 previousVisibleIdentifiers = currentVisibleIdentifiers
             }
         } else if phase == .idle && !currentVisibleIdentifiers.isEmpty {
-            startPrimaryVideoPlayback()
+            scheduleStartPrimary()
             previousVisibleIdentifiers = currentVisibleIdentifiers
         } else {
             previousVisibleIdentifiers = currentVisibleIdentifiers
@@ -932,6 +972,8 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Cancel all timers
         playbackDebounceTimer?.invalidate()
         playbackDebounceTimer = nil
+        cancelDownloadsTimer?.invalidate()
+        cancelDownloadsTimer = nil
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
 
@@ -943,7 +985,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Clear state
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
+        finishedPrimaryIdentifier = nil
         phase = .idle
+        LocalHTTPServer.shared.clearPrimaryRestriction()
         // Clear previous visible identifiers so next updateVisibleTweets sees a change.
         // Do NOT clear onScreenMediaCells here: the overlay-dismiss 0.15s timer reads
         // visibleVideos (filtered by onScreenMediaCells) to decide whether to resume.
@@ -992,12 +1036,20 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// If coordinator thinks primary is playing but it's actually stuck, resets and restarts.
     func requestStartPlaybackIfStalled() {
         if phase == .idle {
+            print("🎬 [COORD] stallCheck: phase is idle, starting primary")
             startPrimaryVideoPlayback()
             return
         }
         guard phase == .primaryPlaying, let primaryId = primaryVideoId else { return }
+
+        // Grace period: don't consider primary stuck if recently selected — it may still be loading
+        if let switchTime = lastPrimarySwitchTime, Date().timeIntervalSince(switchTime) < 3.0 {
+            return
+        }
+
         guard let delegate = mediaCellDelegates[primaryId] else {
             // Delegate gone — reset and restart
+            print("🎬 [COORD] stallCheck: delegate gone for \(shortIdent(primaryId)), restarting")
             phase = .idle
             currentlyPlayingVideoIds.removeAll()
             primaryVideoId = nil
@@ -1006,6 +1058,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         if delegate.isActuallyPlaying { return }  // Primary is healthy — nothing to do
         // Primary is stuck — reset and restart
+        print("🎬 [COORD] stallCheck: primary \(shortIdent(primaryId)) is stuck (isActuallyPlaying=false), restarting")
         phase = .idle
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
@@ -1164,12 +1217,12 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Preload videos ahead in the scroll direction during scrolling.
-    /// First 3 videos: full player preload (AVPlayer ready to play instantly).
+    /// Next 1 video: full player preload (AVPlayer ready to play instantly).
     /// Remaining videos: asset-only preload (download data, player created on demand).
     private func preloadVideosInScrollDirection() {
         lastScrollPreloadTime = Date()
 
-        let playerPreloadCount = 3
+        let playerPreloadCount = 1
 
         // Get ALL next videos (including already-preloaded) for protection tracking
         let allNextVideos = getNextVideosInScrollDirection(count: playerPreloadCount + 1, includePreloaded: true)
@@ -1210,12 +1263,23 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Get the next videos in scroll direction that are not currently visible.
     /// When `includePreloaded` is true, returns all upcoming videos (for protection tracking).
     private func getNextVideosInScrollDirection(count: Int, includePreloaded: Bool = false) -> [VideoPlaybackInfo] {
-        // Get indices of currently visible videos
-        let visibleVideoSet = visibleTweetIds
-        let visibleIndices = allVideos.enumerated()
-            .filter { visibleVideoSet.contains($0.element.cellTweetId) && $0.element.isInVisibleMediaRange }
-            .map { $0.offset }
-            .sorted()
+        // Use media-cell level visibility (onScreenMediaCells) instead of tweet-level
+        // (visibleTweetIds). Tweet-level treats ALL videos in a partially-visible tweet
+        // as "visible," skipping them for preload — but they haven't scrolled on screen yet.
+        // Fall back to tweet-level at app start before onScreenMediaCells is populated.
+        let visibleIndices: [Int]
+        if !onScreenMediaCells.isEmpty {
+            visibleIndices = allVideos.enumerated()
+                .filter { onScreenMediaCells.contains($0.element.identifier) && $0.element.isInVisibleMediaRange }
+                .map { $0.offset }
+                .sorted()
+        } else {
+            let visibleVideoSet = visibleTweetIds
+            visibleIndices = allVideos.enumerated()
+                .filter { visibleVideoSet.contains($0.element.cellTweetId) && $0.element.isInVisibleMediaRange }
+                .map { $0.offset }
+                .sorted()
+        }
 
         guard !visibleIndices.isEmpty else { return [] }
 
@@ -1274,7 +1338,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         guard isFeedVisible, !isPlaybackSuppressedByOverlay else { return }
         guard !allVideos.isEmpty else { return }
 
-        let restartCount = 4
+        let restartCount = 2
         let candidates = getNextVideosInScrollDirection(count: restartCount, includePreloaded: true)
 
         // Only restart videos that have no cache at all (no memory player, no disk cache)
@@ -1309,22 +1373,63 @@ class VideoPlaybackCoordinator: ObservableObject {
         isScrolling = false
     }
     
+    /// Schedule primary video playback after a short debounce (0.3s).
+    /// Used during scrolling to avoid rapid primary switches that waste bandwidth.
+    private func scheduleStartPrimary() {
+        playbackDebounceTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.playbackDebounceTimer = nil
+                if self.phase == .idle && !self.visibleVideos.isEmpty {
+                    self.startPrimaryVideoPlayback()
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        playbackDebounceTimer = timer
+    }
+
     /// Start primary video playback — play topmost video immediately.
     /// Fully synchronous: visibility calculations use direct UITableView access.
     /// Delegate existence is validated before committing state to prevent stuck `primaryPlaying`.
     private func startPrimaryVideoPlayback() {
-        guard !isPlaybackSuppressedByOverlay else { return }
-        guard isFeedVisible else { return }
-        guard phase == .idle else { return }
+        // Cancel any pending debounced start — immediate caller wins
+        playbackDebounceTimer?.invalidate()
+        playbackDebounceTimer = nil
+
+        guard !isPlaybackSuppressedByOverlay else {
+            print("🎬 [COORD] startPrimary: blocked by overlay")
+            return
+        }
+        guard isFeedVisible else {
+            print("🎬 [COORD] startPrimary: feed not visible")
+            return
+        }
+        guard phase == .idle else {
+            print("🎬 [COORD] startPrimary: skipped (phase=\(phase), current primary=\(primaryVideoId.map { shortIdent($0) } ?? "nil"))")
+            return
+        }
+
+        let onScreenCount = onScreenMediaCells.count
+        let visibleCount = visibleVideos.count
+        let delegateCount = mediaCellDelegates.count
 
         guard let primary = identifyPrimaryVideo() else {
-            stopAllVideos()
+            print("🎬 [COORD] startPrimary: no candidate (onScreen=\(onScreenCount), visible=\(visibleCount), delegates=\(delegateCount))")
+            // Only stop all videos when there ARE videos but none are visible (all scrolled off).
+            // When allVideos is empty (feed not loaded yet), don't stop — cells may be mid-load
+            // and buildVideoList will kick playback once the video list is populated.
+            if !allVideos.isEmpty {
+                stopAllVideos()
+            }
             return
         }
 
         // When we have granular on-screen tracking, never start playback for a video that isn't on-screen.
         // Prevents off-screen videos from resuming after updateOnScreenMediaCells stopped them.
         if !onScreenMediaCells.isEmpty, !onScreenMediaCells.contains(primary.identifier) {
+            print("🎬 [COORD] startPrimary: \(shortMID(primary.videoMid)) not in onScreenMediaCells (\(onScreenCount) cells)")
             return
         }
 
@@ -1332,8 +1437,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         // If the cell was reused or visibility changed, the delegate may be gone.
         // Stay idle so next updateVisibleTweets will retry.
         guard let delegate = mediaCellDelegates[primary.identifier] else {
+            print("🎬 [COORD] startPrimary: \(shortMID(primary.videoMid)) has no delegate")
             return
         }
+
+        print("🎬 [COORD] startPrimary: selected \(shortMID(primary.videoMid)) (onScreen=\(onScreenCount), visible=\(visibleCount), scrollDown=\(scrollDirection))")
 
         // Stop the previous primary video if different
         if let previousPrimaryId = primaryVideoId, previousPrimaryId != primary.identifier {
@@ -1355,6 +1463,28 @@ class VideoPlaybackCoordinator: ObservableObject {
         cachedVisibilityRatios[primary.identifier] = 0.7
         lastPrimarySwitchTime = Date()
 
+        // Set primary immediately so its segment requests bypass the concurrent download limit.
+        // The heavier cancelNonPrimaryDownloads runs after a 1s debounce to avoid churn.
+        let primaryMid = primary.videoMid
+        LocalHTTPServer.shared.setPrimaryMediaID(primaryMid)
+
+        // Debounce download cancellation: during fast scroll the primary changes rapidly;
+        // killing downloads immediately means each primary is cancelled before it loads.
+        // Wait 1s for the primary to stabilise, then cancel off-screen downloads.
+        // Read allVideos/onScreenMediaCells inside the closure so the protected set
+        // reflects the CURRENT on-screen state, not the state when the timer was created.
+        cancelDownloadsTimer?.invalidate()
+        cancelDownloadsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // Protect on-screen videos (avoid breaking their proxy connections)
+                // AND preloaded videos (they represent invested bandwidth for upcoming scroll)
+                var protectedMids = Set(self.allVideos.filter { self.onScreenMediaCells.contains($0.identifier) }.map { $0.videoMid })
+                protectedMids.formUnion(self.preloadedVideoMids)
+                LocalHTTPServer.shared.cancelNonPrimaryDownloads(primaryMediaID: primaryMid, protectedMediaIDs: protectedMids)
+            }
+        }
+
         delegate.shouldPlayVideo(withMid: primary.videoMid)
     }
 
@@ -1369,10 +1499,11 @@ class VideoPlaybackCoordinator: ObservableObject {
         let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
         // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
-        // Skip failedPrimaryIdentifier (set during notifyPrimaryVideoFailed) to avoid infinite retry loops.
+        // Skip failedPrimaryIdentifier and finishedPrimaryIdentifier to avoid re-selecting.
         for video in candidates {
             guard mediaCellDelegates[video.identifier] != nil else { continue }
             if video.identifier == failedPrimaryIdentifier { continue }
+            if video.identifier == finishedPrimaryIdentifier { continue }
             return video
         }
 
@@ -1438,6 +1569,35 @@ class VideoPlaybackCoordinator: ObservableObject {
         onScreenMediaCells.contains(video.identifier)
     }
     
+    /// Soft idle after primary finishes — preserve preloaded state and finishedPrimaryIdentifier.
+    /// Unlike stopAllVideos(), does NOT broadcast shouldStopAllVideos or clear visibility tracking.
+    /// The finished video was already paused by the finish handler; we just reset coordinator state
+    /// and let scheduleStartPrimary pick up the next candidate when one appears.
+    private func goIdleAfterPrimaryFinished() {
+        // Pause the finished primary's coordinatorWantsToPlay flag
+        if let primaryId = primaryVideoId,
+           let video = allVideos.first(where: { $0.identifier == primaryId }),
+           let delegate = mediaCellDelegates[primaryId] {
+            delegate.shouldPauseVideo(withMid: video.videoMid)
+        }
+
+        let finishedMid = primaryVideoId.flatMap { id in allVideos.first(where: { $0.identifier == id })?.videoMid } ?? "?"
+        print("🎬 [COORD] goIdleAfterPrimaryFinished: \(shortMID(finishedMid)) done, onScreen=\(onScreenMediaCells.count), visible=\(visibleVideos.count)")
+
+        cancelDownloadsTimer?.invalidate()
+        cancelDownloadsTimer = nil
+        currentlyPlayingVideoIds.removeAll()
+        primaryVideoId = nil
+        phase = .idle
+        LocalHTTPServer.shared.clearPrimaryRestriction()
+        // Do NOT clear finishedPrimaryIdentifier — it prevents re-selecting the just-finished video
+        // Do NOT clear previousVisibleIdentifiers — preserve visibility tracking
+        // Do NOT broadcast shouldStopAllVideos — cells keep their players/state
+
+        // Let the debounce timer check for a new visible candidate (e.g. preloaded video appears on scroll)
+        scheduleStartPrimary()
+    }
+
     /// Play next visible video after primary finishes
     private func playNextVisibleVideo() {
         guard let currentPrimary = primaryVideoId else {
@@ -1448,10 +1608,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         // But we need to ensure we're advancing to the next video in feed order (by Y position)
         // Find current primary in visible videos list (sorted by position)
         guard let currentIndex = visibleVideos.firstIndex(where: { $0.identifier == currentPrimary }) else {
-            stopAllVideos()
+            goIdleAfterPrimaryFinished()
             return
         }
-
 
         // Find next video based on scroll direction
         // Scrolling down: next video (index + 1)
@@ -1461,14 +1620,14 @@ class VideoPlaybackCoordinator: ObservableObject {
             // Scrolling DOWN: advance to next video
             targetIndex = currentIndex + 1
             guard targetIndex < visibleVideos.count else {
-                stopAllVideos()
+                goIdleAfterPrimaryFinished()
                 return
             }
         } else {
             // Scrolling UP: go back to previous video
             targetIndex = currentIndex - 1
             guard targetIndex >= 0 else {
-                stopAllVideos()
+                goIdleAfterPrimaryFinished()
                 return
             }
         }
@@ -1492,11 +1651,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         guard let nextVideo else {
-            stopAllVideos()
+            goIdleAfterPrimaryFinished()
             return
         }
         let currentVideo = visibleVideos[currentIndex]
-        
 
         // CRITICAL: Clear coordinatorWantsToPlay flag for finished video
         if let delegate = mediaCellDelegates[currentVideo.identifier] {
@@ -1531,6 +1689,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 isPrimaryFinished = primaryId.contains(videoMid)
             }
             if isPrimaryFinished {
+                finishedPrimaryIdentifier = primaryId
                 playNextVisibleVideo()
             }
         }

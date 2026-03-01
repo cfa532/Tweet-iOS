@@ -17,7 +17,7 @@ enum Constants {
     // Cache Configuration - RESTORED to original limits for better performance
     static let MAX_ASSET_CACHE_SIZE = 40
     static let MAX_PLAYER_CACHE_SIZE = 10 // number of players to cache (players released on background)
-    static let MAX_CONCURRENT_PLAYER_CREATIONS = 6 // Increased for better feed throughput; 2 slots reserved for visible content
+    static let MAX_CONCURRENT_PLAYER_CREATIONS = 2 // Conservative: 1 slot reserved for visible content, preloads only when idle
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 300 // 5 minutes - reasonable balance of memory vs performance
     
     // File Upload Limits

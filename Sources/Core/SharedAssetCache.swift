@@ -108,13 +108,16 @@ class SharedAssetCache: ObservableObject {
     private let maxPlayerCacheSize = Constants.MAX_PLAYER_CACHE_SIZE
     private let maxConcurrentCreations = Constants.MAX_CONCURRENT_PLAYER_CREATIONS
     private let cacheExpirationInterval: TimeInterval = Constants.CACHE_EXPIRATION_SECONDS
+
+    /// Truncate a mediaID to 8 chars for log readability.
+    private func shortMID(_ id: String) -> String { id.count > 8 ? String(id.prefix(8)) : id }
     
     // MARK: - Player Creation Throttling
     private var activeCreations = 0
     private var activeCreationTasks: [String: Task<AVPlayer, Error>] = [:] // mediaID -> creation task (for cancellation)
     private var inFlightPlayerCreations: [String: Task<AVPlayer, Error>] = [:] // mediaID -> dedup: covers queued + in-flight
     private var pendingCreations: [(url: URL, tweetId: String?, mediaType: MediaType?, isHighPriority: Bool, continuation: CheckedContinuation<AVPlayer, Error>)] = []
-    private let maxPendingCreations = 10 // MEMORY LEAK FIX: Limit queue size to prevent unbounded continuation buildup
+    private let maxPendingCreations = 4 // MEMORY LEAK FIX: Limit queue size; reduced from 10 with max 2 concurrent
     private var lastSlotsAvailableNotification: Date?
     private let slotsAvailableThrottleInterval: TimeInterval = 1.0
     
@@ -733,6 +736,8 @@ class SharedAssetCache: ObservableObject {
         var protected = visibleVideoMids
         // Protect preloaded players (next videos in scroll direction)
         protected.formUnion(preloadedPlayerMids)
+        // Protect players still being created — evicting mid-flight causes stuck spinner
+        protected.formUnion(inFlightPlayerCreations.keys)
         // Also protect media belonging to tweets in the VideoLoadingManager visible window
         for tweetId in VideoLoadingManager.shared.visibleTweetIds {
             let mediaIDs = getMediaIDsForTweet(tweetId)
@@ -939,7 +944,7 @@ class SharedAssetCache: ObservableObject {
         // Deduplicate: join an existing in-flight creation for the same mediaID.
         // Set BEFORE any suspension point so the second caller always finds it.
         if let existingTask = inFlightPlayerCreations[mediaID] {
-            let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+            let shortId = shortMID(mediaID)
             print("♻️ [SharedAssetCache] Joining in-flight creation for \(shortId)")
             return try await existingTask.value
         }
@@ -994,8 +999,9 @@ class SharedAssetCache: ObservableObject {
         if isHighPriority {
             return activeCreations < maxConcurrentCreations
         }
-        // Low priority (preloads): leave 2 slots reserved for visible content
-        return activeCreations < maxConcurrentCreations - 2
+        // Low priority (preloads): leave 1 slot reserved for visible content
+        // With max=2, preloads only start when nothing is actively downloading
+        return activeCreations < maxConcurrentCreations - 1
     }
 
     /// Process next pending creation when a slot opens
@@ -1064,7 +1070,7 @@ class SharedAssetCache: ObservableObject {
         // (e.g. visible cell finished while preload was pending in the queue)
         if let cachedPlayer = await MainActor.run(body: { self.getCachedPlayer(for: mediaID) }),
            cachedPlayer.currentItem != nil {
-            let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+            let shortId = shortMID(mediaID)
             print("♻️ [SharedAssetCache] Skipping duplicate creation for \(shortId) — already cached")
             return cachedPlayer
         }
@@ -1424,7 +1430,7 @@ class SharedAssetCache: ObservableObject {
         player.isMuted = true
 
         
-        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false  // Don't buffer when paused to avoid connection overload
+        cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
         
         // Cache the player using mediaID (video attachment mid)
         await MainActor.run { 
@@ -1837,8 +1843,9 @@ class SharedAssetCache: ObservableObject {
                 // Pause immediately — this is a preloaded player, not for playback yet
                 await MainActor.run {
                     player.pause()
-                    // Limit preload buffering to 10s to save bandwidth.
-                    // The cell will clear this limit when it becomes visible.
+                    // Allow preloaded player to buffer while paused — uses 1 of 2 download slots.
+                    // The cell will clear the buffer limit when it becomes visible.
+                    player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                     player.currentItem?.preferredForwardBufferDuration = 10
                     self.preloadedPlayerMids.insert(mediaID)
                 }
@@ -1874,12 +1881,7 @@ class SharedAssetCache: ObservableObject {
     /// Read a cached thumbnail for mediaID. Filters/clears dark frames so callers
     /// never treat black snapshots as valid poster images.
     func cachedThumbnail(for mediaID: String) -> UIImage? {
-        guard let image = VideoLastFrameCache.shared.image(for: mediaID) else { return nil }
-        if VideoFrameExtractor.isMostlyBlack(image) {
-            VideoLastFrameCache.shared.clear(for: mediaID)
-            return nil
-        }
-        return image
+        return VideoLastFrameCache.shared.image(for: mediaID)
     }
 
     /// Update cached thumbnail from a runtime-captured frame (pause/stop/scroll-out).
@@ -1909,12 +1911,20 @@ class SharedAssetCache: ObservableObject {
         }
     }
 
-    /// Update preloaded player set — called when scroll direction changes to release stale preloads
+    /// Update preloaded player set — called when scroll direction changes to release stale preloads.
+    /// Disables network buffering on players that leave the preloaded set to free download slots.
     func updatePreloadedPlayerMids(_ mids: Set<String>) {
+        let newSet = mids.intersection(playerCache.keys)
+        // Stop buffering on players that are no longer preloaded (free download slots)
+        let removed = preloadedPlayerMids.subtracting(newSet).subtracting(visibleVideoMids)
+        for mid in removed {
+            if let item = playerCache[mid]?.currentItem {
+                item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            }
+        }
         let previousCount = preloadedPlayerMids.count
-        preloadedPlayerMids = mids.intersection(playerCache.keys)
+        preloadedPlayerMids = newSet
         let newCount = preloadedPlayerMids.count
-        // Only log when the protected set actually changed size
         if newCount != previousCount {
             print("🔮 [PLAYER PRELOAD] Protected players: \(newCount) (was \(previousCount))")
         }

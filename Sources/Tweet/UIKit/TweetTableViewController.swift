@@ -463,6 +463,10 @@ class TweetTableViewController: UITableViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
 
+        if needsHeaderUpdate {
+            updateHeader()
+        }
+
         videoCoordinator.isFeedVisible = true
 
         // Resume video playback when returning from a UIKit full-screen modal (e.g. the
@@ -843,7 +847,17 @@ class TweetTableViewController: UITableViewController {
         videoCoordinator.buildVideoList(from: newTweets, pinnedTweets: pinnedTweets)
     }
     
+    private var needsHeaderUpdate = false
+
     func updateHeader() {
+        // Defer header layout until the view is in the hierarchy to avoid
+        // "UITableView layout outside view hierarchy" warnings.
+        guard viewIfLoaded?.window != nil else {
+            needsHeaderUpdate = true
+            return
+        }
+        needsHeaderUpdate = false
+
         guard let headerBuilder = headerViewBuilder else {
             if tableView.tableHeaderView != nil {
                 tableView.tableHeaderView = nil

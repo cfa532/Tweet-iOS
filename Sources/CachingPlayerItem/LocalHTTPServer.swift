@@ -231,6 +231,13 @@ private actor ActiveDownloadsActor {
         activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
     }
 
+    /// Remove all active download keys EXCEPT those matching any of the given (protected) mediaIDs.
+    func cancelTasksExcept(keepMediaIDs: Set<String>) {
+        activeDownloads = activeDownloads.filter { key in
+            keepMediaIDs.contains(where: { key.contains($0) })
+        }
+    }
+
     /// Returns true if the player for this mediaID was cleared while a download was in-flight.
     func isMediaIDCancelled(_ mediaID: String) -> Bool {
         return cancelledMediaIDs.contains(mediaID)
@@ -240,6 +247,7 @@ private actor ActiveDownloadsActor {
     func clearCancelledMediaID(_ mediaID: String) {
         cancelledMediaIDs.remove(mediaID)
     }
+
 }
 
 public class LocalHTTPServer: @unchecked Sendable {
@@ -248,6 +256,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     private var listener: NWListener?
     public private(set) var port: UInt16 = 8080  // Public read, private write
     private var mediaCache: [String: String] = [:] // mediaID -> cachePath
+    /// Truncate a mediaID to 8 chars for log readability.
+    private func shortMID(_ id: String) -> String { id.count > 8 ? String(id.prefix(8)) : id }
+
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
     private let mediaLock = NSLock() // Protects mediaCache and mediaRealURLs
     private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
@@ -288,6 +299,23 @@ public class LocalHTTPServer: @unchecked Sendable {
     // Log deduplication: suppress duplicate CACHE MISS logs for same mediaID+range within 3s
     private var recentCacheMissLogs: [String: Date] = [:]
     private let cacheMissLogLock = NSLock()
+
+    // Primary video gating: only the primary video may start NEW network downloads.
+    // Cached content is always served regardless of primary status.
+    private var currentPrimaryMediaID: String?
+    private let primaryMediaIDLock = NSLock()
+
+    // Per-mediaID concurrent download limit: at most 2 different videos may download at once.
+    // Lock-based (not actor) so both async and sync handlers can check it.
+    private var downloadingMediaIDs: [String: Int] = [:]
+    private let downloadingMediaIDsLock = NSLock()
+    private let maxConcurrentVideoDownloads = 2
+
+    // Early reservation for progressive downloads: prevents duplicate byte-range downloads
+    // when two NWConnections request the same range before the async HEAD callback completes.
+    // Key format: "mediaID_requestedStart" (e.g., "QmS7eJeG_0").
+    private var progressiveReservations = Set<String>()
+    private let progressiveReservationsLock = NSLock()
     
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
@@ -727,6 +755,139 @@ public class LocalHTTPServer: @unchecked Sendable {
             streamingSessions.removeValue(forKey: key)
         }
         streamingSessionsLock.unlock()
+
+        // 3. Release progressive reservations so cancelled ranges can be re-requested
+        progressiveReservationsLock.lock()
+        progressiveReservations = progressiveReservations.filter { !$0.hasPrefix(mediaID) }
+        progressiveReservationsLock.unlock()
+
+        // 4. Free concurrent download slot so other videos aren't permanently blocked
+        downloadingMediaIDsLock.lock()
+        downloadingMediaIDs.removeValue(forKey: mediaID)
+        downloadingMediaIDsLock.unlock()
+    }
+
+    /// Cancel active downloads EXCEPT for the specified primary and any on-screen (protected) mediaIDs.
+    /// Called when the coordinator starts primary playback to free bandwidth for the primary video.
+    /// On-screen videos are protected to avoid breaking their proxy connections (which causes -1005 player failures).
+    public func cancelNonPrimaryDownloads(primaryMediaID: String, protectedMediaIDs: Set<String> = []) {
+        // Track the primary so future requests from non-primary videos are blocked
+        primaryMediaIDLock.lock()
+        currentPrimaryMediaID = primaryMediaID
+        primaryMediaIDLock.unlock()
+
+        // Build the full set of mediaIDs to keep (primary + on-screen)
+        var keepMediaIDs = protectedMediaIDs
+        keepMediaIDs.insert(primaryMediaID)
+
+        // 1. Cancel non-primary, non-protected HLS segment download tasks
+        Task { await activeDownloadsActor.cancelTasksExcept(keepMediaIDs: keepMediaIDs) }
+
+        // 2. Cancel non-primary, non-protected progressive streaming sessions
+        streamingSessionsLock.lock()
+        let sessionKeysToRemove = streamingSessions.keys.filter { key in
+            !keepMediaIDs.contains(where: { key.hasPrefix($0) })
+        }
+        for key in sessionKeysToRemove {
+            streamingSessions[key]?.invalidateAndCancel()
+            streamingSessions.removeValue(forKey: key)
+        }
+        streamingSessionsLock.unlock()
+
+        // 3. Release progressive reservations for cancelled videos
+        progressiveReservationsLock.lock()
+        progressiveReservations = progressiveReservations.filter { key in
+            keepMediaIDs.contains(where: { key.hasPrefix($0) })
+        }
+        progressiveReservationsLock.unlock()
+
+        // 4. Free concurrent download slots for off-screen mediaIDs only
+        clearVideoDownloadTracking(except: keepMediaIDs)
+
+        for key in sessionKeysToRemove {
+            print("🎯 [PRIORITY] Cancelled download: \(key) (primary: \(shortMID(primaryMediaID)))")
+        }
+    }
+
+    /// Set the current primary mediaID so its segment requests bypass the concurrent download limit.
+    /// Called immediately when the coordinator selects a primary (before the 1s cancel-others debounce).
+    public func setPrimaryMediaID(_ mediaID: String?) {
+        primaryMediaIDLock.lock()
+        currentPrimaryMediaID = mediaID
+        primaryMediaIDLock.unlock()
+    }
+
+    /// Clear primary restriction so all videos can download (e.g., when all playback stops).
+    public func clearPrimaryRestriction() {
+        primaryMediaIDLock.lock()
+        currentPrimaryMediaID = nil
+        primaryMediaIDLock.unlock()
+    }
+
+    /// Check if a mediaID is allowed to start new network downloads.
+    /// Only the current primary (or any video when no primary is set) may download.
+    private func isDownloadAllowed(for mediaID: String) -> Bool {
+        primaryMediaIDLock.lock()
+        defer { primaryMediaIDLock.unlock() }
+        guard let primary = currentPrimaryMediaID else { return true }
+        return mediaID == primary
+    }
+
+    // MARK: - Per-mediaID concurrent download limit
+
+    /// Check if a new download for this mediaID can start within the concurrent limit.
+    /// If this mediaID already has active downloads, it keeps its slot.
+    private func canStartVideoDownload(for mediaID: String) -> Bool {
+        // Primary video is never throttled — its segment requests are time-critical
+        primaryMediaIDLock.lock()
+        let isPrimary = currentPrimaryMediaID == mediaID
+        primaryMediaIDLock.unlock()
+        if isPrimary { return true }
+
+        downloadingMediaIDsLock.lock()
+        defer { downloadingMediaIDsLock.unlock() }
+        if downloadingMediaIDs[mediaID] != nil { return true }
+        let allowed = downloadingMediaIDs.count < maxConcurrentVideoDownloads
+        if !allowed {
+            let shortId = shortMID(mediaID)
+            let activeIds = downloadingMediaIDs.keys.map { shortMID($0) }.joined(separator: ", ")
+            print("⛔ [CONCURRENCY] Blocked download for \(shortId) — \(downloadingMediaIDs.count) active: [\(activeIds)]")
+        }
+        return allowed
+    }
+
+    private func trackVideoDownloadStarted(for mediaID: String) {
+        downloadingMediaIDsLock.lock()
+        defer { downloadingMediaIDsLock.unlock() }
+        downloadingMediaIDs[mediaID, default: 0] += 1
+    }
+
+    private func trackVideoDownloadCompleted(for mediaID: String) {
+        downloadingMediaIDsLock.lock()
+        defer { downloadingMediaIDsLock.unlock() }
+        guard let count = downloadingMediaIDs[mediaID] else { return }
+        if count <= 1 { downloadingMediaIDs.removeValue(forKey: mediaID) }
+        else { downloadingMediaIDs[mediaID] = count - 1 }
+    }
+
+    private func clearVideoDownloadTracking(except mediaID: String? = nil) {
+        downloadingMediaIDsLock.lock()
+        defer { downloadingMediaIDsLock.unlock() }
+        if let keep = mediaID {
+            let keepCount = downloadingMediaIDs[keep]
+            downloadingMediaIDs.removeAll()
+            if let count = keepCount { downloadingMediaIDs[keep] = count }
+        } else {
+            downloadingMediaIDs.removeAll()
+        }
+    }
+
+    private func clearVideoDownloadTracking(except keepMediaIDs: Set<String>) {
+        downloadingMediaIDsLock.lock()
+        defer { downloadingMediaIDsLock.unlock() }
+        let kept = downloadingMediaIDs.filter { keepMediaIDs.contains($0.key) }
+        downloadingMediaIDs.removeAll()
+        for (key, value) in kept { downloadingMediaIDs[key] = value }
     }
 
     /// Release stalled download slots for a non-primary video without marking the mediaID
@@ -745,6 +906,16 @@ public class LocalHTTPServer: @unchecked Sendable {
             streamingSessions.removeValue(forKey: key)
         }
         streamingSessionsLock.unlock()
+
+        // 3. Release progressive reservations so the video can retry
+        progressiveReservationsLock.lock()
+        progressiveReservations = progressiveReservations.filter { !$0.hasPrefix(mediaID) }
+        progressiveReservationsLock.unlock()
+
+        // 4. Free concurrent download slot so other videos aren't permanently blocked
+        downloadingMediaIDsLock.lock()
+        downloadingMediaIDs.removeValue(forKey: mediaID)
+        downloadingMediaIDsLock.unlock()
     }
 
     /// Thread-safe lookup of a registered real URL — safe to call from async contexts.
@@ -976,8 +1147,8 @@ public class LocalHTTPServer: @unchecked Sendable {
                         }
                     }
 
-                    // Only log non-connection-reset errors
-                    if nwCode != 54 {
+                    // Only log unexpected errors (suppress connection-reset 54 and operation-canceled 89)
+                    if nwCode != 54 && nwCode != 89 {
                         print("DEBUG: [LocalHTTPServer] Receive error (code \(nwCode)): \(error)")
                     }
                 } else {
@@ -1230,16 +1401,19 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     private func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) async {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
-        
-        // Check cache first
+
+        // Check cache first — always serve cached content regardless of concurrency
         if FileManager.default.fileExists(atPath: cachePath) {
-            // Serve cached segment - this reads from disk, no memory bloat
             autoreleasepool {
                 serveFile(path: cachePath, connection: connection, method: method)
             }
             return
         }
 
+        // NOTE: No concurrent download limit for HLS segments — they are small (~1MB) and
+        // time-critical. Blocking them causes AVPlayer to fail with -12889. The dedup logic
+        // below already prevents truly redundant downloads. Progressive downloads (larger,
+        // less time-critical) are still gated by canStartVideoDownload().
 
         // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
@@ -1302,9 +1476,11 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // This request becomes the downloader — mark active, fetch, then mark completed.
         await activeDownloadsActor.markDownloadStarted(for: downloadKey)
+        trackVideoDownloadStarted(for: mediaID)
 
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
             Task { await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey) }
+            self.trackVideoDownloadCompleted(for: mediaID)
         }
     }
     
@@ -1416,6 +1592,11 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // CACHE MISS - fetch from real server
+        // Concurrent download limit: at most 2 different mediaIDs may download at once.
+        guard canStartVideoDownload(for: mediaID) else {
+            connection.cancel()
+            return
+        }
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
@@ -1425,11 +1606,30 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // STREAMING: First get file size with HEAD, then stream data in chunks
         let requestedStart = rangeStart ?? 0
-        
+
+        // Reserve this byte-range download BEFORE the async HEAD call to prevent
+        // duplicate downloads when two NWConnections request the same range concurrently.
+        // Without this, both connections pass the streamingSessions dedup check inside
+        // the HEAD callback because neither has registered yet.
+        let reservationKey = "\(mediaID)_\(requestedStart)"
+        progressiveReservationsLock.lock()
+        if progressiveReservations.contains(reservationKey) {
+            progressiveReservationsLock.unlock()
+            // Another connection is already handling this exact range — close this one.
+            // AVPlayer will get data from the first connection's response.
+            connection.cancel()
+            return
+        }
+        progressiveReservations.insert(reservationKey)
+        progressiveReservationsLock.unlock()
+
         self.fetchHEADWithRetry(url: fullRealURL, mediaID: mediaID) { [weak self] httpResponse in
             guard let self = self else { return }
 
             guard let httpResponse = httpResponse else {
+                self.progressiveReservationsLock.lock()
+                self.progressiveReservations.remove(reservationKey)
+                self.progressiveReservationsLock.unlock()
                 self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
                 return
             }
@@ -1494,19 +1694,36 @@ public class LocalHTTPServer: @unchecked Sendable {
             connection.send(content: headerData, completion: .contentProcessed { [weak self] headerError in
                 guard let self = self else { return }
                 if let headerError = headerError {
+                    self.progressiveReservationsLock.lock()
+                    self.progressiveReservations.remove(reservationKey)
+                    self.progressiveReservationsLock.unlock()
                     print("⚠️ [PROGRESSIVE HEADERS] Failed to send headers for \(mediaID): \(headerError.localizedDescription)")
                     return
                 }
-                
-                
-                guard method.uppercased() == "GET" else { return }
+
+
+                guard method.uppercased() == "GET" else {
+                    self.progressiveReservationsLock.lock()
+                    self.progressiveReservations.remove(reservationKey)
+                    self.progressiveReservationsLock.unlock()
+                    return
+                }
                 
                 let startNetworkStreaming: () -> Void = {
                     let remainderNeeded = requestedSize <= 0 || cachedSegmentLength < requestedSize
-                    guard remainderNeeded else { return }
-                    
+                    guard remainderNeeded else {
+                        // Entire range served from cache — release reservation
+                        self.progressiveReservationsLock.lock()
+                        self.progressiveReservations.remove(reservationKey)
+                        self.progressiveReservationsLock.unlock()
+                        return
+                    }
+
                     let streamStart = requestedStart + cachedSegmentLength
                     if let resolvedEnd = resolvedRequestedEnd, streamStart > resolvedEnd {
+                        self.progressiveReservationsLock.lock()
+                        self.progressiveReservations.remove(reservationKey)
+                        self.progressiveReservationsLock.unlock()
                         return
                     }
                     
@@ -1598,11 +1815,16 @@ public class LocalHTTPServer: @unchecked Sendable {
                     }
                     
                     let sessionKey = mediaID + "_\(streamStart)"
+                    self.trackVideoDownloadStarted(for: mediaID)
                     let sessionCleanup: () -> Void = { [weak self] in
                         guard let self = self else { return }
                         self.streamingSessionsLock.lock()
                         self.streamingSessions.removeValue(forKey: sessionKey)
                         self.streamingSessionsLock.unlock()
+                        self.progressiveReservationsLock.lock()
+                        self.progressiveReservations.remove(reservationKey)
+                        self.progressiveReservationsLock.unlock()
+                        self.trackVideoDownloadCompleted(for: mediaID)
                     }
 
                     let delegate = StreamingDownloadDelegate(
@@ -1621,13 +1843,29 @@ public class LocalHTTPServer: @unchecked Sendable {
                     let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
 
                     self.streamingSessionsLock.lock()
+                    if self.streamingSessions[sessionKey] != nil {
+                        // Already downloading this exact range — keep existing, skip duplicate
+                        self.streamingSessionsLock.unlock()
+                        session.invalidateAndCancel()
+                        // Balance the trackVideoDownloadStarted call above
+                        self.trackVideoDownloadCompleted(for: mediaID)
+                        self.progressiveReservationsLock.lock()
+                        self.progressiveReservations.remove(reservationKey)
+                        self.progressiveReservationsLock.unlock()
+                        let shortId = self.shortMID(mediaID)
+                        print("♻️ [DOWNLOAD \(shortId)] Skipped duplicate download from byte \(streamStart)")
+                        connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+                            connection.cancel()
+                        })
+                        return
+                    }
                     self.streamingSessions[sessionKey] = session
                     self.streamingSessionsLock.unlock()
-                    
+
                     let streamTask = session.dataTask(with: streamRequest)
                     streamTask.resume()
 
-                    let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+                    let shortId = self.shortMID(mediaID)
                     let totalStr = totalFileSize.map { "\($0 / 1024)KB" } ?? "unknown size"
                     print("📡 [DOWNLOAD \(shortId)] Started progressive stream from byte \(streamStart) (\(totalStr) total)")
                 }
@@ -2165,10 +2403,22 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Track session so cancelDownloads(for: mediaID) can invalidate it.
         streamingSessionsLock.lock()
+        if streamingSessions[sessionKey] != nil {
+            // Already downloading this exact segment — keep existing, skip duplicate
+            streamingSessionsLock.unlock()
+            session.invalidateAndCancel()
+            let shortId = shortMID(mediaID)
+            print("♻️ [HLS SEGMENT \(shortId)] Skipped duplicate download for \(sessionKey)")
+            connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+            completion()
+            return
+        }
         streamingSessions[sessionKey] = session
         streamingSessionsLock.unlock()
 
-        let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+        let shortId = shortMID(mediaID)
         let segmentFile = cacheURL.lastPathComponent
         let parentDir = cacheURL.deletingLastPathComponent().lastPathComponent
         // Include resolution folder if present (e.g. "720p/segment000.ts")

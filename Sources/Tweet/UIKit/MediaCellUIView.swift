@@ -157,6 +157,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Prevent duplicate finish handling
     private var isHandlingFinishEvent: Bool = false
 
+    /// Timer for detecting HLS duration mismatch stalls (loaded data < declared duration)
+    private var durationMismatchTimer: Timer?
+    /// Loaded-end when mismatch timer started — used to detect if data is still growing
+    private var mismatchTimerLoadedEnd: Double = 0
+
     /// Tracks when the player was loaned to detail view; enables fast-path reclaim on return
     private var playerWasLoaned: Bool = false
 
@@ -728,6 +733,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         newPlayer.currentItem?.preferredForwardBufferDuration = 0
         removePlayerObservers()
         self.player = newPlayer
+        // Pick up preload-generated thumbnail if the cell missed it during setupVideoCell
+        if imageView.image == nil, let mid = attachment?.mid,
+           let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+            imageView.image = cached
+        }
         transitionTo(.playerLoading)
     }
 
@@ -751,10 +761,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 self.transitionTo(.playerReady)
             }
 
-            // Notify coordinator — video is ready. If coordinator is idle (no primary
-            // playing), it will re-evaluate and may pick this video.
-            if !self.coordinatorWantsToPlay {
-                (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
+            // If coordinator already told us to play, attempt now — covers the case
+            // where KVO fired before onReadyForDisplay (or didn't fire for preloaded players).
+            if self.coordinatorWantsToPlay, let player = self.player {
+                print("\(self.logPrefix) 🖼️ onReadyForDisplay: coordinatorWants=true, calling requestPlayback")
+                self.requestPlaybackStartIfNeeded(player, reason: "onReadyForDisplay-coordinatorWaiting")
+            } else {
+                // Notify coordinator — video is ready. If idle, start; if primary is
+                // stuck (not actually playing), reset and pick a new primary.
+                print("\(self.logPrefix) 🖼️ onReadyForDisplay: coordinatorWants=false, checking stall")
+                (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
             }
         }
     }
@@ -810,6 +826,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleCoordinatorPlayCommand() {
         guard let mid = attachment?.mid else { return }
 
+        let hasPlayer = player != nil
+        let itemStatus = player?.currentItem?.status.rawValue ?? -1
+        let rate = player?.rate ?? -1
+        print("\(logPrefix) 🎬 shouldPlayVideo: state=\(videoCellState), hasPlayer=\(hasPlayer), itemStatus=\(itemStatus), rate=\(rate)")
 
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
@@ -1040,7 +1060,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Start playback if coordinator wants to play and player isn't already playing.
     private func requestPlaybackStartIfNeeded(_ player: AVPlayer, reason: String) {
-        guard coordinatorWantsToPlay else { return }
+        guard coordinatorWantsToPlay else {
+            print("\(logPrefix) ⏸️ requestPlayback(\(reason)): skipped, coordinatorWantsToPlay=false")
+            return
+        }
+
+        print("\(logPrefix) ▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
 
         if player.rate > 0 {
             // Already playing — just sync UI
@@ -1288,6 +1313,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
                 if item.status == .readyToPlay {
                     let firstReadyTransition = change.oldValue != .readyToPlay
+                    print("\(self.logPrefix) 📺 statusKVO: readyToPlay (first=\(firstReadyTransition), coordWants=\(self.coordinatorWantsToPlay), state=\(self.videoCellState))")
 
                     // If playback already started before status reached readyToPlay,
                     // reveal player layer now (safe point) instead of relying on an
@@ -1325,10 +1351,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         }
                     }
 
-                    // Notify coordinator — video data is fully ready. If coordinator is
-                    // idle (previous primary stopped/failed), it can pick this video.
+                    // Notify coordinator — video data is fully ready. If idle, start;
+                    // if primary is stuck (not actually playing), reset and pick new.
                     if !self.coordinatorWantsToPlay {
-                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfIdle()
+                        (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
                     }
                 } else if item.status == .failed {
                     let errorMsg = item.error?.localizedDescription ?? "Unknown error"
@@ -1355,7 +1381,34 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
+
+                // Diagnostic logging for all timeControlStatus transitions
+                let statusName: String
+                switch player.timeControlStatus {
+                case .paused: statusName = "paused"
+                case .playing: statusName = "playing"
+                case .waitingToPlayAtSpecifiedRate: statusName = "waiting"
+                @unknown default: statusName = "unknown(\(player.timeControlStatus.rawValue))"
+                }
+                let pos = player.currentTime().seconds
+                let dur = player.currentItem?.duration.seconds ?? 0
+                let atEnd = self.isVideoAtEnd(player)
+                var logMsg = "\(self.logPrefix) ⏱️ timeControl: \(statusName), pos=\(String(format: "%.1f", pos))/\(String(format: "%.1f", dur)), atEnd=\(atEnd), state=\(self.videoCellState)"
+                if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+                    let reason = player.reasonForWaitingToPlay?.rawValue ?? "nil"
+                    let ranges = player.currentItem?.loadedTimeRanges.map {
+                        let r = $0.timeRangeValue
+                        return "\(String(format: "%.1f", r.start.seconds))-\(String(format: "%.1f", r.end.seconds))"
+                    }.joined(separator: ", ") ?? "none"
+                    let bufferEmpty = player.currentItem?.isPlaybackBufferEmpty ?? true
+                    let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
+                    logMsg += ", reason=\(reason), ranges=[\(ranges)], bufEmpty=\(bufferEmpty), keepUp=\(keepUp)"
+                }
+                print(logMsg)
+
                 if player.timeControlStatus == .playing {
+                    self.durationMismatchTimer?.invalidate()
+                    self.durationMismatchTimer = nil
                     self.loadingSpinner.stopAnimating()
                     // Smooth playback confirmed — hide thumbnail cover to reveal actual video
                     if self.isActuallyPlayerReady(player) && (self.videoCellState == .playing || self.videoCellState == .playerReady) {
@@ -1375,6 +1428,57 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     guard !self.isVideoAtEnd(player) else { return }
                     // Player was told to play but is buffering — show spinner.
                     self.loadingSpinner.startAnimating()
+
+                    // Detect HLS duration mismatch: loaded data ends before declared duration.
+                    // The player stalls because the remaining gap will never be filled.
+                    // Start a repeating 1s check — only treat as finished when data stops growing for 3s.
+                    if self.durationMismatchTimer == nil,
+                       let item = player.currentItem,
+                       let lastRange = item.loadedTimeRanges.last?.timeRangeValue {
+                        let loadedEnd = CMTimeAdd(lastRange.start, lastRange.duration).seconds
+                        let duration = item.duration.seconds
+                        let durationGap = duration - loadedEnd
+                        let currentPos = player.currentTime().seconds
+                        // Loaded data falls short of declared duration, player near end of loaded data
+                        if duration > 0 && durationGap > 0 && durationGap < 2.0 && currentPos > loadedEnd - 1.0 {
+                            print("\(self.logPrefix) ⚠️ Duration mismatch detected: loaded=\(String(format: "%.1f", loadedEnd))s, declared=\(String(format: "%.1f", duration))s, gap=\(String(format: "%.1f", durationGap))s — monitoring for 3s stall")
+                            self.mismatchTimerLoadedEnd = loadedEnd
+                            var staleSeconds = 0
+                            self.durationMismatchTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+                                guard let self, let player = self.player else { timer.invalidate(); return }
+                                guard player.timeControlStatus == .waitingToPlayAtSpecifiedRate else {
+                                    timer.invalidate()
+                                    self.durationMismatchTimer = nil
+                                    return
+                                }
+                                // Check if loaded range grew since last tick
+                                if let item = player.currentItem,
+                                   let lastRange = item.loadedTimeRanges.last?.timeRangeValue {
+                                    let currentLoadedEnd = CMTimeAdd(lastRange.start, lastRange.duration).seconds
+                                    if currentLoadedEnd > self.mismatchTimerLoadedEnd + 0.1 {
+                                        // Data still arriving — reset stale counter
+                                        print("\(self.logPrefix) ⏱️ Duration mismatch: data still growing (loaded=\(String(format: "%.1f", currentLoadedEnd))s), resetting stall counter")
+                                        self.mismatchTimerLoadedEnd = currentLoadedEnd
+                                        staleSeconds = 0
+                                        return
+                                    }
+                                }
+                                staleSeconds += 1
+                                if staleSeconds >= 3 {
+                                    timer.invalidate()
+                                    self.durationMismatchTimer = nil
+                                    print("\(self.logPrefix) ⏰ Duration mismatch timeout (data stale for 3s) — treating as finished")
+                                    Task { @MainActor in
+                                        await self.handleVideoFinishedDueToMismatch()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Paused or other — cancel mismatch timer
+                    self.durationMismatchTimer?.invalidate()
+                    self.durationMismatchTimer = nil
                 }
             }
         }
@@ -1389,10 +1493,39 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         resumeObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        durationMismatchTimer?.invalidate()
+        durationMismatchTimer = nil
+        mismatchTimerLoadedEnd = 0
     }
 
 
     // MARK: - Video Finished
+
+    /// Handle video that stalled due to HLS duration mismatch (loaded data < declared duration).
+    /// Bypasses the timeUntilEnd guard in handleVideoFinished since the gap will never be filled.
+    private func handleVideoFinishedDueToMismatch() async {
+        guard !isHandlingFinishEvent else { return }
+        isHandlingFinishEvent = true
+
+        guard let player = player, let mid = attachment?.mid else { return }
+
+        player.pause()
+        player.isMuted = MuteState.shared.isMuted
+        transitionTo(.paused)
+        VideoStateCache.shared.clearCachedState(for: mid)
+        preserveFrameToCache(skipImageView: true)
+        loadingSpinner.stopAnimating()
+
+        var userInfo: [String: Any] = ["videoMid": mid, "tweetId": parentTweet?.mid ?? ""]
+        if let id = videoIdentifier { userInfo["videoIdentifier"] = id }
+        NotificationCenter.default.post(
+            name: .videoDidFinishPlaying,
+            object: nil,
+            userInfo: userInfo
+        )
+
+        VideoStateCache.shared.clearCache(for: mid, force: true)
+    }
 
     private func handleVideoFinished() async {
         guard !isHandlingFinishEvent else { return }
@@ -1846,8 +1979,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
               player.currentItem != nil else { return false }
         // rate > 0 means actually playing
         if player.rate > 0 { return true }
-        // Coordinator told us to play and we have a player with item — still buffering, not stalled
-        if coordinatorWantsToPlay { return true }
+        // Only count as "playing" if the player is actively buffering (waiting to play),
+        // not just because the coordinator sent a play command. A video stuck in
+        // playerLoading with coordinatorWantsToPlay=true is NOT actually playing.
+        if coordinatorWantsToPlay && player.timeControlStatus == .waitingToPlayAtSpecifiedRate { return true }
         return false
     }
 
