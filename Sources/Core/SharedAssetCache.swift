@@ -468,7 +468,7 @@ class SharedAssetCache: ObservableObject {
     /// Get cached asset or create new one
     @MainActor func getAsset(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil) async throws -> AVAsset {
         guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL"])
         }
         let cacheKey = mediaID
         
@@ -903,7 +903,7 @@ class SharedAssetCache: ObservableObject {
     ///   Preloads should pass false so they don't block visible content.
     func getOrCreatePlayer(for url: URL, tweetId: String? = nil, mediaType: MediaType? = nil, isHighPriority: Bool = true) async throws -> AVPlayer {
         guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL"])
         }
 
         // ✅ CHECK BLACKLIST FIRST - Don't waste resources on known-bad videos
@@ -1366,7 +1366,7 @@ class SharedAssetCache: ObservableObject {
     /// Create CachingPlayerItem for HLS videos only
     private func createCachingPlayer(for url: URL, tweetId: String?) async throws -> AVPlayer {
         guard let mediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL"])
         }
                 
         // Fast path: use persisted extension from CacheMetadata (no disk I/O or network)
@@ -1452,7 +1452,7 @@ class SharedAssetCache: ObservableObject {
         try Task.checkCancellation()
         
         guard let extractedMediaID = extractMediaID(from: url) else {
-            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot extract mediaID from URL", comment: "Media ID extraction error")])
+            throw NSError(domain: "SharedAssetCache", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cannot extract mediaID from URL"])
         }
         
         // Determine if this is HLS
