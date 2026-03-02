@@ -443,6 +443,7 @@ struct MediaBrowserView: View {
                 videoIndex: index,
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
+                shouldAutoPlay: shouldAutoPlay,
                 onUserInteraction: {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showControls = true
@@ -927,6 +928,7 @@ struct SingletonVideoPlayerView: View {
     let videoIndex: Int
     let mediaType: MediaType
     let aspectRatio: Float?
+    let shouldAutoPlay: Bool
     let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
@@ -992,9 +994,11 @@ struct SingletonVideoPlayerView: View {
                 }
             }
             .onAppear {
-                    // Always call loadVideo — it handles idempotency.
-                    // When the same video is already loaded (re-entry after dismiss),
-                    // loadVideo() returns early and resumes playback without a network round-trip.
+                    // Only load video for the view the user actually tapped (shouldAutoPlay).
+                    // SwiftUI's TabView preloads neighboring pages — without this guard, a
+                    // non-autoplay neighbor's onAppear fires loadVideo() with the wrong mid,
+                    // overriding the correct video the user tapped.
+                    guard shouldAutoPlay else { return }
                     if !hasAttemptedReload {
                         hasAttemptedReload = true
                         manager.loadVideo(

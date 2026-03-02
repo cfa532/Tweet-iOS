@@ -48,6 +48,11 @@ protocol MediaCellDelegate {
 
     /// Whether the video is actually playing (healthy player with rate > 0)
     var isActuallyPlaying: Bool { get }
+
+    /// True when the coordinator has commanded this video to play but the AVPlayerItem is still
+    /// in .unknown status (item loading from network). Prevents false stall detection during
+    /// legitimate loading delays (IPFS/HLS can take >3s before play() is called).
+    var isLoadingForCoordinator: Bool { get }
 }
 
 /// Video state during orchestration
@@ -362,6 +367,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Invalidate all timers
         playbackDebounceTimer?.invalidate()
         overlayUncoverPlaybackTimer?.invalidate()
+        cancelDownloadsTimer?.invalidate()
     }
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
@@ -1068,11 +1074,15 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         if delegate.isActuallyPlaying { return }  // Primary is healthy — nothing to do
+        // Primary has been commanded to play but AVPlayerItem is still loading (status=.unknown).
+        // This is not a stall — it's normal IPFS/HLS latency. Let it load; durationMismatchTimer
+        // and loadingTimeoutTask will handle genuine failures.
+        if delegate.isLoadingForCoordinator { return }
         // Primary is stuck — reset and restart. identifyPrimaryVideo naturally prefers a
         // different candidate when one exists (direction fix picks bottommost when scrolling down).
         // Do NOT set failedPrimaryIdentifier: if this is the only visible video it would block
         // it permanently; if another video is available the direction fix picks it anyway.
-        print("🎬 [COORD] stallCheck: primary \(shortIdent(primaryId)) is stuck (isActuallyPlaying=false), restarting")
+        print("🎬 [COORD] stallCheck: primary \(shortIdent(primaryId)) is stuck (isActuallyPlaying=false, notLoading), restarting")
         phase = .idle
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil

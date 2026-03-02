@@ -811,6 +811,26 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
     }
 
+    /// Returns true if any HLS segment download is currently in-flight for the given mediaID.
+    /// Synchronous — safe to call from the main thread (uses NSLock, not actor).
+    /// Used by the duration-mismatch timer to avoid treating a quality-switch stall as a finished video.
+    func hasActiveHLSSegmentDownloads(for mediaID: String) -> Bool {
+        streamingSessionsLock.lock()
+        defer { streamingSessionsLock.unlock() }
+        return streamingSessions.keys.contains { $0.hasPrefix("\(mediaID)/stream/") }
+    }
+
+    /// Returns the relative paths of all in-flight HLS segments for a mediaID (e.g. ["480p/segment001.ts"]).
+    /// Used by the duration-mismatch timer to log exactly which segment is blocking playback.
+    func activeHLSSegmentKeys(for mediaID: String) -> [String] {
+        streamingSessionsLock.lock()
+        defer { streamingSessionsLock.unlock() }
+        let prefix = "\(mediaID)/stream/"
+        return streamingSessions.keys
+            .filter { $0.hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)) }
+    }
+
     /// Set the current primary mediaID so its segment requests bypass the concurrent download limit.
     /// Called immediately when the coordinator selects a primary (before the 1s cancel-others debounce).
     public func setPrimaryMediaID(_ mediaID: String?) {
@@ -1391,8 +1411,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                 }
             }
             
-            // Fallback to original file if rewrite fails
-            serveFile(path: cachePath, connection: connection, method: method)
+            // Fallback: cache file is unreadable (corrupted or filesystem error).
+            // Delete the bad file and re-fetch fresh so ENDLIST injection always applies.
+            try? FileManager.default.removeItem(atPath: cachePath)
+            fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method, completion: nil)
             return
         }
         
@@ -1556,10 +1578,6 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         }
         
-        // Calculate request size for caching decision
-        let requestSize = rangeEnd != nil ? (rangeEnd! - (rangeStart ?? 0) + 1) : Int64.max
-        let isProbeRequest = requestSize < 1024  // Requests < 1KB are just probes
-        
         // Check cache for this specific range - ALWAYS check, even for probes
         // CRITICAL: If no range header, try to serve full file from cache (range 0-end)
         // For cache operations, use ORIGINAL rangeEnd (not capped) - we can serve from cache without memory issues
@@ -1595,8 +1613,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // CACHE MISS - fetch from real server
         // Concurrent download limit: at most 2 different mediaIDs may download at once.
+        // Send 503 (not RST) so AVPlayer treats it as a server-busy condition rather than
+        // a connection failure — prevents -1005 playerItem errors on fast-scrolled videos.
         guard canStartVideoDownload(for: mediaID) else {
-            connection.cancel()
+            sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
             return
         }
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
@@ -1621,7 +1641,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         var cacheFileHandle: FileHandle? = nil
         var cacheFilePath: String? = nil
         let cacheFileURL = progressiveCacheFileURL(for: mediaID)
-        var initialCachedSize = min(cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL), progressiveDiskCacheLimit)
+        let initialCachedSize = min(cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL), progressiveDiskCacheLimit)
 
         if shouldCache {
             let cacheDir = progressiveCacheDirectory(for: mediaID)
@@ -2214,6 +2234,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
 
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        delegate.urlSession = session   // weak back-ref so delegate can self-cancel on dead NWConnection
 
         // Track session so cancelDownloads(for: mediaID) can invalidate it.
         streamingSessionsLock.lock()
@@ -2769,8 +2790,14 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     private let removeSession: (String) -> Void
     private let completion: () -> Void
 
+    /// Weak back-reference so we can cancel the IPFS download when AVPlayer closes its
+    /// NWConnection (quality-switch, cell reuse, etc.) instead of downloading the whole
+    /// segment to a dead connection and wasting bandwidth.
+    weak var urlSession: URLSession?
+
     private var diskBuffer = Data()
     private var headersSent = false
+    private var connectionDead = false   // set when a send error signals the connection is closed
     private var contentLength: Int64 = -1
 
     // Download progress tracking
@@ -2841,11 +2868,20 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession,
                     dataTask: URLSessionDataTask,
                     didReceive data: Data) {
+        guard !connectionDead else { return }   // connection already known-dead; drain quietly
         diskBuffer.append(data)
-        // NWConnection queues sends internally and delivers them in order over TCP.
-        connection.send(content: data, isComplete: false, completion: .contentProcessed { _ in })
-
-        // HLS segment progress: only start/finish logged (see didCompleteWithError)
+        // Forward bytes to AVPlayer immediately so it can start decoding the first keyframe
+        // rather than waiting for the full segment download.
+        // If the NWConnection is dead (AVPlayer cancelled the request during a quality switch),
+        // the send callback fires with a non-nil error — cancel the IPFS download immediately
+        // to avoid downloading the whole segment (~2–5 MB) to nowhere.
+        connection.send(content: data, isComplete: false, completion: .contentProcessed { [weak self] error in
+            guard let self, error != nil, !self.connectionDead else { return }
+            self.connectionDead = true
+            let shortId = self.mediaID.count > 8 ? String(self.mediaID.prefix(8)) : self.mediaID
+            print("🔌 [HLS SEGMENT \(shortId)] NWConnection closed mid-stream (\(self.segmentLabel)) — cancelling IPFS download")
+            self.urlSession?.invalidateAndCancel()
+        })
     }
 
     func urlSession(_ session: URLSession,

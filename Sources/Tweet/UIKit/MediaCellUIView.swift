@@ -1465,11 +1465,28 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                                         return
                                     }
                                 }
+                                // Loaded range hasn't grown.
+                                // Use a flat 3s threshold regardless of whether a download is active.
+                                // When data IS arriving (a genuine new-segment download), loadedEnd grows
+                                // and the stale counter resets above — the threshold is never hit.
+                                // The 10s threshold was only reached for quality-switch downloads that
+                                // cover an already-buffered range (e.g. 720p/segment000.ts while stalled
+                                // at the 480p/segment000→segment001 boundary) and don't help the stall.
+                                let activeSegmentKeys = self.attachment.map {
+                                    LocalHTTPServer.shared.activeHLSSegmentKeys(for: $0.mid)
+                                } ?? []
+                                let hasActiveDownloads = !activeSegmentKeys.isEmpty
+                                if hasActiveDownloads {
+                                    let keyList = activeSegmentKeys.joined(separator: ", ")
+                                    print("\(self.logPrefix) ⏱️ Duration mismatch: active segments [\(keyList)] (\(staleSeconds + 1)s/3s)")
+                                }
                                 staleSeconds += 1
-                                if staleSeconds >= 3 {
+                                let staleThreshold = 3
+                                if staleSeconds >= staleThreshold {
                                     timer.invalidate()
                                     self.durationMismatchTimer = nil
-                                    print("\(self.logPrefix) ⏰ Duration mismatch timeout (data stale for 3s) — treating as finished")
+                                    let activeDesc = hasActiveDownloads ? ", active: [\(activeSegmentKeys.joined(separator: ", "))]" : ""
+                                    print("\(self.logPrefix) ⏰ Duration mismatch timeout (\(staleSeconds)s stall\(activeDesc)) — treating as finished")
                                     Task { @MainActor in
                                         await self.handleVideoFinishedDueToMismatch()
                                     }
@@ -1986,6 +2003,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // playerLoading with coordinatorWantsToPlay=true is NOT actually playing.
         if coordinatorWantsToPlay && player.timeControlStatus == .waitingToPlayAtSpecifiedRate { return true }
         return false
+    }
+
+    /// True when coordinator commanded play but AVPlayerItem is still loading (status=.unknown).
+    /// Prevents false stall detection: IPFS/HLS can take >3s before play() is even callable.
+    /// Returns false once item fails (.failed) or becomes ready (.readyToPlay), so genuine stalls
+    /// (item never transitions out of .unknown) are eventually caught by loadingTimeoutTask.
+    var isLoadingForCoordinator: Bool {
+        guard coordinatorWantsToPlay,
+              let item = player?.currentItem else { return false }
+        return item.status == .unknown
     }
 
     var isVideoAttachment: Bool {
