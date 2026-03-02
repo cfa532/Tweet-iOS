@@ -480,6 +480,11 @@ class VideoPlaybackCoordinator: ObservableObject {
                 await MainActor.run {
                     self.allVideos = newVideos
                     self.invalidateVisibleVideoCache()
+                    // Re-run preload: the initial preload may have used a stale allVideos
+                    // that was missing this embedded tweet's video (original tweet wasn't
+                    // cached yet). Now that the video list is complete, preload the correct
+                    // next videos.
+                    self.preloadVideosInScrollDirection()
                 }
             }
 
@@ -515,6 +520,8 @@ class VideoPlaybackCoordinator: ObservableObject {
                 await MainActor.run {
                     self.allVideos = newVideos
                     self.invalidateVisibleVideoCache()
+                    // Re-run preload (see addEmbeddedTweetVideos comment)
+                    self.preloadVideosInScrollDirection()
                 }
             }
         }

@@ -692,7 +692,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         }
                         return
                     }
-                    self.handleVideoLoadFailure(reason: "Player creation failed: \(error.localizedDescription)")
+                    let nsErr = error as NSError
+                    self.handleVideoLoadFailure(reason: "Player creation failed: \(nsErr.domain) \(nsErr.code)")
                 }
             }
         }
@@ -1064,6 +1065,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             print("\(logPrefix) ⏸️ requestPlayback(\(reason)): skipped, coordinatorWantsToPlay=false")
             return
         }
+        guard isVisible else {
+            print("\(logPrefix) 👻 requestPlayback(\(reason)): skipped, cell not visible")
+            return
+        }
 
         print("\(logPrefix) ▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
 
@@ -1357,12 +1362,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         (self.videoCoordinator ?? .shared).requestStartPlaybackIfStalled()
                     }
                 } else if item.status == .failed {
-                    let errorMsg = item.error?.localizedDescription ?? "Unknown error"
+                    let nsError = item.error.map { $0 as NSError }
+                    let errorMsg = nsError.map { "\($0.domain) \($0.code)" } ?? "Unknown error"
                     print("\(self.logPrefix) ❌ Player failed: \(errorMsg)")
-                    if let error = item.error {
-                        let nsError = error as NSError
-                        print("\(self.logPrefix) ❌ Error detail: domain=\(nsError.domain), code=\(nsError.code)")
-                    }
                     // Release the failed player from SharedAssetCache. Guard: don't clear
                     // if fullscreen player owns this video (would kill its streaming).
                     if let mid = self.attachment?.mid {
@@ -1372,7 +1374,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                             SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
                         }
                     }
-                    self.handleVideoLoadFailure(reason: "playerItem.status == .failed: \(errorMsg)")
+                    self.handleVideoLoadFailure(reason: "playerItem.status == .failed (\(errorMsg))")
                 }
             }
         }

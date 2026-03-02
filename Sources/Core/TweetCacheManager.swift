@@ -246,15 +246,18 @@ extension TweetCacheManager {
                             
                             // NOTE: baseUrl will be assigned on MainActor after all tweets are collected
                             
-                            // Skip retweets/quoted tweets whose original tweet is not available
+                            // Skip retweets/quoted tweets whose original tweet is not available.
+                            // Load into in-memory singleton so buildVideoListAsync can find
+                            // retweet/quoted tweet videos for correct preload ordering.
                             if let originalTweetId = tweet.originalTweetId, tweet.originalAuthorId != nil {
                                 if Tweet.getInstance(for: originalTweetId) == nil {
-                                    // Also check Core Data cache
                                     let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
                                     origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
                                     origRequest.fetchLimit = 1
-                                    let origCount = (try? self.context.count(for: origRequest)) ?? 0
-                                    if origCount == 0 {
+                                    if let cdOrigTweet = try? self.context.fetch(origRequest).first,
+                                       let _ = try? Tweet.from(cdTweet: cdOrigTweet) {
+                                        // Original tweet loaded into singleton — retweet can proceed
+                                    } else {
                                         continue
                                     }
                                 }

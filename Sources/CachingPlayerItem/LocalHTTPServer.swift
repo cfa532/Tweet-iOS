@@ -7,13 +7,13 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private let connection: NWConnection
     private let mediaID: String
     private let cacheStart: Int64
-    private let totalExpectedSize: Int64?
-    private let isProbeRequest: Bool
     private let cacheFileHandle: FileHandle?
     private let cacheFilePath: String?
     private let initialCachedSize: Int64
     private let contiguousSizeUpdate: (Int64) -> Void
     private let sessionCleanup: () -> Void
+    private let buildHeaders: (Int, [String: String]) -> Data
+    private let onTotalSizeKnown: ((Int64) -> Void)?
 
     private var sentBytesCount: Int64 = 0
     private var cachedBytesCount: Int64
@@ -26,32 +26,58 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         connection: NWConnection,
         mediaID: String,
         cacheStart: Int64,
-        totalExpectedSize: Int64?,
-        isProbeRequest: Bool,
         cacheFileHandle: FileHandle?,
         cacheFilePath: String?,
         initialCachedSize: Int64,
         contiguousSizeUpdate: @escaping (Int64) -> Void,
-        sessionCleanup: @escaping () -> Void
+        sessionCleanup: @escaping () -> Void,
+        buildHeaders: @escaping (Int, [String: String]) -> Data,
+        onTotalSizeKnown: ((Int64) -> Void)?
     ) {
         self.connection = connection
         self.mediaID = mediaID
         self.cacheStart = cacheStart
-        self.totalExpectedSize = totalExpectedSize
-        self.isProbeRequest = isProbeRequest
         self.cacheFileHandle = cacheFileHandle
         self.cacheFilePath = cacheFilePath
         self.initialCachedSize = initialCachedSize
         self.cachedBytesCount = initialCachedSize
         self.contiguousSizeUpdate = contiguousSizeUpdate
         self.sessionCleanup = sessionCleanup
+        self.buildHeaders = buildHeaders
+        self.onTotalSizeKnown = onTotalSizeKnown
         self.lastPersistedContiguousSize = initialCachedSize
-
-        if !isProbeRequest && cacheStart > initialCachedSize {
-            // Non-contiguous request - streaming only, no caching
-        }
     }
-    
+
+    // Forward IPFS response headers to AVPlayer, fixing only Content-Type.
+    // All other headers (Content-Range, Content-Length) are passed through as-is.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            return
+        }
+        var headers: [String: String] = [
+            "Content-Type": "video/mp4",
+            "Accept-Ranges": "bytes"
+        ]
+        if let cl = httpResponse.allHeaderFields["Content-Length"] as? String {
+            headers["Content-Length"] = cl
+        }
+        if let cr = httpResponse.allHeaderFields["Content-Range"] as? String {
+            headers["Content-Range"] = cr
+            // Parse total file size from "bytes X-Y/Z" for disk cache metadata
+            if let slash = cr.lastIndex(of: "/"),
+               let size = Int64(String(cr[cr.index(after: slash)...])) {
+                onTotalSizeKnown?(size)
+            }
+        }
+        let headerData = buildHeaders(httpResponse.statusCode, headers)
+        // Queue headers; NWConnection delivers them before subsequent data sends.
+        connection.send(content: headerData, completion: .contentProcessed { _ in })
+        completionHandler(.allow)
+    }
+
     // Receive data in chunks
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         autoreleasepool {
@@ -64,20 +90,17 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             connection.send(content: data, completion: .contentProcessed { _ in })
             sentBytesCount += chunkLength
 
-            // Write chunk to disk cache (if not probe request)
-            guard !isProbeRequest,
-                  let fileHandle = cacheFileHandle,
+            // Write chunk to disk cache (only if a cache file handle was provided)
+            guard let fileHandle = cacheFileHandle,
                   cachedBytesCount < maxCacheSize else {
                 return
             }
-            
+
             // Only write sequential data to avoid sparse files
-            guard writeOffset <= cachedBytesCount else {
-                return
-            }
-            
+            guard writeOffset <= cachedBytesCount else { return }
+
             var sizeToPersist: Int64?
-            
+
             writeLock.lock()
             defer {
                 writeLock.unlock()
@@ -85,26 +108,22 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                     contiguousSizeUpdate(size)
                 }
             }
-            
+
             let remainingAllowance = maxCacheSize - cachedBytesCount
             guard remainingAllowance > 0 else { return }
-            
+
             var bytesToWrite = min(chunkLength, remainingAllowance)
             var chunkToWrite = data.prefix(Int(bytesToWrite))
             var targetOffset = writeOffset
-            
+
             if targetOffset < cachedBytesCount {
                 let alreadyCached = cachedBytesCount - targetOffset
-                if alreadyCached >= bytesToWrite {
-                    return
-                }
+                if alreadyCached >= bytesToWrite { return }
                 bytesToWrite -= alreadyCached
-                
-                let trimmedData = data.dropFirst(Int(alreadyCached))
-                chunkToWrite = trimmedData.prefix(Int(bytesToWrite))
+                chunkToWrite = data.dropFirst(Int(alreadyCached)).prefix(Int(bytesToWrite))
                 targetOffset = cachedBytesCount
             }
-            
+
             do {
                 if #available(iOS 13.0, *) {
                     try fileHandle.seek(toOffset: UInt64(targetOffset))
@@ -113,33 +132,24 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                     fileHandle.seek(toFileOffset: UInt64(targetOffset))
                     fileHandle.write(chunkToWrite)
                 }
-                
                 let newEnd = targetOffset + bytesToWrite
-                if newEnd > cachedBytesCount {
-                    cachedBytesCount = newEnd
-                }
-                
+                if newEnd > cachedBytesCount { cachedBytesCount = newEnd }
                 let delta = cachedBytesCount - lastPersistedContiguousSize
                 if delta >= persistInterval || cachedBytesCount == maxCacheSize {
                     lastPersistedContiguousSize = cachedBytesCount
                     sizeToPersist = cachedBytesCount
                 }
             } catch {
-                print("❌ [PROGRESSIVE CACHE WRITE] Failed to write chunk for \(mediaID): \(error.localizedDescription)")
-            }
-            
-            if cachedBytesCount >= maxCacheSize {
-                print("⚠️ [PROGRESSIVE CACHE LIMIT] Reached 50MB cache limit for \(mediaID) - further data won't be cached")
+                print("❌ [PROGRESSIVE CACHE WRITE] Failed for \(mediaID): \(error.localizedDescription)")
             }
         }
     }
-    
+
     // Handle completion
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         var finalSizeToPersist: Int64?
 
         defer {
-            // Close file handle
             writeLock.lock()
             let finalSize = cachedBytesCount
             if finalSize > lastPersistedContiguousSize {
@@ -154,11 +164,7 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
             try? cacheFileHandle?.close()
             writeLock.unlock()
 
-            if let size = finalSizeToPersist {
-                contiguousSizeUpdate(size)
-            }
-
-            // Clean up the streaming session entry
+            if let size = finalSizeToPersist { contiguousSizeUpdate(size) }
             sessionCleanup()
         }
 
@@ -172,21 +178,18 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
                               nsError.code == NSURLErrorNetworkConnectionLost ||
                               nsError.code == NSURLErrorNotConnectedToInternet
             if isTransient {
-                // Don't BlackList transient errors — AVPlayer will re-request remaining bytes
-                print("⚠️ [DOWNLOAD \(shortId)\(startLabel)] Transient error (code \(nsError.code)), \(sentBytesCount / 1024)KB sent: \(error.localizedDescription)")
+                print("⚠️ [DOWNLOAD \(shortId)\(startLabel)] Transient error (\(nsError.domain) \(nsError.code)), \(sentBytesCount / 1024)KB sent")
             } else {
-                print("❌ [DOWNLOAD \(shortId)\(startLabel)] Failed: \(error.localizedDescription)")
+                print("❌ [DOWNLOAD \(shortId)\(startLabel)] Failed: \(nsError.domain) \(nsError.code)")
                 BlackList.shared.recordFailure(mediaID)
             }
-        } else if !isProbeRequest {
+        } else {
             print("✅ [DOWNLOAD \(shortId)\(startLabel)] Complete: \(sentBytesCount / 1024)KB")
         }
 
         // Send TCP FIN so AVPlayer detects end-of-body (Connection: close).
-        // Without this, AVPlayer waits indefinitely for more data when fewer
-        // than Content-Length bytes were sent (upstream failure / slow IPFS).
         connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
-                       completion: .contentProcessed { _ in })
+                        completion: .contentProcessed { _ in })
     }
 }
 
@@ -311,11 +314,10 @@ public class LocalHTTPServer: @unchecked Sendable {
     private let downloadingMediaIDsLock = NSLock()
     private let maxConcurrentVideoDownloads = 2
 
-    // Early reservation for progressive downloads: prevents duplicate byte-range downloads
-    // when two NWConnections request the same range before the async HEAD callback completes.
-    // Key format: "mediaID_requestedStart" (e.g., "QmS7eJeG_0").
-    private var progressiveReservations = Set<String>()
-    private let progressiveReservationsLock = NSLock()
+    // Tracks which mediaID_offset combos are actively writing to the disk cache.
+    // Only one writer per starting offset is allowed; parallel connections skip disk write.
+    private var progressiveCacheWriters: Set<String> = []
+    private let progressiveCacheWritersLock = NSLock()
     
     // Connection pool for efficient HTTP requests
     private var _connectionPool: URLSession?
@@ -482,9 +484,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         case .ready:
             return
         case .waiting(let error):
-            print("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error.localizedDescription)' – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener waiting with error '\(error)' – restarting")
         case .failed(let error):
-            print("[LocalHTTPServer] ⚠️ Listener failed with error '\(error.localizedDescription)' – restarting")
+            print("[LocalHTTPServer] ⚠️ Listener failed with error '\(error)' – restarting")
         case .cancelled:
             print("[LocalHTTPServer] ⚠️ Listener was cancelled – restarting")
         default:
@@ -756,10 +758,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         streamingSessionsLock.unlock()
 
-        // 3. Release progressive reservations so cancelled ranges can be re-requested
-        progressiveReservationsLock.lock()
-        progressiveReservations = progressiveReservations.filter { !$0.hasPrefix(mediaID) }
-        progressiveReservationsLock.unlock()
+        // 3. Release cache writer slot so a future request can write to disk
+        progressiveCacheWritersLock.lock()
+        progressiveCacheWriters = progressiveCacheWriters.filter { !$0.hasPrefix(mediaID) }
+        progressiveCacheWritersLock.unlock()
 
         // 4. Free concurrent download slot so other videos aren't permanently blocked
         downloadingMediaIDsLock.lock()
@@ -794,12 +796,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         streamingSessionsLock.unlock()
 
-        // 3. Release progressive reservations for cancelled videos
-        progressiveReservationsLock.lock()
-        progressiveReservations = progressiveReservations.filter { key in
+        // 3. Release cache writer slots for off-screen videos
+        progressiveCacheWritersLock.lock()
+        progressiveCacheWriters = progressiveCacheWriters.filter { key in
             keepMediaIDs.contains(where: { key.hasPrefix($0) })
         }
-        progressiveReservationsLock.unlock()
+        progressiveCacheWritersLock.unlock()
 
         // 4. Free concurrent download slots for off-screen mediaIDs only
         clearVideoDownloadTracking(except: keepMediaIDs)
@@ -907,10 +909,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         streamingSessionsLock.unlock()
 
-        // 3. Release progressive reservations so the video can retry
-        progressiveReservationsLock.lock()
-        progressiveReservations = progressiveReservations.filter { !$0.hasPrefix(mediaID) }
-        progressiveReservationsLock.unlock()
+        // 3. Release cache writer slot so a future request can write to disk
+        progressiveCacheWritersLock.lock()
+        progressiveCacheWriters = progressiveCacheWriters.filter { !$0.hasPrefix(mediaID) }
+        progressiveCacheWritersLock.unlock()
 
         // 4. Free concurrent download slot so other videos aren't permanently blocked
         downloadingMediaIDsLock.lock()
@@ -1475,12 +1477,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         // This request becomes the downloader — mark active, fetch, then mark completed.
+        // NOTE: HLS segments are NOT tracked in downloadingMediaIDs (progressive-only
+        // concurrent limit). They are tracked via activeDownloadsActor for dedup/cancel.
         await activeDownloadsActor.markDownloadStarted(for: downloadKey)
-        trackVideoDownloadStarted(for: mediaID)
 
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
             Task { await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey) }
-            self.trackVideoDownloadCompleted(for: mediaID)
         }
     }
     
@@ -1510,7 +1512,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                     return
                 }
 
-                print("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(error.localizedDescription)")
+                print("❌ [PROGRESSIVE HEAD] Failed for \(mediaID): \(nsError.domain) \(nsError.code)")
                 if nsError.code != NSURLErrorCancelled {
                     BlackList.shared.recordFailure(mediaID)
                 }
@@ -1604,288 +1606,100 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
         
-        // STREAMING: First get file size with HEAD, then stream data in chunks
         let requestedStart = rangeStart ?? 0
+        let shortId = shortMID(mediaID)
 
-        // Reserve this byte-range download BEFORE the async HEAD call to prevent
-        // duplicate downloads when two NWConnections request the same range concurrently.
-        // Without this, both connections pass the streamingSessions dedup check inside
-        // the HEAD callback because neither has registered yet.
-        let reservationKey = "\(mediaID)_\(requestedStart)"
-        progressiveReservationsLock.lock()
-        if progressiveReservations.contains(reservationKey) {
-            progressiveReservationsLock.unlock()
-            // Another connection is already handling this exact range — close this one.
-            // AVPlayer will get data from the first connection's response.
-            connection.cancel()
-            return
+        // Only the first connection at each starting offset writes to disk cache.
+        // Parallel connections for the same range just stream without caching.
+        let cacheKey = "\(mediaID)_\(requestedStart)"
+        progressiveCacheWritersLock.lock()
+        let shouldCache = !progressiveCacheWriters.contains(cacheKey)
+        if shouldCache { progressiveCacheWriters.insert(cacheKey) }
+        progressiveCacheWritersLock.unlock()
+
+        // Set up disk cache file handle for the writer connection
+        var cacheFileHandle: FileHandle? = nil
+        var cacheFilePath: String? = nil
+        let cacheFileURL = progressiveCacheFileURL(for: mediaID)
+        var initialCachedSize = min(cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL), progressiveDiskCacheLimit)
+
+        if shouldCache {
+            let cacheDir = progressiveCacheDirectory(for: mediaID)
+            try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            let path = cacheFileURL.path
+            if !FileManager.default.fileExists(atPath: path) {
+                FileManager.default.createFile(atPath: path, contents: nil)
+            }
+            if initialCachedSize < progressiveDiskCacheLimit,
+               let fh = try? FileHandle(forUpdating: cacheFileURL) {
+                cacheFileHandle = fh
+                cacheFilePath = path
+                try? fh.seek(toOffset: UInt64(requestedStart))
+            }
         }
-        progressiveReservations.insert(reservationKey)
-        progressiveReservationsLock.unlock()
 
-        self.fetchHEADWithRetry(url: fullRealURL, mediaID: mediaID) { [weak self] httpResponse in
+        let contiguousUpdate: (Int64) -> Void = { [weak self] newSize in
             guard let self = self else { return }
-
-            guard let httpResponse = httpResponse else {
-                self.progressiveReservationsLock.lock()
-                self.progressiveReservations.remove(reservationKey)
-                self.progressiveReservationsLock.unlock()
-                self.sendResponse(connection: connection, statusCode: 500, headers: [:], body: nil)
-                return
+            self.queue.async {
+                self.storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: newSize)
             }
-
-            // Get total file size
-            var totalFileSize: Int64?
-            if let contentLength = httpResponse.allHeaderFields["Content-Length"] as? String, let size = Int64(contentLength) {
-                totalFileSize = size
-                self.storeProgressiveTotalSize(mediaID: mediaID, totalSize: size)
-            } else {
-                print("⚠️ [PROGRESSIVE HEAD] \(mediaID): totalSize unknown")
-            }
-            
-            // Calculate response size based on what AVPlayer actually requested
-            let requestedSize: Int64
-            if let end = rangeEnd {
-                requestedSize = end - requestedStart + 1
-            } else if let total = totalFileSize {
-                requestedSize = total - requestedStart
-            } else {
-                requestedSize = 0
-            }
-            
-            // Build response headers - match exactly what AVPlayer requested
-            var responseHeaders: [String: String] = [
-                "Content-Type": "video/mp4",
-                "Content-Length": "\(requestedSize)",
-                "Accept-Ranges": "bytes"
-            ]
-            
-            if rangeHeader != nil, let totalSize = totalFileSize {
-                let actualEnd = rangeEnd ?? (totalSize - 1)
-                responseHeaders["Content-Range"] = "bytes \(requestedStart)-\(actualEnd)/\(totalSize)"
-            }
-            
-            let statusCode = rangeHeader != nil ? 206 : 200
-            
-            // Send HTTP headers first (buildHTTPHeaderData adds Connection: close)
-            let headerData = self.buildHTTPHeaderData(statusCode: statusCode, headers: responseHeaders)
-            
-            let resolvedRequestedEnd: Int64? = {
-                if let end = rangeEnd {
-                    return end
-                } else if let total = totalFileSize {
-                    return total - 1
-                }
-                return nil
-            }()
-            
-            let cacheFileURL = self.progressiveCacheFileURL(for: mediaID)
-            let contiguousSize = self.cachedContiguousSize(for: mediaID, cacheFileURL: cacheFileURL)
-            let cachedOverlapStart = max(requestedStart, Int64(0))
-            var cachedSegmentLength: Int64 = 0
-            if FileManager.default.fileExists(atPath: cacheFileURL.path), contiguousSize > cachedOverlapStart {
-                let overlapEnd = min(contiguousSize - 1, resolvedRequestedEnd ?? (contiguousSize - 1))
-                if overlapEnd >= cachedOverlapStart {
-                    let potentialLength = overlapEnd - cachedOverlapStart + 1
-                    cachedSegmentLength = requestedSize > 0 ? min(potentialLength, requestedSize) : potentialLength
-                }
-            }
-            
-            connection.send(content: headerData, completion: .contentProcessed { [weak self] headerError in
-                guard let self = self else { return }
-                if let headerError = headerError {
-                    self.progressiveReservationsLock.lock()
-                    self.progressiveReservations.remove(reservationKey)
-                    self.progressiveReservationsLock.unlock()
-                    print("⚠️ [PROGRESSIVE HEADERS] Failed to send headers for \(mediaID): \(headerError.localizedDescription)")
-                    return
-                }
-
-
-                guard method.uppercased() == "GET" else {
-                    self.progressiveReservationsLock.lock()
-                    self.progressiveReservations.remove(reservationKey)
-                    self.progressiveReservationsLock.unlock()
-                    return
-                }
-                
-                let startNetworkStreaming: () -> Void = {
-                    let remainderNeeded = requestedSize <= 0 || cachedSegmentLength < requestedSize
-                    guard remainderNeeded else {
-                        // Entire range served from cache — release reservation
-                        self.progressiveReservationsLock.lock()
-                        self.progressiveReservations.remove(reservationKey)
-                        self.progressiveReservationsLock.unlock()
-                        return
-                    }
-
-                    let streamStart = requestedStart + cachedSegmentLength
-                    if let resolvedEnd = resolvedRequestedEnd, streamStart > resolvedEnd {
-                        self.progressiveReservationsLock.lock()
-                        self.progressiveReservations.remove(reservationKey)
-                        self.progressiveReservationsLock.unlock()
-                        return
-                    }
-                    
-                    var streamRequest = URLRequest(url: fullRealURL)
-                    streamRequest.httpMethod = method
-                    streamRequest.timeoutInterval = 90
-                    
-                    var forwardedRange: String?
-                    if let resolvedEnd = resolvedRequestedEnd {
-                        forwardedRange = "bytes=\(streamStart)-\(resolvedEnd)"
-                    } else if streamStart > requestedStart || rangeHeader != nil {
-                        forwardedRange = "bytes=\(streamStart)-"
-                    }
-                    
-                    if let rangeValue = forwardedRange {
-                        streamRequest.setValue(rangeValue, forHTTPHeaderField: "Range")
-                    } else if let originalRange = rangeHeader {
-                        streamRequest.setValue(originalRange, forHTTPHeaderField: "Range")
-                    }
-                    
-                    var cacheFileHandle: FileHandle?
-                    var cacheFilePath: String?
-                    var initialCachedSize = min(contiguousSize, self.progressiveDiskCacheLimit)
-                    
-                    if !isProbeRequest {
-                        let cacheDir = self.progressiveCacheDirectory(for: mediaID)
-                        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-                        
-                        cacheFilePath = cacheFileURL.path
-                        let fileManager = FileManager.default
-                        if !fileManager.fileExists(atPath: cacheFilePath!) {
-                            fileManager.createFile(atPath: cacheFilePath!, contents: nil)
-                        }
-                        
-                        if initialCachedSize == 0,
-                           let attributes = try? fileManager.attributesOfItem(atPath: cacheFilePath!),
-                           let sizeNumber = attributes[.size] as? NSNumber {
-                            initialCachedSize = min(sizeNumber.int64Value, self.progressiveDiskCacheLimit)
-                            if initialCachedSize > 0 {
-                                self.storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: initialCachedSize)
-                            }
-                        }
-                        
-                        if initialCachedSize >= self.progressiveDiskCacheLimit {
-                            print("⚠️ [PROGRESSIVE CACHE LIMIT] Disk cache already at 50MB for \(mediaID) - skipping additional caching")
-                            cacheFileHandle = nil
-                            cacheFilePath = nil
-                        } else {
-                            #if swift(>=5.3)
-                            if #available(iOS 13.0, macOS 10.15, *) {
-                                do {
-                                    cacheFileHandle = try FileHandle(forUpdating: cacheFileURL)
-                                } catch {
-                                    print("⚠️ [PROGRESSIVE CACHE] Failed to open cache file for updating (\(mediaID)): \(error.localizedDescription)")
-                                    cacheFileHandle = try? FileHandle(forWritingTo: cacheFileURL)
-                                }
-                            } else {
-                                cacheFileHandle = FileHandle(forUpdatingAtPath: cacheFilePath!)
-                            }
-                            #else
-                            cacheFileHandle = FileHandle(forUpdatingAtPath: cacheFilePath!)
-                            #endif
-                            
-                            if cacheFileHandle == nil {
-                                cacheFileHandle = FileHandle(forWritingAtPath: cacheFilePath!)
-                            }
-                            
-                            if let fileHandle = cacheFileHandle {
-                                do {
-                                    try fileHandle.seek(toOffset: UInt64(streamStart))
-                                } catch {
-                                    print("⚠️ [PROGRESSIVE CACHE] Failed to seek cache file for \(mediaID) to \(streamStart): \(error.localizedDescription)")
-                                }
-                            } else {
-                                print("⚠️ [PROGRESSIVE CACHE] Could not obtain writable handle for \(mediaID) - caching disabled for this request")
-                            }
-                        }
-                    }
-                    
-                    let config = URLSessionConfiguration.default
-                    config.timeoutIntervalForRequest = 90
-                    config.timeoutIntervalForResource = 300
-                    
-                    let contiguousUpdate: (Int64) -> Void = { [weak self] newSize in
-                        guard let self = self else { return }
-                        self.queue.async {
-                            self.storeProgressiveContiguousSize(mediaID: mediaID, contiguousSize: newSize)
-                        }
-                    }
-                    
-                    let sessionKey = mediaID + "_\(streamStart)"
-                    self.trackVideoDownloadStarted(for: mediaID)
-                    let sessionCleanup: () -> Void = { [weak self] in
-                        guard let self = self else { return }
-                        self.streamingSessionsLock.lock()
-                        self.streamingSessions.removeValue(forKey: sessionKey)
-                        self.streamingSessionsLock.unlock()
-                        self.progressiveReservationsLock.lock()
-                        self.progressiveReservations.remove(reservationKey)
-                        self.progressiveReservationsLock.unlock()
-                        self.trackVideoDownloadCompleted(for: mediaID)
-                    }
-
-                    let delegate = StreamingDownloadDelegate(
-                        connection: connection,
-                        mediaID: mediaID,
-                        cacheStart: streamStart,
-                        totalExpectedSize: totalFileSize,
-                        isProbeRequest: isProbeRequest,
-                        cacheFileHandle: cacheFileHandle,
-                        cacheFilePath: cacheFilePath,
-                        initialCachedSize: initialCachedSize,
-                        contiguousSizeUpdate: contiguousUpdate,
-                        sessionCleanup: sessionCleanup
-                    )
-
-                    let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-
-                    self.streamingSessionsLock.lock()
-                    if self.streamingSessions[sessionKey] != nil {
-                        // Already downloading this exact range — keep existing, skip duplicate
-                        self.streamingSessionsLock.unlock()
-                        session.invalidateAndCancel()
-                        // Balance the trackVideoDownloadStarted call above
-                        self.trackVideoDownloadCompleted(for: mediaID)
-                        self.progressiveReservationsLock.lock()
-                        self.progressiveReservations.remove(reservationKey)
-                        self.progressiveReservationsLock.unlock()
-                        let shortId = self.shortMID(mediaID)
-                        print("♻️ [DOWNLOAD \(shortId)] Skipped duplicate download from byte \(streamStart)")
-                        connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
-                            connection.cancel()
-                        })
-                        return
-                    }
-                    self.streamingSessions[sessionKey] = session
-                    self.streamingSessionsLock.unlock()
-
-                    let streamTask = session.dataTask(with: streamRequest)
-                    streamTask.resume()
-
-                    let shortId = self.shortMID(mediaID)
-                    let totalStr = totalFileSize.map { "\($0 / 1024)KB" } ?? "unknown size"
-                    print("📡 [DOWNLOAD \(shortId)] Started progressive stream from byte \(streamStart) (\(totalStr) total)")
-                }
-                
-                if cachedSegmentLength > 0 {
-                    let _ = cachedOverlapStart + cachedSegmentLength - 1
-                    self.streamFileRange(
-                        connection: connection,
-                        fileURL: cacheFileURL,
-                        offset: cachedOverlapStart,
-                        length: cachedSegmentLength,
-                        completion: startNetworkStreaming
-                    )
-                } else {
-                    startNetworkStreaming()
-                }
-            })
         }
+
+        // Use a unique session key per connection so parallel connections don't clobber each other
+        let sessionKey = "\(mediaID)_\(requestedStart)_\(ObjectIdentifier(connection).hashValue)"
+        trackVideoDownloadStarted(for: mediaID)
+        let sessionCleanup: () -> Void = { [weak self] in
+            guard let self = self else { return }
+            self.streamingSessionsLock.lock()
+            self.streamingSessions.removeValue(forKey: sessionKey)
+            self.streamingSessionsLock.unlock()
+            self.trackVideoDownloadCompleted(for: mediaID)
+            if shouldCache {
+                self.progressiveCacheWritersLock.lock()
+                self.progressiveCacheWriters.remove(cacheKey)
+                self.progressiveCacheWritersLock.unlock()
+            }
+        }
+
+        let delegate = StreamingDownloadDelegate(
+            connection: connection,
+            mediaID: mediaID,
+            cacheStart: requestedStart,
+            cacheFileHandle: cacheFileHandle,
+            cacheFilePath: cacheFilePath,
+            initialCachedSize: initialCachedSize,
+            contiguousSizeUpdate: contiguousUpdate,
+            sessionCleanup: sessionCleanup,
+            buildHeaders: { [weak self] statusCode, headers in
+                self?.buildHTTPHeaderData(statusCode: statusCode, headers: headers) ?? Data()
+            },
+            onTotalSizeKnown: { [weak self] totalSize in
+                self?.storeProgressiveTotalSize(mediaID: mediaID, totalSize: totalSize)
+            }
+        )
+
+        // Forward AVPlayer's request directly to IPFS and pipe back the response.
+        // IPFS provides correct Content-Range / Content-Length; we only fix Content-Type.
+        var streamRequest = URLRequest(url: fullRealURL)
+        streamRequest.httpMethod = "GET"
+        if let range = rangeHeader {
+            streamRequest.setValue(range, forHTTPHeaderField: "Range")
+        }
+        streamRequest.timeoutInterval = 90
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 300
+
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        streamingSessionsLock.lock()
+        streamingSessions[sessionKey] = session
+        streamingSessionsLock.unlock()
+
+        session.dataTask(with: streamRequest).resume()
+        print("📡 [DOWNLOAD \(shortId)] range=\(rangeHeader ?? "full")\(shouldCache ? "" : " (no-cache)")")
     }
-    
+
     // MARK: - Progressive Video Cache Helpers
     
     private func progressiveCacheDirectory(for mediaID: String) -> URL {
@@ -3063,7 +2877,7 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
                                completion: .contentProcessed { _ in })
             }
             if nsError.code != NSURLErrorCancelled {
-                print("⚠️ [HLS SEGMENT \(shortId)] \(segmentLabel) failed, \(diskBuffer.count / 1024)KB downloaded: \(error.localizedDescription)")
+                print("⚠️ [HLS SEGMENT \(shortId)] \(segmentLabel) failed, \(diskBuffer.count / 1024)KB downloaded: \(nsError.domain) \(nsError.code)")
             }
             return
         }
