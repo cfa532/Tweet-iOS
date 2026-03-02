@@ -1068,7 +1068,10 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
         if delegate.isActuallyPlaying { return }  // Primary is healthy — nothing to do
-        // Primary is stuck — reset and restart
+        // Primary is stuck — reset and restart. identifyPrimaryVideo naturally prefers a
+        // different candidate when one exists (direction fix picks bottommost when scrolling down).
+        // Do NOT set failedPrimaryIdentifier: if this is the only visible video it would block
+        // it permanently; if another video is available the direction fix picks it anyway.
         print("🎬 [COORD] stallCheck: primary \(shortIdent(primaryId)) is stuck (isActuallyPlaying=false), restarting")
         phase = .idle
         currentlyPlayingVideoIds.removeAll()
@@ -1513,14 +1516,15 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Identify the primary video based on scroll direction.
-    /// Visibility depends on video (media cell) only — visibleVideos is already filtered by onScreenMediaCells.
-    /// Scrolling down: first (topmost) on-screen video with delegate. Scrolling up: last (bottommost).
+    /// visibleVideos is in feed order (index 0 = topmost on screen, last = bottommost).
+    /// Scrolling down: pick bottommost (the video just scrolled into view, where attention is).
+    /// Scrolling up: pick topmost (the video just scrolled into view from above).
     private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
         guard tableView?.window != nil else {
             return visibleVideos.first
         }
 
-        let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
+        let candidates = scrollDirection ? visibleVideos.reversed() : visibleVideos
 
         // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
         // Skip failedPrimaryIdentifier and finishedPrimaryIdentifier to avoid re-selecting.
