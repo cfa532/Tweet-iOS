@@ -127,6 +127,9 @@ class VideoPlaybackCoordinator: ObservableObject {
     
     /// Timer for debouncing video playback (0.2s delay)
     private var playbackDebounceTimer: Timer?
+    /// The video identifier that the pending debounce timer was started for.
+    /// If the top candidate changes, the timer resets; if it stays the same, the timer keeps running.
+    private var pendingPrimaryCandidate: String?
 
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
@@ -979,6 +982,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Cancel all timers
         playbackDebounceTimer?.invalidate()
         playbackDebounceTimer = nil
+        pendingPrimaryCandidate = nil
         cancelDownloadsTimer?.invalidate()
         cancelDownloadsTimer = nil
         overlayUncoverPlaybackTimer?.invalidate()
@@ -1381,13 +1385,25 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
     
     /// Schedule primary video playback after a short debounce (0.3s).
-    /// Used during scrolling to avoid rapid primary switches that waste bandwidth.
+    /// Per-candidate: the timer starts from when a specific video first becomes the top candidate
+    /// and is NOT reset as long as that same video remains the top candidate. Only resets when
+    /// the top candidate changes (a different video scrolled into the leading position).
     private func scheduleStartPrimary() {
+        let topCandidate = identifyPrimaryVideo()?.identifier
+
+        // If the timer is already running for this exact candidate, let it keep ticking.
+        if playbackDebounceTimer != nil && topCandidate == pendingPrimaryCandidate {
+            return
+        }
+
+        // Candidate changed (or no timer running) — restart the clock for the new candidate.
         playbackDebounceTimer?.invalidate()
+        pendingPrimaryCandidate = topCandidate
         let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.playbackDebounceTimer = nil
+                self.pendingPrimaryCandidate = nil
                 if self.phase == .idle && !self.visibleVideos.isEmpty {
                     self.startPrimaryVideoPlayback()
                 }
@@ -1404,6 +1420,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Cancel any pending debounced start — immediate caller wins
         playbackDebounceTimer?.invalidate()
         playbackDebounceTimer = nil
+        pendingPrimaryCandidate = nil
 
         guard !isPlaybackSuppressedByOverlay else {
             print("🎬 [COORD] startPrimary: blocked by overlay")
