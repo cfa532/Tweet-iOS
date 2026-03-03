@@ -1,346 +1,177 @@
-# Video Playback Algorithm
+# Video Player Comprehensive Algorithm
 
-**Last Updated**: January 5, 2026  
-**Status**: ✅ Production (Conservative Recovery + Fullscreen Resume) ⚠️ Watchdog Disabled
+## Components
+- **MediaCellUIView**: UIKit cell managing AVPlayer lifecycle, KVO observers, state machine
+- **VideoPlaybackCoordinator**: Per-feed coordinator selecting primary video, managing visibility
+- **SharedAssetCache**: Player creation, caching, HLS resolution, memory management
+- **LocalHTTPServer**: Transparent caching proxy (see localhttpserver-algorithm.md)
 
-## Overview
-
-This document describes the algorithm for video playback in the Tweet-iOS app, specifically for sequential video playback within media grids and individual video player management. The algorithm handles video lifecycle, background/foreground transitions, fullscreen interactions, and automatic resume functionality.
-
-> **Note:** As of January 5, 2026, a new **VideoPlaybackCoordinator** system has been implemented for tweet feed videos. This provides intelligent orchestration with survey phase, primary video selection, and sequential playback. The algorithm described in this document still applies to **MediaGridView** (multi-video tweets), while feed-level orchestration is now handled by `VideoPlaybackCoordinator`. See [NEW_VIDEO_ORCHESTRATION.md](NEW_VIDEO_ORCHESTRATION.md) for details.
-
-## Core Components
-
-### 1. VideoManager
-- **Purpose**: Manages sequential video playback state across multiple videos
-- **Type**: `ObservableObject` for SwiftUI state management
-- **Key Properties**:
-  - `videoMids: [String]` - Array of video media IDs in sequence
-  - `currentVideoIndex: Int` - Index of currently playing video
-  - `isSequentialPlaybackEnabled: Bool` - Whether sequential playback is active
-
-### 2. MediaGridView
-- **Purpose**: Orchestrates video playback for a collection of media attachments
-- **Responsibilities**:
-  - Setup and teardown of sequential playback
-  - Reset video states when grid becomes visible
-  - Force refresh MediaCell components when needed
-
-### 3. MediaCell
-- **Purpose**: Individual media item container that interfaces with SimpleVideoPlayer
-- **Key Features**:
-  - Responds to VideoManager state changes
-  - Handles visibility detection
-  - Manages force refresh triggers from MediaGridView
-
-### 4. SimpleVideoPlayer
-- **Purpose**: Core video player component with autoplay logic
-- **Key Features**:
-  - KVO-based player status monitoring
-  - Automatic playback when player becomes ready
-  - Shared video player instances via SharedAssetCache
-
-## Algorithm Flow
-
-### 1. MediaGrid Initialization
-
+## State Machine (MediaCellUIView)
 ```
-MediaGridView.onAppear:
-1. Set isVisible = true
-2. Extract video MIDs from attachments
-3. Stop any existing sequential playback
-4. If multiple videos:
-   - Setup sequential playback with videoMids
-   - Reset all video players to beginning
-   - Set isSequentialPlaybackEnabled = true
-5. If single video:
-   - Setup video MID but disable sequential playback
-   - Reset single video player
-   - Force refresh MediaCell (forceRefreshTrigger += 1)
+noContent → thumbnail → playerLoading → playerReady → playing ⇄ paused
+                                    ↘ failed (retry button)
+```
+- `transitionTo()` is single source of truth — controls imageView, videoPlayerView, spinner, retryButton visibility
+- `.playerLoading`: Shows thumbnail (prevents black flash during buffering)
+- `.playerReady`: First frame rendered, paused, ready for coordinator command
+- `.playing`: Video layer visible, thumbnail hidden
+
+## Player Acquisition (3 tiers)
+
+### Tier 1: Synchronous Cache (VideoStateCache)
+- `VideoStateCache.shared.getCachedState(for: mid)` → instant reuse
+- Validates: `currentItem != nil`, seeks finished videos to zero
+
+### Tier 2: Async Loading (SharedAssetCache)
+- `acquirePlayerAsync()` → `SharedAssetCache.shared.getOrCreatePlayer()`
+- On success: `configurePlayer(newPlayer)` on MainActor
+- On blacklist error (code -2): transition to `.thumbnail`, no retry
+- On network error: `handleVideoLoadFailure()`
+
+### Tier 3: SharedAssetCache.getOrCreatePlayer()
+1. **Blacklist check**: Throw error -2 if blacklisted
+2. **Cached player**: Health check (currentItem != nil, not failed, no errors)
+3. **In-flight dedup**: Join existing `inFlightPlayerCreations[mediaID]`
+4. **Concurrency gate**: `canStartCreation(isHighPriority:)`
+   - High-priority (visible cell): uses both slots (max 2)
+   - Low-priority (preload): only when 0 active slots used
+5. **Queue**: High-priority at front, low-priority at back
+
+## Player Configuration Sequence
+```
+configurePlayer(newPlayer)
+  → preparePlayerForConfiguration(): pause, mute, throttle buffer (3s), disable network-while-paused
+  → registerFirstFrameCallback(): onReadyForDisplay → capture frame → .playerReady
+  → attachPlayerToLayer(): suppress CALayer animations
+  → setupPlayerObservers(): KVO for item.status + timeControlStatus
+  → handleAlreadyReadyPlayer(): immediate play if already readyToPlay
+  → deferVideoOutputAttachment(): AVPlayerItemVideoOutput on next run loop
 ```
 
-### 2. Video Player State Determination
+## Bandwidth Throttling
+- **Default** (preparePlayerForConfiguration): `preferredForwardBufferDuration = 3`, `canUseNetworkResourcesForLiveStreamingWhilePaused = false`, `automaticallyWaitsToMinimizeStalling = false`
+- **Primary** (shouldPlayVideo): `preferredForwardBufferDuration = 0` (unlimited), `canUseNetworkResourcesForLiveStreamingWhilePaused = true`
+- **Pause/Stop**: reverts to 3s buffer, no network-while-paused
+- **Preload** (SharedAssetCache.preloadPlayer): 3s buffer, no network-while-paused
+- Only the primary video gets unlimited bandwidth; all others are throttled
+
+## KVO Observers
+
+### item.status Observer
+- **readyToPlay**: If coordinator wants play → `requestPlaybackStartIfNeeded(reason: "statusKVO-ready")`
+- **failed**: Clear player from SharedAssetCache
+
+### timeControlStatus Observer
+- **playing**: Cancel duration mismatch timer, hide spinner, reveal player layer
+- **waitingToPlayAtSpecifiedRate**:
+  - Guard: `isVideoAtEnd()` prevents infinite play/wait loop at end
+  - Show spinner (buffering)
+  - Start duration mismatch detection (see below)
+- **paused**: Cancel mismatch timer
+
+## Duration Mismatch Detection
+**Problem**: IPFS/HLS sometimes declares duration (e.g. 11.2s) but only delivers data up to 9.8s.
 
 ```
-VideoManager.shouldPlayVideo(for mid):
-1. Check if sequential playback is enabled
-2. If enabled:
-   - Return true if mid matches current video in sequence
-   - Return false otherwise
-3. If disabled (single video):
-   - Return true if mid exists in videoMids
-4. Return false if video not in managed set
+Condition: loaded_end < declared_duration AND current_pos > loaded_end - 1.0
+Trigger: Start 1s repeating timer
+Monitor: Check if loaded_end grows each tick
+Threshold: 3 seconds of no growth → handleVideoFinishedDueToMismatch()
+```
+Bypasses normal finish guard (timeUntilEnd will never reach 0).
+
+## requestPlaybackStartIfNeeded()
+**Guards**: `coordinatorWantsToPlay == true` AND `isVisible == true`
+**Flow**: `playWithVolumeFadeIn()` → `startPlaybackWithFade()` → `actuallyStartPlayback()`
+- Show player layer, transition to `.playing`
+- Set volume 0, call `player.play()`, fade volume to 1.0 over 0.3s
+
+## Coordinator Commands (MediaCellDelegate)
+
+### shouldPlayVideo
+- Set `coordinatorWantsToPlay = true`
+- If `.playerReady`: `requestPlaybackStartIfNeeded()` immediately
+- If `.failed`: cleanup and retry (acquire new player)
+- If player not ready: show `.playerLoading`, trigger async setup, KVO triggers play when ready
+- If finished: seek to zero before playing
+
+### shouldPauseVideo
+- Set `coordinatorWantsToPlay = false`
+- Save position, capture last frame (throttled 0.75s), fade out, pause
+
+### shouldStopVideo
+- Set `coordinatorWantsToPlay = false`
+- If loading + not visible: release player immediately
+- If loading + visible: pause (allow preload to complete)
+- If playing: transition to paused
+
+## VideoPlaybackCoordinator
+
+### Primary Video Selection
+- `scheduleStartPrimary()` → `identifyPrimaryVideo()` → `startPrimaryVideoPlayback()`
+- **Fast path**: cached ready player → play immediately (skip debounce)
+- **Slow path**: 0.3s debounce per candidate
+- During scroll: primary stays until it leaves `onScreenMediaCells` — no mid-scroll switching
+- `updateOnScreenMediaCells()` handles primary leaving screen → idle → select new primary
+
+### Per-Feed Instances (Phase 5)
+- Main feed: `.shared` singleton
+- Profile/list feeds: create own coordinator via `@StateObject`
+
+### Coordinator Chain
+```
+TweetListView (@StateObject) → TweetTableViewController → TweetTableViewCell
+  → TweetCellContentView → TweetBodyUIView → MediaGridUIView → MediaCellUIView
 ```
 
-### 3. MediaCell State Management
+### Visibility Tracking
+- `visibleTweetIds`: Tweet IDs on screen
+- `onScreenMediaCells`: Media cell identifiers within viewport (50% visibility)
+- `updateVisibleTweetsForVideoPlayback()`: Called on scroll, updates visibility sets
 
-```
-MediaCell.onAppear:
-1. Set isVisible = true immediately
-2. If attachment is video:
-   - Set shouldLoadVideo = true
-   - Update play state based on VideoManager.shouldPlayVideo()
+### Preloading (scroll-stop only)
+- `performPreloadOnScrollStop(nearbyTweetIds:)`: Called on scroll stop + initial load
+- **Preload**: next 2 videos in scroll direction → `preloadPlayer()` (full AVPlayer)
+- **Nearby**: adjacent tweet videos → `preloadAsset()` (asset only)
+- Stale preloads cancelled when sets change; completed players stay in LRU cache
+- `activePreloadMids` / `activeNearbyMids`: explicit tracked sets (replaced `preloadedVideoMids`)
 
-MediaCell.onChange(forceRefreshTrigger):
-1. Get new play state from VideoManager
-2. Update local play state if different
-3. Trigger SimpleVideoPlayer refresh
-```
+### Scroll Lifecycle
+- `onScrollStarted()`: 2s grace timer — if scroll >2s, cancel preload/nearby downloads
+- Scroll stop: `triggerPreloadOnScrollStop()` from TweetTableViewController
+- No preloading during active scroll — bandwidth reserved for primary video
 
-### 4. Video Player Autoplay Logic
+## Frame Capture (AVPlayerItemVideoOutput)
+- **Priority 1**: AVPlayerItemVideoOutput → try 5 candidate times → downscale to 720px
+- **Priority 2**: Same but synchronous on main thread
+- **Priority 3**: Layer snapshot via UIGraphicsImageRenderer
+- **Priority 4**: Already-cached thumbnail from SharedAssetCache
+- **Throttle**: 0.75s minimum between captures
 
-```
-SimpleVideoPlayer Initialization:
-1. Create player using SharedAssetCache (shared instances)
-2. Setup KVO observer for player item status
-3. If player already ready:
-   - Check VideoManager approval (for MediaCell)
-   - Start playback immediately if autoPlay = true AND approved
-4. If player not ready:
-   - Wait for KVO status change to .readyToPlay
+## Memory Management (SharedAssetCache)
 
-SimpleVideoPlayer KVO Callback:
-1. When status becomes .readyToPlay:
-   - Set isLoading = false
-   - Update duration
-   - For MediaCell: Check VideoManager.shouldPlayVideo(for: mid)
-   - If autoPlay = true AND approved (if MediaCell) AND not already playing:
-     - Start playback (player.play())
-     - Set playbackState = .playing
+### Protection
+- `foregroundProtectedMids`: visible + preloaded + in-flight + VideoLoadingManager visible
+- Protected videos never evicted by LRU cleanup
 
-Buffer Data Observer:
-1. When sufficient data buffered (hasEnoughData):
-   - For MediaCell: Check VideoManager approval
-   - If approved: Show first frame and auto-play
-   - If not approved: Show first frame but wait for approval
-```
+### Cleanup (10s interval)
+1. Identify expired keys (> 15s since last access)
+2. Skip protected mids
+3. Release player, remove from all caches
+4. Manage cache size, clean orphaned mappings
 
-**VideoManager Approval Checks:**
-- All auto-play entry points check `videoManager?.shouldPlayVideo(for: mid)` for MediaCell mode
-- Prevents multiple videos from playing simultaneously
-- Ensures only the current video in sequential playback plays
-- Defaults to `false` if VideoManager is not ready (prevents unintended playback)
+### Release on Scroll-Out
+- `releasePlayerImmediately()`: Called when cell scrolls out of view
+- Cancels loading/preload tasks, stops buffering, releases player
+- **Preserves disk cache** for fast reload when scrolling back
 
-### 5. Sequential Playback Progression
+## HLS URL Resolution (SharedAssetCache)
+1. **Fast path**: Check `hlsExtensions[mediaID]` cache → append to URL (no network)
+2. **Disk check**: Look for master.m3u8 or playlist.m3u8 on disk
+3. **Network**: Parallel HEAD requests for both filenames (`async let`, 8s worst case)
+4. **Persist**: Save resolved extension for next app launch
 
-```
-SimpleVideoPlayer.onVideoFinished:
-1. Mark video as finished
-2. Reset video state (position, flags)
-3. Call VideoManager.onVideoFinished()
-
-VideoManager.onVideoFinished:
-1. Calculate next video index
-2. If more videos exist:
-   - Increment currentVideoIndex
-   - This triggers MediaCell state updates via @Published
-3. If all videos finished:
-   - Clear state (videoMids = [], currentVideoIndex = -1)
-   - Disable sequential playback
-```
-
-### 6. State Synchronization
-
-```
-MediaCell observes VideoManager.currentVideoIndex:
-1. When currentVideoIndex changes:
-   - Calculate new play state for this cell's video
-   - Update local play state if different
-   - SimpleVideoPlayer receives new autoPlay parameter
-   - Autoplay logic executes if conditions met
-```
-
-## Key Design Principles
-
-### 1. Shared Video Player Instances
-- SharedAssetCache provides shared AVPlayer instances
-- Same video uses same player across MediaCell and MediaBrowserView
-- Enables seamless transition between contexts
-
-### 2. Declarative State Management
-- VideoManager publishes state changes
-- MediaCell observes and reacts to state
-- SimpleVideoPlayer responds to autoPlay parameter changes
-
-### 3. Race Condition Prevention
-- KVO monitoring ensures playback starts when player is ready
-- Force refresh triggers handle timing issues during initialization
-- Immediate visibility setting in onAppear prevents state mismatches
-- VideoManager approval checks prevent race conditions where multiple videos try to play
-- Duplicate completion handler guards prevent multiple finish events
-
-### 4. Clean Separation of Concerns
-- VideoManager: Sequential playback logic
-- MediaGridView: Grid-level orchestration
-- MediaCell: Individual cell state management
-- SimpleVideoPlayer: Core playback functionality
-
-### 5. No Cross-Player Interference
-- Removed pauseAllOtherVideos logic
-- Each player manages its own state independently
-- Sequential behavior achieved through state coordination, not direct control
-
-## Edge Cases Handled
-
-### 1. Grid Reappearance
-- MediaGridView.onAppear always resets to first video
-- All video players reset to beginning position
-- Force refresh ensures MediaCells update their play state
-
-### 2. App Background/Foreground
-- **State Caching**: Player state (position, playing status) cached before backgrounding
-- **Conservative Recovery**: Only recreates players that are actually broken (missing, failed status, stalled)
-- **Resume Logic**: Videos that were playing before backgrounding automatically resume when returning to foreground
-- **VideoManager Integration**: For MediaCell videos, checks VideoManager approval before resuming
-- **Player Validation**: Validates player is ready before resuming playback
-- **KVO observers properly cleaned up on disappear**
-- **Video layer restoration on app becoming active**
-- **Black screen prevention through layer refresh**
-
-**Recovery Flow:**
-```
-App goes to background:
-1. cachePlayerStateForBackground() saves player state (time, wasPlaying)
-2. Player paused but kept attached
-
-App returns to foreground:
-1. recoverFromBackground() called
-2. Check if player is broken (isPlayerBroken())
-3. If broken: Recreate player, restore position, resume if wasPlaying
-4. If healthy: Reattach player, restore position, resume if wasPlaying
-5. For MediaCell: Check VideoManager approval before resuming
-6. Wait for ready state if player not ready yet
-```
-
-### 2a. Fullscreen Resume
-- **State Preservation**: Videos paused when entering fullscreen preserve their playing state
-- **Resume After Exit**: Videos that were playing before fullscreen automatically resume when exiting
-- **VideoManager State**: MediaGridView re-establishes VideoManager state when returning from fullscreen
-- **No State Clearing**: MediaGridView no longer clears VideoManager state when fullscreen opens
-
-**Fullscreen Flow:**
-```
-Enter fullscreen:
-1. MediaBrowserView posts .stopAllVideos notification
-2. SimpleVideoPlayer.handleStopAllVideos() pauses player
-3. playbackState kept as .playing (not changed to .paused)
-4. MediaGridView does NOT clear VideoManager state
-
-Exit fullscreen:
-1. MediaBrowserView posts .resumeMediaCellVideos notification
-2. MediaGridView.onReceive(.resumeMediaCellVideos) re-establishes VideoManager state
-3. SimpleVideoPlayer.handleResumeMediaCellVideos() checks:
-   - playbackState == .playing (was playing before)
-   - VideoManager approval (for MediaCell)
-   - isVisible
-4. If all conditions met: player.play() and resume
-```
-
-### 3. Single vs Multiple Videos
-- Different logic paths for single video (no sequential) vs multiple videos
-- Single videos still use VideoManager for consistent interface
-
-### 4. Player Readiness Timing
-- KVO observer handles asynchronous player preparation
-- Autoplay works regardless of when player becomes ready
-- No dependency on view lifecycle timing
-
-### 5. Stuck Player Detection (Watchdog) - ⚠️ DISABLED
-- **Status:** Disabled as of January 4, 2026
-- **Reason:** Even optimized implementation caused scroll UX degradation
-- **Current Strategy:** Relies on existing error handling mechanisms:
-  - KVO observers detect failed/stalled items
-  - Lifecycle methods handle state transitions
-  - Conservative recovery for broken players
-  - VideoManager sequential playback approval
-- See VIDEO_SYSTEM.md "Playback Watchdog" section for historical details
-
-## Performance Considerations
-
-### 1. Video Player Reuse
-- SharedAssetCache maintains player instances
-- Avoids repeated player creation/destruction
-- Faster playback start times
-- Conservative recreation: Only recreates broken players, not all players after backgrounding
-
-### 2. Efficient State Updates
-- @Published properties for automatic UI updates
-- Minimal state synchronization overhead
-- Batched updates through force refresh triggers
-- Early exits in onAppear to prevent duplicate setup
-
-### 3. Memory Management
-- Proper KVO observer cleanup
-- Shared player instances reduce memory usage
-- Background video state preservation
-- VideoStateCache with expiration (10 minutes)
-
-### 4. Recovery Efficiency
-- Only broken players are recreated (not all players)
-- Healthy players are simply reattached and resumed
-- Reduces unnecessary work and potential issues
-- Validates player state before resuming
-
-## Debugging Information
-
-The algorithm provides extensive debug logging at key points:
-- VideoManager state changes
-- MediaGridView setup/reset operations
-- MediaCell state transitions
-- SimpleVideoPlayer status changes
-- KVO player readiness notifications
-
-Log format: `DEBUG: [COMPONENT] Message with relevant state information`
-
-## Recent Improvements
-
-### January 2026: Watchdog Disabled for Scroll Performance
-- **Problem**: Even optimized watchdog (background thread, 5s delay) caused scroll UX degradation
-- **Root Cause**: `await MainActor.run` calls for state inspection created main thread hops
-- **Solution**: Completely disabled watchdog, rely on existing error handling
-- **Trade-off**: Occasional stuck videos (rare) vs smooth scrolling (critical UX)
-- **Result**: Smooth scroll performance restored
-- **See**: `fixes/SCROLL_FRIENDLY_WATCHDOG.md` for full history of optimization attempts
-
-### December 2025: Conservative Player Recreation
-- **Before**: Aggressively recreated all players after backgrounding
-- **After**: Only recreates players that are actually broken (missing, failed status, stalled)
-- **Benefit**: Leaves healthy players alone, reducing unnecessary work and potential issues
-
-### 2. Fullscreen Resume Support
-- **Before**: Videos paused when entering fullscreen didn't resume after exit
-- **After**: Videos that were playing before fullscreen automatically resume when exiting
-- **Implementation**: `playbackState` preserved, VideoManager state re-established, resume checks approval
-
-### 3. Enhanced VideoManager Integration
-- **Before**: Some auto-play paths didn't check VideoManager approval
-- **After**: All auto-play entry points check VideoManager approval for MediaCell
-- **Benefit**: Prevents multiple videos from playing simultaneously
-
-### 4. Improved Background Recovery
-- **Before**: Recovery logic was complex with multiple paths
-- **After**: Simplified to single path: check if broken, recreate if needed, otherwise reattach and resume
-- **Benefit**: More reliable recovery, better logging, handles edge cases
-
-### 5. Duplicate Event Prevention
-- **Before**: Video completion handlers could fire multiple times
-- **After**: Guards prevent duplicate completion events
-- **Benefit**: Prevents state corruption and flickering
-
-## Future Considerations
-
-### 1. Extensibility
-- Algorithm supports different sequential playback strategies
-- Easy to add pause/resume functionality
-- Can be extended for playlist-like behavior
-
-### 2. Performance Optimization
-- Potential for video preloading
-- Smart cache management
-- Progressive loading strategies
-
-### 3. User Experience
-- Smooth transitions between videos
-- Consistent playback behavior
-- Predictable state management
-- Automatic resume after backgrounding/fullscreen
+## Retry Logic
+- Try once, on first failure: refresh author's baseUrl via `fetchUser(authorId, baseUrl: "")`, retry once
+- On second failure: give up, reset counter
+- Progressive and HLS share same retry logic
