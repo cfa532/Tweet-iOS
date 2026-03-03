@@ -773,6 +773,7 @@ extension MediaCell {
 
     var isActuallyPlaying: Bool { false }
     var isLoadingForCoordinator: Bool { false }
+    var isRecentlyPlaying: Bool { false }
 }
 
 // MARK: - MuteButton

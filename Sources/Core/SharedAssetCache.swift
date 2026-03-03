@@ -746,6 +746,20 @@ class SharedAssetCache: ObservableObject {
         return protected
     }
 
+    /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
+    /// Called by VideoPlaybackCoordinator when preload/nearby sets change and old downloads should stop.
+    @MainActor func cancelPreloadTask(for mediaID: String) {
+        if let preloadTask = preloadTasks[mediaID] {
+            preloadTask.cancel()
+            preloadTasks.removeValue(forKey: mediaID)
+        }
+        if let loadingTask = loadingTasks[mediaID] {
+            loadingTask.cancel()
+            loadingTasks.removeValue(forKey: mediaID)
+        }
+        // Don't release cached player — LRU handles eviction
+    }
+
     /// MEMORY FIX: Immediately release player and all video data when video goes out of sight
     /// This is called when MediaCell disappears to free memory immediately (not wait for 30-60s timer)
     @MainActor func releasePlayerImmediately(for mediaID: String) {
@@ -1770,9 +1784,10 @@ class SharedAssetCache: ObservableObject {
             }
             do {
                 let player = try await getOrCreatePlayer(for: url, isHighPriority: false)
-                // Limit preload buffering to 10s to save bandwidth.
+                // Limit preload buffering — just enough for readyToPlay + first frame.
+                // Primary video gets unlimited buffer when coordinator selects it.
                 await MainActor.run {
-                    player.currentItem?.preferredForwardBufferDuration = 10
+                    player.currentItem?.preferredForwardBufferDuration = 3
                 }
             } catch {
                 // Handle error silently
@@ -1843,10 +1858,10 @@ class SharedAssetCache: ObservableObject {
                 // Pause immediately — this is a preloaded player, not for playback yet
                 await MainActor.run {
                     player.pause()
-                    // Allow preloaded player to buffer while paused — uses 1 of 2 download slots.
-                    // The cell will clear the buffer limit when it becomes visible.
-                    player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-                    player.currentItem?.preferredForwardBufferDuration = 10
+                    // Don't allow preloaded players to use network while paused —
+                    // only the primary video gets network access via shouldPlayVideo.
+                    player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                    player.currentItem?.preferredForwardBufferDuration = 3
                     self.preloadedPlayerMids.insert(mediaID)
                 }
                 // Generate first-frame thumbnail so the cell isn't black before playback

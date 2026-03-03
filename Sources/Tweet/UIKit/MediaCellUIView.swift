@@ -153,6 +153,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Frame capture throttle
     private var lastFrameCaptureAt: Date = .distantPast
 
+    /// Last time AVPlayer confirmed playing (timeControlStatus == .playing).
+    /// Used by stall-check to distinguish HLS buffer gaps from genuine stalls.
+    private var lastActualPlaybackDate: Date = .distantPast
+
 
     /// Prevent duplicate finish handling
     private var isHandlingFinishEvent: Bool = false
@@ -726,12 +730,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
         if newPlayer.rate > 0 { newPlayer.pause() }
         newPlayer.isMuted = MuteState.shared.isMuted
-        // Enable network loading while paused so HLS data continues arriving.
-        // Default is false, causing deadlock: paused player can't fetch data →
-        // status stays .unknown → code waits for .readyToPlay before play().
-        newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        // Clear preload buffer limit (preloadPlayer sets 10s) — let AVPlayer buffer freely for playback
-        newPlayer.currentItem?.preferredForwardBufferDuration = 0
+        // Play immediately with available buffer instead of waiting for keepUp.
+        // Default (true) makes AVPlayer refuse to play when isPlaybackLikelyToKeepUp
+        // is false — even with 15+ seconds buffered — if the network is saturated
+        // by concurrent downloads from other videos in the feed.
+        newPlayer.automaticallyWaitsToMinimizeStalling = false
+        // Don't allow paused players to use network — only the primary video
+        // (selected by coordinator via shouldPlayVideo) gets network access.
+        // This prevents 10+ nearby cells from downloading HLS segments concurrently,
+        // starving the primary of bandwidth.
+        newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        // Keep a short buffer limit as safety net. shouldPlayVideo sets this to 0
+        // (unlimited) when coordinator selects primary.
+        newPlayer.currentItem?.preferredForwardBufferDuration = 3
         removePlayerObservers()
         self.player = newPlayer
         // Pick up preload-generated thumbnail if the cell missed it during setupVideoCell
@@ -836,6 +847,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
 
+        // Unlock unlimited buffering and network access for the primary video.
+        // Non-primary players have these throttled to prevent bandwidth starvation.
+        player?.currentItem?.preferredForwardBufferDuration = 0
+        player?.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+
         // If the layer already has a frame, treat it as playable even if item.status
         // is still .unknown. Avoid bouncing back to .playerLoading.
         if let player = player, videoCellState == .playerReady {
@@ -860,6 +876,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if let att = attachment, let url = att.getUrl(effectiveBaseUrl),
                let parentTweet = parentTweet {
                 transitionTo(imageView.image != nil ? .thumbnail : .noContent)
+                // Restore: cleanupVideoPlayer resets coordinatorWantsToPlay via resetVideoState().
+                // Without this, onReadyForDisplay takes the stall-check path instead of auto-playing.
+                coordinatorWantsToPlay = true
                 acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
             }
             return
@@ -950,6 +969,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
 
         if let player = player {
+            // No longer primary — revert to throttled settings.
+            player.currentItem?.preferredForwardBufferDuration = 3
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
@@ -975,6 +997,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
 
         if let player = player {
+            // No longer primary — revert to throttled settings.
+            player.currentItem?.preferredForwardBufferDuration = 3
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
@@ -1409,6 +1434,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 print(logMsg)
 
                 if player.timeControlStatus == .playing {
+                    self.lastActualPlaybackDate = Date()
+                    self.resumeObserver?.invalidate()
+                    self.resumeObserver = nil
                     self.durationMismatchTimer?.invalidate()
                     self.durationMismatchTimer = nil
                     self.loadingSpinner.stopAnimating()
@@ -1498,6 +1526,65 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Paused or other — cancel mismatch timer
                     self.durationMismatchTimer?.invalidate()
                     self.durationMismatchTimer = nil
+
+                    // Buffer stall recovery: player paused because buffer emptied while
+                    // IPFS segment is still downloading. Show spinner and resume when
+                    // enough data has loaded (one segment ~5s, or all remaining data).
+                    if player.timeControlStatus == .paused
+                        && self.coordinatorWantsToPlay
+                        && self.videoCellState == .playing
+                        && !self.isVideoAtEnd(player) {
+                        self.loadingSpinner.startAnimating()
+                        self.setupBufferRecoveryObserver(player)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if loaded data is sufficient to resume playback.
+    /// Requires 5s buffer ahead, OR all remaining data loaded (near end of video).
+    private func hasEnoughBufferToResume(_ player: AVPlayer) -> Bool {
+        let currentPos = player.currentTime().seconds
+        let duration = player.currentItem?.duration.seconds ?? 0
+        guard let lastRange = player.currentItem?.loadedTimeRanges.last?.timeRangeValue else { return false }
+        let loadedEnd = CMTimeAdd(lastRange.start, lastRange.duration).seconds
+        // Near end of video: all remaining data is loaded
+        if duration > 0 && loadedEnd >= duration - 0.5 { return true }
+        // Normal: at least 5s of data ahead
+        return loadedEnd > currentPos + 5.0
+    }
+
+    /// Set up KVO on loadedTimeRanges to resume when enough data arrives.
+    private func setupBufferRecoveryObserver(_ player: AVPlayer) {
+        resumeObserver?.invalidate()
+        // Check immediately — data may already be loaded
+        if hasEnoughBufferToResume(player) {
+            let pos = player.currentTime().seconds
+            let loaded = player.currentItem?.loadedTimeRanges.last.map {
+                CMTimeAdd($0.timeRangeValue.start, $0.timeRangeValue.duration).seconds
+            } ?? 0
+            print("\(logPrefix) 🔄 Buffer recovery (immediate): loaded=\(String(format: "%.1f", loaded))s, pos=\(String(format: "%.1f", pos))s — resuming")
+            player.play()
+            return
+        }
+        resumeObserver = player.currentItem?.observe(\.loadedTimeRanges, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                guard let self, let player = self.player else { return }
+                guard self.coordinatorWantsToPlay, self.videoCellState == .playing else {
+                    self.resumeObserver?.invalidate()
+                    self.resumeObserver = nil
+                    return
+                }
+                if self.hasEnoughBufferToResume(player) {
+                    let pos = player.currentTime().seconds
+                    let loaded = player.currentItem?.loadedTimeRanges.last.map {
+                        CMTimeAdd($0.timeRangeValue.start, $0.timeRangeValue.duration).seconds
+                    } ?? 0
+                    print("\(self.logPrefix) 🔄 Buffer recovery: loaded=\(String(format: "%.1f", loaded))s, pos=\(String(format: "%.1f", pos))s — resuming")
+                    self.resumeObserver?.invalidate()
+                    self.resumeObserver = nil
+                    player.play()
                 }
             }
         }
@@ -2015,6 +2102,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         return item.status == .unknown
     }
 
+    var isRecentlyPlaying: Bool {
+        coordinatorWantsToPlay
+            && videoCellState == .playing
+            && Date().timeIntervalSince(lastActualPlaybackDate) < 5.0
+    }
+
     var isVideoAttachment: Bool {
         guard let attachment else { return false }
         return attachment.type == .video || attachment.type == .hls_video
@@ -2229,6 +2322,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerWasLoaned = false
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
+        lastActualPlaybackDate = .distantPast
     }
 
     private func removeAudioHosting() {
