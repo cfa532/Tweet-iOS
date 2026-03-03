@@ -1186,14 +1186,11 @@ public class LocalHTTPServer: @unchecked Sendable {
                     // Handle the request
                     Task {
                         await self.handleRequest(request, connection: connection) {
-                            // After handling, continue listening for more requests
-                            if !isComplete && error == nil {
-                                Task {
-                                    await self.receiveNextRequest(connection: connection)
-                                }
-                            } else {
-                                connection.cancel()
-                            }
+                            // With Connection: close, each NWConnection handles exactly one
+                            // request-response cycle. Synchronous handlers (sendResponse /
+                            // serveFile) already send TCP FIN. Streaming handlers
+                            // (SegmentStreamDelegate) manage connection lifecycle themselves.
+                            // Do NOT cancel here — it kills streaming connections mid-flight.
                         }
                         continuation.resume()
                     }
@@ -2234,20 +2231,21 @@ public class LocalHTTPServer: @unchecked Sendable {
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
 
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        delegate.urlSession = session   // weak back-ref so delegate can self-cancel on dead NWConnection
 
         // Track session so cancelDownloads(for: mediaID) can invalidate it.
         streamingSessionsLock.lock()
         if streamingSessions[sessionKey] != nil {
-            // Already downloading this exact segment — keep existing, skip duplicate
+            // Already downloading this exact segment. Close the connection so AVPlayer
+            // treats it as a transient error and retries — the retry goes through
+            // handleSegmentRequest's polling loop and is served from disk cache once
+            // the in-flight download completes.
+            // NOTE: Do NOT send HTTP errors — AVPlayer may treat them as permanent failures.
+            // Do NOT call completion() — the ORIGINAL session handles markDownloadCompleted.
             streamingSessionsLock.unlock()
             session.invalidateAndCancel()
             let shortId = shortMID(mediaID)
-            print("♻️ [HLS SEGMENT \(shortId)] Skipped duplicate download for \(sessionKey)")
-            connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
-                connection.cancel()
-            })
-            completion()
+            print("♻️ [HLS SEGMENT \(shortId)] Duplicate download for \(sessionKey), closing connection")
+            connection.cancel()
             return
         }
         streamingSessions[sessionKey] = session
@@ -2790,15 +2788,9 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     private let removeSession: (String) -> Void
     private let completion: () -> Void
 
-    /// Weak back-reference so we can cancel the IPFS download when AVPlayer closes its
-    /// NWConnection (quality-switch, cell reuse, etc.) instead of downloading the whole
-    /// segment to a dead connection and wasting bandwidth.
-    weak var urlSession: URLSession?
-
     private var diskBuffer = Data()
     private var headersSent = false
-    private var connectionDead = false   // set when a send error signals the connection is closed
-    private var contentLength: Int64 = -1
+    private var connectionDead = false   // set when NWConnection closes before download finishes
 
     // Download progress tracking
     private let downloadStartTime = CFAbsoluteTimeGetCurrent()
@@ -2835,30 +2827,28 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            sendFallbackError(connection)
+            if !connectionDead {
+                sendFallbackError(connection)
+            }
             completionHandler(.cancel)
-            completion()
             return
         }
 
-        contentLength = http.expectedContentLength
+        guard !connectionDead else {
+            completionHandler(.allow)
+            return
+        }
+
+        // Transparent proxy: forward Content-Length if IPFS provides it.
+        // When IPFS uses chunked transfer (no Content-Length), omit it —
+        // with Connection: close, AVPlayer detects end-of-body from TCP FIN.
         var headers: [String: String] = [
             "Content-Type": "video/mp2t",
             "Accept-Ranges": "bytes"
         ]
-        if contentLength > 0 {
-            headers["Content-Length"] = "\(contentLength)"
-            // Content-Length known: keep-alive is valid (default in buildHTTPHeaderData)
-        } else {
-            // No Content-Length (IPFS chunked transfer). Use Connection: close so AVPlayer
-            // uses TCP FIN to detect end-of-body instead of an ill-formed keep-alive response.
-            // Without this, AVPlayerItem.status stays stuck at .unknown indefinitely.
-            headers["Connection"] = "close"
+        if http.expectedContentLength > 0 {
+            headers["Content-Length"] = "\(http.expectedContentLength)"
         }
-
-        // Send HTTP response headers to AVPlayer immediately.
-        // AVPlayer starts reading the body stream and will render the first frame
-        // as soon as it receives enough bytes to decode the initial keyframe.
         let headerData = buildHeaders(200, headers)
         connection.send(content: headerData, isComplete: false, completion: .contentProcessed { _ in })
         headersSent = true
@@ -2868,19 +2858,17 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession,
                     dataTask: URLSessionDataTask,
                     didReceive data: Data) {
-        guard !connectionDead else { return }   // connection already known-dead; drain quietly
+        // Always buffer to disk — the proxy's sole purpose is to persist data locally.
         diskBuffer.append(data)
-        // Forward bytes to AVPlayer immediately so it can start decoding the first keyframe
-        // rather than waiting for the full segment download.
-        // If the NWConnection is dead (AVPlayer cancelled the request during a quality switch),
-        // the send callback fires with a non-nil error — cancel the IPFS download immediately
-        // to avoid downloading the whole segment (~2–5 MB) to nowhere.
+
+        // Stream to AVPlayer if connection is alive.
+        guard !connectionDead else { return }
+
         connection.send(content: data, isComplete: false, completion: .contentProcessed { [weak self] error in
             guard let self, error != nil, !self.connectionDead else { return }
             self.connectionDead = true
             let shortId = self.mediaID.count > 8 ? String(self.mediaID.prefix(8)) : self.mediaID
-            print("🔌 [HLS SEGMENT \(shortId)] NWConnection closed mid-stream (\(self.segmentLabel)) — cancelling IPFS download")
-            self.urlSession?.invalidateAndCancel()
+            print("🔌 [HLS SEGMENT \(shortId)] NWConnection closed mid-stream (\(self.segmentLabel)) — continuing IPFS download to disk cache")
         })
     }
 
@@ -2901,14 +2889,12 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
 
         if let error = error {
             let nsError = error as NSError
-            if !headersSent && nsError.code != NSURLErrorCancelled {
-                // Headers never sent — tell AVPlayer the request failed so it retries.
+            if !connectionDead && !headersSent && nsError.code != NSURLErrorCancelled {
+                // No data was sent — tell AVPlayer so it can retry or switch variants.
                 sendFallbackError(connection)
                 BlackList.shared.recordFailure(mediaID)
-            } else if headersSent {
-                // Headers were already sent — close the connection so AVPlayer detects the
-                // incomplete response. Without this, the connection stays open and AVPlayer
-                // waits forever for more data (especially for Connection: close responses).
+            } else if !connectionDead && headersSent {
+                // Send FIN so AVPlayer detects incomplete transfer.
                 connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
                                completion: .contentProcessed { _ in })
             }
@@ -2918,24 +2904,26 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             return
         }
 
-        print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(diskBuffer.count / 1024)KB")
-
-        // Write the fully-downloaded segment to disk for instant cache hits on future requests.
+        // Write the fully-downloaded segment to disk cache.
         let cacheURL = URL(fileURLWithPath: cachePath)
         guard FileManager.default.fileExists(atPath: cacheURL.deletingLastPathComponent().path) else {
-            // Signal end-of-body so AVPlayer isn't left waiting.
-            connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
-                           completion: .contentProcessed { _ in })
-            return // Cache directory was deleted by clearPlayerForMediaID — skip write
+            if !connectionDead {
+                connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
+                               completion: .contentProcessed { _ in })
+            }
+            return
         }
         try? diskBuffer.write(to: cacheURL)
         BlackList.shared.recordSuccess(mediaID)
 
-        // Signal end of HTTP response body by sending TCP FIN.
-        // All responses use Connection: close, so AVPlayer expects the TCP connection
-        // to actually close after the body. Without FIN, AVPlayer waits indefinitely
-        // for the connection to close, item.status stays at .unknown, and the video
-        // never starts playing — even if all Content-Length bytes were received.
+        if connectionDead {
+            print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(diskBuffer.count / 1024)KB (background → disk cache)")
+            return
+        }
+
+        print("✅ [HLS SEGMENT \(shortId)] \(segmentLabel): \(diskBuffer.count / 1024)KB")
+
+        // Body fully streamed — send TCP FIN to signal end-of-response.
         connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
                        completion: .contentProcessed { _ in })
     }
