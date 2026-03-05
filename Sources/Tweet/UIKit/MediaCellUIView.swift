@@ -1126,6 +1126,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             print("\(logPrefix) 👻 requestPlayback(\(reason)): skipped, cell not visible")
             return
         }
+        // Guard against premature play() when onReadyForDisplay fires from a stale GPU frame
+        // (fast-recovery player reuse) while item.status is still .unknown. Calling play()
+        // before the item is ready disrupts AVPlayer's buffering state machine and prevents
+        // the statusKVO .readyToPlay transition from ever firing. The statusKVO handler
+        // (or handleAlreadyReadyPlayer) will call requestPlaybackStartIfNeeded once ready.
+        guard isActuallyPlayerReady(player) else {
+            print("\(logPrefix) ⏸️ requestPlayback(\(reason)): item not ready (status=\(player.currentItem?.status.rawValue ?? -1)), deferring to statusKVO")
+            return
+        }
 
         print("\(logPrefix) ▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
 
