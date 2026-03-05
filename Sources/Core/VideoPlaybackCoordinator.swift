@@ -480,14 +480,14 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         if !videosToAdd.isEmpty {
             // Rebuild the video list to ensure correct feed ordering
-            // This is necessary because embedded videos may be loaded after initial list building
+            // This is necessary because embedded videos may be loaded after initial list building.
+            // Do NOT call performPreloadOnScrollStop here — video list rebuilds triggered by
+            // pagination would create preloads for newly-loaded tweets the user hasn't scrolled to.
             Task {
                 let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
                 await MainActor.run {
                     self.allVideos = newVideos
                     self.invalidateVisibleVideoCache()
-                    // Re-run preload now that the video list is complete.
-                    self.performPreloadOnScrollStop()
                 }
             }
 
@@ -517,14 +517,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
 
         if !videosToAdd.isEmpty {
-            // Rebuild the video list to ensure correct feed ordering
+            // Rebuild the video list to ensure correct feed ordering.
+            // Do NOT call performPreloadOnScrollStop — same reason as addEmbeddedTweetVideos.
             Task {
                 let newVideos = await self.buildVideoListAsync(tweets: self.currentTweets, pinnedTweets: [])
                 await MainActor.run {
                     self.allVideos = newVideos
                     self.invalidateVisibleVideoCache()
-                    // Re-run preload (see addEmbeddedTweetVideos comment)
-                    self.performPreloadOnScrollStop()
                 }
             }
         }
@@ -1065,10 +1064,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         // This is not a stall — it's normal IPFS/HLS latency. Let it load; durationMismatchTimer
         // and loadingTimeoutTask will handle genuine failures.
         if delegate.isLoadingForCoordinator { return }
-        // HLS buffer gap: the player was confirmed playing within the last 5s but the buffer
-        // briefly emptied (IPFS segment still downloading). timeControlStatus goes to .paused
-        // (not .waitingToPlayAtSpecifiedRate) when automaticallyWaitsToMinimizeStalling=false
-        // and the buffer is fully drained. This is transient — not a stall.
+        // Grace period after recent playback: give the primary time to recover from a brief
+        // non-playing state (e.g. mid-startup, buffering). AVPlayer self-manages stall recovery
+        // via automaticallyWaitsToMinimizeStalling=true (always set), surfacing gaps as
+        // .waitingToPlayAtSpecifiedRate (caught by isActuallyPlaying), not .paused.
         if delegate.isRecentlyPlaying { return }
         // Primary is stuck — reset and restart. identifyPrimaryVideo naturally prefers a
         // different candidate when one exists (direction fix picks bottommost when scrolling down).
@@ -1472,24 +1471,23 @@ class VideoPlaybackCoordinator: ObservableObject {
         lastPrimarySwitchTime = Date()
 
         // Set primary immediately so its segment requests bypass the concurrent download limit.
-        // The heavier cancelNonPrimaryDownloads runs after a 1s debounce to avoid churn.
         let primaryMid = primary.videoMid
         LocalHTTPServer.shared.setPrimaryMediaID(primaryMid)
 
-        // Debounce download cancellation: during fast scroll the primary changes rapidly;
-        // killing downloads immediately means each primary is cancelled before it loads.
-        // Wait 1s for the primary to stabilise, then cancel off-screen downloads.
-        // Read allVideos/onScreenMediaCells inside the closure so the protected set
-        // reflects the CURRENT on-screen state, not the state when the timer was created.
+        // Immediately cancel preload downloads so the primary isn't starved during the debounce.
+        // Preload AVPlayers stay in cache — they just stop buffering until they become primary.
+        let preloadMidsSnapshot = activePreloadMids.union(activeNearbyMids)
+        for mid in preloadMidsSnapshot where mid != primaryMid {
+            LocalHTTPServer.shared.cancelDownloads(for: mid)
+        }
+
+        // On-screen non-primary videos get a 1s grace period to avoid breaking proxy
+        // connections mid-stream (which causes -1005 player errors).
         cancelDownloadsTimer?.invalidate()
         cancelDownloadsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self else { return }
-                // Protect on-screen videos (avoid breaking their proxy connections)
-                // AND preloaded videos (they represent invested bandwidth for upcoming scroll)
-                var protectedMids = Set(self.allVideos.filter { self.onScreenMediaCells.contains($0.identifier) }.map { $0.videoMid })
-                protectedMids.formUnion(self.activePreloadMids)
-                protectedMids.formUnion(self.activeNearbyMids)
+                let protectedMids = Set(self.allVideos.filter { self.onScreenMediaCells.contains($0.identifier) }.map { $0.videoMid })
                 LocalHTTPServer.shared.cancelNonPrimaryDownloads(primaryMediaID: primaryMid, protectedMediaIDs: protectedMids)
             }
         }
@@ -1631,6 +1629,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Set new primary and start playing
         primaryVideoId = nextVideo.identifier
         currentlyPlayingVideoIds = [nextVideo.identifier]
+        // Mirror startPrimaryVideoPlayback: clear cancelledMediaID so a preloaded-then-cancelled
+        // player can resume downloading immediately without waiting for a new CachingPlayerItem.
+        LocalHTTPServer.shared.setPrimaryMediaID(nextVideo.videoMid)
 
         // Direct delegate call — no broadcast notification
         if let delegate = mediaCellDelegates[nextVideo.identifier] {

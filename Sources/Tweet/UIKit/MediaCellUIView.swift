@@ -137,12 +137,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var videoCompletionObserver: NSObjectProtocol?
     private var stopAllObserver: NSObjectProtocol?
     private var playerLoanedObserver: NSObjectProtocol?
+    private var playerClaimedObserver: NSObjectProtocol?
     private var shouldPlayObserver: NSObjectProtocol?
     private var shouldPauseObserver: NSObjectProtocol?
     private var shouldStopObserver: NSObjectProtocol?
 
     /// Async player acquisition task
     private var setupPlayerTask: Task<Void, Never>?
+
+    /// Debounce task that delays player acquisition during fast scroll.
+    /// Cancelled if the cell scrolls off-screen within 0.3s of configure().
+    private var playerAcquireDebounceTask: Task<Void, Never>?
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -586,6 +591,32 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             self.player = nil
         }
 
+        // Listen for another feed cell claiming exclusive ownership of the same player.
+        // When tweet A and its retweet B both show the same videoMid, both call acquirePlayer()
+        // and get the same cached AVPlayer. Whichever cell calls configurePlayer() last posts
+        // this notification so earlier holders release their KVO observers and player reference,
+        // preventing duplicate timeControlStatus and statusKVO logs.
+        let myIdentity = ObjectIdentifier(self).hashValue
+        playerClaimedObserver = NotificationCenter.default.addObserver(
+            forName: .videoPlayerClaimedByCell, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let claimedMid = notification.userInfo?["videoMid"] as? String,
+                  let claimerHash = notification.userInfo?["claimerIdentity"] as? Int,
+                  claimedMid == self.attachment?.mid,
+                  claimerHash != myIdentity,
+                  self.player != nil else { return }
+            // Another cell took the player — release KVO observers and nil our reference.
+            // Time observer must go first (removePlayerTimeObserver uses timeObserverPlayer,
+            // not self.player, so it's safe to call before nilling).
+            self.removePlayerTimeObserver()
+            self.removePlayerObservers()
+            self.player = nil
+            if self.videoCellState == .playing || self.videoCellState == .playerReady {
+                self.transitionTo(self.imageView.image != nil ? .thumbnail : .noContent)
+            }
+        }
+
         // Observe MuteState changes → forward to player
         MuteState.shared.$isMuted
             .receive(on: DispatchQueue.main)
@@ -594,8 +625,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             .store(in: &cancellables)
 
-        // Acquire player (sync from cache or async from SharedAssetCache)
-        acquirePlayer(attachment: attachment, url: url, parentTweet: parentTweet)
+        // Debounce player acquisition: wait 0.3s before acquiring to skip fast-scrolled cells.
+        // If the cell leaves the screen before the delay fires, cleanupVideoPlayer cancels
+        // playerAcquireDebounceTask and no player is ever created.
+        playerAcquireDebounceTask?.cancel()
+        playerAcquireDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
+            guard !Task.isCancelled, let self, self.isVisible,
+                  let att = self.attachment,
+                  let url = att.getUrl(self.effectiveBaseUrl),
+                  let parentTweet = self.parentTweet else { return }
+            self.playerAcquireDebounceTask = nil
+            self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+        }
 
         // Mute button for single video (timer shown when playback starts)
         if isSingleMedia {
@@ -733,11 +775,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
         if newPlayer.rate > 0 { newPlayer.pause() }
         newPlayer.isMuted = MuteState.shared.isMuted
-        // Play immediately with available buffer instead of waiting for keepUp.
-        // Default (true) makes AVPlayer refuse to play when isPlaybackLikelyToKeepUp
-        // is false — even with 15+ seconds buffered — if the network is saturated
-        // by concurrent downloads from other videos in the feed.
-        newPlayer.automaticallyWaitsToMinimizeStalling = false
+        // Always enabled: AVPlayer manages its own stall recovery. With rate=0 (paused),
+        // this has no effect on non-primary cells. For the primary (rate=1), AVPlayer
+        // automatically waits to build buffer before playing — no manual intervention needed.
+        newPlayer.automaticallyWaitsToMinimizeStalling = true
         // Don't allow paused players to use network — only the primary video
         // (selected by coordinator via shouldPlayVideo) gets network access.
         // This prevents 10+ nearby cells from downloading HLS segments concurrently,
@@ -748,6 +789,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         newPlayer.currentItem?.preferredForwardBufferDuration = 3
         removePlayerObservers()
         self.player = newPlayer
+        // Notify other feed cells that may hold the same player (tweet + retweet case)
+        // to release their KVO observers. Must post after self.player = newPlayer so that
+        // when the notification fires synchronously, this cell is already the owner.
+        if let mid = attachment?.mid {
+            NotificationCenter.default.post(
+                name: .videoPlayerClaimedByCell,
+                object: nil,
+                userInfo: ["videoMid": mid, "claimerIdentity": ObjectIdentifier(self).hashValue]
+            )
+        }
         // Pick up preload-generated thumbnail if the cell missed it during setupVideoCell
         if imageView.image == nil, let mid = attachment?.mid,
            let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
@@ -972,7 +1023,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
 
         if let player = player {
-            // No longer primary — revert to throttled settings.
+            // No longer primary — throttle buffering but leave stall recovery alone.
             player.currentItem?.preferredForwardBufferDuration = 3
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             if player.rate > 0 {
@@ -1000,7 +1051,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
 
         if let player = player {
-            // No longer primary — revert to throttled settings.
+            // No longer primary — throttle buffering but leave stall recovery alone.
             player.currentItem?.preferredForwardBufferDuration = 3
             player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             if player.rate > 0 {
@@ -1142,6 +1193,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         videoCellState = .playing
         retryButton.isHidden = true
+
+        // Unlimited forward buffer so AVPlayer can load the full asset from disk/cache
+        // without being capped at 3s. keepUp=false clears once the buffer grows past the
+        // playback rate threshold. Reset to 3 on pause/stop (preparePlayer / handlePause / handleStop).
+        player.currentItem?.preferredForwardBufferDuration = 0
 
         player.isMuted = MuteState.shared.isMuted
         player.play()
@@ -2097,6 +2153,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             preserveFrameToCache()
         }
 
+        // Cancel any pending debounce — prevents player acquisition after cleanup.
+        playerAcquireDebounceTask?.cancel()
+        playerAcquireDebounceTask = nil
+
         let hasWork =
             setupPlayerTask != nil ||
             videoOutput != nil ||
@@ -2108,6 +2168,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             videoCompletionObserver != nil ||
             stopAllObserver != nil ||
             playerLoanedObserver != nil ||
+            playerClaimedObserver != nil ||
             shouldPlayObserver != nil ||
             shouldPauseObserver != nil ||
             shouldStopObserver != nil ||
@@ -2134,6 +2195,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         stopAllObserver = nil
         if let o = playerLoanedObserver { NotificationCenter.default.removeObserver(o) }
         playerLoanedObserver = nil
+        if let o = playerClaimedObserver { NotificationCenter.default.removeObserver(o) }
+        playerClaimedObserver = nil
         if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
         shouldPlayObserver = nil
         if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }

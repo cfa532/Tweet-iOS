@@ -113,6 +113,10 @@ extension Notification.Name {
     /// Posted when a feed cell's AVPlayer is loaned to the detail view.
     /// userInfo: ["videoMid": String]. The owning MediaCellUIView should release its reference.
     static let videoPlayerLoaned = Notification.Name("VideoPlayerLoaned")
+    /// Posted when a feed cell claims exclusive ownership of an AVPlayer.
+    /// userInfo: ["videoMid": String, "claimerIdentity": Int].
+    /// Other MediaCellUIView instances holding the same player must release it.
+    static let videoPlayerClaimedByCell = Notification.Name("VideoPlayerClaimedByCell")
     /// Posted to force video layer refresh after screen lock recovery
     static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
     /// Posted to reload only visible videos after foreground recovery (not all videos)

@@ -768,6 +768,10 @@ class SharedAssetCache: ObservableObject {
             loadingTask.cancel()
             loadingTasks.removeValue(forKey: mediaID)
         }
+        // Stop any active HLS segment downloads for this preloaded player.
+        // Task cancellation alone doesn't stop already-running AVPlayer segment requests
+        // since AVPlayer makes them independently via the local HTTP proxy.
+        LocalHTTPServer.shared.cancelDownloads(for: mediaID)
         // Don't release cached player — LRU handles eviction
     }
 

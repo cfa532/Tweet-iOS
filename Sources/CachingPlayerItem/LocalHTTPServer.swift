@@ -312,7 +312,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     // Lock-based (not actor) so both async and sync handlers can check it.
     private var downloadingMediaIDs: [String: Int] = [:]
     private let downloadingMediaIDsLock = NSLock()
-    private let maxConcurrentVideoDownloads = 2
+    private let maxConcurrentVideoDownloads = 3
 
     // Tracks which mediaID_offset combos are actively writing to the disk cache.
     // Only one writer per starting offset is allowed; parallel connections skip disk write.
@@ -803,8 +803,24 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         progressiveCacheWritersLock.unlock()
 
-        // 4. Free concurrent download slots for off-screen mediaIDs only
+        // 4. Collect cancelled mids before clearing slots (needed for step 5)
+        downloadingMediaIDsLock.lock()
+        let midsToMarkCancelled = Set(downloadingMediaIDs.keys.filter { !keepMediaIDs.contains($0) })
+        downloadingMediaIDsLock.unlock()
+
+        // 5. Free concurrent download slots for off-screen mediaIDs only
         clearVideoDownloadTracking(except: keepMediaIDs)
+
+        // 6. Mark cancelled mediaIDs in the actor — future AVPlayer retries for these
+        // will hit isMediaIDCancelled → immediate connection.cancel() (no ⛔ spam, no slot used).
+        // Cleared automatically when a fresh player is registered (registerProxiedURL).
+        if !midsToMarkCancelled.isEmpty {
+            Task {
+                for mid in midsToMarkCancelled {
+                    await activeDownloadsActor.cancelTasks(for: mid)
+                }
+            }
+        }
 
         for key in sessionKeysToRemove {
             print("🎯 [PRIORITY] Cancelled download: \(key) (primary: \(shortMID(primaryMediaID)))")
@@ -837,6 +853,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.lock()
         currentPrimaryMediaID = mediaID
         primaryMediaIDLock.unlock()
+        // Clear cancelled state so a preloaded-then-cancelled player can download once primary.
+        // (registerProxiedURL only clears it when a NEW CachingPlayerItem is created, but
+        // cached players skip that path entirely.)
+        if let mediaID {
+            Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
+        }
     }
 
     /// Clear primary restriction so all videos can download (e.g., when all playback stops).
@@ -1431,10 +1453,17 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
 
-        // NOTE: No concurrent download limit for HLS segments — they are small (~1MB) and
-        // time-critical. Blocking them causes AVPlayer to fail with -12889. The dedup logic
-        // below already prevents truly redundant downloads. Progressive downloads (larger,
-        // less time-critical) are still gated by canStartVideoDownload().
+        // Guard: if this mediaID was cleared by the priority system, reject the segment request
+        // immediately rather than starting a new IPFS download. Prevents the retry storm where
+        // a cancelled non-primary AVPlayer keeps reconnecting (each failed connection triggers
+        // an immediate AVPlayer retry). The short connection.cancel() here puts AVPlayer into
+        // its built-in exponential backoff rather than an infinite fast-retry loop.
+        // Note: clearCancelledMediaID is called when a fresh player is registered (on becoming
+        // primary), so this guard only fires while the mediaID remains non-primary.
+        if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
+            connection.cancel()
+            return
+        }
 
         // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
@@ -1495,12 +1524,22 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Fall through to become a new downloader (no untracked background spawns)
         }
 
+        // Concurrency limit: at most maxConcurrentVideoDownloads IPFS downloads at once.
+        // Primary video always bypasses (canStartVideoDownload returns true for primary).
+        // Non-primary segments are cancelled immediately — AVPlayer retries with backoff,
+        // and the retry will succeed once a slot opens. Polling was replaced because it
+        // generated log spam and held 10+ idle Swift concurrency tasks simultaneously.
+        if !canStartVideoDownload(for: mediaID) {
+            connection.cancel()
+            return
+        }
+        trackVideoDownloadStarted(for: mediaID)
+
         // This request becomes the downloader — mark active, fetch, then mark completed.
-        // NOTE: HLS segments are NOT tracked in downloadingMediaIDs (progressive-only
-        // concurrent limit). They are tracked via activeDownloadsActor for dedup/cancel.
         await activeDownloadsActor.markDownloadStarted(for: downloadKey)
 
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
+            self.trackVideoDownloadCompleted(for: mediaID)
             Task { await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey) }
         }
     }
