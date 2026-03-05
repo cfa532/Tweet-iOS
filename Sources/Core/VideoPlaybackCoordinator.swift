@@ -810,11 +810,16 @@ class VideoPlaybackCoordinator: ObservableObject {
             // timer handle it with stable layout.
             if overlayUncoverPlaybackTimer != nil { return }
 
-            // Transient layout gap: old cell removed but new cell hasn't laid out yet.
-            // Don't stop the primary — its player keeps buffering. Just go idle and
-            // let scheduleStartPrimary pick up the new cell after layout settles.
             if identifiers.isEmpty {
-                print("🎬 [COORD] onScreenUpdate: 0 cells on-screen (transient), going idle without stop")
+                // All media cells left the screen — stop the primary so audio doesn't leak.
+                if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
+                    if let delegate = mediaCellDelegates[primary.identifier] {
+                        delegate.shouldStopVideo(withMid: primary.videoMid)
+                    } else {
+                        SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
+                    }
+                }
+                print("🎬 [COORD] onScreenUpdate: 0 cells on-screen, going idle")
                 phase = .idle
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil
@@ -873,10 +878,15 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Stop all videos if none are visible
         if currentVisibleIdentifiers.isEmpty {
-            // If a primary was playing, this empty set may be a transient layout gap
-            // (old cell scrolled off, new cell hasn't laid out yet). Don't nuke
-            // everything — go idle and let scheduleStartPrimary recover when cells appear.
-            if phase == .primaryPlaying {
+            if phase == .primaryPlaying, let primaryId = primaryVideoId {
+                // Stop the primary so audio doesn't leak off-screen.
+                if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
+                    if let delegate = mediaCellDelegates[primary.identifier] {
+                        delegate.shouldStopVideo(withMid: primary.videoMid)
+                    } else {
+                        SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
+                    }
+                }
                 phase = .idle
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil

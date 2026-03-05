@@ -414,6 +414,17 @@ class SharedAssetCache: ObservableObject {
                 activeCreationTasks.removeValue(forKey: mediaID)
             }
 
+            // Drain any pending creation queue entries for this mediaID.
+            // Without this, a queued entry for a scrolled-off cell would eventually
+            // dequeue, create a full AVPlayer, and then discard it (ghost player),
+            // wasting a concurrency slot and download bandwidth.
+            let evicted = pendingCreations.filter { extractMediaID(from: $0.url) == mediaID }
+            pendingCreations.removeAll { extractMediaID(from: $0.url) == mediaID }
+            for entry in evicted {
+                entry.continuation.resume(throwing: NSError(domain: "SharedAssetCache", code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: "Cancelled: cell scrolled off screen"]))
+            }
+
             // Stop network usage for CachingPlayerItem if it exists
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
                 cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
