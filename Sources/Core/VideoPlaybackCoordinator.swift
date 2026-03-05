@@ -144,8 +144,6 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Timestamp when primary video was last switched (to prevent immediate re-switching)
     private var lastPrimarySwitchTime: Date?
 
-    /// Debounce timer for cancelNonPrimaryDownloads — avoids killing downloads during fast scroll
-    private var cancelDownloadsTimer: Timer?
 
     /// Visible tweet IDs (updated by scroll tracking)
     private var visibleTweetIds: Set<String> = []
@@ -364,7 +362,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Invalidate all timers
         playbackDebounceTimer?.invalidate()
         overlayUncoverPlaybackTimer?.invalidate()
-        cancelDownloadsTimer?.invalidate()
     }
     
     @objc private func handleOverlayCoverageChanged(_ notification: Notification) {
@@ -975,8 +972,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         playbackDebounceTimer?.invalidate()
         playbackDebounceTimer = nil
         pendingPrimaryCandidate = nil
-        cancelDownloadsTimer?.invalidate()
-        cancelDownloadsTimer = nil
         overlayUncoverPlaybackTimer?.invalidate()
         overlayUncoverPlaybackTimer = nil
 
@@ -1282,26 +1277,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Called when scroll starts (scrollViewWillBeginDragging).
-    /// Starts a 2s grace period: if scroll is still active after 2s, cancel preload/nearby
-    /// downloads to free bandwidth for the primary video. If scroll stops before 2s,
-    /// performPreloadOnScrollStop() invalidates the timer — preloads survive.
+    /// NodeConnectionPool manages bandwidth during scroll — no download cancellation needed here.
     func onScrollStarted() {
         scrollCancelTimer?.invalidate()
-        scrollCancelTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self, self.isScrolling else { return }
-                let allActive = self.activePreloadMids.union(self.activeNearbyMids)
-                if !allActive.isEmpty {
-                    print("🎬 [COORD] Scroll >2s — cancelling \(allActive.count) preload/nearby downloads")
-                    for mid in allActive {
-                        SharedAssetCache.shared.cancelPreloadTask(for: mid)
-                    }
-                    self.activePreloadMids.removeAll()
-                    self.activeNearbyMids.removeAll()
-                    SharedAssetCache.shared.updatePreloadedPlayerMids([])
-                }
-            }
-        }
+        scrollCancelTimer = nil
     }
     
     /// Called on scroll stop and initial load. Replaces preloadVideosInScrollDirection +
@@ -1474,23 +1453,9 @@ class VideoPlaybackCoordinator: ObservableObject {
         let primaryMid = primary.videoMid
         LocalHTTPServer.shared.setPrimaryMediaID(primaryMid)
 
-        // Immediately cancel preload downloads so the primary isn't starved during the debounce.
-        // Preload AVPlayers stay in cache — they just stop buffering until they become primary.
-        let preloadMidsSnapshot = activePreloadMids.union(activeNearbyMids)
-        for mid in preloadMidsSnapshot where mid != primaryMid {
-            LocalHTTPServer.shared.cancelDownloads(for: mid)
-        }
-
-        // On-screen non-primary videos get a 1s grace period to avoid breaking proxy
-        // connections mid-stream (which causes -1005 player errors).
-        cancelDownloadsTimer?.invalidate()
-        cancelDownloadsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                let protectedMids = Set(self.allVideos.filter { self.onScreenMediaCells.contains($0.identifier) }.map { $0.videoMid })
-                LocalHTTPServer.shared.cancelNonPrimaryDownloads(primaryMediaID: primaryMid, protectedMediaIDs: protectedMids)
-            }
-        }
+        // NodeConnectionPool now manages bandwidth: primary gets priority,
+        // preloads wait between segment/chunk requests when primary is starved.
+        // No need to cancel preload downloads here.
 
         delegate.shouldPlayVideo(withMid: primary.videoMid)
     }
@@ -1549,8 +1514,6 @@ class VideoPlaybackCoordinator: ObservableObject {
         let finishedMid = primaryVideoId.flatMap { id in allVideos.first(where: { $0.identifier == id })?.videoMid } ?? "?"
         print("🎬 [COORD] goIdleAfterPrimaryFinished: \(shortMID(finishedMid)) done, onScreen=\(onScreenMediaCells.count), visible=\(visibleVideos.count)")
 
-        cancelDownloadsTimer?.invalidate()
-        cancelDownloadsTimer = nil
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
         phase = .idle

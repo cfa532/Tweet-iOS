@@ -14,6 +14,9 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
     private let sessionCleanup: () -> Void
     private let buildHeaders: (Int, [String: String]) -> Data
     private let onTotalSizeKnown: ((Int64) -> Void)?
+    /// Called once when AVPlayer closes the proxy connection (either normally or mid-stream).
+    /// Used to release the NodeConnectionPool slot early so subsequent downloads aren't blocked.
+    var onConnectionDead: (() -> Void)?
 
     private var sentBytesCount: Int64 = 0
     private var cachedBytesCount: Int64
@@ -86,8 +89,14 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 
             let writeOffset = cacheStart + sentBytesCount
 
-            // Stream chunk to AVPlayer immediately
-            connection.send(content: data, completion: .contentProcessed { _ in })
+            // Stream chunk to AVPlayer immediately; on send failure the connection is dead —
+            // release the pool slot so primary video is no longer blocked.
+            connection.send(content: data, completion: .contentProcessed { [weak self] error in
+                guard let self = self, error != nil else { return }
+                let release = self.onConnectionDead
+                self.onConnectionDead = nil
+                release?()
+            })
             sentBytesCount += chunkLength
 
             // Write chunk to disk cache (only if a cache file handle was provided)
@@ -303,16 +312,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     private var recentCacheMissLogs: [String: Date] = [:]
     private let cacheMissLogLock = NSLock()
 
-    // Primary video gating: only the primary video may start NEW network downloads.
-    // Cached content is always served regardless of primary status.
+    // Primary video tracking — used to set isPrimary when acquiring NodeConnectionPool slots.
     private var currentPrimaryMediaID: String?
     private let primaryMediaIDLock = NSLock()
-
-    // Per-mediaID concurrent download limit: at most 2 different videos may download at once.
-    // Lock-based (not actor) so both async and sync handlers can check it.
-    private var downloadingMediaIDs: [String: Int] = [:]
-    private let downloadingMediaIDsLock = NSLock()
-    private let maxConcurrentVideoDownloads = 3
 
     // Tracks which mediaID_offset combos are actively writing to the disk cache.
     // Only one writer per starting offset is allowed; parallel connections skip disk write.
@@ -762,69 +764,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         progressiveCacheWritersLock.lock()
         progressiveCacheWriters = progressiveCacheWriters.filter { !$0.hasPrefix(mediaID) }
         progressiveCacheWritersLock.unlock()
-
-        // 4. Free concurrent download slot so other videos aren't permanently blocked
-        downloadingMediaIDsLock.lock()
-        downloadingMediaIDs.removeValue(forKey: mediaID)
-        downloadingMediaIDsLock.unlock()
-    }
-
-    /// Cancel active downloads EXCEPT for the specified primary and any on-screen (protected) mediaIDs.
-    /// Called when the coordinator starts primary playback to free bandwidth for the primary video.
-    /// On-screen videos are protected to avoid breaking their proxy connections (which causes -1005 player failures).
-    public func cancelNonPrimaryDownloads(primaryMediaID: String, protectedMediaIDs: Set<String> = []) {
-        // Track the primary so future requests from non-primary videos are blocked
-        primaryMediaIDLock.lock()
-        currentPrimaryMediaID = primaryMediaID
-        primaryMediaIDLock.unlock()
-
-        // Build the full set of mediaIDs to keep (primary + on-screen)
-        var keepMediaIDs = protectedMediaIDs
-        keepMediaIDs.insert(primaryMediaID)
-
-        // 1. Cancel non-primary, non-protected HLS segment download tasks
-        Task { await activeDownloadsActor.cancelTasksExcept(keepMediaIDs: keepMediaIDs) }
-
-        // 2. Cancel non-primary, non-protected progressive streaming sessions
-        streamingSessionsLock.lock()
-        let sessionKeysToRemove = streamingSessions.keys.filter { key in
-            !keepMediaIDs.contains(where: { key.hasPrefix($0) })
-        }
-        for key in sessionKeysToRemove {
-            streamingSessions[key]?.invalidateAndCancel()
-            streamingSessions.removeValue(forKey: key)
-        }
-        streamingSessionsLock.unlock()
-
-        // 3. Release cache writer slots for off-screen videos
-        progressiveCacheWritersLock.lock()
-        progressiveCacheWriters = progressiveCacheWriters.filter { key in
-            keepMediaIDs.contains(where: { key.hasPrefix($0) })
-        }
-        progressiveCacheWritersLock.unlock()
-
-        // 4. Collect cancelled mids before clearing slots (needed for step 5)
-        downloadingMediaIDsLock.lock()
-        let midsToMarkCancelled = Set(downloadingMediaIDs.keys.filter { !keepMediaIDs.contains($0) })
-        downloadingMediaIDsLock.unlock()
-
-        // 5. Free concurrent download slots for off-screen mediaIDs only
-        clearVideoDownloadTracking(except: keepMediaIDs)
-
-        // 6. Mark cancelled mediaIDs in the actor — future AVPlayer retries for these
-        // will hit isMediaIDCancelled → immediate connection.cancel() (no ⛔ spam, no slot used).
-        // Cleared automatically when a fresh player is registered (registerProxiedURL).
-        if !midsToMarkCancelled.isEmpty {
-            Task {
-                for mid in midsToMarkCancelled {
-                    await activeDownloadsActor.cancelTasks(for: mid)
-                }
-            }
-        }
-
-        for key in sessionKeysToRemove {
-            print("🎯 [PRIORITY] Cancelled download: \(key) (primary: \(shortMID(primaryMediaID)))")
-        }
     }
 
     /// Returns true if any HLS segment download is currently in-flight for the given mediaID.
@@ -868,98 +807,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.unlock()
     }
 
-    /// Check if a mediaID is allowed to start new network downloads.
-    /// Only the current primary (or any video when no primary is set) may download.
-    private func isDownloadAllowed(for mediaID: String) -> Bool {
+    /// Returns true if mediaID matches the current primary (or no primary is set).
+    private func isCurrentPrimary(_ mediaID: String) -> Bool {
         primaryMediaIDLock.lock()
         defer { primaryMediaIDLock.unlock() }
         guard let primary = currentPrimaryMediaID else { return true }
         return mediaID == primary
-    }
-
-    // MARK: - Per-mediaID concurrent download limit
-
-    /// Check if a new download for this mediaID can start within the concurrent limit.
-    /// If this mediaID already has active downloads, it keeps its slot.
-    private func canStartVideoDownload(for mediaID: String) -> Bool {
-        // Primary video is never throttled — its segment requests are time-critical
-        primaryMediaIDLock.lock()
-        let isPrimary = currentPrimaryMediaID == mediaID
-        primaryMediaIDLock.unlock()
-        if isPrimary { return true }
-
-        downloadingMediaIDsLock.lock()
-        defer { downloadingMediaIDsLock.unlock() }
-        if downloadingMediaIDs[mediaID] != nil { return true }
-        let allowed = downloadingMediaIDs.count < maxConcurrentVideoDownloads
-        if !allowed {
-            let shortId = shortMID(mediaID)
-            let activeIds = downloadingMediaIDs.keys.map { shortMID($0) }.joined(separator: ", ")
-            print("⛔ [CONCURRENCY] Blocked download for \(shortId) — \(downloadingMediaIDs.count) active: [\(activeIds)]")
-        }
-        return allowed
-    }
-
-    private func trackVideoDownloadStarted(for mediaID: String) {
-        downloadingMediaIDsLock.lock()
-        defer { downloadingMediaIDsLock.unlock() }
-        downloadingMediaIDs[mediaID, default: 0] += 1
-    }
-
-    private func trackVideoDownloadCompleted(for mediaID: String) {
-        downloadingMediaIDsLock.lock()
-        defer { downloadingMediaIDsLock.unlock() }
-        guard let count = downloadingMediaIDs[mediaID] else { return }
-        if count <= 1 { downloadingMediaIDs.removeValue(forKey: mediaID) }
-        else { downloadingMediaIDs[mediaID] = count - 1 }
-    }
-
-    private func clearVideoDownloadTracking(except mediaID: String? = nil) {
-        downloadingMediaIDsLock.lock()
-        defer { downloadingMediaIDsLock.unlock() }
-        if let keep = mediaID {
-            let keepCount = downloadingMediaIDs[keep]
-            downloadingMediaIDs.removeAll()
-            if let count = keepCount { downloadingMediaIDs[keep] = count }
-        } else {
-            downloadingMediaIDs.removeAll()
-        }
-    }
-
-    private func clearVideoDownloadTracking(except keepMediaIDs: Set<String>) {
-        downloadingMediaIDsLock.lock()
-        defer { downloadingMediaIDsLock.unlock() }
-        let kept = downloadingMediaIDs.filter { keepMediaIDs.contains($0.key) }
-        downloadingMediaIDs.removeAll()
-        for (key, value) in kept { downloadingMediaIDs[key] = value }
-    }
-
-    /// Release stalled download slots for a non-primary video without marking the mediaID
-    /// as permanently cancelled.  Frees network concurrency for other videos while keeping
-    /// the existing AVPlayer and its buffer intact.  Future segment requests from AVPlayer
-    /// will still be served normally (unlike `cancelDownloads` which blocks them).
-    public func releaseStalledDownloads(for mediaID: String) {
-        // 1. Clear dedup keys so new requests aren't stuck waiting for the stalled download
-        Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
-
-        // 2. Cancel the URLSession tasks to free network slots
-        streamingSessionsLock.lock()
-        let sessionKeysToRemove = streamingSessions.keys.filter { $0.hasPrefix(mediaID) }
-        for key in sessionKeysToRemove {
-            streamingSessions[key]?.invalidateAndCancel()
-            streamingSessions.removeValue(forKey: key)
-        }
-        streamingSessionsLock.unlock()
-
-        // 3. Release cache writer slot so a future request can write to disk
-        progressiveCacheWritersLock.lock()
-        progressiveCacheWriters = progressiveCacheWriters.filter { !$0.hasPrefix(mediaID) }
-        progressiveCacheWritersLock.unlock()
-
-        // 4. Free concurrent download slot so other videos aren't permanently blocked
-        downloadingMediaIDsLock.lock()
-        downloadingMediaIDs.removeValue(forKey: mediaID)
-        downloadingMediaIDsLock.unlock()
     }
 
     /// Thread-safe lookup of a registered real URL — safe to call from async contexts.
@@ -1325,11 +1178,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
             
             // Progressive video - proxy with Content-Type fix
-            handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
+            await handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
             completion()
             return
         }
-        
+
         // Extract file path after /ipfs/mediaID/ for cache lookup (HLS playlists/segments)
         let filePathComponents = pathComponents[2...].joined(separator: "/")
         let potentialCachePath = mediaDir.appendingPathComponent(filePathComponents)
@@ -1402,11 +1255,11 @@ public class LocalHTTPServer: @unchecked Sendable {
             completion()
         } else {
             // Progressive video - proxy with Content-Type fix
-            handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
+            await handleProgressiveVideoRequest(fullRealURL: fullRealURL, mediaID: mediaID, connection: connection, method: method, requestHeaders: requestLines)
             completion()
         }
     }
-    
+
     private func handlePlaylistRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String) {
         let cachePath = getCachePath(for: fullRealURL, mediaID: mediaID)
         let isCached = FileManager.default.fileExists(atPath: cachePath)
@@ -1524,23 +1377,26 @@ public class LocalHTTPServer: @unchecked Sendable {
             // Fall through to become a new downloader (no untracked background spawns)
         }
 
-        // Concurrency limit: at most maxConcurrentVideoDownloads IPFS downloads at once.
-        // Primary video always bypasses (canStartVideoDownload returns true for primary).
-        // Non-primary segments are cancelled immediately — AVPlayer retries with backoff,
-        // and the retry will succeed once a slot opens. Polling was replaced because it
-        // generated log spam and held 10+ idle Swift concurrency tasks simultaneously.
-        if !canStartVideoDownload(for: mediaID) {
-            connection.cancel()
-            return
-        }
-        trackVideoDownloadStarted(for: mediaID)
+        // Acquire a slot in the per-node connection pool before starting the IPFS download.
+        // Primary video is never blocked; preloads wait when primaryStarved or both preload slots are taken.
+        // Each slot is released after the download completes — preloads naturally yield between segments.
+        let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
+        let pool = NodePoolRegistry.shared.pool(for: nodeHost)
+        await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID))
 
         // This request becomes the downloader — mark active, fetch, then mark completed.
         await activeDownloadsActor.markDownloadStarted(for: downloadKey)
 
-        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method) {
-            self.trackVideoDownloadCompleted(for: mediaID)
-            Task { await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey) }
+        // Release the pool slot as soon as the NWConnection closes (either normally after the
+        // full segment is served, or early when AVPlayer switches bitrate / closes the connection).
+        // The IPFS download may continue to disk cache after that without holding a slot.
+        fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method,
+                      onConnectionDead: { Task { await pool.releaseSlot(mediaID: mediaID) } }) {
+            Task {
+                await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey)
+                // pool.releaseSlot already fired via onConnectionDead; second call is a safe no-op.
+                await pool.releaseSlot(mediaID: mediaID)
+            }
         }
     }
     
@@ -1590,7 +1446,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         headTask.resume()
     }
 
-    private func handleProgressiveVideoRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String, requestHeaders: [String]) {
+    private func handleProgressiveVideoRequest(fullRealURL: URL, mediaID: String, connection: NWConnection, method: String, requestHeaders: [String]) async {
         // Parse Range header from client request
         var rangeHeader: String? = nil
         for line in requestHeaders {
@@ -1647,18 +1503,16 @@ public class LocalHTTPServer: @unchecked Sendable {
         if shouldLog {
         }
         
-        // CACHE MISS - fetch from real server
-        // Concurrent download limit: at most 2 different mediaIDs may download at once.
-        // Send 503 (not RST) so AVPlayer treats it as a server-busy condition rather than
-        // a connection failure — prevents -1005 playerItem errors on fast-scrolled videos.
-        guard canStartVideoDownload(for: mediaID) else {
-            sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            return
-        }
+        // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
+        // Primary video is never blocked; preloads wait until a slot is available.
+        let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
+        let pool = NodePoolRegistry.shared.pool(for: nodeHost)
+        await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID))
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
+            await pool.releaseSlot(mediaID: mediaID)
             return
         }
         
@@ -1703,18 +1557,18 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Use a unique session key per connection so parallel connections don't clobber each other
         let sessionKey = "\(mediaID)_\(requestedStart)_\(ObjectIdentifier(connection).hashValue)"
-        trackVideoDownloadStarted(for: mediaID)
         let sessionCleanup: () -> Void = { [weak self] in
             guard let self = self else { return }
             self.streamingSessionsLock.lock()
             self.streamingSessions.removeValue(forKey: sessionKey)
             self.streamingSessionsLock.unlock()
-            self.trackVideoDownloadCompleted(for: mediaID)
             if shouldCache {
                 self.progressiveCacheWritersLock.lock()
                 self.progressiveCacheWriters.remove(cacheKey)
                 self.progressiveCacheWritersLock.unlock()
             }
+            // Release node connection pool slot so the next preload (or primary) can proceed.
+            Task { await pool.releaseSlot(mediaID: mediaID) }
         }
 
         let delegate = StreamingDownloadDelegate(
@@ -1733,6 +1587,10 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self?.storeProgressiveTotalSize(mediaID: mediaID, totalSize: totalSize)
             }
         )
+        // Release the pool slot as soon as AVPlayer closes the proxy connection.
+        // The IPFS download continues to disk cache without holding the slot — preloads no
+        // longer block the primary video for the full duration of a large range download.
+        delegate.onConnectionDead = { Task { await pool.releaseSlot(mediaID: mediaID) } }
 
         // Forward AVPlayer's request directly to IPFS and pipe back the response.
         // IPFS provides correct Content-Range / Content-Length; we only fix Content-Type.
@@ -2192,7 +2050,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         return mediaDir.appendingPathComponent(filename).path
     }
     
-    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, completion: (() -> Void)? = nil) {
+    private func fetchAndServe(url: URL, cachePath: String, connection: NWConnection, method: String, onConnectionDead: (() -> Void)? = nil, completion: (() -> Void)? = nil) {
         // CRITICAL: Block NEW network requests until app initialized
         guard canBypassInitialization(url: url) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing network fetch for \(url.path)")
@@ -2211,7 +2069,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // instead of waiting for the full 4–5 MB segment to download.
         // HEAD requests are routed through fetchWithRetry (we only need headers, not a stream).
         if isSegment && method == "GET" {
-            streamSegmentAndServe(url: url, cachePath: cachePath, connection: connection, mediaID: mediaID, completion: completion ?? {})
+            streamSegmentAndServe(url: url, cachePath: cachePath, connection: connection, mediaID: mediaID, onConnectionDead: onConnectionDead, completion: completion ?? {})
             return
         }
 
@@ -2229,7 +2087,7 @@ public class LocalHTTPServer: @unchecked Sendable {
     ///
     /// The session is registered in `streamingSessions` so `cancelDownloads(for:)` can cancel
     /// it when the player is cleared.
-    private func streamSegmentAndServe(url: URL, cachePath: String, connection: NWConnection, mediaID: String, completion: @escaping () -> Void) {
+    private func streamSegmentAndServe(url: URL, cachePath: String, connection: NWConnection, mediaID: String, onConnectionDead: (() -> Void)? = nil, completion: @escaping () -> Void) {
         // Use the relative path (e.g., "480p/segment000.ts") instead of just the filename
         // to avoid session key collisions between quality variants of the same segment.
         let cacheURL = URL(fileURLWithPath: cachePath)
@@ -2262,6 +2120,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             },
             completion: completion
         )
+        delegate.onConnectionDead = onConnectionDead
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 90
@@ -2830,6 +2689,8 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     private var diskBuffer = Data()
     private var headersSent = false
     private var connectionDead = false   // set when NWConnection closes before download finishes
+    /// Called once when the NWConnection closes early; releases the NodeConnectionPool slot.
+    var onConnectionDead: (() -> Void)?
 
     // Download progress tracking
     private let downloadStartTime = CFAbsoluteTimeGetCurrent()
@@ -2908,6 +2769,11 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             self.connectionDead = true
             let shortId = self.mediaID.count > 8 ? String(self.mediaID.prefix(8)) : self.mediaID
             print("🔌 [HLS SEGMENT \(shortId)] NWConnection closed mid-stream (\(self.segmentLabel)) — continuing IPFS download to disk cache")
+            // Release the pool slot immediately so primary isn't blocked waiting for this
+            // background cache-fill download to finish.
+            let release = self.onConnectionDead
+            self.onConnectionDead = nil
+            release?()
         })
     }
 

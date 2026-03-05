@@ -34,6 +34,7 @@
 		4612ED222E924A18005D5B8B /* MediaFileHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED162E924A18005D5B8B /* MediaFileHandle.swift */; };
 		4612ED232E924A18005D5B8B /* PendingRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED172E924A18005D5B8B /* PendingRequest.swift */; };
 		4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED242E925803005D5B8B /* LocalHTTPServer.swift */; };
+		4612ED2D2E924A18005D5B8B /* NodeConnectionPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED2C2E924A18005D5B8B /* NodeConnectionPool.swift */; };
 		4612ED272E937091005D5B8B /* DiskCacheCleanupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */; };
 		4612ED2A2E925803005D5B8B /* MemoryCapManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */; };
 		461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438162E3E426A002D1B22 /* ChatCacheManager.swift */; };
@@ -186,6 +187,7 @@
 		4612ED192E924A18005D5B8B /* URLExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLExtension.swift; sourceTree = "<group>"; };
 		4612ED1A2E924A18005D5B8B /* URLResponseExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLResponseExtension.swift; sourceTree = "<group>"; };
 		4612ED242E925803005D5B8B /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
+		4612ED2C2E924A18005D5B8B /* NodeConnectionPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeConnectionPool.swift; sourceTree = "<group>"; };
 		4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskCacheCleanupManager.swift; sourceTree = "<group>"; };
 		4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCapManager.swift; sourceTree = "<group>"; };
 		461438162E3E426A002D1B22 /* ChatCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCacheManager.swift; sourceTree = "<group>"; };
@@ -510,6 +512,7 @@
 			isa = PBXGroup;
 			children = (
 				4612ED242E925803005D5B8B /* LocalHTTPServer.swift */,
+				4612ED2C2E924A18005D5B8B /* NodeConnectionPool.swift */,
 				4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */,
 				4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */,
 				4612ED132E924A18005D5B8B /* AppLogger.swift */,
@@ -846,6 +849,7 @@
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */,
+				4612ED2D2E924A18005D5B8B /* NodeConnectionPool.swift in Sources */,
 				4612ED2A2E925803005D5B8B /* MemoryCapManager.swift in Sources */,
 				4612ED272E937091005D5B8B /* DiskCacheCleanupManager.swift in Sources */,
 				46B03D892E488EC0000E08DF /* CameraView.swift in Sources */,

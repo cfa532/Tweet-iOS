@@ -771,22 +771,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         deferVideoOutputAttachment(newPlayer)
     }
 
-    /// Pause, mute, enable network-while-paused, assign player, transition to .playerLoading.
+    /// Pause, mute, assign player, transition to .playerLoading.
     private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
         if newPlayer.rate > 0 { newPlayer.pause() }
         newPlayer.isMuted = MuteState.shared.isMuted
-        // Always enabled: AVPlayer manages its own stall recovery. With rate=0 (paused),
-        // this has no effect on non-primary cells. For the primary (rate=1), AVPlayer
-        // automatically waits to build buffer before playing — no manual intervention needed.
-        newPlayer.automaticallyWaitsToMinimizeStalling = true
-        // Don't allow paused players to use network — only the primary video
-        // (selected by coordinator via shouldPlayVideo) gets network access.
-        // This prevents 10+ nearby cells from downloading HLS segments concurrently,
-        // starving the primary of bandwidth.
-        newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-        // Keep a short buffer limit as safety net. shouldPlayVideo sets this to 0
-        // (unlimited) when coordinator selects primary.
-        newPlayer.currentItem?.preferredForwardBufferDuration = 3
         removePlayerObservers()
         self.player = newPlayer
         // Notify other feed cells that may hold the same player (tweet + retweet case)
@@ -900,9 +888,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         isHandlingFinishEvent = false
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
-
-        // Allow network access while paused so IPFS video can keep buffering.
-        player?.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
 
         // If the layer already has a frame, treat it as playable even if item.status
         // is still .unknown. Avoid bouncing back to .playerLoading.
@@ -1023,16 +1008,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
 
         if let player = player {
-            // No longer primary — throttle buffering but leave stall recovery alone.
-            player.currentItem?.preferredForwardBufferDuration = 3
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "coordinatorPause")
             // When video finished naturally, keep AVPlayerLayer showing the last
             // rendered frame instead of revealing the lower-res imageView thumbnail.
-            // The cell will be cleaned up normally when scrolled out of view.
             if videoCellState == .playing && !isHandlingFinishEvent {
                 transitionTo(.paused)
             }
@@ -1051,9 +1032,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         coordinatorWantsToPlay = false
 
         if let player = player {
-            // No longer primary — throttle buffering but leave stall recovery alone.
-            player.currentItem?.preferredForwardBufferDuration = 3
-            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
             if player.rate > 0 {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
@@ -1193,11 +1171,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         videoCellState = .playing
         retryButton.isHidden = true
-
-        // Unlimited forward buffer so AVPlayer can load the full asset from disk/cache
-        // without being capped at 3s. keepUp=false clears once the buffer grows past the
-        // playback rate threshold. Reset to 3 on pause/stop (preparePlayer / handlePause / handleStop).
-        player.currentItem?.preferredForwardBufferDuration = 0
 
         player.isMuted = MuteState.shared.isMuted
         player.play()
