@@ -1587,10 +1587,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self?.storeProgressiveTotalSize(mediaID: mediaID, totalSize: totalSize)
             }
         )
-        // Release the pool slot as soon as AVPlayer closes the proxy connection.
-        // The IPFS download continues to disk cache without holding the slot — preloads no
-        // longer block the primary video for the full duration of a large range download.
-        delegate.onConnectionDead = { Task { await pool.releaseSlot(mediaID: mediaID) } }
+        // Hold the pool slot until the IPFS download completes (or is cancelled).
+        // Unlike HLS segments (which must release early on NWConnection close to allow same-segment
+        // retries through duplicate-detection), progressive range requests are unique by byte offset —
+        // no duplicate detection exists, so early release causes AVPlayer's many parallel range
+        // requests to each get a slot sequentially, then all continue as background downloads
+        // simultaneously (7×4MB downloads observed = timeout). Holding until completion caps
+        // concurrent IPFS downloads to the pool limit (3 total).
+        // sessionCleanup (above) releases the slot on completion or cancellation.
 
         // Forward AVPlayer's request directly to IPFS and pipe back the response.
         // IPFS provides correct Content-Range / Content-Length; we only fix Content-Type.

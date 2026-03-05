@@ -635,6 +635,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                   let att = self.attachment,
                   let url = att.getUrl(self.effectiveBaseUrl),
                   let parentTweet = self.parentTweet else { return }
+            // Skip if a player is already configured (coordinator may have acquired one
+            // during the 0.3s window). Without this guard, the debounce reconfigures
+            // an already-playing player — causing a playing→playerLoading state reset.
+            guard self.player == nil, self.setupPlayerTask == nil else { return }
             self.playerAcquireDebounceTask = nil
             self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
         }
@@ -1180,6 +1184,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         videoCellState = .playing
         retryButton.isHidden = true
+
+        // Show spinner immediately — the player may need to buffer before the first frame
+        // even though the item status is .readyToPlay. KVO will stop it when
+        // timeControlStatus transitions to .playing (smooth playback confirmed).
+        // This covers the gap between coordinator selection and first KVO fire,
+        // which is invisible without the spinner on preloaded .playerReady players.
+        loadingSpinner.startAnimating()
 
         player.isMuted = MuteState.shared.isMuted
         player.play()
