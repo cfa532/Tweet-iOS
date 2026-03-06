@@ -7,11 +7,12 @@
 // Primary video:
 //   - Never waits — acquires a slot immediately, even if totalActive ≥ maxSlots.
 //   - Capped at primarySlotCap concurrent slots: 1 for HLS (sequential), 2 for progressive.
-//   - totalActive may temporarily exceed maxSlots; preloads' next segment requests
-//     suspend in acquireSlot, naturally shifting bandwidth to primary without cancellation.
+//   - totalActive may temporarily exceed maxSlots.
 // Non-primary (preloads):
-//   - Wait until totalActive < maxSlots (3).
-//   - As preloads finish their current segments and release slots, totalActive falls back to ≤ 3.
+//   - Non-blocking: acquires immediately if totalActive < maxSlots, otherwise returns false.
+//   - Never holds proxy TCP connections while waiting — ensures the primary's AVPlayer can
+//     always connect to the proxy (iOS limits concurrent connections per host to ~6).
+//   - Rejected preloads rely on AVPlayer's built-in retry with exponential backoff.
 
 import Foundation
 
@@ -19,14 +20,11 @@ import Foundation
 
 actor NodeConnectionPool {
     let nodeHost: String
-    /// Soft cap on total concurrent downloads. Preloads wait at this limit; primary may exceed it.
+    /// Soft cap on total concurrent downloads. Preloads are rejected at this limit; primary may exceed it.
     private let maxSlots = 3
 
     /// Count of active IPFS slot holds per mediaID.
     private var activeSlots: [String: Int] = [:]
-
-    /// Suspended preload callers waiting for a slot to free up.
-    private var waiters: [(mediaID: String, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(nodeHost: String) {
         self.nodeHost = nodeHost
@@ -37,23 +35,20 @@ actor NodeConnectionPool {
     /// Acquire a slot before starting an IPFS download.
     ///
     /// Returns `true` if a slot was actually occupied (caller must call `releaseSlot` when done).
-    /// Returns `false` if the primary was already at `primarySlotCap` — the download still
-    /// proceeds but the caller must NOT call `releaseSlot` (no slot was acquired).
+    /// Returns `false` in two cases (caller must NOT call `releaseSlot`):
+    ///   - Primary at `primarySlotCap`: download still proceeds (no slot needed).
+    ///   - Non-primary rejected (pool full): caller should close the connection.
     ///
     /// - Primary (`isPrimary: true`): granted immediately, even if totalActive ≥ maxSlots.
-    ///   totalActive may temporarily overshoot; preloads' next segment requests suspend
-    ///   until slots free up, naturally shifting bandwidth to primary without cancellation.
-    /// - Non-primary (`isPrimary: false`): suspends until totalActive < maxSlots. Always returns true.
+    /// - Non-primary (`isPrimary: false`): granted immediately if totalActive < maxSlots,
+    ///   otherwise returns `false`. Never blocks — keeps TCP connection count low so the
+    ///   primary's AVPlayer can always connect to the localhost proxy.
     @discardableResult
-    func acquireSlot(mediaID: String, isPrimary: Bool, primarySlotCap: Int = 1) async -> Bool {
+    func acquireSlot(mediaID: String, isPrimary: Bool, primarySlotCap: Int = 1) -> Bool {
         let short = String(mediaID.prefix(8))
         if isPrimary {
             let current = activeSlots[mediaID] ?? 0
             if current < primarySlotCap {
-                // Primary always occupies a slot immediately (never waits).
-                // totalActive may temporarily exceed maxSlots — preloads' next segment
-                // requests will suspend in acquireSlot until primary releases, naturally
-                // shifting bandwidth to primary without cancellation.
                 occupy(mediaID: mediaID)
                 print("🎰 [POOL \(nodeHost)] PRIMARY \(short) acquired slot \(current + 1)/\(primarySlotCap) (total=\(totalActive))")
                 return true
@@ -62,43 +57,30 @@ actor NodeConnectionPool {
                 return false
             }
         }
-        await withCheckedContinuation { continuation in
-            if totalActive < maxSlots {
-                occupy(mediaID: mediaID)
-                print("🎰 [POOL \(nodeHost)] preload \(short) acquired slot (total=\(totalActive))")
-                continuation.resume()
-            } else {
-                print("🎰 [POOL \(nodeHost)] preload \(short) waiting (total=\(totalActive), max=\(maxSlots))")
-                waiters.append((mediaID, continuation))
-            }
+        // Non-primary: acquire immediately if capacity available, else reject.
+        // Never blocks — prevents TCP connection accumulation that starves the primary.
+        if totalActive < maxSlots {
+            occupy(mediaID: mediaID)
+            print("🎰 [POOL \(nodeHost)] preload \(short) acquired slot (total=\(totalActive))")
+            return true
+        } else {
+            print("🎰 [POOL \(nodeHost)] preload \(short) rejected (total=\(totalActive), max=\(maxSlots))")
+            return false
         }
-        return true  // non-primary always acquires a slot after waiting
     }
 
     /// Release a slot after an IPFS download completes or is cancelled.
-    /// Wakes any preload waiters that can now proceed.
     func releaseSlot(mediaID: String) {
         guard let count = activeSlots[mediaID] else { return }
         let short = String(mediaID.prefix(8))
         if count <= 1 { activeSlots.removeValue(forKey: mediaID) }
         else { activeSlots[mediaID] = count - 1 }
-        print("🎰 [POOL \(nodeHost)] \(short) released slot (total=\(totalActive), waiters=\(waiters.count))")
-        wakeWaiters()
+        print("🎰 [POOL \(nodeHost)] \(short) released slot (total=\(totalActive))")
     }
 
-    /// Called when the server stops. Clears all slot counts and resumes any suspended
-    /// preload continuations so they are not permanently leaked. Woken callers will
-    /// proceed past acquireSlot but their downloads will fail gracefully (server is down).
+    /// Called when the server stops. Clears all stale slot counts.
     func reset() {
-        let waiterCount = waiters.count
         activeSlots.removeAll()
-        for waiter in waiters {
-            waiter.continuation.resume()
-        }
-        waiters.removeAll()
-        if waiterCount > 0 {
-            print("🎰 [POOL \(nodeHost)] reset: cleared slots, released \(waiterCount) waiters")
-        }
     }
 
     // MARK: - Internal
@@ -107,19 +89,6 @@ actor NodeConnectionPool {
 
     private func occupy(mediaID: String) {
         activeSlots[mediaID, default: 0] += 1
-    }
-
-    private func wakeWaiters() {
-        var remaining: [(String, CheckedContinuation<Void, Never>)] = []
-        for waiter in waiters {
-            if totalActive < maxSlots {
-                occupy(mediaID: waiter.mediaID)
-                waiter.continuation.resume()
-            } else {
-                remaining.append(waiter)
-            }
-        }
-        waiters = remaining
     }
 }
 
@@ -143,7 +112,7 @@ class NodePoolRegistry {
         return pool
     }
 
-    /// Reset all pools on server stop: clears stale slot counts and resumes suspended waiters.
+    /// Reset all pools on server stop: clears stale slot counts.
     func resetAllPools() {
         lock.lock()
         let allPools = Array(pools.values)

@@ -1405,11 +1405,19 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         // Acquire a slot in the per-node connection pool before starting the IPFS download.
-        // Primary: never blocked (bypasses soft cap). Preloads wait until totalActive < 3.
-        // slotAcquired=false means primary is at cap; download proceeds but no slot to release.
+        // Primary: never blocked (bypasses soft cap). Non-primary: rejected if pool is full.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
-        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID))
+        let isPrimary = isCurrentPrimary(mediaID)
+        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
+
+        // Non-primary rejected (pool full): release dedup claim and close connection.
+        // AVPlayer retries with backoff; slot will be available after current downloads finish.
+        guard slotAcquired || isPrimary else {
+            await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
+            connection.cancel()
+            return
+        }
 
         // SlotReleaseGuard prevents a double-release: both onConnectionDead (NWConnection closes
         // during bitrate switch) and the IPFS completion callback call releaseSlot. Without
@@ -1535,13 +1543,19 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
-        // Primary video is never blocked; preloads wait until a slot is available.
-        // slotAcquired is false when the primary is already at its cap (2 parallel range requests) —
-        // the download proceeds but releaseSlot must NOT be called.
+        // Primary video is never blocked; non-primary rejected if pool is full.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
-        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID), primarySlotCap: 2)
+        let isPrimary = isCurrentPrimary(mediaID)
+        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
+
+        // Non-primary rejected (pool full): close connection. AVPlayer retries with backoff.
+        guard slotAcquired || isPrimary else {
+            connection.cancel()
+            return
+        }
+
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
