@@ -1137,6 +1137,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // (or handleAlreadyReadyPlayer) will call requestPlaybackStartIfNeeded once ready.
         guard isActuallyPlayerReady(player) else {
             print("\(logPrefix) ⏸️ requestPlayback(\(reason)): item not ready (status=\(player.currentItem?.status.rawValue ?? -1)), deferring to statusKVO")
+            // Show spinner so the user sees loading feedback while waiting for statusKVO.
+            // transitionTo(.playerReady) may have been called before coordinatorWantsToPlay
+            // was set (preloaded video selected as primary), leaving the spinner stopped.
+            loadingSpinner.startAnimating()
             return
         }
 
