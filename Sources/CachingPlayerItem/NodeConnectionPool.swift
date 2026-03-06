@@ -5,8 +5,9 @@
 //
 // Soft cap of maxSlots (3) concurrent downloads per node.
 // Primary video:
-//   - Never waits — acquires a slot immediately, temporarily exceeding maxSlots if needed.
-//   - Capped at maxPrimarySlots (2) concurrent slots to avoid monopolising bandwidth.
+//   - Never waits — acquires a slot immediately, even if totalActive ≥ maxSlots.
+//   - Capped at primarySlotCap concurrent slots: 1 for HLS (sequential), 2 for progressive.
+//   - acquireSlot returns false when at cap — download proceeds unmetered, caller skips releaseSlot.
 // Non-primary (preloads):
 //   - Wait until totalActive < maxSlots (3).
 //   - As preloads finish their segments and release slots, totalActive falls back to ≤ 3.
@@ -34,22 +35,27 @@ actor NodeConnectionPool {
 
     /// Acquire a slot before starting an IPFS download.
     ///
+    /// Returns `true` if a slot was actually occupied (caller must call `releaseSlot` when done).
+    /// Returns `false` if the primary was already at `primarySlotCap` — the download still
+    /// proceeds unmetered, but the caller must NOT call `releaseSlot` (no slot was acquired).
+    ///
     /// - Primary (`isPrimary: true`): granted immediately, even if totalActive ≥ maxSlots.
     ///   Capped at `primarySlotCap` concurrent slots; HLS passes 1 (sequential segments),
     ///   progressive video passes 2 (parallel range requests benefit from extra bandwidth).
-    ///   If already at cap, returns without acquiring (download proceeds unmetered).
-    /// - Non-primary (`isPrimary: false`): suspends until totalActive < maxSlots.
-    func acquireSlot(mediaID: String, isPrimary: Bool, primarySlotCap: Int = 1) async {
+    /// - Non-primary (`isPrimary: false`): suspends until totalActive < maxSlots. Always returns true.
+    @discardableResult
+    func acquireSlot(mediaID: String, isPrimary: Bool, primarySlotCap: Int = 1) async -> Bool {
         let short = String(mediaID.prefix(8))
         if isPrimary {
             let current = activeSlots[mediaID] ?? 0
             if current < primarySlotCap {
                 occupy(mediaID: mediaID)
                 print("🎰 [POOL \(nodeHost)] PRIMARY \(short) acquired slot \(current + 1)/\(primarySlotCap) (total=\(totalActive))")
+                return true
             } else {
                 print("🎰 [POOL \(nodeHost)] PRIMARY \(short) at cap (\(primarySlotCap)), skipping slot (total=\(totalActive))")
+                return false  // download proceeds but no slot acquired — caller must NOT releaseSlot
             }
-            return  // never waits
         }
         await withCheckedContinuation { continuation in
             if totalActive < maxSlots {
@@ -61,6 +67,7 @@ actor NodeConnectionPool {
                 waiters.append((mediaID, continuation))
             }
         }
+        return true  // non-primary always acquires a slot after waiting
     }
 
     /// Release a slot after an IPFS download completes or is cancelled.
@@ -74,9 +81,20 @@ actor NodeConnectionPool {
         wakeWaiters()
     }
 
-    /// Called when the primary mediaID changes. No-op in this design — primary identity
-    /// does not affect slot logic; the `isPrimary` flag at acquisition time is sufficient.
-    func setPrimaryMediaID(_ mediaID: String?) { }
+    /// Called when the server stops. Clears all slot counts and resumes any suspended
+    /// preload continuations so they are not permanently leaked. Woken callers will
+    /// proceed past acquireSlot but their downloads will fail gracefully (server is down).
+    func reset() {
+        let waiterCount = waiters.count
+        activeSlots.removeAll()
+        for waiter in waiters {
+            waiter.continuation.resume()
+        }
+        waiters.removeAll()
+        if waiterCount > 0 {
+            print("🎰 [POOL \(nodeHost)] reset: cleared slots, released \(waiterCount) waiters")
+        }
+    }
 
     // MARK: - Internal
 
@@ -120,14 +138,15 @@ class NodePoolRegistry {
         return pool
     }
 
-    /// Notifies all pools of the current primary. No-op in the current design;
-    /// kept so LocalHTTPServer callers don't need to change.
-    func setPrimaryMediaID(_ mediaID: String?) {
+    /// Reset all pools on server stop: clears stale slot counts and resumes suspended waiters.
+    func resetAllPools() {
         lock.lock()
         let allPools = Array(pools.values)
         lock.unlock()
-        for pool in allPools {
-            Task { await pool.setPrimaryMediaID(mediaID) }
+        Task {
+            for pool in allPools {
+                await pool.reset()
+            }
         }
     }
 

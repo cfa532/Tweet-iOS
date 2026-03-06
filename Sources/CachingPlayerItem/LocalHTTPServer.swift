@@ -247,8 +247,8 @@ private actor ActiveDownloadsActor {
     }
 
     /// Remove active download keys for this mediaID without marking it as permanently
-    /// cancelled. Used to free download slots for non-primary videos whose downloads
-    /// stalled — future segment requests will still be served normally.
+    /// cancelled. Used when a video becomes primary — clears stale preload dedup entries
+    /// so the primary player's segment requests start immediately without waiting.
     func releaseStalledDownloads(for mediaID: String) {
         activeDownloads = activeDownloads.filter { !$0.contains(mediaID) }
     }
@@ -270,6 +270,17 @@ private actor ActiveDownloadsActor {
         cancelledMediaIDs.remove(mediaID)
     }
 
+}
+
+/// Ensures a pool slot is released at most once, even when both the NWConnection-dead
+/// callback and the IPFS completion callback both try to call releaseSlot.
+private actor SlotReleaseGuard {
+    private var released = false
+    func tryRelease() -> Bool {
+        if released { return false }
+        released = true
+        return true
+    }
 }
 
 public class LocalHTTPServer: @unchecked Sendable {
@@ -677,6 +688,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self = self else { return }
             self.stopInternal()
+            // Reset per-node connection pools so stale slot counts and suspended
+            // preload waiters don't carry over into the next server session.
+            NodePoolRegistry.shared.resetAllPools()
             Task {
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
                 self.isStopping = false
@@ -721,6 +735,10 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // 3. Fire-and-forget: cancel tracked active downloads
         Task { await activeDownloadsActor.cancelAllTasks() }
+
+        // 4. Reset per-node connection pools: clears stale slot counts and resumes
+        //    any suspended preload continuations so they are not permanently leaked.
+        NodePoolRegistry.shared.resetAllPools()
     }
 
     /// Emergency cleanup during network failures
@@ -802,16 +820,16 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.lock()
         currentPrimaryMediaID = mediaID
         primaryMediaIDLock.unlock()
-        // Clear cancelled state so a preloaded-then-cancelled player can download once primary.
-        // (registerProxiedURL only clears it when a NEW CachingPlayerItem is created, but
-        // cached players skip that path entirely.)
         if let mediaID {
+            // Clear cancelled state so a preloaded-then-cancelled player can download once primary.
             Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
+            // Clear stale dedup entries from any in-flight preload downloads for this mediaID.
+            // This ensures the primary player's segment requests always see a clean slate in
+            // startIfNotInFlight — no 120s poll wait for a preload that was downloading the
+            // same segment. The preload's URLSession continues to disk in the background;
+            // the primary just starts its own download in parallel.
+            Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
         }
-        // Inform all pools of the new primary so that new preload slot acquisitions are
-        // held while primary has an active download slot (i.e. while it is buffering).
-        // Currently-running preload downloads are NOT cancelled — only new acquisitions wait.
-        NodePoolRegistry.shared.setPrimaryMediaID(mediaID)
     }
 
     /// Clear primary restriction so all videos can download (e.g., when all playback stops).
@@ -819,7 +837,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.lock()
         currentPrimaryMediaID = nil
         primaryMediaIDLock.unlock()
-        NodePoolRegistry.shared.setPrimaryMediaID(nil)
     }
 
     /// Returns true if mediaID matches the current primary (or no primary is set).
@@ -1335,70 +1352,51 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         let downloadKey = cachePath
 
-        // Atomically claim this download. If another task already started it, enter the polling
-        // loop — this eliminates the TOCTOU race where two concurrent requests both see the key
-        // as not-in-flight (between a separate hasDownload check and markDownloadStarted the task
-        // could suspend in acquireSlot), then both reach streamSegmentAndServe, where one triggers
-        // the duplicate-download guard → connection.cancel() with no HTTP response →
-        // CoreMediaErrorDomain -12889 in AVPlayer.
+        // Deduplicate concurrent requests for the same segment.
+        // Primary video: setPrimaryMediaID clears this video's dedup entries so the primary
+        // player's requests always see a clean slate and claim immediately. If somehow still
+        // in-flight (a concurrent parallel request from the same player), cancel and let
+        // AVPlayer retry — its retry arrives after the in-flight download completes or caches.
+        // Non-primary: poll up to 120s. IPFS DHT lookups can take 30-90s; 120s prevents
+        // duplicate downloads while allowing enough time for slow nodes.
         if !(await activeDownloadsActor.startIfNotInFlight(for: downloadKey)) {
-            // Check connection state before entering the wait loop
-            switch connection.state {
-            case .cancelled, .failed:
+            if isCurrentPrimary(mediaID) {
+                // Primary's dedup entries were cleared by setPrimaryMediaID. Seeing in-flight
+                // here means two parallel requests from the same primary player raced; cancel
+                // this one so only one download runs. AVPlayer retries and hits the cache.
+                connection.cancel()
                 return
-            default:
-                break
             }
 
-            // Poll until: file appears on disk, download removed from active set, or 120s timeout.
-            // IPFS segments can take 30-90s due to DHT lookup overhead — 15s was too short,
-            // causing the dedup waiter to time out and leave NWConnections hanging.
-            let pollInterval: UInt64 = 500_000_000 // 0.5s
-            let maxPolls = 240 // 240 × 0.5s = 120s
+            // Non-primary: poll until the in-flight download finishes and file lands on disk.
+            switch connection.state {
+            case .cancelled, .failed: return
+            default: break
+            }
 
-            for _ in 0..<maxPolls {
+            let pollInterval: UInt64 = 500_000_000 // 0.5s
+            for _ in 0..<240 { // max 120s
                 try? await Task.sleep(nanoseconds: pollInterval)
 
-                // File appeared on disk — serve it
                 if FileManager.default.fileExists(atPath: cachePath) {
-                    autoreleasepool {
-                        serveFile(path: cachePath, connection: connection, method: method)
-                    }
+                    autoreleasepool { serveFile(path: cachePath, connection: connection, method: method) }
                     return
                 }
-
-                // Download finished (removed from active set) but file missing — download failed
-                if !(await activeDownloadsActor.hasDownload(for: downloadKey)) {
-                    break
-                }
-
-                // Player was cleared — cancel connection so AVPlayer retries cleanly
-                if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
-                    connection.cancel()
-                    return
-                }
-
-                // Connection closed by AVPlayer — just return
+                // Download removed from active set — failed without writing to disk
+                if !(await activeDownloadsActor.hasDownload(for: downloadKey)) { break }
+                if await activeDownloadsActor.isMediaIDCancelled(mediaID) { connection.cancel(); return }
                 switch connection.state {
                 case .cancelled, .failed: return
                 default: break
                 }
             }
 
-            // After timeout or download failure, check again before falling through
-            if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
-                connection.cancel()
-                return
-            }
-
+            if await activeDownloadsActor.isMediaIDCancelled(mediaID) { connection.cancel(); return }
             switch connection.state {
             case .cancelled, .failed: return
             default: break
             }
-
-            // Try to claim as the new downloader (the previous one failed without caching).
-            // If still in-flight (very unusual — means original is in acquireSlot backlog),
-            // cancel this connection so AVPlayer retries after its backoff.
+            // Previous downloader failed without caching; try to claim as new downloader.
             guard await activeDownloadsActor.startIfNotInFlight(for: downloadKey) else {
                 connection.cancel()
                 return
@@ -1406,21 +1404,27 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         // Acquire a slot in the per-node connection pool before starting the IPFS download.
-        // Primary video is never blocked; preloads wait until totalActive < maxPreloadSlots (2).
-        // Each slot is released after the download completes — preloads naturally yield between segments.
+        // Primary: never blocked (bypasses soft cap). Preloads wait until totalActive < 3.
+        // slotAcquired=false means primary is at cap; download proceeds but no slot to release.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
-        await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID))
+        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID))
 
-        // Release the pool slot as soon as the NWConnection closes (either normally after the
-        // full segment is served, or early when AVPlayer switches bitrate / closes the connection).
-        // The IPFS download may continue to disk cache after that without holding a slot.
+        // SlotReleaseGuard prevents a double-release: both onConnectionDead (NWConnection closes
+        // during bitrate switch) and the IPFS completion callback call releaseSlot. Without
+        // the guard, if a new segment for the same mediaID acquired a slot between the two
+        // fires, the second release would decrement the wrong slot count.
+        let slotGuard = SlotReleaseGuard()
+
         fetchAndServe(url: fullRealURL, cachePath: cachePath, connection: connection, method: method,
-                      onConnectionDead: { Task { await pool.releaseSlot(mediaID: mediaID) } }) {
+                      onConnectionDead: slotAcquired ? {
+                          Task { if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) } }
+                      } : nil) {
             Task {
                 await self.activeDownloadsActor.markDownloadCompleted(for: downloadKey)
-                // pool.releaseSlot already fired via onConnectionDead; second call is a safe no-op.
-                await pool.releaseSlot(mediaID: mediaID)
+                if slotAcquired {
+                    if await slotGuard.tryRelease() { await pool.releaseSlot(mediaID: mediaID) }
+                }
             }
         }
     }
@@ -1530,15 +1534,17 @@ public class LocalHTTPServer: @unchecked Sendable {
         
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
         // Primary video is never blocked; preloads wait until a slot is available.
+        // slotAcquired is false when the primary is already at its cap (2 parallel range requests) —
+        // the download proceeds but releaseSlot must NOT be called.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
-        await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID), primarySlotCap: 2)
+        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID), primarySlotCap: 2)
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")
             self.sendResponse(connection: connection, statusCode: 503, headers: [:], body: nil)
-            await pool.releaseSlot(mediaID: mediaID)
+            if slotAcquired { await pool.releaseSlot(mediaID: mediaID) }
             return
         }
         
@@ -1594,7 +1600,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self.progressiveCacheWritersLock.unlock()
             }
             // Release node connection pool slot so the next preload (or primary) can proceed.
-            Task { await pool.releaseSlot(mediaID: mediaID) }
+            if slotAcquired { Task { await pool.releaseSlot(mediaID: mediaID) } }
         }
 
         let delegate = StreamingDownloadDelegate(
@@ -2168,12 +2174,15 @@ public class LocalHTTPServer: @unchecked Sendable {
             // handleSegmentRequest's polling loop and is served from disk cache once
             // the in-flight download completes.
             // NOTE: Do NOT send HTTP errors — AVPlayer may treat them as permanent failures.
-            // Do NOT call completion() — the ORIGINAL session handles markDownloadCompleted.
+            // MUST call completion() to release the pool slot and activeDownloads key that
+            // handleSegmentRequest acquired before calling us. Without it, both leak and the
+            // primary can never make progress (startIfNotInFlight keeps failing on the stale key).
             streamingSessionsLock.unlock()
             session.invalidateAndCancel()
             let shortId = shortMID(mediaID)
             print("♻️ [HLS SEGMENT \(shortId)] Duplicate download for \(sessionKey), closing connection")
             connection.cancel()
+            completion()
             return
         }
         streamingSessions[sessionKey] = session
