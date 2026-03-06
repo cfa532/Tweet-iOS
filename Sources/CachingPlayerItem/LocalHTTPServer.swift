@@ -221,6 +221,16 @@ private actor ActiveDownloadsActor {
         activeDownloads.insert(key)
     }
 
+    /// Atomically checks if a download is in flight and, if not, marks it as started.
+    /// Returns true if the caller should proceed as the downloader (key was not in-flight).
+    /// Returns false if another task is already downloading this key (caller should poll).
+    /// Eliminates the TOCTOU race between a separate hasDownload check and markDownloadStarted.
+    func startIfNotInFlight(for key: String) -> Bool {
+        if activeDownloads.contains(key) { return false }
+        activeDownloads.insert(key)
+        return true
+    }
+
     func markDownloadCompleted(for key: String) {
         activeDownloads.remove(key)
     }
@@ -1318,15 +1328,16 @@ public class LocalHTTPServer: @unchecked Sendable {
             return
         }
 
-        // DEDUPLICATION FIX: Check if this segment is already being downloaded
         let downloadKey = cachePath
 
-        // DEDUPLICATION: Check if another request is already downloading this segment.
-        // Waiters poll with Task.sleep — no CheckedContinuation, no leak risk.
-        let hasExisting = await activeDownloadsActor.hasDownload(for: downloadKey)
-
-        if hasExisting {
-            // Check connection state before waiting
+        // Atomically claim this download. If another task already started it, enter the polling
+        // loop — this eliminates the TOCTOU race where two concurrent requests both see the key
+        // as not-in-flight (between a separate hasDownload check and markDownloadStarted the task
+        // could suspend in acquireSlot), then both reach streamSegmentAndServe, where one triggers
+        // the duplicate-download guard → connection.cancel() with no HTTP response →
+        // CoreMediaErrorDomain -12889 in AVPlayer.
+        if !(await activeDownloadsActor.startIfNotInFlight(for: downloadKey)) {
+            // Check connection state before entering the wait loop
             switch connection.state {
             case .cancelled, .failed:
                 return
@@ -1356,25 +1367,37 @@ public class LocalHTTPServer: @unchecked Sendable {
                     break
                 }
 
-                // Player was cleared — don't retry
-                if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
+                // Player was cleared — cancel connection so AVPlayer retries cleanly
+                if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
+                    connection.cancel()
+                    return
+                }
 
-                // Connection closed — just return
+                // Connection closed by AVPlayer — just return
                 switch connection.state {
                 case .cancelled, .failed: return
                 default: break
                 }
             }
 
-            // After timeout or download failure, check again
-            if await activeDownloadsActor.isMediaIDCancelled(mediaID) { return }
+            // After timeout or download failure, check again before falling through
+            if await activeDownloadsActor.isMediaIDCancelled(mediaID) {
+                connection.cancel()
+                return
+            }
 
             switch connection.state {
             case .cancelled, .failed: return
             default: break
             }
 
-            // Fall through to become a new downloader (no untracked background spawns)
+            // Try to claim as the new downloader (the previous one failed without caching).
+            // If still in-flight (very unusual — means original is in acquireSlot backlog),
+            // cancel this connection so AVPlayer retries after its backoff.
+            guard await activeDownloadsActor.startIfNotInFlight(for: downloadKey) else {
+                connection.cancel()
+                return
+            }
         }
 
         // Acquire a slot in the per-node connection pool before starting the IPFS download.
@@ -1383,9 +1406,6 @@ public class LocalHTTPServer: @unchecked Sendable {
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID))
-
-        // This request becomes the downloader — mark active, fetch, then mark completed.
-        await activeDownloadsActor.markDownloadStarted(for: downloadKey)
 
         // Release the pool slot as soon as the NWConnection closes (either normally after the
         // full segment is served, or early when AVPlayer switches bitrate / closes the connection).
@@ -2798,7 +2818,15 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
 
         if let error = error {
             let nsError = error as NSError
-            if !connectionDead && !headersSent && nsError.code != NSURLErrorCancelled {
+            if nsError.code == NSURLErrorCancelled {
+                // We cancelled this IPFS download (player scrolled off screen, etc.).
+                // Cancel the NWConnection rather than sending a FIN — a FIN would falsely signal
+                // a complete segment body to AVPlayer, causing it to decode a truncated TS file
+                // and fail with CoreMediaErrorDomain -12889.
+                if !connectionDead { connection.cancel() }
+                return
+            }
+            if !connectionDead && !headersSent {
                 // No data was sent — tell AVPlayer so it can retry or switch variants.
                 sendFallbackError(connection)
                 BlackList.shared.recordFailure(mediaID)
@@ -2807,9 +2835,7 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
                 connection.send(content: nil, contentContext: .defaultMessage, isComplete: true,
                                completion: .contentProcessed { _ in })
             }
-            if nsError.code != NSURLErrorCancelled {
-                print("⚠️ [HLS SEGMENT \(shortId)] \(segmentLabel) failed, \(diskBuffer.count / 1024)KB downloaded: \(nsError.domain) \(nsError.code)")
-            }
+            print("⚠️ [HLS SEGMENT \(shortId)] \(segmentLabel) failed, \(diskBuffer.count / 1024)KB downloaded: \(nsError.domain) \(nsError.code)")
             return
         }
 
