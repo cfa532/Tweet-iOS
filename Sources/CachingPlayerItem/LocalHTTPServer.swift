@@ -808,6 +808,10 @@ public class LocalHTTPServer: @unchecked Sendable {
         if let mediaID {
             Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
         }
+        // Inform all pools of the new primary so that new preload slot acquisitions are
+        // held while primary has an active download slot (i.e. while it is buffering).
+        // Currently-running preload downloads are NOT cancelled — only new acquisitions wait.
+        NodePoolRegistry.shared.setPrimaryMediaID(mediaID)
     }
 
     /// Clear primary restriction so all videos can download (e.g., when all playback stops).
@@ -815,6 +819,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.lock()
         currentPrimaryMediaID = nil
         primaryMediaIDLock.unlock()
+        NodePoolRegistry.shared.setPrimaryMediaID(nil)
     }
 
     /// Returns true if mediaID matches the current primary (or no primary is set).
@@ -1401,7 +1406,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         // Acquire a slot in the per-node connection pool before starting the IPFS download.
-        // Primary video is never blocked; preloads wait when primaryStarved or both preload slots are taken.
+        // Primary video is never blocked; preloads wait until totalActive < maxPreloadSlots (2).
         // Each slot is released after the download completes — preloads naturally yield between segments.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
@@ -1527,7 +1532,8 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Primary video is never blocked; preloads wait until a slot is available.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
-        await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID))
+        // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
+        await pool.acquireSlot(mediaID: mediaID, isPrimary: isCurrentPrimary(mediaID), primarySlotCap: 2)
         // CRITICAL: Block NEW network requests until app initialized (but cached content is OK)
         guard canBypassInitialization(for: mediaID, url: fullRealURL) else {
             print("⚠️ [LocalHTTPServer] App not initialized, refusing NETWORK request for \(mediaID). Cache miss - video won't load until app initializes.")

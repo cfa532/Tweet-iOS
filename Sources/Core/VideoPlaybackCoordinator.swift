@@ -1462,14 +1462,14 @@ class VideoPlaybackCoordinator: ObservableObject {
 
     /// Identify the primary video based on scroll direction.
     /// visibleVideos is in feed order (index 0 = topmost on screen, last = bottommost).
-    /// Scrolling down: pick bottommost (the video just scrolled into view, where attention is).
-    /// Scrolling up: pick topmost (the video just scrolled into view from above).
+    /// Scrolling down: pick topmost (already in view, user is reading it).
+    /// Scrolling up: pick bottommost (just scrolled into view from below).
     private func identifyPrimaryVideo() -> VideoPlaybackInfo? {
         guard tableView?.window != nil else {
             return visibleVideos.first
         }
 
-        let candidates = scrollDirection ? visibleVideos.reversed() : visibleVideos
+        let candidates = scrollDirection ? visibleVideos : visibleVideos.reversed()
 
         // visibleVideos is derived from onScreenMediaCells only; pick first candidate with a delegate.
         // Skip failedPrimaryIdentifier and finishedPrimaryIdentifier to avoid re-selecting.
