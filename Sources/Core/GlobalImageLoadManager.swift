@@ -57,8 +57,8 @@ class GlobalImageLoadManager: ObservableObject {
     static let shared = GlobalImageLoadManager()
     
     // MARK: - Configuration
-    private let maxConcurrentLoads = 12  // Balanced for stable network performance
-    private let reservedHighPrioritySlots = 4  // Slots reserved for critical/high priority requests
+    private let maxConcurrentLoads = 8   // Fewer concurrent loads so visible images get bandwidth faster
+    private let reservedHighPrioritySlots = 3  // Slots reserved for critical/high priority requests
     private let maxQueueSize = 50
     private let memoryWarningThreshold = 0.45 // 45% of available memory
     
