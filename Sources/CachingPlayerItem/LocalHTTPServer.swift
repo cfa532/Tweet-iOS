@@ -839,11 +839,12 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.unlock()
     }
 
-    /// Returns true if mediaID matches the current primary (or no primary is set).
+    /// Returns true only if mediaID matches the current primary.
+    /// When no primary is set, nothing is primary — all downloads respect the pool cap.
     private func isCurrentPrimary(_ mediaID: String) -> Bool {
         primaryMediaIDLock.lock()
         defer { primaryMediaIDLock.unlock() }
-        guard let primary = currentPrimaryMediaID else { return true }
+        guard let primary = currentPrimaryMediaID else { return false }
         return mediaID == primary
     }
 
@@ -1520,15 +1521,16 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Deduplicate: suppress identical cache miss logs within 3 seconds
         let logKey = "\(mediaID)_\(rangeStr)"
         let now = Date()
-        cacheMissLogLock.lock()
-        let lastLog = recentCacheMissLogs[logKey]
-        let shouldLog = lastLog == nil || now.timeIntervalSince(lastLog!) >= 3.0
-        if shouldLog { recentCacheMissLogs[logKey] = now }
-        // Prune old entries periodically
-        if recentCacheMissLogs.count > 50 {
-            recentCacheMissLogs = recentCacheMissLogs.filter { now.timeIntervalSince($0.value) < 5.0 }
+        let shouldLog = cacheMissLogLock.withLock {
+            let lastLog = recentCacheMissLogs[logKey]
+            let should = lastLog == nil || now.timeIntervalSince(lastLog!) >= 3.0
+            if should { recentCacheMissLogs[logKey] = now }
+            // Prune old entries periodically
+            if recentCacheMissLogs.count > 50 {
+                recentCacheMissLogs = recentCacheMissLogs.filter { now.timeIntervalSince($0.value) < 5.0 }
+            }
+            return should
         }
-        cacheMissLogLock.unlock()
         if shouldLog {
         }
         
@@ -1554,10 +1556,11 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Only the first connection at each starting offset writes to disk cache.
         // Parallel connections for the same range just stream without caching.
         let cacheKey = "\(mediaID)_\(requestedStart)"
-        progressiveCacheWritersLock.lock()
-        let shouldCache = !progressiveCacheWriters.contains(cacheKey)
-        if shouldCache { progressiveCacheWriters.insert(cacheKey) }
-        progressiveCacheWritersLock.unlock()
+        let shouldCache = progressiveCacheWritersLock.withLock {
+            let isNew = !progressiveCacheWriters.contains(cacheKey)
+            if isNew { progressiveCacheWriters.insert(cacheKey) }
+            return isNew
+        }
 
         // Set up disk cache file handle for the writer connection
         var cacheFileHandle: FileHandle? = nil
@@ -1642,9 +1645,9 @@ public class LocalHTTPServer: @unchecked Sendable {
         config.timeoutIntervalForResource = 300
 
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        streamingSessionsLock.lock()
-        streamingSessions[sessionKey] = session
-        streamingSessionsLock.unlock()
+        streamingSessionsLock.withLock {
+            streamingSessions[sessionKey] = session
+        }
 
         session.dataTask(with: streamRequest).resume()
         print("📡 [DOWNLOAD \(shortId)] range=\(rangeHeader ?? "full")\(shouldCache ? "" : " (no-cache)")")

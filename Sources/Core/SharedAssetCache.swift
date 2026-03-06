@@ -957,10 +957,10 @@ class SharedAssetCache: ObservableObject {
             await MainActor.run { self.activeCreationTasks[mediaID2] = task }
             do {
                 let player = try await task.value
-                await MainActor.run { self.activeCreationTasks.removeValue(forKey: mediaID2) }
+                await MainActor.run { _ = self.activeCreationTasks.removeValue(forKey: mediaID2) }
                 return player
             } catch {
-                await MainActor.run { self.activeCreationTasks.removeValue(forKey: mediaID2) }
+                await MainActor.run { _ = self.activeCreationTasks.removeValue(forKey: mediaID2) }
                 throw error
             }
         }

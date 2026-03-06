@@ -7,10 +7,11 @@
 // Primary video:
 //   - Never waits — acquires a slot immediately, even if totalActive ≥ maxSlots.
 //   - Capped at primarySlotCap concurrent slots: 1 for HLS (sequential), 2 for progressive.
-//   - acquireSlot returns false when at cap — download proceeds unmetered, caller skips releaseSlot.
+//   - totalActive may temporarily exceed maxSlots; preloads' next segment requests
+//     suspend in acquireSlot, naturally shifting bandwidth to primary without cancellation.
 // Non-primary (preloads):
 //   - Wait until totalActive < maxSlots (3).
-//   - As preloads finish their segments and release slots, totalActive falls back to ≤ 3.
+//   - As preloads finish their current segments and release slots, totalActive falls back to ≤ 3.
 
 import Foundation
 
@@ -37,11 +38,11 @@ actor NodeConnectionPool {
     ///
     /// Returns `true` if a slot was actually occupied (caller must call `releaseSlot` when done).
     /// Returns `false` if the primary was already at `primarySlotCap` — the download still
-    /// proceeds unmetered, but the caller must NOT call `releaseSlot` (no slot was acquired).
+    /// proceeds but the caller must NOT call `releaseSlot` (no slot was acquired).
     ///
     /// - Primary (`isPrimary: true`): granted immediately, even if totalActive ≥ maxSlots.
-    ///   Capped at `primarySlotCap` concurrent slots; HLS passes 1 (sequential segments),
-    ///   progressive video passes 2 (parallel range requests benefit from extra bandwidth).
+    ///   totalActive may temporarily overshoot; preloads' next segment requests suspend
+    ///   until slots free up, naturally shifting bandwidth to primary without cancellation.
     /// - Non-primary (`isPrimary: false`): suspends until totalActive < maxSlots. Always returns true.
     @discardableResult
     func acquireSlot(mediaID: String, isPrimary: Bool, primarySlotCap: Int = 1) async -> Bool {
@@ -49,12 +50,16 @@ actor NodeConnectionPool {
         if isPrimary {
             let current = activeSlots[mediaID] ?? 0
             if current < primarySlotCap {
+                // Primary always occupies a slot immediately (never waits).
+                // totalActive may temporarily exceed maxSlots — preloads' next segment
+                // requests will suspend in acquireSlot until primary releases, naturally
+                // shifting bandwidth to primary without cancellation.
                 occupy(mediaID: mediaID)
                 print("🎰 [POOL \(nodeHost)] PRIMARY \(short) acquired slot \(current + 1)/\(primarySlotCap) (total=\(totalActive))")
                 return true
             } else {
                 print("🎰 [POOL \(nodeHost)] PRIMARY \(short) at cap (\(primarySlotCap)), skipping slot (total=\(totalActive))")
-                return false  // download proceeds but no slot acquired — caller must NOT releaseSlot
+                return false
             }
         }
         await withCheckedContinuation { continuation in

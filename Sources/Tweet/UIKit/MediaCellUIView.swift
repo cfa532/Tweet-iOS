@@ -61,7 +61,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         let btn = UIButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 28, weight: .medium)
         btn.setImage(UIImage(systemName: "arrow.clockwise.circle", withConfiguration: config), for: .normal)
-        btn.tintColor = .secondaryLabel
+        btn.tintColor = .white.withAlphaComponent(0.7)
         btn.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
         btn.isHidden = true
         return btn
@@ -1706,6 +1706,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         print("\(logPrefix) 🔄 Manual video retry")
         retryButton.isHidden = true
         coordinatorWantsToPlay = true
+        // Set as primary so retry gets bandwidth priority in NodeConnectionPool
+        LocalHTTPServer.shared.setPrimaryMediaID(att.mid)
         if let player = player, isActuallyPlayerReady(player) {
             // Player still exists (buffering failure) — just resume playback.
             // AVPlayer will re-request the failed segments from LocalHTTPServer.
