@@ -477,20 +477,30 @@ struct TweetListView: View {
         let page: UInt = 0
 
         do {
-            // Step 1: Load from cache first for instant UX (always try cache)
-            let tweetsFromCache = try await tweetFetcher(page, pageSize, true)
-            let validCachedTweets = tweetsFromCache.compactMap { $0 }
-            
-            let hasCachedContent = !validCachedTweets.isEmpty
-            
+            // Step 1: Load ALL cached pages for instant UX (not just page 0)
+            // When server is unreachable, this ensures the full cached feed is available
+            var allCachedTweets: [Tweet] = []
+            var cachePage: UInt = 0
+            while true {
+                let tweetsFromCache = try await tweetFetcher(cachePage, pageSize, true)
+                let validPage = tweetsFromCache.compactMap { $0 }
+                if validPage.isEmpty { break }
+                allCachedTweets.append(contentsOf: validPage)
+                if tweetsFromCache.count < pageSize { break }
+                cachePage += 1
+            }
+
+            let hasCachedContent = !allCachedTweets.isEmpty
+
             await MainActor.run {
                 if hasCachedContent {
                     // If we have cached content, show it immediately without loading spinner
                     // Use direct assignment (not merge) to avoid re-sorting cached content
-                    tweets = validCachedTweets
-                    
-                    // Set hasMoreTweets based on cache - if we got a full page, there might be more
-                    hasMoreTweets = tweetsFromCache.count >= pageSize
+                    tweets = allCachedTweets
+                    currentPage = cachePage
+
+                    // All cache pages loaded — no more cached tweets to paginate
+                    hasMoreTweets = true  // Server may have more
 
                     // Update VideoLoadingManager with delay for startup
                     updateVideoLoadingManager(delay: 1.0)

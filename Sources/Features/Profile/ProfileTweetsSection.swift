@@ -34,13 +34,19 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
-        // Wait for app initialization if not complete (same as home feed)
+        // Wait for app initialization with timeout — don't block forever when server is unreachable
         if !hproseInstance.isAppInitialized {
-            print("⏳ [PROFILE FETCH] Waiting for app initialization...")
-            while !hproseInstance.isAppInitialized {
+            print("⏳ [PROFILE FETCH] Waiting for app initialization (max 10s)...")
+            var waitCount = 0
+            while !hproseInstance.isAppInitialized && waitCount < 100 {
                 try? await Task.sleep(nanoseconds: 100_000_000)
+                waitCount += 1
             }
-            print("✅ [PROFILE FETCH] App initialization complete")
+            if hproseInstance.isAppInitialized {
+                print("✅ [PROFILE FETCH] App initialization complete")
+            } else {
+                print("⚠️ [PROFILE FETCH] Timed out waiting for app initialization")
+            }
         }
         
         do {
