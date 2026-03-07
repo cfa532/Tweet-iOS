@@ -3,16 +3,17 @@
 //
 // Per-node IPFS bandwidth manager.
 //
-// Soft cap of maxSlots (3) concurrent downloads per node.
+// Separate caps for primary and preload downloads per node:
 // Primary video:
-//   - Never waits — acquires a slot immediately, even if totalActive ≥ maxSlots.
+//   - Never waits — acquires a slot immediately.
 //   - Capped at primarySlotCap concurrent slots: 1 for HLS (sequential), 2 for progressive.
-//   - totalActive may temporarily exceed maxSlots.
+//   - Primary slots do NOT count toward the preload cap.
 // Non-primary (preloads):
-//   - Non-blocking: acquires immediately if totalActive < maxSlots, otherwise returns false.
-//   - Never holds proxy TCP connections while waiting — ensures the primary's AVPlayer can
-//     always connect to the proxy (iOS limits concurrent connections per host to ~6).
-//   - Rejected preloads rely on AVPlayer's built-in retry with exponential backoff.
+//   - Soft cap of maxPreloadSlots (3) concurrent downloads, counting only non-primary slots.
+//   - Acquires immediately if nonPrimaryActive < maxPreloadSlots, otherwise returns false.
+//   - Polling and primary-promotion handled by the proxy handler (not the pool).
+//   - When primary changes, forceReleaseNonPrimary clears stale slot counts so
+//     preloads see capacity (old IPFS downloads continue to disk cache uncounted).
 
 import Foundation
 
@@ -20,11 +21,14 @@ import Foundation
 
 actor NodeConnectionPool {
     let nodeHost: String
-    /// Soft cap on total concurrent downloads. Preloads are rejected at this limit; primary may exceed it.
-    private let maxSlots = 3
+    /// Cap on concurrent preload downloads. Primary slots are separate and don't count here.
+    private let maxPreloadSlots = 3
 
     /// Count of active IPFS slot holds per mediaID.
     private var activeSlots: [String: Int] = [:]
+
+    /// The currently-playing primary mediaID. Its slots are excluded from the preload cap.
+    private var primaryMediaID: String?
 
     init(nodeHost: String) {
         self.nodeHost = nodeHost
@@ -32,60 +36,75 @@ actor NodeConnectionPool {
 
     // MARK: - Public API
 
-    /// Acquire a slot before starting an IPFS download.
+    /// Acquire a slot before starting an IPFS download. Non-blocking.
     ///
-    /// Returns `true` if a slot was actually occupied (caller must call `releaseSlot` when done).
+    /// Returns `true` if a slot was occupied (caller must call `releaseSlot` when done).
     /// Returns `false` in two cases (caller must NOT call `releaseSlot`):
     ///   - Primary at `primarySlotCap`: download still proceeds (no slot needed).
-    ///   - Non-primary rejected (pool full): caller should close the connection.
+    ///   - Non-primary rejected (preload pool full): caller should poll and retry.
     ///
-    /// - Primary (`isPrimary: true`): granted immediately, even if totalActive ≥ maxSlots.
-    /// - Non-primary (`isPrimary: false`): granted immediately if totalActive < maxSlots,
-    ///   otherwise returns `false`. Never blocks — keeps TCP connection count low so the
-    ///   primary's AVPlayer can always connect to the localhost proxy.
+    /// - Primary (`isPrimary: true`): granted immediately; slots don't count toward preload cap.
+    /// - Non-primary (`isPrimary: false`): granted if nonPrimaryActive < maxPreloadSlots,
+    ///   otherwise returns `false`. Caller (proxy handler) manages retry polling.
     @discardableResult
     func acquireSlot(mediaID: String, isPrimary: Bool, primarySlotCap: Int = 1) -> Bool {
         let short = String(mediaID.prefix(8))
         if isPrimary {
+            primaryMediaID = mediaID
             let current = activeSlots[mediaID] ?? 0
             if current < primarySlotCap {
                 occupy(mediaID: mediaID)
-                print("🎰 [POOL \(nodeHost)] PRIMARY \(short) acquired slot \(current + 1)/\(primarySlotCap) (total=\(totalActive))")
+                print("🎰 [POOL \(nodeHost)] PRIMARY \(short) slot \(current + 1)/\(primarySlotCap) (preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
                 return true
             } else {
-                print("🎰 [POOL \(nodeHost)] PRIMARY \(short) at cap (\(primarySlotCap)), skipping slot (total=\(totalActive))")
                 return false
             }
         }
-        // Non-primary: acquire immediately if capacity available, else reject.
-        // Never blocks — prevents TCP connection accumulation that starves the primary.
-        if totalActive < maxSlots {
+        if nonPrimaryActive < maxPreloadSlots {
             occupy(mediaID: mediaID)
-            print("🎰 [POOL \(nodeHost)] preload \(short) acquired slot (total=\(totalActive))")
             return true
         } else {
-            print("🎰 [POOL \(nodeHost)] preload \(short) rejected (total=\(totalActive), max=\(maxSlots))")
-            return false
+            return false  // caller polls; no per-attempt log to avoid spam
         }
     }
 
     /// Release a slot after an IPFS download completes or is cancelled.
     func releaseSlot(mediaID: String) {
         guard let count = activeSlots[mediaID] else { return }
-        let short = String(mediaID.prefix(8))
         if count <= 1 { activeSlots.removeValue(forKey: mediaID) }
         else { activeSlots[mediaID] = count - 1 }
-        print("🎰 [POOL \(nodeHost)] \(short) released slot (total=\(totalActive))")
+    }
+
+    /// Force-release all slots except the new primary's. Called when primary changes.
+    /// Old IPFS downloads continue to disk cache but no longer count toward the cap,
+    /// freeing slots so preloads can acquire capacity.
+    func forceReleaseNonPrimary(primaryMediaID: String?) {
+        self.primaryMediaID = primaryMediaID
+        var released = 0
+        for (mediaID, count) in activeSlots where mediaID != primaryMediaID {
+            activeSlots.removeValue(forKey: mediaID)
+            released += count
+        }
+        if released > 0 {
+            let short = primaryMediaID.map { String($0.prefix(8)) } ?? "nil"
+            print("🎰 [POOL \(nodeHost)] force-released \(released) non-primary slots (primary=\(short), preload=\(nonPrimaryActive)/\(maxPreloadSlots))")
+        }
     }
 
     /// Called when the server stops. Clears all stale slot counts.
     func reset() {
         activeSlots.removeAll()
+        primaryMediaID = nil
     }
 
     // MARK: - Internal
 
     private var totalActive: Int { activeSlots.values.reduce(0, +) }
+
+    /// Count of active slots held by non-primary mediaIDs.
+    private var nonPrimaryActive: Int {
+        activeSlots.filter { $0.key != primaryMediaID }.values.reduce(0, +)
+    }
 
     private func occupy(mediaID: String) {
         activeSlots[mediaID, default: 0] += 1
@@ -110,6 +129,18 @@ class NodePoolRegistry {
         let pool = NodeConnectionPool(nodeHost: nodeHost)
         pools[nodeHost] = pool
         return pool
+    }
+
+    /// Force-release non-primary slots from all pools.
+    func forceReleaseNonPrimary(primaryMediaID: String?) {
+        lock.lock()
+        let allPools = Array(pools.values)
+        lock.unlock()
+        Task {
+            for pool in allPools {
+                await pool.forceReleaseNonPrimary(primaryMediaID: primaryMediaID)
+            }
+        }
     }
 
     /// Reset all pools on server stop: clears stale slot counts.

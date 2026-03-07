@@ -294,7 +294,11 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     private var mediaRealURLs: [String: URL] = [:] // mediaID -> real URL
     private let mediaLock = NSLock() // Protects mediaCache and mediaRealURLs
-    private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated)
+    // Concurrent queue: NWConnection serializes per-connection events internally, so different
+    // connections can safely process in parallel. A serial queue here bottlenecks when many
+    // connections have pending send completions (e.g., large progressive downloads to paused
+    // preload AVPlayers with full TCP windows), delaying new primary connections.
+    private let queue = DispatchQueue(label: "LocalHTTPServer", qos: .userInitiated, attributes: .concurrent)
     private var preferenceHelper: PreferenceHelper?
     private let stateLock = NSLock() // Protects isStarting, isRunning, isStopping
     private var _isStarting = false
@@ -829,6 +833,10 @@ public class LocalHTTPServer: @unchecked Sendable {
             // same segment. The preload's URLSession continues to disk in the background;
             // the primary just starts its own download in parallel.
             Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
+            // Force-release all non-primary pool slots. Old IPFS downloads continue to disk
+            // cache but no longer count toward the 3-slot cap. Without this, primary bypass
+            // slots accumulate (total=7+) and preloads can never acquire (totalActive >= max).
+            NodePoolRegistry.shared.forceReleaseNonPrimary(primaryMediaID: mediaID)
         }
     }
 
@@ -1405,14 +1413,22 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
 
         // Acquire a slot in the per-node connection pool before starting the IPFS download.
-        // Primary: never blocked (bypasses soft cap). Non-primary: rejected if pool is full.
+        // Primary: bypasses soft cap. Non-primary: polls up to 5s with primary promotion.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
-        let isPrimary = isCurrentPrimary(mediaID)
-        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
-
-        // Non-primary rejected (pool full): release dedup claim and close connection.
-        // AVPlayer retries with backoff; slot will be available after current downloads finish.
+        var isPrimary = isCurrentPrimary(mediaID)
+        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
+        // Non-primary rejected: poll up to 5s. Re-check isCurrentPrimary each iteration
+        // so a preload promoted to primary gets a slot immediately.
+        if !slotAcquired && !isPrimary {
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                switch connection.state { case .cancelled, .failed: return; default: break }
+                isPrimary = isCurrentPrimary(mediaID)
+                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary)
+                if slotAcquired || isPrimary { break }
+            }
+        }
         guard slotAcquired || isPrimary else {
             await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
             connection.cancel()
@@ -1543,14 +1559,21 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         
         // CACHE MISS - acquire a slot in the per-node connection pool before fetching from IPFS.
-        // Primary video is never blocked; non-primary rejected if pool is full.
+        // Primary: bypasses soft cap. Non-primary: polls up to 5s with primary promotion.
         let nodeHost = NodePoolRegistry.nodeHost(from: fullRealURL)
         let pool = NodePoolRegistry.shared.pool(for: nodeHost)
         // Progressive video can use 2 parallel range requests; HLS segments are sequential (cap=1).
-        let isPrimary = isCurrentPrimary(mediaID)
-        let slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
-
-        // Non-primary rejected (pool full): close connection. AVPlayer retries with backoff.
+        var isPrimary = isCurrentPrimary(mediaID)
+        var slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
+        if !slotAcquired && !isPrimary {
+            for _ in 0..<10 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                switch connection.state { case .cancelled, .failed: return; default: break }
+                isPrimary = isCurrentPrimary(mediaID)
+                slotAcquired = await pool.acquireSlot(mediaID: mediaID, isPrimary: isPrimary, primarySlotCap: 2)
+                if slotAcquired || isPrimary { break }
+            }
+        }
         guard slotAcquired || isPrimary else {
             connection.cancel()
             return

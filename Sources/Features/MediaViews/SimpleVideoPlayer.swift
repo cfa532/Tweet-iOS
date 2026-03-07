@@ -3430,9 +3430,11 @@ struct SimpleVideoPlayer: View {
                 // TweetDetail UX: last-frame placeholder prevents black flash during player setup.
                 // AVPlayerViewControllerRepresentable renders black until the first frame is decoded;
                 // cover it with the feed cell's last captured frame until playback actually starts.
-                if mode == .tweetDetail, let frame = cachedLastFrame {
+                if mode == .tweetDetail,
+                   let frame = cachedLastFrame ?? SharedAssetCache.shared.cachedThumbnail(for: mid) {
                     let isWaitingForFirstFrame = loadingState.isLoading ||
                         playbackState == .notStarted ||
+                        isBuffering ||
                         (player.currentItem?.status != .readyToPlay)
 
                     if isWaitingForFirstFrame {
@@ -3468,7 +3470,8 @@ struct SimpleVideoPlayer: View {
                      (player.currentItem?.currentTime().seconds ?? 0) < 0.1) ||
                     (mode == .mediaBrowser &&
                      player.timeControlStatus == .waitingToPlayAtSpecifiedRate) ||
-                    (mode == .tweetDetail && playbackState == .notStarted)
+                    (mode == .tweetDetail && playbackState == .notStarted) ||
+                    (mode == .tweetDetail && isBuffering)
                 
                 if showInitialLoadingSpinner {
                     ZStack {

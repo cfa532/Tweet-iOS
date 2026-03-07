@@ -809,8 +809,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.imageView.image == nil else { return }
                     self.preserveFrameToCache()
-                    if self.videoCellState == .playerLoading {
-                        self.transitionTo(.playerLoading)
+                    // Re-transition to update imageView visibility now that a thumbnail exists.
+                    if self.videoCellState == .playerLoading || self.videoCellState == .playerReady {
+                        self.transitionTo(self.videoCellState)
                     }
                 }
             }
@@ -893,11 +894,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
 
-        // If the layer already has a frame, treat it as playable even if item.status
-        // is still .unknown. Avoid bouncing back to .playerLoading.
+        // If the layer already has a frame AND item is actually ready, play immediately.
+        // If item is not ready (stale .playerReady state), fall through to re-acquire.
         if let player = player, videoCellState == .playerReady {
-            requestPlaybackStartIfNeeded(player, reason: "coordinatorPlay-playerReady")
-            return
+            if isActuallyPlayerReady(player) {
+                // Re-evaluate spinner: coordinatorWantsToPlay is now true, so
+                // transitionTo(.playerReady) will show the spinner while buffering.
+                transitionTo(.playerReady)
+                requestPlaybackStartIfNeeded(player, reason: "coordinatorPlay-playerReady")
+                return
+            }
+            // Item not ready despite .playerReady state — show spinner and fall through
+            // to the main logic which handles re-acquisition.
+            transitionTo(.playerLoading)
         }
 
         // If already in playing state, resume if stalled (rate==0) and return.
@@ -1016,10 +1025,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "coordinatorPause")
-            // When video finished naturally, keep AVPlayerLayer showing the last
-            // rendered frame instead of revealing the lower-res imageView thumbnail.
             if videoCellState == .playing && !isHandlingFinishEvent {
                 transitionTo(.paused)
+            } else if videoCellState == .playerReady || videoCellState == .playerLoading {
+                // Re-evaluate spinner: coordinatorWantsToPlay is now false,
+                // so transitionTo will stop the spinner for non-primary cells.
+                transitionTo(videoCellState)
             }
             // Volume fade-out then pause
             UIView.animate(withDuration: 0.2, animations: {
@@ -1045,8 +1056,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 if !isVisible {
                     // Cell is off-screen — release player to free network resources
                     // instead of waiting for the 15s stuck timer.
-                    // Remove observers BEFORE nilling player to prevent memory leak
-                    // (observers hold strong references to the player item).
                     removePlayerObservers()
                     SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
                     self.player = nil
@@ -1060,16 +1069,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 } else {
                     // Cell is still visible but no longer primary.
                     // Keep the player so it can finish loading and show a preview frame.
-                    // When item.status reaches readyToPlay, KVO will see coordinatorWantsToPlay == false
-                    // and seek to 0.01s to decode a preview frame.
+                    // Re-evaluate spinner: coordinatorWantsToPlay is now false.
+                    transitionTo(.playerLoading)
                     player.pause()
                 }
             } else if videoCellState == .playing {
-                // When video finished naturally, keep AVPlayerLayer showing the last
-                // rendered frame — don't reveal the lower-res imageView thumbnail.
                 if !isHandlingFinishEvent {
                     transitionTo(.paused)
                 }
+                player.pause()
+            } else if videoCellState == .playerReady {
+                // Re-evaluate spinner: coordinatorWantsToPlay is now false.
+                transitionTo(.playerReady)
                 player.pause()
             } else {
                 player.pause()
@@ -1136,10 +1147,22 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // the statusKVO .readyToPlay transition from ever firing. The statusKVO handler
         // (or handleAlreadyReadyPlayer) will call requestPlaybackStartIfNeeded once ready.
         guard isActuallyPlayerReady(player) else {
-            print("\(logPrefix) ⏸️ requestPlayback(\(reason)): item not ready (status=\(player.currentItem?.status.rawValue ?? -1)), deferring to statusKVO")
+            let itemStatus = player.currentItem?.status
+            print("\(logPrefix) ⏸️ requestPlayback(\(reason)): item not ready (status=\(itemStatus?.rawValue ?? -1)), deferring to statusKVO")
+            // If item is in a terminal failure state or has no currentItem, statusKVO will
+            // never fire .readyToPlay. Clean up and re-acquire instead of spinning forever.
+            if itemStatus == .failed || player.currentItem == nil {
+                print("\(logPrefix) 🔄 Item terminal — cleaning up for re-acquisition")
+                if let mid = attachment?.mid {
+                    cleanupVideoPlayer(reason: "requestPlayback.terminalItem")
+                    coordinatorWantsToPlay = true
+                    if let att = attachment, let url = att.getUrl(effectiveBaseUrl), let parentTweet = parentTweet {
+                        acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+                    }
+                }
+                return
+            }
             // Show spinner so the user sees loading feedback while waiting for statusKVO.
-            // transitionTo(.playerReady) may have been called before coordinatorWantsToPlay
-            // was set (preloaded video selected as primary), leaving the spinner stopped.
             loadingSpinner.startAnimating()
             return
         }
@@ -1147,13 +1170,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         print("\(logPrefix) ▶️ requestPlayback(\(reason)): rate=\(player.rate), timeControl=\(player.timeControlStatus.rawValue), state=\(videoCellState)")
 
         if player.rate > 0 {
-            // Already playing — just sync UI
+            // Already told to play — sync UI state.
             videoPlayerView.isHidden = false
             if videoCellState != .playing {
                 print("\(logPrefix) State: \(videoCellState) → playing")
                 videoCellState = .playing
             }
-            loadingSpinner.stopAnimating()
+            // Only stop spinner if actually rendering frames. rate > 0 just means
+            // play() was called; the player may still be buffering (timeControlStatus
+            // == .waitingToPlayAtSpecifiedRate) with no frames to show.
+            if player.timeControlStatus == .playing {
+                loadingSpinner.stopAnimating()
+            } else {
+                loadingSpinner.startAnimating()
+            }
             retryButton.isHidden = true
             player.isMuted = MuteState.shared.isMuted
             player.volume = 1.0
@@ -1429,8 +1459,18 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                                 self.requestPlaybackStartIfNeeded(player, reason: "statusKVO-ready")
                             }
                         } else if let player = self.player {
-                            // Not going to play — seek to force AVPlayerLayer to decode a frame.
-                            // Must observe isReadyForDisplay so the onReadyForDisplay callback fires.
+                            // Not going to play — transition to playerReady and seek to decode a frame.
+                            if self.videoCellState == .playerLoading {
+                                self.transitionTo(.playerReady)
+                            }
+                            // Set fresh callback for thumbnail capture (original may have been consumed).
+                            self.videoPlayerView.onReadyForDisplay = { [weak self] in
+                                guard let self, self.imageView.image == nil else { return }
+                                self.preserveFrameToCache()
+                                if self.videoCellState == .playerReady || self.videoCellState == .playerLoading {
+                                    self.transitionTo(self.videoCellState)
+                                }
+                            }
                             self.videoPlayerView.observeReadyForDisplay()
                             let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
                             player.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
