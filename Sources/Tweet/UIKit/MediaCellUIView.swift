@@ -1153,7 +1153,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // never fire .readyToPlay. Clean up and re-acquire instead of spinning forever.
             if itemStatus == .failed || player.currentItem == nil {
                 print("\(logPrefix) 🔄 Item terminal — cleaning up for re-acquisition")
-                if let mid = attachment?.mid {
+                if (attachment?.mid) != nil {
                     cleanupVideoPlayer(reason: "requestPlayback.terminalItem")
                     coordinatorWantsToPlay = true
                     if let att = attachment, let url = att.getUrl(effectiveBaseUrl), let parentTweet = parentTweet {
