@@ -531,6 +531,14 @@ class TweetTableViewController: UITableViewController {
 
         // NOTE: Video playback restart is handled by .feedViewDidAppear notification
         // (see setupFeedViewDidAppearObserver) which re-evaluates visibility to resume playback
+
+        // Ensure video visibility is evaluated after initial layout completes.
+        // registerDelegate kicks playback but onScreenMediaCells may be empty if
+        // updateVisibleTweetsForVideoPlayback hasn't been called yet (no scroll event
+        // on first appearance). Delay lets cells finish rendering.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.updateVisibleTweetsForVideoPlayback()
+        }
     }
     
     override func viewWillDisappear(_ animated: Bool) {
