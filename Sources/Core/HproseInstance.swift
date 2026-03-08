@@ -1463,8 +1463,13 @@ final class HproseInstance: ObservableObject {
                 let nsError = error as NSError
                 print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
                 
-                // Remove unhealthy node from pool if this is a network/connection error
-                if let baseUrlString = user.baseUrl?.absoluteString,
+                // Remove unhealthy node only for genuine connection failures.
+                // Timeouts (-1001) can be caused by backgrounding; cancellations (-999) by
+                // task teardown — neither indicates the node itself is unhealthy.
+                let nsCode = (error as NSError).code
+                let isTransient = nsCode == NSURLErrorTimedOut || nsCode == NSURLErrorCancelled
+                if !isTransient,
+                   let baseUrlString = user.baseUrl?.absoluteString,
                    let hostIds = user.hostIds, hostIds.count > 1 {
                     let accessNodeMid = hostIds[1]
                     print("DEBUG: [\(logPrefix)] Removing unhealthy node \(accessNodeMid) from pool after failure")

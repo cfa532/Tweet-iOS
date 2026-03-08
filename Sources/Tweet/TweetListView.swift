@@ -707,13 +707,14 @@ struct TweetListView: View {
                     // No valid tweets - check response size
                     hasMoreTweets = freshTweets.count >= pageSize
 
-                    // Only clear if server returned no valid tweets AND we have no cached tweets
-                    if tweets.isEmpty {
+                    if freshTweets.count < pageSize {
+                        // Partial page: server confirmed empty feed (no error = not a network failure).
+                        // Replace any stale cached content so the user sees the correct empty state.
                         tweets = []
-                        // Update VideoLoadingManager with empty list
                         updateVideoLoadingManager()
                     }
-                    // Keep cached tweets if server returned no valid tweets
+                    // Full page of nils: server still has entries, keep cached content and let
+                    // auto-load continue to the next page.
                 }
 
                 isLoading = false
@@ -963,15 +964,13 @@ struct TweetListView: View {
             hasMoreTweets = false
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
             if page == 0 {
-                if tweets.isEmpty {
-                    // Update VideoLoadingManager with empty list (no debouncing needed for empty)
-                    updateVideoLoadingManager()
-                    isLoading = false
-                    initialLoadComplete = true
-                } else {
-                    isLoading = false
-                    initialLoadComplete = true
-                }
+                // Server confirmed empty feed — replace any stale cached content.
+                // (Network errors reach the catch block, so reaching here means server
+                // genuinely has no tweets for this user.)
+                tweets = []
+                updateVideoLoadingManager()
+                isLoading = false
+                initialLoadComplete = true
             }
 
         // BRANCH 3: No valid tweets BUT full page - keep trying next page
