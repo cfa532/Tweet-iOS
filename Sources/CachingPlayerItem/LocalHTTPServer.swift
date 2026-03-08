@@ -1425,9 +1425,16 @@ public class LocalHTTPServer: @unchecked Sendable {
             default: break
             }
             // Previous downloader failed without caching; try to claim as new downloader.
-            guard await activeDownloadsActor.startIfNotInFlight(for: downloadKey) else {
-                connection.cancel()
-                return
+            // Primary: force-clear the stalled download key so it can proceed. The stalled
+            // URLSession will eventually timeout and call markDownloadCompleted (no-op).
+            if isCurrentPrimary(mediaID) {
+                await activeDownloadsActor.markDownloadCompleted(for: downloadKey)
+                await activeDownloadsActor.markDownloadStarted(for: downloadKey) // re-claim for primary
+            } else {
+                guard await activeDownloadsActor.startIfNotInFlight(for: downloadKey) else {
+                    connection.cancel()
+                    return
+                }
             }
         }
 
@@ -2233,36 +2240,47 @@ public class LocalHTTPServer: @unchecked Sendable {
 
         // Track session so cancelDownloads(for: mediaID) can invalidate it.
         streamingSessionsLock.lock()
-        if streamingSessions[sessionKey] != nil {
-            // Already downloading this exact segment. The IPFS download is in-flight (likely
-            // the NWConnection died mid-stream and the download continues to disk cache).
-            // Poll for the cache file to appear and serve it, rather than connection.cancel()
-            // which causes AVPlayer to immediately retry → tight cancel-retry storm.
-            // Call completion() to release any pool slot acquired by handleSegmentRequest.
-            streamingSessionsLock.unlock()
-            session.invalidateAndCancel()
-            let shortId = shortMID(mediaID)
-            print("♻️ [HLS SEGMENT \(shortId)] Duplicate download for \(sessionKey), waiting for disk cache")
-            completion()
-            Task { [weak self] in
-                for _ in 0..<20 { // max 10s
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    switch connection.state {
-                    case .cancelled, .failed: return
-                    default: break
+        if let oldSession = streamingSessions[sessionKey] {
+            if isCurrentPrimary(mediaID) {
+                // Primary takes over: cancel the stalled preload session and start a fresh
+                // download that streams directly to the primary's NWConnection. The old
+                // session's IPFS download may have stalled (node unresponsive for this variant);
+                // waiting for it causes a permanent spinner because AVPlayer treats server
+                // errors (503) as stream-wide failures and stops requesting ALL segments.
+                streamingSessions[sessionKey] = session
+                streamingSessionsLock.unlock()
+                oldSession.invalidateAndCancel()
+                let shortId = shortMID(mediaID)
+                print("🎯 [HLS SEGMENT \(shortId)] Primary taking over stalled download for \(relativePath)")
+                // Fall through to start fresh download below
+            } else {
+                // Non-primary: poll for the cache file to appear (background IPFS download
+                // may still be writing). Avoids cancel-retry storm.
+                streamingSessionsLock.unlock()
+                session.invalidateAndCancel()
+                let shortId = shortMID(mediaID)
+                print("♻️ [HLS SEGMENT \(shortId)] Duplicate download for \(sessionKey), waiting for disk cache")
+                completion()
+                Task { [weak self] in
+                    for _ in 0..<20 { // max 10s
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        switch connection.state {
+                        case .cancelled, .failed: return
+                        default: break
+                        }
+                        if FileManager.default.fileExists(atPath: cachePath) {
+                            autoreleasepool { self?.serveFile(path: cachePath, connection: connection, method: "GET") }
+                            return
+                        }
                     }
-                    if FileManager.default.fileExists(atPath: cachePath) {
-                        autoreleasepool { self?.serveFile(path: cachePath, connection: connection, method: "GET") }
-                        return
-                    }
+                    connection.cancel()
                 }
-                // Timed out — cancel so AVPlayer retries (cache file may be available by then).
-                connection.cancel()
+                return
             }
-            return
+        } else {
+            streamingSessions[sessionKey] = session
+            streamingSessionsLock.unlock()
         }
-        streamingSessions[sessionKey] = session
-        streamingSessionsLock.unlock()
 
         let shortId = shortMID(mediaID)
         let segmentFile = cacheURL.lastPathComponent

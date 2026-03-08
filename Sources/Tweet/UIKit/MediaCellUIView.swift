@@ -985,10 +985,17 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                let att = attachment, let url = att.getUrl(effectiveBaseUrl),
                let parentTweet = parentTweet {
                 acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+            } else if let player = self.player, player.currentItem?.status == .unknown {
+                // DEADLOCK FIX: Paused player created with
+                // canUseNetworkResourcesForLiveStreamingWhilePaused=false (SharedAssetCache
+                // default) can't fetch HLS data while paused → item.status stays .unknown
+                // forever → requestPlaybackStartIfNeeded blocks → permanent spinner.
+                // Enable network and play() to kick AVPlayer into requesting segments.
+                // Segments are on the proxy's disk cache → data arrives instantly.
+                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                actuallyStartPlayback(player)
             }
 
-            // coordinatorWantsToPlay is already set — KVO observer will call
-            // playWhenReady() when playerItem.status becomes .readyToPlay
             return
         }
 
@@ -1146,9 +1153,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         // Guard against premature play() when onReadyForDisplay fires from a stale GPU frame
         // (fast-recovery player reuse) while item.status is still .unknown. Calling play()
-        // before the item is ready disrupts AVPlayer's buffering state machine and prevents
-        // the statusKVO .readyToPlay transition from ever firing. The statusKVO handler
-        // (or handleAlreadyReadyPlayer) will call requestPlaybackStartIfNeeded once ready.
+        // on a player with disabled network (canUseNetworkResourcesForLiveStreamingWhilePaused
+        // =false) disrupts AVPlayer's buffering state machine and prevents statusKVO
+        // .readyToPlay from ever firing. The coordinator's play command bypasses this guard
+        // by enabling network + calling actuallyStartPlayback() directly.
         guard isActuallyPlayerReady(player) else {
             let itemStatus = player.currentItem?.status
             print("\(logPrefix) ⏸️ requestPlayback(\(reason)): item not ready (status=\(itemStatus?.rawValue ?? -1)), deferring to statusKVO")
@@ -1230,6 +1238,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         loadingSpinner.startAnimating()
 
         player.isMuted = MuteState.shared.isMuted
+        lastActualPlaybackDate = Date()
         player.play()
 
         // Show timer when playback starts
