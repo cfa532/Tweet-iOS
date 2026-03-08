@@ -484,34 +484,30 @@ final class HproseInstance: ObservableObject {
         var entryIP: String? = nil
         var fetchedUser: User? = nil  // Store fetched user from cached baseUrl verification
 
-        // Try using cached baseUrl first if available
-        if let cachedBaseUrl = appUser.baseUrl,
+        // Try using cached baseUrl first — only for logged-in users.
+        // Guest users always resolve a fresh IP so the port is guaranteed correct.
+        if !appUser.isGuest,
+           let cachedBaseUrl = appUser.baseUrl,
            let cachedHost = cachedBaseUrl.host {
             print("🔄 [INIT] Attempting to use cached baseUrl: \(cachedBaseUrl.absoluteString)")
 
             // Set HproseInstance.baseUrl to cached value temporarily
             HproseInstance.baseUrl = cachedBaseUrl
-            entryIP = cachedHost
+            entryIP = cachedBaseUrl.port.map { "\(cachedHost):\($0)" } ?? cachedHost
 
-            // For logged-in users, verify cached baseUrl still works
-            if !appUser.isGuest {
-                do {
-                    // Try fetching user data with cached baseUrl (don't force re-resolution)
-                    let user = try await fetchUser(appUser.mid, baseUrl: cachedHost)
-                    if let user = user {
-                        print("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
-                        fetchedUser = user  // Save for later use
-                    } else {
-                        print("⚠️ [INIT] Cached baseUrl returned nil user - falling back to findEntryIP()")
-                        entryIP = nil
-                    }
-                } catch {
-                    print("⚠️ [INIT] Cached baseUrl failed with error: \(error) - falling back to findEntryIP()")
+            do {
+                // Try fetching user data with cached baseUrl (don't force re-resolution)
+                let user = try await fetchUser(appUser.mid, baseUrl: cachedHost)
+                if let user = user {
+                    print("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
+                    fetchedUser = user  // Save for later use
+                } else {
+                    print("⚠️ [INIT] Cached baseUrl returned nil user - falling back to findEntryIP()")
                     entryIP = nil
                 }
-            } else {
-                // For guest users, assume cached baseUrl is valid (will be verified when fetching data)
-                print("✅ [INIT] Using cached baseUrl for guest user")
+            } catch {
+                print("⚠️ [INIT] Cached baseUrl failed with error: \(error) - falling back to findEntryIP()")
+                entryIP = nil
             }
         }
 
@@ -6698,11 +6694,11 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: [registerUser] Sending registration request to server")
         print("DEBUG: [registerUser] Using target URL: \(targetUrl)")
         
-        let unwrappedResponse: Any
+        let unwrappedResponse: Any?
         do {
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            unwrappedResponse = try Self.unwrapV2Response(rawResponse) as Any
-            print("DEBUG: [registerUser] Unwrapped response: \(unwrappedResponse)")
+            unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+            print("DEBUG: [registerUser] Unwrapped response: \(String(describing: unwrappedResponse))")
         } catch {
             print("DEBUG: [registerUser] ERROR: Exception during API call: \(error)")
             print("DEBUG: [registerUser] Error details: \(error.localizedDescription)")
