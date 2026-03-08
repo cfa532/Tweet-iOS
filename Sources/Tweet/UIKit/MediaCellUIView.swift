@@ -766,11 +766,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func configurePlayer(_ newPlayer: AVPlayer) {
         guard (attachment?.mid) != nil else { return }
 
-
         preparePlayerForConfiguration(newPlayer)
         registerFirstFrameCallback(newPlayer)
-        attachPlayerToLayer(newPlayer)
+        // KVO BEFORE layer attachment: attachPlayerToLayer may fire onReadyForDisplay
+        // synchronously (stale GPU frame), which calls actuallyStartPlayback → player.play()
+        // → timeControlStatus changes. Without observers in place, the transition is lost
+        // and the spinner from actuallyStartPlayback never stops.
         setupPlayerObservers(newPlayer)
+        attachPlayerToLayer(newPlayer)
         handleAlreadyReadyPlayer(newPlayer)
         deferVideoOutputAttachment(newPlayer)
     }
@@ -2023,19 +2026,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     var isActuallyPlaying: Bool {
         guard let player = player,
               player.currentItem != nil else { return false }
-        // rate > 0 means actually playing
-        if player.rate > 0 { return true }
-        // Only count as "playing" if the player is actively buffering (waiting to play),
-        // not just because the coordinator sent a play command. A video stuck in
-        // playerLoading with coordinatorWantsToPlay=true is NOT actually playing.
-        if coordinatorWantsToPlay && player.timeControlStatus == .waitingToPlayAtSpecifiedRate { return true }
+        // timeControlStatus == .playing means frames are actually rendering
+        if player.timeControlStatus == .playing { return true }
+        // rate > 0 + waitingToPlayAtSpecifiedRate = play() was called but buffering.
+        // Only count as "playing" for up to 15s — beyond that, the player is stuck
+        // buffering (IPFS unreachable, segments can't be fetched) and the stall
+        // detector should restart with a different video.
+        if player.rate > 0 || (coordinatorWantsToPlay && player.timeControlStatus == .waitingToPlayAtSpecifiedRate) {
+            return Date().timeIntervalSince(lastActualPlaybackDate) < 15.0
+        }
         return false
     }
 
     /// True when coordinator commanded play but AVPlayerItem is still loading (status=.unknown).
     /// Prevents false stall detection: IPFS/HLS can take >3s before play() is even callable.
     /// Returns false once item fails (.failed) or becomes ready (.readyToPlay), so genuine stalls
-    /// (item never transitions out of .unknown) are eventually caught by loadingTimeoutTask.
+    /// (item never transitions out of .unknown) are eventually caught by the stall detector's
+    /// 15s buffering timeout in isActuallyPlaying.
     var isLoadingForCoordinator: Bool {
         guard coordinatorWantsToPlay,
               let item = player?.currentItem else { return false }

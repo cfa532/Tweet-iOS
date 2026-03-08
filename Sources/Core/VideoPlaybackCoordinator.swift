@@ -1056,12 +1056,13 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
         if delegate.isActuallyPlaying { return }  // Primary is healthy — nothing to do
         // Primary has been commanded to play but AVPlayerItem is still loading (status=.unknown).
-        // This is not a stall — it's normal IPFS/HLS latency. Let it load; durationMismatchTimer
-        // and loadingTimeoutTask will handle genuine failures.
+        // This is not a stall — it's normal IPFS/HLS latency. Let it load; once the item
+        // reaches readyToPlay and play() is called, the 15s buffering timeout in
+        // isActuallyPlaying will handle genuine stuck-buffering failures.
         if delegate.isLoadingForCoordinator { return }
         // Grace period after recent playback: give the primary time to recover from a brief
         // non-playing state (e.g. mid-startup, buffering). AVPlayer self-manages stall recovery
-        // via automaticallyWaitsToMinimizeStalling=true (always set), surfacing gaps as
+        // via automaticallyWaitsToMinimizeStalling=true (default), surfacing gaps as
         // .waitingToPlayAtSpecifiedRate (caught by isActuallyPlaying), not .paused.
         if delegate.isRecentlyPlaying { return }
         // Primary is stuck — reset and restart. identifyPrimaryVideo naturally prefers a

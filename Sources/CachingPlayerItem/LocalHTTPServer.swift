@@ -77,6 +77,13 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
         }
         let headerData = buildHeaders(httpResponse.statusCode, headers)
         // Queue headers; NWConnection delivers them before subsequent data sends.
+        // Guard: skip if AVPlayer already closed this connection (adaptive bitrate switch).
+        switch connection.state {
+        case .cancelled, .failed:
+            completionHandler(.cancel)
+            return
+        default: break
+        }
         connection.send(content: headerData, completion: .contentProcessed { _ in })
         completionHandler(.allow)
     }
@@ -91,6 +98,14 @@ private class StreamingDownloadDelegate: NSObject, URLSessionDataDelegate {
 
             // Stream chunk to AVPlayer immediately; on send failure the connection is dead —
             // release the pool slot so primary video is no longer blocked.
+            switch connection.state {
+            case .cancelled, .failed:
+                let release = self.onConnectionDead
+                self.onConnectionDead = nil
+                release?()
+                return
+            default: break
+            }
             connection.send(content: data, completion: .contentProcessed { [weak self] error in
                 guard let self = self, error != nil else { return }
                 let release = self.onConnectionDead
@@ -822,21 +837,29 @@ public class LocalHTTPServer: @unchecked Sendable {
     /// Called immediately when the coordinator selects a primary (before the 1s cancel-others debounce).
     public func setPrimaryMediaID(_ mediaID: String?) {
         primaryMediaIDLock.lock()
+        let previousPrimary = currentPrimaryMediaID
         currentPrimaryMediaID = mediaID
         primaryMediaIDLock.unlock()
         if let mediaID {
             // Clear cancelled state so a preloaded-then-cancelled player can download once primary.
             Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
-            // Clear stale dedup entries from any in-flight preload downloads for this mediaID.
-            // This ensures the primary player's segment requests always see a clean slate in
-            // startIfNotInFlight — no 120s poll wait for a preload that was downloading the
-            // same segment. The preload's URLSession continues to disk in the background;
-            // the primary just starts its own download in parallel.
-            Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
-            // Force-release all non-primary pool slots. Old IPFS downloads continue to disk
-            // cache but no longer count toward the 3-slot cap. Without this, primary bypass
-            // slots accumulate (total=7+) and preloads can never acquire (totalActive >= max).
-            NodePoolRegistry.shared.forceReleaseNonPrimary(primaryMediaID: mediaID)
+            // Only clear dedup entries + pool slots when the primary actually changes.
+            // Re-selecting the same primary (e.g., coordinator scroll-stop re-confirms) must NOT
+            // clear its in-flight download keys — the background IPFS download is still writing
+            // to disk cache, and clearing the key causes a cancel-retry storm where AVPlayer
+            // passes startIfNotInFlight, hits streamingSessions duplicate, and cycles.
+            if mediaID != previousPrimary {
+                // Clear stale dedup entries from any in-flight preload downloads for this mediaID.
+                // This ensures the primary player's segment requests always see a clean slate in
+                // startIfNotInFlight — no 120s poll wait for a preload that was downloading the
+                // same segment. The preload's URLSession continues to disk in the background;
+                // the primary just starts its own download in parallel.
+                Task { await activeDownloadsActor.releaseStalledDownloads(for: mediaID) }
+                // Force-release all non-primary pool slots. Old IPFS downloads continue to disk
+                // cache but no longer count toward the 3-slot cap. Without this, primary bypass
+                // slots accumulate (total=7+) and preloads can never acquire (totalActive >= max).
+                NodePoolRegistry.shared.forceReleaseNonPrimary(primaryMediaID: mediaID)
+            }
         }
     }
 
@@ -1362,29 +1385,25 @@ public class LocalHTTPServer: @unchecked Sendable {
         let downloadKey = cachePath
 
         // Deduplicate concurrent requests for the same segment.
-        // Primary video: setPrimaryMediaID clears this video's dedup entries so the primary
-        // player's requests always see a clean slate and claim immediately. If somehow still
-        // in-flight (a concurrent parallel request from the same player), cancel and let
-        // AVPlayer retry — its retry arrives after the in-flight download completes or caches.
-        // Non-primary: poll up to 120s. IPFS DHT lookups can take 30-90s; 120s prevents
-        // duplicate downloads while allowing enough time for slow nodes.
+        // When a NEW video becomes primary, setPrimaryMediaID clears stale preload dedup
+        // entries so the primary player's requests claim immediately. Re-selecting the same
+        // primary does NOT clear entries (prevents cancel-retry storm on background downloads).
+        // If in-flight: poll for the cache file to appear on disk.
+        //   Primary: 10s timeout (background IPFS download writing to disk).
+        //   Non-primary: 120s timeout (IPFS DHT lookups can take 30-90s).
         if !(await activeDownloadsActor.startIfNotInFlight(for: downloadKey)) {
-            if isCurrentPrimary(mediaID) {
-                // Primary's dedup entries were cleared by setPrimaryMediaID. Seeing in-flight
-                // here means two parallel requests from the same primary player raced; cancel
-                // this one so only one download runs. AVPlayer retries and hits the cache.
-                connection.cancel()
-                return
-            }
-
-            // Non-primary: poll until the in-flight download finishes and file lands on disk.
+            // Another task is downloading this segment. Poll for the cache file to appear.
+            // Primary: 10s timeout (NWConnection died mid-stream, IPFS continues to disk;
+            //   without polling, AVPlayer cancel-retries in a tight loop — dozens per second).
+            // Non-primary: 120s timeout (IPFS DHT lookups can take 30-90s).
+            let maxPolls = isCurrentPrimary(mediaID) ? 20 : 240
             switch connection.state {
             case .cancelled, .failed: return
             default: break
             }
 
             let pollInterval: UInt64 = 500_000_000 // 0.5s
-            for _ in 0..<240 { // max 120s
+            for _ in 0..<maxPolls {
                 try? await Task.sleep(nanoseconds: pollInterval)
 
                 if FileManager.default.fileExists(atPath: cachePath) {
@@ -1989,10 +2008,16 @@ public class LocalHTTPServer: @unchecked Sendable {
         length: Int64,
         completion: (() -> Void)? = nil
     ) {
+        switch connection.state {
+        case .cancelled, .failed:
+            completion?()
+            return
+        default: break
+        }
         do {
             let fileHandle = try FileHandle(forReadingFrom: fileURL)
             try fileHandle.seek(toOffset: UInt64(offset))
-            
+
             let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
             connection.send(content: headerData, completion: .contentProcessed { [weak self] error in
                 if let error = error {
@@ -2209,20 +2234,31 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Track session so cancelDownloads(for: mediaID) can invalidate it.
         streamingSessionsLock.lock()
         if streamingSessions[sessionKey] != nil {
-            // Already downloading this exact segment. Close the connection so AVPlayer
-            // treats it as a transient error and retries — the retry goes through
-            // handleSegmentRequest's polling loop and is served from disk cache once
-            // the in-flight download completes.
-            // NOTE: Do NOT send HTTP errors — AVPlayer may treat them as permanent failures.
-            // MUST call completion() to release the pool slot and activeDownloads key that
-            // handleSegmentRequest acquired before calling us. Without it, both leak and the
-            // primary can never make progress (startIfNotInFlight keeps failing on the stale key).
+            // Already downloading this exact segment. The IPFS download is in-flight (likely
+            // the NWConnection died mid-stream and the download continues to disk cache).
+            // Poll for the cache file to appear and serve it, rather than connection.cancel()
+            // which causes AVPlayer to immediately retry → tight cancel-retry storm.
+            // Call completion() to release any pool slot acquired by handleSegmentRequest.
             streamingSessionsLock.unlock()
             session.invalidateAndCancel()
             let shortId = shortMID(mediaID)
-            print("♻️ [HLS SEGMENT \(shortId)] Duplicate download for \(sessionKey), closing connection")
-            connection.cancel()
+            print("♻️ [HLS SEGMENT \(shortId)] Duplicate download for \(sessionKey), waiting for disk cache")
             completion()
+            Task { [weak self] in
+                for _ in 0..<20 { // max 10s
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    switch connection.state {
+                    case .cancelled, .failed: return
+                    default: break
+                    }
+                    if FileManager.default.fileExists(atPath: cachePath) {
+                        autoreleasepool { self?.serveFile(path: cachePath, connection: connection, method: "GET") }
+                        return
+                    }
+                }
+                // Timed out — cancel so AVPlayer retries (cache file may be available by then).
+                connection.cancel()
+            }
             return
         }
         streamingSessions[sessionKey] = session
@@ -2664,6 +2700,15 @@ public class LocalHTTPServer: @unchecked Sendable {
     }
     
     private func sendResponse(connection: NWConnection, statusCode: Int, headers: [String: String], body: Data?, completion: (() -> Void)? = nil) {
+        // Guard: skip send on dead connections to avoid NWConnection
+        // "Socket is not connected" warnings from the network framework.
+        switch connection.state {
+        case .cancelled, .failed:
+            completion?()
+            return
+        default: break
+        }
+
         let headerData = buildHTTPHeaderData(statusCode: statusCode, headers: headers)
 
         guard let body = body, !body.isEmpty else {
@@ -2829,6 +2874,14 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
             headers["Content-Length"] = "\(http.expectedContentLength)"
         }
         let headerData = buildHeaders(200, headers)
+        // Guard: skip if AVPlayer already closed this connection.
+        switch connection.state {
+        case .cancelled, .failed:
+            connectionDead = true
+            completionHandler(.allow)
+            return
+        default: break
+        }
         connection.send(content: headerData, isComplete: false, completion: .contentProcessed { _ in })
         headersSent = true
         completionHandler(.allow)
@@ -2842,6 +2895,17 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
 
         // Stream to AVPlayer if connection is alive.
         guard !connectionDead else { return }
+        switch connection.state {
+        case .cancelled, .failed:
+            connectionDead = true
+            let shortId = mediaID.count > 8 ? String(mediaID.prefix(8)) : mediaID
+            print("🔌 [HLS SEGMENT \(shortId)] NWConnection closed mid-stream (\(segmentLabel)) — continuing IPFS download to disk cache")
+            let release = onConnectionDead
+            onConnectionDead = nil
+            release?()
+            return
+        default: break
+        }
 
         connection.send(content: data, isComplete: false, completion: .contentProcessed { [weak self] error in
             guard let self, error != nil, !self.connectionDead else { return }
