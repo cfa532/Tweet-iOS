@@ -222,13 +222,10 @@ class TweetCellContentView: UIView {
         // Get tap location
         let location = gesture.location(in: self)
 
-        // Check if tap is on action bar - use hitTest to properly detect button taps
+        // Check if tap is anywhere on the action bar — never open detail view from it
         let actionBarLocation = gesture.location(in: actionBar)
-        if let hitView = actionBar.hitTest(actionBarLocation, with: nil) {
-            // If hit test returns a UIControl (button), don't handle the tap
-            if hitView is UIControl || hitView.superview is UIControl {
-                return
-            }
+        if actionBar.hitTest(actionBarLocation, with: nil) != nil {
+            return
         }
 
         // Check if tap is on avatar (has its own tap handler)
