@@ -73,7 +73,7 @@ struct ProfileHeaderView: View {
             }
             if let profile = user.profile {
                 Text(profile)
-                    .font(.body)
+                    .font(.callout)
                     .foregroundColor(.themeText)
                     .lineLimit(3)
                     .truncationMode(.tail)

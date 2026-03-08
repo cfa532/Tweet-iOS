@@ -46,7 +46,7 @@ struct AppConfig {
         case .debug:
             return "iFG4GC9r0fF22jYBCkuPThybzwO"
         case .release:
-            return "mwmQCHCEHClCIJy-bItx5ALAhq9"
+            return "mKOihoVuFnQ2xt33R51KTQXSBkX"
         }
     }()
     

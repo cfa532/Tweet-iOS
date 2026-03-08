@@ -899,8 +899,10 @@ class TweetTableViewController: UITableViewController {
             // Set a fixed width for the hosting controller to ensure proper layout
             hostingController.view.frame.size.width = contentWidth
             
-            // Calculate the fitting height with the fixed width
-            let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingCompressedSize.height)
+            // Calculate the fitting height with the fixed width.
+            // Use layoutFittingExpandedSize so SwiftUI text views return their ideal
+            // (multi-line) height rather than the minimum (1-line) height.
+            let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingExpandedSize.height)
             let fittingSize = hostingController.sizeThatFits(in: targetSize)
             
             // Set final frame with padding
@@ -938,7 +940,7 @@ class TweetTableViewController: UITableViewController {
                 headerView.setNeedsLayout()
                 headerView.layoutIfNeeded()
                 
-                let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingCompressedSize.height)
+                let targetSize = CGSize(width: contentWidth, height: UIView.layoutFittingExpandedSize.height)
                 let fittingSize = headerHostingController?.sizeThatFits(in: targetSize) ?? targetSize
                 
                 // Update frames if size changed
