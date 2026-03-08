@@ -2230,9 +2230,13 @@ public class LocalHTTPServer: @unchecked Sendable {
         )
         delegate.onConnectionDead = onConnectionDead
 
+        // Primary: 15s request timeout so AVPlayer gets a fast failure signal and can
+        // switch to a lower bitrate variant (e.g., 480p) whose segments are already cached.
+        // Non-primary (preload): 30s/60s — fail faster to free pool slots for primary.
+        let isPrimary = isCurrentPrimary(mediaID)
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 90
-        config.timeoutIntervalForResource = 300
+        config.timeoutIntervalForRequest = isPrimary ? 15 : 30
+        config.timeoutIntervalForResource = isPrimary ? 30 : 60
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
 
@@ -2241,7 +2245,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         // Track session so cancelDownloads(for: mediaID) can invalidate it.
         streamingSessionsLock.lock()
         if let oldSession = streamingSessions[sessionKey] {
-            if isCurrentPrimary(mediaID) {
+            if isPrimary {
                 // Primary takes over: cancel the stalled preload session and start a fresh
                 // download that streams directly to the primary's NWConnection. The old
                 // session's IPFS download may have stalled (node unresponsive for this variant);
