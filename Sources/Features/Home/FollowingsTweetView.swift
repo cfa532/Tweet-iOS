@@ -26,7 +26,7 @@ struct FollowingsTweetView: View {
                     return cachedTweets
                 } else {
                     print("🌐 [SERVER LOAD] Fetching page \(page) from server")
-                    let serverTweets = await viewModel.fetchTweets(page: page, pageSize: size)
+                    let serverTweets = try await viewModel.fetchTweets(page: page, pageSize: size)
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
                     let validCount = serverTweets.compactMap{$0}.count
                     print("✅ [SERVER LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms")

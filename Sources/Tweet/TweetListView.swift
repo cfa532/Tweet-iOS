@@ -963,12 +963,17 @@ struct TweetListView: View {
             // Partial page means server ran out of bookmark/favorite entries
             hasMoreTweets = false
             print("📊 [PAGINATION] Page \(page): got \(tweetsFromServer.count) entries (0 valid), PARTIAL PAGE - no more tweets")
-            if page == 0 {
-                // Server confirmed empty feed — replace any stale cached content.
-                // (Network errors reach the catch block, so reaching here means server
-                // genuinely has no tweets for this user.)
+            if page == 0 && tweets.isEmpty {
+                // Server confirmed empty feed — only clear when we have no cached content.
+                // If tweets is non-empty (cached), keep them: fetchers should throw on network
+                // error, but guard here in case any path swallows the error and returns [].
                 tweets = []
                 updateVideoLoadingManager()
+                isLoading = false
+                initialLoadComplete = true
+            } else if page == 0 {
+                // Have cached tweets but server returned empty — keep cached content visible.
+                // Either network failed (fetcher should have thrown) or server is temporarily empty.
                 isLoading = false
                 initialLoadComplete = true
             }

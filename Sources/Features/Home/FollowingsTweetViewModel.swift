@@ -23,7 +23,7 @@ class FollowingsTweetViewModel: ObservableObject {
         self.hproseInstance = hproseInstance
     }
     
-    func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
         let startTime = Date()
         print("🌐 [SERVER FETCH] fetchTweets START - page: \(page), pageSize: \(pageSize)")
         
@@ -59,7 +59,7 @@ class FollowingsTweetViewModel: ObservableObject {
                 }
             } catch {
                 print("[HproseInstance] Error loading tweets for guest user: \(error)")
-                // Don't throw here, allow the app to continue even if tweet loading fails
+                throw error
             }
             return []
         }
@@ -114,7 +114,7 @@ class FollowingsTweetViewModel: ObservableObject {
         } catch {
             let elapsed = Date().timeIntervalSince(startTime) * 1000
             print("❌ [SERVER FETCH] fetchTweets FAILED in \(String(format: "%.1f", elapsed))ms: \(error)")
-            return []
+            throw error
         }
     }
     

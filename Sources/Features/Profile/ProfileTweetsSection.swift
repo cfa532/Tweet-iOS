@@ -79,10 +79,10 @@ class ProfileTweetsViewModel: ObservableObject {
             
             return filteredTweets
         } catch {
-            return []
+            throw error
         }
     }
-    
+
     func handleNewTweet(_ tweet: Tweet) {
         // Only show private tweets if the current user is the author
         if !(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid {
