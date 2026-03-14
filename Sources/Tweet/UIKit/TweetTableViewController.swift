@@ -268,6 +268,25 @@ class TweetTableViewController: UITableViewController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            // Only perform aggressive cleanup when memory is genuinely high.
+            // iOS sends memory warnings even at ~200MB; reloading visible cells
+            // tears down playing video players and causes black flicker.
+            var vmInfo = task_vm_info_data_t()
+            var vmCount = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size) / mach_msg_type_number_t(MemoryLayout<natural_t>.size)
+            let memoryMB: UInt64
+            if withUnsafeMutablePointer(to: &vmInfo, {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(vmCount)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &vmCount)
+                }
+            }) == KERN_SUCCESS {
+                memoryMB = UInt64(vmInfo.phys_footprint) / (1024 * 1024)
+            } else {
+                memoryMB = 0
+            }
+            guard memoryMB > 1200 else {
+                print("ℹ️ [TweetTableVC] Memory warning at \(memoryMB)MB — skipping cell reload")
+                return
+            }
 
             // Stop all videos and clear coordinator caches via notification
             NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
