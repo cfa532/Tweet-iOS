@@ -188,7 +188,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
             
             // Configure timeout for regular operations (15 seconds - fast fail for bad servers)
-            client.timeout = 15000  // 15 seconds in milliseconds (detect slow servers quickly)
+            client.timeout = 15  // 15 seconds (detect slow/dead servers quickly)
             
             return client
         }
@@ -204,7 +204,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             
             // Configure timeout for upload operations (10 seconds to detect bad servers)
             // Note: Actual file upload uses URLSession with 10-minute timeout (see HproseInstance.swift:4628)
-            client.timeout = 10000  // 10 seconds - fast fail for slow servers, URLSession handles actual upload
+            client.timeout = 10  // 10 seconds - fast fail for slow servers, URLSession handles actual upload
             
             return client
         }

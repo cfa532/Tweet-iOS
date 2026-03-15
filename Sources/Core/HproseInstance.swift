@@ -1437,8 +1437,8 @@ final class HproseInstance: ObservableObject {
                     NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
                 }
                 
-                user.baseUrl = nil
-                
+                await MainActor.run { user.baseUrl = nil }
+
                 // If this was the last attempt, fail
                 if attempt >= maxRetries {
                     print("ERROR: [\(logPrefix)] NULL RESPONSE on final attempt for userId: \(user.mid), adding to blacklist")
@@ -1462,7 +1462,16 @@ final class HproseInstance: ObservableObject {
                 lastError = error
                 let nsError = error as NSError
                 print("ERROR: [\(logPrefix)] USER UPDATE FAILED: userId: \(user.mid), attempt: \(attempt)/\(maxRetries), domain: \(nsError.domain), code: \(nsError.code)")
-                
+
+                // Invalidate IP cache so retry's getProviderIP() health check won't
+                // return stale "healthy" for the failed IP
+                if let baseUrlString = user.baseUrl?.absoluteString,
+                   let baseURL = URL(string: baseUrlString),
+                   let host = baseURL.host {
+                    let cacheKey = host + (baseURL.port.map { ":\($0)" } ?? "")
+                    invalidateIPCache(for: cacheKey)
+                }
+
                 // Remove unhealthy node only for genuine connection failures.
                 // Timeouts (-1001) can be caused by backgrounding; cancellations (-999) by
                 // task teardown — neither indicates the node itself is unhealthy.
@@ -1488,7 +1497,8 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // All retries failed - remove node from pool
+        // All retries failed - remove node from pool and clear stale baseUrl
+        // so the NEXT fetchUser call forces fresh IP resolution via getProviderIP()
         print("ERROR: [\(logPrefix)] ALL RETRIES FAILED: userId: \(user.mid), maxRetries: \(maxRetries)")
         if let baseUrlString = user.baseUrl?.absoluteString,
            let hostIds = user.hostIds, hostIds.count > 1 {
@@ -1496,6 +1506,7 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [\(logPrefix)] Removing failed node \(accessNodeMid) from pool after all retries failed")
             NodePool.shared.removeIPFromNode(nodeMid: accessNodeMid, ip: baseUrlString)
         }
+        await MainActor.run { user.baseUrl = nil }
         if !skipRetryAndBlacklist {
             blackList.recordFailure(user.mid)
         }
@@ -1567,9 +1578,9 @@ final class HproseInstance: ObservableObject {
                 }
             }
             
-            // User's node not in pool - use user's existing baseUrl (also trusted)
-            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User's node not in pool, using existing baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(user.mid)")
-            return
+            // User's node not in pool — existing baseUrl is unvalidated and may be stale
+            // (e.g., host IP changed). Fall through to getProviderIP() for fresh resolution.
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - User's node not in pool, resolving fresh IP via getProviderIP() for userId: \(user.mid)")
         }
         
         // Resolve fresh IP (retry attempts or forced refresh)
@@ -1590,7 +1601,12 @@ final class HproseInstance: ObservableObject {
             guard let providerIP = try await getProviderIP(user.mid, v4Only: v4Only) else {
                 // getProviderIP returned nil (not exception) - user not found or no IPs available
                 print("WARNING: [resolveAndUpdateBaseUrl] getProviderIP returned nil for userId: \(user.mid) - user not found or no IPs available")
-                // Continue with current baseUrl - calling code will handle appropriately
+                // On retry: clear stale baseUrl to fail fast with "no client" instead of
+                // wasting 5+ seconds on a doomed timeout to the old IP
+                if attempt > 1 {
+                    await MainActor.run { user.baseUrl = nil }
+                    print("DEBUG: [resolveAndUpdateBaseUrl] Cleared stale baseUrl on retry after getProviderIP returned nil")
+                }
                 return
             }
             
