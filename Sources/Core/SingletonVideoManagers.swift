@@ -620,169 +620,30 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // while still sharing the same underlying AVURLAsset (local HTTP proxy URL).
             let playerItem = AVPlayerItem(asset: cachedPlayerItem.asset)
 
-            Task { @MainActor in
-                // Ignore stale completions (e.g. duplicated loadVideo calls from view recreations)
-                guard self.loadGeneration == generation, self.currentVideoMid == mid else {
-                    return
-                }
-                self.loadingMid = nil
+            // No Task wrapper needed — class is @MainActor, already on main thread.
+            // Executing synchronously eliminates the 1+ frame delay before item attachment.
+            self.loadingMid = nil
 
-                // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
-                AudioSessionManager.shared.activateForVideoPlayback()
+            // Ensure audio session uses playback category so hardware mute switch doesn't silence fullscreen video
+            AudioSessionManager.shared.activateForVideoPlayback()
 
-                // Create or reuse singleton player (fullscreen's unique player instance)
-                if self.singletonPlayer == nil {
-                    self.singletonPlayer = AVPlayer(playerItem: playerItem)
-                } else {
-                    self.singletonPlayer?.replaceCurrentItem(with: playerItem)
-                }
-                
-                // Always unmuted in fullscreen
-                self.singletonPlayer?.isMuted = false
-                
-                // CRITICAL: Setup fullscreen's unique functionality
-                // These observers are essential for auto-advance, retry monitoring, and buffering detection
-                self.setupVideoCompletionObserver(playerItem)
-                self.setupTimeControlStatusObserver()
-                self.startRetryMonitoring()
-                
-                // Check if player item is ready
-                if playerItem.status == .readyToPlay {
-                    self.isItemReady = true
-                    
-                    // Check if video finished in mediaCell - if so, restart from beginning
-                    let duration = playerItem.duration
-                    if duration.isValid && duration.seconds > 0 {
-                        if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
-                            print("🔄 [FullScreenVideoManager] Video \(mid) finished in mediaCell - restarting from beginning")
-                            self.singletonPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                guard finished, let self = self else { return }
-                                Task { @MainActor in
-                                    self.singletonPlayer?.play()
-                                    self.isPlaying = true
-                                    print("▶️ [FullScreenVideoManager] Restarted finished video from beginning")
-                                }
-                            }
-                            return
-                        }
-                    }
-                    
-                    // Check for saved position and restore it
-                    if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
-                       let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen) {
-                        // CRITICAL: Validate saved time before seeking to prevent crash
-                        guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
-                            print("⚠️ [FullScreenVideoManager] Invalid saved time (\(savedState.currentTime.seconds)s) - clearing and starting normally")
-                            PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .fullScreen)
-                            self.checkAndRewindIfAtEnd {
-                                self.singletonPlayer?.play()
-                                self.isPlaying = true
-                            }
-                            return
-                        }
-                        
-                        print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s")
-                        
-                        self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                            guard finished, let self = self else { return }
-                            
-                            Task { @MainActor in
-                                print("✅ [FullScreenVideoManager] Restored position to \(savedState.currentTime.seconds)s")
-                                
-                                // CRITICAL: Fullscreen should always auto-play, regardless of wasPlaying state
-                                self.singletonPlayer?.play()
-                                self.isPlaying = true
-                                print("▶️ [FullScreenVideoManager] Started playback from saved position")
-                            }
-                        }
-                    } else {
-                        // No saved state, check position and rewind if at end before playing
-                        self.checkAndRewindIfAtEnd {
-                            self.singletonPlayer?.play()
-                            self.isPlaying = true
-                        }
-                    }
-                } else {
-                    self.isPlaying = true // Mark as "should be playing"
-                    
-                    // CRITICAL: Observe playerItem status to start playback when it becomes ready
-                    self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
-                        guard let self = self else { return }
-                        
-                        DispatchQueue.main.async {
-                            guard item.status == .readyToPlay else {
-                                if item.status == .failed {
-                                    print("❌ [FullScreenVideoManager] PlayerItem failed to load: \(item.error?.localizedDescription ?? "unknown")")
-                                }
-                                return
-                            }
-                            
-                            print("✅ [FullScreenVideoManager] Cached playerItem became ready, starting playback")
-                            self.isItemReady = true
-                            
-                            // Check if video finished in mediaCell - if so, restart from beginning
-                            let duration = item.duration
-                            if duration.isValid && duration.seconds > 0 {
-                                if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
-                                    print("🔄 [FullScreenVideoManager] Video \(mid) finished in mediaCell - restarting from beginning")
-                                    self.singletonPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                        guard finished, let self = self else { return }
-                                        Task { @MainActor in
-                                            self.singletonPlayer?.play()
-                                            self.isPlaying = true
-                                            print("▶️ [FullScreenVideoManager] Restarted finished video from beginning")
-                                        }
-                                    }
-                                    return
-                                }
-                            }
-                            
-                            // Check for saved position and restore it
-                            if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
-                               let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen) {
-                                // CRITICAL: Validate saved time before seeking to prevent crash
-                                guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
-                                    print("⚠️ [FullScreenVideoManager] Invalid saved time (\(savedState.currentTime.seconds)s) - clearing and starting normally")
-                                    PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .fullScreen)
-                                    self.checkAndRewindIfAtEnd {
-                                        self.singletonPlayer?.play()
-                                        self.isPlaying = true
-                                        print("▶️ [FullScreenVideoManager] Started playback after invalid state cleared")
-                                    }
-                                    return
-                                }
-                                
-                                print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s (deferred)")
-                                
-                                self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                    guard finished, let self = self else { return }
-                                    
-                                    Task { @MainActor in
-                                        print("✅ [FullScreenVideoManager] Restored position to \(savedState.currentTime.seconds)s (deferred)")
-                                        
-                                        // CRITICAL: Fullscreen should always auto-play, regardless of wasPlaying state
-                                        self.singletonPlayer?.play()
-                                        self.isPlaying = true
-                                        print("▶️ [FullScreenVideoManager] Started playback from saved position (deferred)")
-                                    }
-                                }
-                            } else {
-                                // No saved state, check position and rewind if at end before playing
-                                self.checkAndRewindIfAtEnd {
-                                    self.singletonPlayer?.play()
-                                    self.isPlaying = true
-                                    print("▶️ [FullScreenVideoManager] Started playback with cached playerItem (deferred)")
-                                }
-                            }
-                            
-                            // Clean up observer after handling
-                            self.itemStatusObserver?.invalidate()
-                            self.itemStatusObserver = nil
-                        }
-                    }
-                }
-                
+            // Create or reuse singleton player (fullscreen's unique player instance)
+            if self.singletonPlayer == nil {
+                self.singletonPlayer = AVPlayer(playerItem: playerItem)
+            } else {
+                self.singletonPlayer?.replaceCurrentItem(with: playerItem)
             }
+
+            // Always unmuted in fullscreen
+            self.singletonPlayer?.isMuted = false
+
+            // CRITICAL: Setup fullscreen's unique functionality
+            self.setupVideoCompletionObserver(playerItem)
+            self.setupTimeControlStatusObserver()
+            self.startRetryMonitoring()
+
+            // Start playback — compute seek target once, seek once, then play
+            self.startPlaybackWithSeekIfNeeded(playerItem: playerItem, mid: mid)
             return
         }
         
@@ -821,70 +682,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     // Start monitoring for stalls during seeking
                     self.startRetryMonitoring()
                     
-                    // Check if player item is ready
-                    if playerItem.status == .readyToPlay {
-                        
-                        // Check if video finished in mediaCell - if so, restart from beginning
-                        let duration = playerItem.duration
-                        if duration.isValid && duration.seconds > 0 {
-                            if VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
-                                print("🔄 [FullScreenVideoManager] Video \(mid) finished in mediaCell - restarting from beginning")
-                                self.singletonPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                    guard finished, let self = self else { return }
-                                    Task { @MainActor in
-                                        self.singletonPlayer?.play()
-                                        self.isPlaying = true
-                                        print("▶️ [FullScreenVideoManager] Restarted finished video from beginning")
-                                    }
-                                }
-                                return
-                            }
-                        }
-                        
-                        // Check for saved position and restore it
-                        let shouldRestore = PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen)
-                        let savedState = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen)
-                        print("🔍 [FullScreenVideoManager] Checking saved state for \(mid): shouldRestore=\(shouldRestore), savedState=\(savedState != nil ? "exists (time=\(savedState!.currentTime.seconds)s)" : "nil")")
-                        
-                        if shouldRestore, let savedState = savedState {
-                            // CRITICAL: Validate saved time before seeking to prevent crash
-                            guard savedState.currentTime.isValid && savedState.currentTime.seconds.isFinite else {
-                                print("⚠️ [FullScreenVideoManager] Invalid saved time (\(savedState.currentTime.seconds)s) - clearing and starting from beginning")
-                                PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .fullScreen)
-                                // Start from beginning - fullscreen should always auto-play
-                                self.checkAndRewindIfAtEnd {
-                                    self.singletonPlayer?.play()
-                                    self.isPlaying = true
-                                    print("▶️ [FullScreenVideoManager] Started playback from beginning (after clearing invalid state)")
-                                }
-                                return
-                            }
-                            
-                            print("🔄 [FullScreenVideoManager] Restoring saved position: \(savedState.currentTime.seconds)s, wasPlaying: \(savedState.wasPlaying)")
-                            
-                            self.singletonPlayer?.seek(to: savedState.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                                guard finished, let self = self else { return }
-                                
-                                Task { @MainActor in
-                                    print("✅ [FullScreenVideoManager] Restored position to \(savedState.currentTime.seconds)s")
-                                    
-                                    // CRITICAL: Fullscreen should always auto-play, regardless of wasPlaying state
-                                    self.singletonPlayer?.play()
-                                    self.isPlaying = true
-                                    print("▶️ [FullScreenVideoManager] Started playback from saved position")
-                                }
-                            }
-                        } else {
-                            print("⚠️ [FullScreenVideoManager] No saved state to restore, starting from beginning")
-                            // No saved state, check position and rewind if at end before playing
-                            self.checkAndRewindIfAtEnd {
-                                self.singletonPlayer?.play()
-                                self.isPlaying = true
-                            }
-                        }
-                    } else {
-                        self.isPlaying = true // Mark as "should be playing"
-                    }
+                    // Start playback — same unified path as cached player
+                    self.startPlaybackWithSeekIfNeeded(playerItem: playerItem, mid: mid)
                     
                 }
             } catch {
@@ -926,6 +725,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Cancel any pending buffering debounce task
         bufferingDebounceTask?.cancel()
         bufferingDebounceTask = nil
+
     }
     
     /// Setup timeControlStatus observer for buffering detection and autoplay
@@ -1305,6 +1105,79 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // End of list: keep last frame (user can swipe down to dismiss; don't auto-dismiss).
     }
     
+    /// Unified seek-then-play for all load paths. Computes the seek target once,
+    /// performs a single seek (or none), then calls play(). If the item isn't ready
+    /// yet, sets up a KVO observer to defer until readyToPlay.
+    private func startPlaybackWithSeekIfNeeded(playerItem: AVPlayerItem, mid: String) {
+        guard playerItem.status == .readyToPlay else {
+            // Item not ready — observe status and retry when ready
+            self.isPlaying = true // Mark as "should be playing"
+            self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+                guard let self = self else { return }
+                DispatchQueue.main.async {
+                    if item.status == .readyToPlay {
+                        self.isItemReady = true
+                        self.seekOnceAndPlay(playerItem: item, mid: mid)
+                        self.itemStatusObserver?.invalidate()
+                        self.itemStatusObserver = nil
+                    } else if item.status == .failed {
+                        print("❌ [FullScreenVideoManager] PlayerItem failed: \(item.error?.localizedDescription ?? "unknown")")
+                    }
+                }
+            }
+            return
+        }
+        self.isItemReady = true
+        seekOnceAndPlay(playerItem: playerItem, mid: mid)
+    }
+
+    /// Compute the single correct seek target and play. Called only when item is readyToPlay.
+    private func seekOnceAndPlay(playerItem: AVPlayerItem, mid: String) {
+        // Determine where to seek (nil = no seek needed)
+        let seekTarget: CMTime? = {
+            let duration = playerItem.duration
+            // 1) Video finished in feed cell → restart from beginning
+            if duration.isValid && duration.seconds > 0,
+               VideoStateCache.shared.hasVideoFinishedInMediaCell(for: mid, duration: duration) {
+                print("🔄 [FullScreenVideoManager] Video \(mid) finished in mediaCell - restarting")
+                return .zero
+            }
+            // 2) Saved position to restore
+            if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .fullScreen),
+               let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .fullScreen) {
+                if saved.currentTime.isValid && saved.currentTime.seconds.isFinite {
+                    print("🔄 [FullScreenVideoManager] Restoring position: \(saved.currentTime.seconds)s")
+                    return saved.currentTime
+                } else {
+                    PersistentVideoStateManager.shared.clearState(videoMid: mid, context: .fullScreen)
+                }
+            }
+            // 3) At/near end → rewind
+            if duration.isValid && duration.seconds > 0 {
+                let remaining = duration.seconds - playerItem.currentTime().seconds
+                if remaining <= 0.5 { return .zero }
+            }
+            return nil
+        }()
+
+        if let target = seekTarget {
+            self.singletonPlayer?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                guard finished, let self = self else { return }
+                DispatchQueue.main.async {
+                    self.singletonPlayer?.play()
+                    self.isPlaying = true
+
+                    print("▶️ [FullScreenVideoManager] Playing after seek to \(target.seconds)s")
+                }
+            }
+        } else {
+            self.singletonPlayer?.play()
+            self.isPlaying = true
+
+            print("▶️ [FullScreenVideoManager] Playing immediately (no seek needed)")
+        }
+    }
+
     /// Check if video is at the end and rewind if needed before playing
     private func checkAndRewindIfAtEnd(completion: @escaping () -> Void) {
         guard let player = singletonPlayer, let playerItem = player.currentItem else {

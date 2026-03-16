@@ -964,11 +964,8 @@ struct SingletonVideoPlayerView: View {
                         .scaleEffect(1.5)
                 }
 
-                // While the new AVPlayerItem is loading (status not yet .readyToPlay),
-                // cover the black player surface with the cached last frame so the user
-                // sees the video image instead of black during the IPFS buffering phase.
-                // currentVideoMid check dropped — the item may not yet be assigned but
-                // this video's thumbnail should still cover the transient black flash.
+                // Cover the player surface with cached last frame while item is loading
+                // or buffering. Once playing, let AVPlayer handle video rendering natively.
                 if let player = manager.singletonPlayer, manager.currentVideoMid == mid,
                    (player.currentItem?.status != .readyToPlay ||
                     manager.isBuffering ||
