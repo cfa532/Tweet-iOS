@@ -642,12 +642,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             self.setupTimeControlStatusObserver()
             self.startRetryMonitoring()
 
-            // Defer playback to next run loop so AVPlayerLayer in AVPlayerViewController
-            // has time to configure for the new playerItem. Without this, play() starts
-            // audio before the video rendering pipeline is ready, causing frozen video.
-            DispatchQueue.main.async {
-                self.startPlaybackWithSeekIfNeeded(playerItem: playerItem, mid: mid)
-            }
+            // Start playback — compute seek target once, seek once, then play
+            self.startPlaybackWithSeekIfNeeded(playerItem: playerItem, mid: mid)
             return
         }
         

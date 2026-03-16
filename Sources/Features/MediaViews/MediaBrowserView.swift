@@ -964,19 +964,6 @@ struct SingletonVideoPlayerView: View {
                         .scaleEffect(1.5)
                 }
 
-                // Cover the player surface with cached last frame while item is loading
-                // or buffering. Once playing, let AVPlayer handle video rendering natively.
-                if let player = manager.singletonPlayer, manager.currentVideoMid == mid,
-                   (player.currentItem?.status != .readyToPlay ||
-                    manager.isBuffering ||
-                    player.timeControlStatus == .waitingToPlayAtSpecifiedRate),
-                   let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .allowsHitTesting(false)
-                }
-
                 // Show buffering spinner when waiting for data (non-interactive overlay)
                 if manager.isBuffering && manager.currentVideoMid == mid {
                     ZStack {
