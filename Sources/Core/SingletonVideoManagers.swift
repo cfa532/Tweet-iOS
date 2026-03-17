@@ -792,9 +792,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 }
                 
                 // Autoplay logic: check multiple conditions to ensure we resume when data is ready
-                let hasEnoughBuffer = hasBufferedData && bufferedDuration >= 0.5
+                // 2.0s minimum prevents play/pause flickering when buffer is too thin to sustain playback
+                let hasEnoughBuffer = hasBufferedData && bufferedDuration >= 2.0
                 let isReadyToPlay = itemStatus == .readyToPlay
                 let isNotPlaying = player.rate == 0
+                let isAlreadyWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 let wantsToPlay = self.isPlaying || self.wasPlayingBeforeWaiting
                 
                 // CRITICAL: Check for saved state and restore position BEFORE playing
@@ -869,21 +871,23 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     return // Still waiting for restoration
                 }
                 
-                // If we want to play, have data, and player is not playing, resume
-                if wantsToPlay && isReadyToPlay && hasEnoughBuffer && isNotPlaying {
+                // If we want to play, have data, and player is not playing, resume.
+                // Skip if already in .waitingToPlayAtSpecifiedRate — player is already trying
+                // to play; redundant play() calls disrupt AVPlayer's buffering state machine
+                // and cause timeControlStatus oscillation (play button flickering).
+                if wantsToPlay && isReadyToPlay && hasEnoughBuffer && isNotPlaying && !isAlreadyWaiting {
                     player.play()
                     self.isPlaying = true
                     self.wasPlayingBeforeWaiting = false
-                } else if player.timeControlStatus == .playing || player.rate > 0 {
-                    // Already playing - just reset flag
+                } else if player.timeControlStatus == .playing || player.rate > 0 || isAlreadyWaiting {
+                    // Already playing or buffering — just reset flag
                     if self.wasPlayingBeforeWaiting {
                         self.wasPlayingBeforeWaiting = false
                     }
-                } else if wantsToPlay && isReadyToPlay && hasEnoughBuffer {
-                    // Fallback: try to play even if rate check didn't catch it
-                    player.play()
-                    self.isPlaying = true
-                    self.wasPlayingBeforeWaiting = false
+                    // Sync isPlaying if player was started externally (e.g. AVPlayerViewController controls)
+                    if !self.isPlaying && (player.timeControlStatus == .playing || isAlreadyWaiting) {
+                        self.isPlaying = true
+                    }
                 }
             }
         }
@@ -1023,8 +1027,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             bufferedDuration = CMTimeGetSeconds(timeRange.duration)
                         }
 
-                        // Only resume when we have at least 1 second of buffer
-                        if hasData && bufferedDuration >= 1.0 {
+                        // Only resume when we have at least 2 seconds of buffer
+                        if hasData && bufferedDuration >= 2.0 {
                             Task { @MainActor in
                                 guard let self = self, let player = player else { return }
                                 // Bail if fullscreen was dismissed while waiting for buffer.

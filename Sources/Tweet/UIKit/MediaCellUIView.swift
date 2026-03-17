@@ -1835,6 +1835,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     @objc private func imageTapped() {
         guard let parentTweet, let parentVC = parentViewController else { return }
+        // Mark overlay BEFORE present to prevent setVisible(false) race (see handleVideoTap)
+        OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaCellUIView.imageTapped")
         let browserView = MediaBrowserView(
             tweet: parentTweet,
             initialIndex: attachmentIndex,
@@ -1873,6 +1875,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Post stop all to pause feed videos
         NotificationCenter.default.post(name: .stopAllVideos, object: nil)
+
+        // CRITICAL: Mark overlay BEFORE presenting the modal. The .fullScreen presentation
+        // triggers didMoveToWindow(nil) → setVisible(false) on feed cells, which checks
+        // isCovered to skip aggressive cleanup (delegate unregister, network cancel).
+        // If beginOverlay waits until onAppear, there's a race where setVisible(false)
+        // fires first with isCovered=false → delegate unregistered → coordinator can't
+        // find the video after dismiss → spinner stuck permanently.
+        OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaCellUIView.handleVideoTap")
 
         // Delay to allow spinner to render
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
