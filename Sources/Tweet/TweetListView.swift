@@ -574,96 +574,12 @@ struct TweetListView: View {
         // By launching server fetch in separate Task, cached tweets render immediately
         Task {
             // Step 2: Load from server to get the most up-to-date data (in background)
+            // Additional pages are loaded automatically when user scrolls near the bottom
             await loadFromServer(page: page, pageSize: pageSize) { _ in }
-            
-            // Step 3: Auto-load additional pages if there are more tweets on server
-            // This ensures all new tweets are loaded when app opens, not just first page
-            await autoLoadRemainingNewTweets()
         }
     }
     
-    /// Automatically load remaining new tweets after initial load
-    /// Continues loading pages until no more tweets or reasonable limit reached
-    ///
-    /// Uses the same pagination algorithm as updateTweetsWithServerData:
-    /// - responseSize >= pageSize: keep loading (more entries might exist)
-    /// - responseSize < pageSize: stop (server depleted)
-    private func autoLoadRemainingNewTweets() async {
-        let maxAutoLoadPages: UInt = 2  // Load up to 2 additional pages (20 tweets total with pageSize=10)
-        var pagesLoaded: UInt = 0
 
-        // Check if there are more tweets to load
-        let shouldContinue = await MainActor.run { hasMoreTweets }
-        guard shouldContinue else { return }
-
-
-        while pagesLoaded < maxAutoLoadPages {
-            let currentHasMore = await MainActor.run { hasMoreTweets }
-            guard currentHasMore else {
-                print("📥 [AUTO-LOAD] No more tweets to load (completed)")
-                break
-            }
-
-            let nextPage = await MainActor.run { currentPage + 1 }
-
-            do {
-                let tweets = try await tweetFetcher(nextPage, pageSize, false)
-                let validTweets = tweets.compactMap { $0 }
-
-                await MainActor.run {
-                    if !validTweets.isEmpty {
-                        // For preserveOrder lists (bookmarks/favorites), append in server order
-                        // For other lists, merge with timestamp sorting
-                        if self.preserveOrder {
-                            self.tweets.appendTweetsPreservingOrder(validTweets)
-                        } else {
-                            self.tweets.mergeTweets(validTweets)
-                        }
-                        self.currentPage = nextPage
-
-                        // Check response size to determine if more items exist
-                        self.hasMoreTweets = tweets.count >= self.pageSize
-
-                        // Update video manager with debouncing (will batch multiple updates)
-                        self.updateVideoLoadingManager(delay: 0.2)
-                    } else {
-                        // No valid tweets - check response size
-                        self.currentPage = nextPage
-                        self.hasMoreTweets = tweets.count >= self.pageSize
-                        if !self.hasMoreTweets {
-                            print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) and partial page - stopping")
-                        } else {
-                            print("📥 [AUTO-LOAD] No valid tweets in page \(nextPage) but got full page - continuing")
-                        }
-                    }
-                }
-                
-                // Check if we got a partial page (indicates end of new tweets)
-                if tweets.count < pageSize {
-                    print("📥 [AUTO-LOAD] Received partial page (\(tweets.count) tweets) - completed")
-                    break
-                }
-                
-                pagesLoaded += 1
-                
-                // Small delay between requests to avoid overwhelming server
-                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms (increased from 100ms)
-                
-            } catch {
-                print("❌ [AUTO-LOAD] Error loading page \(nextPage): \(error)")
-                print("❌ [AUTO-LOAD] Error details: \(error.localizedDescription)")
-                // Don't set hasMoreTweets = false on error!
-                // This would prevent manual retry and show "no more tweets" incorrectly
-                // The error could be temporary (network, timeout, etc.)
-                // Just stop auto-loading and let the user retry manually via scroll
-                break
-            }
-        }
-        
-        if pagesLoaded >= maxAutoLoadPages {
-            print("📥 [AUTO-LOAD] Reached max auto-load limit (\(maxAutoLoadPages) pages)")
-        }
-    }
 
     /// Refresh tweets from server (pull-to-refresh)
     ///
