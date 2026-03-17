@@ -95,8 +95,7 @@ struct FollowingsTweetView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in
-            // TweetListView already handles initial loading with correct pageSize
-            // No need to manually trigger here
+            // TweetListView.onAppear handles reloading when returning to an empty feed
         }
         .onAppear {
             onScroll?(0, 0)

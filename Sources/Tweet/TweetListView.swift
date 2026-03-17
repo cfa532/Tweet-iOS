@@ -284,6 +284,13 @@ struct TweetListView: View {
                     NotificationCenter.default.post(name: .feedViewDidAppear, object: nil,
                                                     userInfo: ["feedIdentifier": feedIdentifier])
                 }
+                // If returning from navigation and feed is empty (e.g. guest user's
+                // initial load completed before server was ready), reload now.
+                if tweets.isEmpty && initialLoadComplete {
+                    Task {
+                        await refreshTweets()
+                    }
+                }
             } else {
                 // First appearance - just mark as appeared, video will start via normal flow
                 hasAppearedOnce = true
