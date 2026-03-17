@@ -40,9 +40,9 @@ class TweetTableViewController: UITableViewController {
     private var hasMoreTweets: Bool = true
     private var isLoadingMore: Bool = false
     
-    // Bottom pull-to-load state
+    // Bottom pull-to-load state (manual pull past bottom edge)
     private var isBottomPullActive: Bool = false
-    private var bottomPullThreshold: CGFloat = 50  // Pull down 50pt to trigger (reduced from 80)
+    private var bottomPullThreshold: CGFloat = 50
     
     // Spinner timing
     private var loadingSpinnerStartTime: Date? = nil
@@ -1610,12 +1610,19 @@ class TweetTableViewController: UITableViewController {
             updateVisibleTweetsForVideoPlayback()
         }
 
-        // Detect bottom pull-to-load gesture (always check, even before initial layout)
+        // Auto-load next page when scrolling near the bottom
         let contentHeight = scrollView.contentSize.height
         let scrollViewHeight = scrollView.frame.size.height
+        let distanceFromBottom = contentHeight - scrollView.contentOffset.y - scrollViewHeight
         let contentInsetBottom = scrollView.contentInset.bottom
         let bottomOffset = scrollView.contentOffset.y + scrollViewHeight - contentHeight + contentInsetBottom
 
+        // Auto-load: trigger when within 2 screen heights of the bottom (only if more tweets exist)
+        if tweets.count >= 4 && hasMoreTweets && distanceFromBottom < scrollViewHeight * 2 && !isLoadingMore {
+            triggerBottomPullLoadMore()
+        }
+
+        // Manual pull-to-load: user pulled past the bottom edge (works even when hasMoreTweets is false)
         if tweets.count >= 4 && bottomOffset > bottomPullThreshold && !isLoadingMore && !isBottomPullActive {
             isBottomPullActive = true
             triggerBottomPullLoadMore()
@@ -1946,27 +1953,20 @@ class TweetTableViewController: UITableViewController {
 
         // Check if there are no more tweets to load
         if !hasMoreTweets {
-            // Show spinner first for exactly 500ms
-            updateLoadingState(isLoadingMore: true, hasMoreTweets: false)
-
-            // After 500ms, hide spinner (which will trigger message if conditions are met)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self = self else { return }
-                self.updateLoadingState(isLoadingMore: false, hasMoreTweets: false)
-                self.isBottomPullActive = false
-            }
+            showNoMoreTweetsMessageIfNeeded()
+            isBottomPullActive = false
             return
         }
 
         updateLoadingState(isLoadingMore: true, hasMoreTweets: hasMoreTweets)
-        
+
         // Call the load more callback with forceLoad=true to bypass hasMoreTweets check
         loadMoreTweets?(true)
-        
+
         // Notify callback if registered
         onLoadMoreRequested?()
-        
-        // Reset flag after a delay to allow next pull
+
+        // Reset manual pull flag after a delay to allow next pull
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.isBottomPullActive = false
         }
