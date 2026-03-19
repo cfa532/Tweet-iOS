@@ -13,6 +13,7 @@ struct Avatar: View {
     @State private var cachedImage: UIImage?
     @State private var isLoading = false
     @State private var loadFailed = false // Track if load failed/timed out
+    @State private var loadTask: Task<Void, Never>?
     
     init(user: User, size: CGFloat = 40) {
         self.user = user
@@ -93,14 +94,16 @@ struct Avatar: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
-            // When user is updated (e.g., baseUrl resolved), reload avatar if avatarUrl is now available
+            // When user is updated (e.g., baseUrl resolved), reload avatar with new URL
             guard let userId = notification.userInfo?["userId"] as? String,
                   userId == user.mid,
-                  !isLoading,
                   let avatarUrl = user.avatarUrl,
                   cachedImage == nil else { return }
-            
-            // baseUrl was resolved, avatarUrl is now available - start loading
+
+            // Cancel in-flight request (may be stuck on stale IP timeout)
+            loadTask?.cancel()
+            loadTask = nil
+            isLoading = false
             loadFailed = false
             loadAvatar(from: avatarUrl)
         }
@@ -152,8 +155,9 @@ struct Avatar: View {
         // ✅ PERFORMANCE FIX: Check disk cache asynchronously to avoid blocking main thread
         // Set isLoading synchronously to prevent race conditions, but clear it immediately if cache is found
         isLoading = true  // Set synchronously to prevent multiple Tasks from starting
-        
-        Task {
+
+        loadTask?.cancel()
+        loadTask = Task {
             // Check disk cache first (async, non-blocking)
             if let cached = ImageCacheManager.shared.getCompressedImage(for: avatarAttachment) {
                 await MainActor.run {
@@ -164,7 +168,7 @@ struct Avatar: View {
                 }
                 return
             }
-            
+
             // Not in disk cache - keep loading state and fetch from network
             // Use standard image loading with deduplication
             guard let url = URL(string: urlString) else {
@@ -175,9 +179,11 @@ struct Avatar: View {
                 }
                 return
             }
-            
+
             let result = await ImageCacheManager.shared.loadAndCacheImage(from: url, for: avatarAttachment)
-            
+
+            guard !Task.isCancelled else { return }
+
             await MainActor.run {
                 if let image = result {
                     cachedImage = image

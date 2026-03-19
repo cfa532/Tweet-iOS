@@ -129,8 +129,12 @@ class AvatarUIView: UIView {
             guard let self, let user,
                   let userId = notification.userInfo?["userId"] as? String,
                   userId == user.mid,
-                  self.imageView.image == nil,
                   user.avatarUrl != nil else { return }
+            // Cancel in-flight request (may be stuck on stale IP timeout)
+            self.loadTask?.cancel()
+            self.loadTask = nil
+            // Only reload if avatar hasn't been displayed yet
+            guard self.imageView.image == nil else { return }
             self.loadAvatarImage(user: user)
         }
         notificationObservers.append(userUpdateObserver)
