@@ -149,6 +149,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Cancelled if the cell scrolls off-screen within 0.3s of configure().
     private var playerAcquireDebounceTask: Task<Void, Never>?
 
+    /// Fallback task: if item.status stays .unknown after deferring to statusKVO,
+    /// enable network and kick playback after a delay (same as deadlock fix).
+    private var statusUnknownFallbackTask: Task<Void, Never>?
+
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
     /// The player that owns timeObserverToken — must remove from the same instance.
@@ -1175,6 +1179,24 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             // Show spinner so the user sees loading feedback while waiting for statusKVO.
             loadingSpinner.startAnimating()
+
+            // FALLBACK: A paused HLS player with canUseNetworkResourcesForLiveStreamingWhilePaused=false
+            // may never transition item.status from .unknown → .readyToPlay, causing a permanent spinner.
+            // Schedule a delayed check: if status is still .unknown after 2s, enable network and play().
+            // This is the same fix as the deadlock code in handleCoordinatorPlayCommand (line ~988).
+            if itemStatus == .unknown {
+                statusUnknownFallbackTask?.cancel()
+                statusUnknownFallbackTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+                    guard !Task.isCancelled, let self,
+                          let player = self.player,
+                          self.coordinatorWantsToPlay,
+                          player.currentItem?.status == .unknown else { return }
+                    print("\(self.logPrefix) ⏰ statusKVO fallback: item still .unknown after 2s, enabling network + play")
+                    player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                    self.actuallyStartPlayback(player)
+                }
+            }
             return
         }
 
@@ -1436,6 +1458,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 guard (self.attachment?.mid) != nil else { return }
 
                 if item.status == .readyToPlay {
+                    // Cancel the fallback task — statusKVO arrived before the timeout.
+                    self.statusUnknownFallbackTask?.cancel()
+                    self.statusUnknownFallbackTask = nil
+
                     let firstReadyTransition = change.oldValue != .readyToPlay
                     print("\(self.logPrefix) 📺 statusKVO: readyToPlay (first=\(firstReadyTransition), coordWants=\(self.coordinatorWantsToPlay), state=\(self.videoCellState))")
 
@@ -2251,6 +2277,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func teardownPlayerAndObservers() {
         setupPlayerTask?.cancel()
         setupPlayerTask = nil
+        statusUnknownFallbackTask?.cancel()
+        statusUnknownFallbackTask = nil
 
         videoPlayerView.onReadyForDisplay = nil
 
@@ -2312,6 +2340,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         imageLoadTask = nil
         timerHideTask?.cancel()
         timerHideTask = nil
+        statusUnknownFallbackTask?.cancel()
+        statusUnknownFallbackTask = nil
         cancellables.removeAll()
 
         if let att = attachment {
