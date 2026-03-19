@@ -196,6 +196,7 @@ final class HproseInstance: ObservableObject {
             user.baseUrl = url
             user.resetClients()
             print("DEBUG: [updateUserFromServer] Updated baseUrl (\(reason)) to \(newValue) for userId: \(user.mid)")
+            NotificationCenter.default.post(name: .userDidUpdate, object: nil, userInfo: ["userId": user.mid])
         }
     }
     
