@@ -834,8 +834,8 @@ struct MediaGridViewModel {
             let isLandscape0 = ar0 > 1
             let isLandscape1 = ar1 > 1
             if isPortrait0 && isPortrait1 {
-                // Both portrait: horizontal layout
-                return min(1.5, maxAspectRatio)  // Clamped to max
+                // Both portrait: horizontal layout, square grid
+                return 1.0
             } else if isLandscape0 && isLandscape1 {
                 // Both landscape: vertical layout
                 return max(0.8, minAspectRatio)  // Clamped to min
