@@ -870,6 +870,11 @@ public class LocalHTTPServer: @unchecked Sendable {
         primaryMediaIDLock.unlock()
     }
 
+    /// Clear the cancelled state for a mediaID so the proxy serves fresh downloads.
+    public func clearCancelledState(for mediaID: String) {
+        Task { await activeDownloadsActor.clearCancelledMediaID(mediaID) }
+    }
+
     /// Returns true only if mediaID matches the current primary.
     /// When no primary is set, nothing is primary — all downloads respect the pool cap.
     private func isCurrentPrimary(_ mediaID: String) -> Bool {

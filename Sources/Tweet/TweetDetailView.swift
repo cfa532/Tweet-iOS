@@ -319,25 +319,15 @@ struct DetailMediaCell: View {
             if let baseUrl = baseUrl, let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    // Show video with SimpleVideoPlayer in tweetDetail mode (shares player with grid, bypasses VideoManager)
-                    // Videos already use .fit in tweetDetail mode, wrap in black background
-                    ZStack {
-                        Color.black
-                        SimpleVideoPlayer(
-                            url: url,
-                            mid: attachment.mid,
-                            parentTweetId: parentTweet.mid,
-                            isVisible: shouldLoadVideo, // Control visibility instead of conditionally creating
-                            mediaType: attachment.type,
-                            authorId: parentTweet.authorId, // Pass authorId for health check
-                            autoPlay: shouldLoadVideo, // Only autoplay when selected
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: true,
-                            isMuted: false,
-                            mode: .tweetDetail
-                        )
-                        .opacity(shouldLoadVideo ? 1.0 : 0.0) // Hide when not selected
-                    }
+                    // Singleton video player — only the selected page loads/plays.
+                    // Non-selected pages show a thumbnail placeholder (no invisible playback).
+                    DetailSingletonVideoPlayerView(
+                        url: url,
+                        mid: attachment.mid,
+                        mediaType: attachment.type,
+                        aspectRatio: attachment.aspectRatio,
+                        shouldLoad: shouldLoadVideo
+                    )
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
                     SimpleAudioPlayer(url: url, autoPlay: false)
@@ -533,6 +523,101 @@ struct DetailMediaCell: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Detail Singleton Video Player View
+// Mirrors MediaBrowserView's SingletonVideoPlayerView pattern:
+// Only the selected page loads video via DetailVideoManager.loadVideo().
+// Non-selected pages show a cached thumbnail (no invisible playback).
+
+private struct DetailSingletonVideoPlayerView: View {
+    let url: URL
+    let mid: String
+    let mediaType: MediaType
+    let aspectRatio: Float?
+    let shouldLoad: Bool
+
+    @ObservedObject private var manager = DetailVideoManager.shared
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            if let player = manager.currentPlayer,
+               manager.currentVideoMid == mid,
+               player.currentItem != nil {
+                // Show player
+                DetailAVPlayerView(player: player, aspectRatio: aspectRatio)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if shouldLoad {
+                // Loading — show thumbnail + spinner
+                thumbnailOrBlack
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
+            } else {
+                // Not selected — just show thumbnail
+                thumbnailOrBlack
+            }
+
+            // Buffering overlay
+            if manager.isBuffering && manager.currentVideoMid == mid {
+                Color.black.opacity(0.15)
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(2.0)
+                    .opacity(0.8)
+            }
+        }
+        .onAppear {
+            if shouldLoad {
+                manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
+            }
+        }
+        .onChange(of: shouldLoad) { _, newValue in
+            if newValue {
+                manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
+            } else if manager.currentVideoMid == mid {
+                manager.pause()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnailOrBlack: some View {
+        if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+            Image(uiImage: thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Color.black
+        }
+    }
+}
+
+// MARK: - Detail AVPlayerViewController Wrapper
+
+private struct DetailAVPlayerView: UIViewControllerRepresentable {
+    let player: AVPlayer
+    let aspectRatio: Float?
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = true
+        vc.videoGravity = .resizeAspect
+        vc.view.backgroundColor = .black
+        if let ar = aspectRatio, ar > 1.0 {
+            vc.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
+        }
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player {
+            vc.player = player
         }
     }
 }
