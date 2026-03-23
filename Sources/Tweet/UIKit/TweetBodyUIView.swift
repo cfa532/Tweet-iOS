@@ -200,7 +200,7 @@ class TweetBodyUIView: UIView {
             )
 
             // Caption for single video
-            let caption = singleVideoCaption(tweet: tweet, attachments: mediaAttachments)
+            let caption = singleVideoCaption(tweet: tweet, attachments: mediaAttachments, hasTextContent: !contentLabel.isHidden)
             if let caption {
                 captionLabel.text = caption
                 captionLabel.isHidden = false
@@ -294,7 +294,7 @@ class TweetBodyUIView: UIView {
 
     // MARK: - Helpers
 
-    private func singleVideoCaption(tweet: Tweet, attachments: [MimeiFileType]) -> String? {
+    private func singleVideoCaption(tweet: Tweet, attachments: [MimeiFileType], hasTextContent: Bool) -> String? {
         guard attachments.count == 1 else { return nil }
         let attachment = attachments[0]
         guard attachment.type == .video || attachment.type == .hls_video else { return nil }
@@ -304,7 +304,9 @@ class TweetBodyUIView: UIView {
             return rawTitle
         }
 
-        if let rawFileName = attachment.fileName?.trimmingCharacters(in: .whitespacesAndNewlines),
+        // Only show filename when the tweet has no text content
+        if !hasTextContent,
+           let rawFileName = attachment.fileName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !rawFileName.isEmpty {
             let components = rawFileName.split(separator: ".")
             if components.count > 1 {
