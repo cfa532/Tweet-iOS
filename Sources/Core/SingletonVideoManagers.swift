@@ -1766,8 +1766,9 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 if let item = currentPlayer?.currentItem,
                    item.duration.isValid && item.duration.seconds > 0,
                    (item.duration.seconds - item.currentTime().seconds) < 0.5 {
-                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                        self?.currentPlayer?.play()
+                    let player = currentPlayer
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                        player?.play()
                     }
                 } else {
                     currentPlayer?.play()
@@ -1897,15 +1898,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             if savedSec.isFinite && savedSec > 0.25 {
                 // If near end, restart from beginning
                 if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
-                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                        self?.currentPlayer?.play()
+                    let player = currentPlayer
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                        player?.play()
                         print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
                     }
                     return
                 }
-                currentPlayer?.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                let player = currentPlayer
+                currentPlayer?.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
                     guard finished else { return }
-                    self?.currentPlayer?.play()
+                    player?.play()
                     print("▶️ [DetailVideoManager] Playing from saved position \(savedSec)s")
                 }
                 return
@@ -1915,8 +1918,9 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         if duration.isValid && duration.seconds > 0 {
             let remaining = duration.seconds - playerItem.currentTime().seconds
             if remaining <= 0.5 {
-                currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                    self?.currentPlayer?.play()
+                let player = currentPlayer
+                currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                    player?.play()
                     print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
                 }
                 return
