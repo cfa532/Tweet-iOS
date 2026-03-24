@@ -629,6 +629,9 @@ struct TweetDetailView: View {
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastIsError = false
     @State private var pinnedTweets: [[String: Any]] = []
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
@@ -809,6 +812,17 @@ struct TweetDetailView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .overlay(alignment: .top) {
+            if showToast {
+                ToastView(
+                    message: toastMessage,
+                    type: toastIsError ? .error : .success
+                )
+                .padding(.top, 60)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.3), value: showToast)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
             if let deletedTweetId = notification.userInfo?["tweetId"] as? String ?? notification.object as? String,
@@ -1053,7 +1067,15 @@ struct TweetDetailView: View {
             onShowLogin: {
                 showLoginSheet = true
             },
-            isInDetailView: true
+            isInDetailView: true,
+            onShowToast: { message, isError in
+                toastMessage = message
+                toastIsError = isError
+                showToast = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    showToast = false
+                }
+            }
         )
         .frame(height: 30)
         .padding(.leading, 16)

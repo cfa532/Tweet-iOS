@@ -112,29 +112,22 @@ class MemoryCapManager {
     
     @MainActor
     @objc private func handleMemoryWarning() {
-        logger.warning("System memory warning received")
-        
-        // CRITICAL: Check if video upload is in progress
-        // During FFmpeg video conversion, memory spikes are expected and temporary
+        // Skip entirely below 500MB — iOS false alarm from other apps
+        let memoryUsageMB = currentMemoryUsage / (1024 * 1024)
+        guard memoryUsageMB > 500 else { return }
+
+        logger.warning("System memory warning received - \(memoryUsageMB)MB")
+
         if UploadProgressManager.shared.isProcessingVideo {
             logger.warning("Video upload in progress - limiting cleanup to preserve video players")
-            print("⚠️ [MemoryCapManager] Video upload in progress - skipping aggressive video cache cleanup")
-            
-            // Perform lighter cleanup without touching video players
             performLightCleanupDuringUpload()
             return
         }
-        
-        // Check memory usage before cleanup (don't cleanup at low usage)
-        let memoryUsageMB = currentMemoryUsage / (1024 * 1024)
-        logger.info("Current memory usage: \(memoryUsageMB)MB")
-        
-        // Only cleanup if usage exceeds 1.4GB (preventive cleanup threshold)
+
+        // Only cleanup if usage exceeds 1.4GB
         if memoryUsageMB > 1400 {
             logger.warning("Memory usage exceeds 1.4GB, performing cleanup")
             forceMemoryCleanup()
-        } else {
-            logger.info("Memory usage under 1.4GB, ignoring system warning (likely false alarm)")
         }
     }
     

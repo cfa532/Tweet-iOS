@@ -2171,8 +2171,12 @@ class SharedAssetCache: ObservableObject {
     private func handleSystemMemoryWarning() {
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
-        let cacheSize = playerCache.count
 
+        // iOS sends memory warnings even at very low usage (other apps need memory).
+        // Nothing to reclaim below 500MB — skip entirely to avoid unnecessary work.
+        guard memoryUsageMB > 500 else { return }
+
+        let cacheSize = playerCache.count
         print("🚨 [SYSTEM MEMORY WARNING] iOS triggered - memory: \(memoryUsageMB)MB, cache: \(cacheSize) players")
 
         if UploadProgressManager.shared.isProcessingVideo {
@@ -2181,18 +2185,14 @@ class SharedAssetCache: ObservableObject {
         }
 
         // Only perform aggressive cleanup if memory usage exceeds 1.2GB
-        // This prevents wasteful cleanup when memory usage is actually low
         if memoryUsageMB > 1200 {
             print("🧹 [SYSTEM MEMORY WARNING] High usage detected, performing aggressive cleanup")
-            // System warning means iOS is serious - be more aggressive
             cancelAllLoadingTasks()
-            releasePartialCache(percentage: 60) // Release 60% (not 100% - preserve some UX)
+            releasePartialCache(percentage: 60)
 
             let memoryAfter = getMemoryUsageString()
             print("✅ [SYSTEM MEMORY WARNING] Cleanup completed (memory: \(memoryUsageMB)MB → \(memoryAfter))")
         } else {
-            print("ℹ️ [SYSTEM MEMORY WARNING] Memory usage moderate (\(memoryUsageMB)MB), light cleanup only")
-            // Even at moderate levels, do a small cleanup
             forceMemoryCleanup()
         }
     }

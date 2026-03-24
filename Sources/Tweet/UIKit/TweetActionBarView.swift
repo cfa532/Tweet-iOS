@@ -356,6 +356,7 @@ class TweetActionBarView: UIView {
                                                      userInfo: ["tweet": updatedTweet])
                 }
             } catch {
+                print("DEBUG: [handleLike] toggleFavorite failed: \(error)")
                 await MainActor.run {
                     tweet.favorites = originalFavorites
                     tweet.favoriteCount = originalFavoriteCount
@@ -363,6 +364,7 @@ class TweetActionBarView: UIView {
                     let msg = wasFavorite
                         ? NSLocalizedString("Failed to remove favorite. Please try again.", comment: "")
                         : NSLocalizedString("Failed to add favorite. Please try again.", comment: "")
+                    print("DEBUG: [handleLike] Showing toast: \(msg)")
                     self.onShowToast?(msg, true)
                 }
             }
@@ -409,6 +411,7 @@ class TweetActionBarView: UIView {
                                                      userInfo: ["tweet": updatedTweet])
                 }
             } catch {
+                print("DEBUG: [handleBookmark] toggleBookmark failed: \(error)")
                 await MainActor.run {
                     tweet.favorites = originalFavorites
                     tweet.bookmarkCount = originalBookmarkCount
@@ -416,6 +419,7 @@ class TweetActionBarView: UIView {
                     let msg = wasBookmarked
                         ? NSLocalizedString("Failed to remove bookmark. Please try again.", comment: "")
                         : NSLocalizedString("Failed to add bookmark. Please try again.", comment: "")
+                    print("DEBUG: [handleBookmark] Showing toast: \(msg)")
                     self.onShowToast?(msg, true)
                 }
             }
@@ -1185,6 +1189,7 @@ struct TweetActionBarRepresentable: UIViewRepresentable {
     var parentTweet: Tweet? = nil
     var commentsVMParentTweet: Tweet? = nil
     var onShareVisibilityChange: ((Bool) -> Void)? = nil
+    var onShowToast: ((String, Bool) -> Void)? = nil
 
     func makeUIView(context: Context) -> TweetActionBarView {
         let bar = TweetActionBarView()
@@ -1197,6 +1202,7 @@ struct TweetActionBarRepresentable: UIViewRepresentable {
         bar.onCommentTap = onCommentTap
         bar.onShowLogin = onShowLogin
         bar.onShareVisibilityChange = onShareVisibilityChange
+        bar.onShowToast = onShowToast
         bar.isInDetailView = isInDetailView
         bar.parentTweet = parentTweet
         bar.commentsVMParentTweet = commentsVMParentTweet

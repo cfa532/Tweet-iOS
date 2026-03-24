@@ -2604,6 +2604,8 @@ final class HproseInstance: ObservableObject {
      */
     func toggleFavorite(_ tweet: Tweet) async throws -> (Tweet?, User?) {
         return try await withRetry {
+            // Resolve author's IP each attempt (may change between retries)
+            _ = try? await fetchUser(tweet.authorId)
             let entry = "toggle_favorite"
             let params = [
                 "aid": appId,
@@ -2614,29 +2616,35 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let client = appUser.hproseClient else {
+            // Use author's node directly to avoid extra hop (user→author→user becomes author→user)
+            let client = tweet.author?.hproseClient ?? appUser.hproseClient
+            guard let client else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            // Hprose syncInvoke returns the error object (not throws) on failure
+            if let error = rawResponse as? NSError {
+                throw error
+            }
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             guard let response = unwrappedResponse as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
-            
+
             // Check if the operation was successful
             guard let success = response["success"] as? Bool, success else {
                 let errorMessage = response["error"] as? String ?? "toggleFavorite: Operation failed"
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
-            
+
             var updatedUser: User?
             var updatedTweet: Tweet?
-            
+
             // Parse updated user
             if let userDict = response["user"] as? [String: Any] {
                 updatedUser = try User.from(dict: userDict)
             }
-            
+
             // Parse updated tweet
             if let tweetDict = response["tweet"] as? [String: Any] {
                 updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
@@ -2644,13 +2652,15 @@ final class HproseInstance: ObservableObject {
                 // This ensures original tweets are cached under their author, not the current user
                 TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
             }
-            
+
             return (updatedTweet, updatedUser)
         }
     }
     
     func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?)  {
-        try await withRetry {
+        return try await withRetry {
+            // Resolve author's IP each attempt (may change between retries)
+            _ = try? await fetchUser(tweet.authorId)
             let entry = "toggle_bookmark"
             let params = [
                 "aid": appId,
@@ -2661,15 +2671,21 @@ final class HproseInstance: ObservableObject {
                 "authorid": tweet.authorId,
                 "userhostid": appUser.hostIds?.first as Any
             ]
-            guard let client = appUser.hproseClient else {
+            // Use author's node directly to avoid extra hop (user→author→user becomes author→user)
+            let client = tweet.author?.hproseClient ?? appUser.hproseClient
+            guard let client else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+            // Hprose syncInvoke returns the error object (not throws) on failure
+            if let error = rawResponse as? NSError {
+                throw error
+            }
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             guard let response = unwrappedResponse as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
-            
+
             // Check if the operation was successful
             guard let success = response["success"] as? Bool, success else {
                 let errorMessage = response["error"] as? String ?? "toggleBookmark: Operation failed"

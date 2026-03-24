@@ -283,10 +283,7 @@ class TweetTableViewController: UITableViewController {
             } else {
                 memoryMB = 0
             }
-            guard memoryMB > 1200 else {
-                print("ℹ️ [TweetTableVC] Memory warning at \(memoryMB)MB — skipping cell reload")
-                return
-            }
+            guard memoryMB > 1200 else { return }
 
             // Stop all videos and clear coordinator caches via notification
             NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)

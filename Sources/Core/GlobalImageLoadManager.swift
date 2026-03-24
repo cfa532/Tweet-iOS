@@ -980,7 +980,6 @@ class GlobalImageLoadManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                print("DEBUG: [GlobalImageLoadManager] System memory warning received")
                 self?.handleMemoryWarning()
             }
         }
@@ -1011,15 +1010,14 @@ class GlobalImageLoadManager: ObservableObject {
     private func handleMemoryWarning() {
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
-        
+
+        // Skip entirely below 500MB — iOS false alarm from other apps
+        guard memoryUsageMB > 500 else { return }
+
         print("🚨 [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
-        
+
         // Only perform aggressive cleanup if memory usage exceeds 1.2GB
-        // This prevents wasteful cleanup when memory usage is actually low
-        guard memoryUsageMB > 1200 else {
-            print("ℹ️ [GlobalImageLoadManager] Memory usage low (\(memoryUsageMB)MB), skipping aggressive cleanup")
-            return
-        }
+        guard memoryUsageMB > 1200 else { return }
         
         // AGGRESSIVE cleanup on memory warning when usage is high
         print("🧹 [GlobalImageLoadManager] Performing aggressive cleanup")
