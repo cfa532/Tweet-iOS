@@ -2621,7 +2621,9 @@ final class HproseInstance: ObservableObject {
             guard let client else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
+            let originalTimeout = client.timeout
             client.timeout = 30.0
+            defer { client.timeout = originalTimeout }
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             // Hprose syncInvoke returns the error object (not throws) on failure
             if let error = rawResponse as? NSError {
@@ -2677,7 +2679,9 @@ final class HproseInstance: ObservableObject {
             guard let client else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
             }
+            let originalTimeout = client.timeout
             client.timeout = 30.0
+            defer { client.timeout = originalTimeout }
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             // Hprose syncInvoke returns the error object (not throws) on failure
             if let error = rawResponse as? NSError {
