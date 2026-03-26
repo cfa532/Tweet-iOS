@@ -1491,8 +1491,8 @@ class TweetTableViewController: UITableViewController {
         // Action bar (fixed 30pt)
         height += 30
 
-        // Bottom padding (matches mainStack.bottomAnchor = separatorView.topAnchor - 16)
-        height += 16
+        // Bottom padding (matches mainStack.bottomAnchor = separatorView.topAnchor - 8)
+        height += 8
 
         // Separator
         height += 1

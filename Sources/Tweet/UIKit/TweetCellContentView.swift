@@ -179,7 +179,7 @@ class TweetCellContentView: UIView {
         NSLayoutConstraint.activate([
             mainStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
             mainStack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            mainStack.bottomAnchor.constraint(equalTo: separatorView.topAnchor, constant: -16),
+            mainStack.bottomAnchor.constraint(equalTo: separatorView.topAnchor, constant: -8),
 
             avatarView.widthAnchor.constraint(equalToConstant: 42),
             avatarView.heightAnchor.constraint(equalToConstant: 42),
