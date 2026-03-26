@@ -644,6 +644,8 @@ struct TweetActionButtonsView: View {
         // a standalone image to show the correct preview in its share sheet.
         if let previewImage = attachmentPreviewImage {
             items.append(CustomShareImage(image: previewImage))
+        } else if let appIcon = UIImage(named: "ic_splash_r") {
+            items.append(CustomShareImage(image: appIcon))
         }
 
         return items
@@ -1704,7 +1706,13 @@ class CustomShareItem: NSObject, UIActivityItemSource {
     @available(iOS 13.0, *)
     func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
         let metadata = LPLinkMetadata()
-        
+
+        // Extract URL from shareText for metadata — required for share sheet to display icon
+        if let range = shareText.range(of: "http", options: .backwards),
+           let url = URL(string: String(shareText[range.lowerBound...])) {
+            metadata.url = url
+        }
+
         print("DEBUG: [SHARE] Creating link metadata for tweet: \(tweet.mid)")
         print("DEBUG: [SHARE] Tweet title: '\(tweet.title ?? "nil")'")
         print("DEBUG: [SHARE] Tweet content: '\(tweet.content ?? "nil")'")
@@ -1733,10 +1741,19 @@ class CustomShareItem: NSObject, UIActivityItemSource {
             metadata.iconProvider = NSItemProvider(object: previewImage)
             metadata.imageProvider = NSItemProvider(object: previewImage)
             print("DEBUG: [SHARE] Link metadata created with preview image")
-        } else if let appIcon = UIImage(named: "ic_splash") {
+        } else if let appIcon = UIImage(named: "ic_splash_r") {
             // No attachments - use app icon as default
-            metadata.iconProvider = NSItemProvider(object: appIcon)
-            metadata.imageProvider = NSItemProvider(object: appIcon)
+            // Render onto opaque background — LPLinkMetadata won't display transparent images
+            let opaqueIcon: UIImage
+            let size = appIcon.size
+            UIGraphicsBeginImageContextWithOptions(size, true, appIcon.scale)
+            UIColor.black.setFill()
+            UIRectFill(CGRect(origin: .zero, size: size))
+            appIcon.draw(in: CGRect(origin: .zero, size: size))
+            opaqueIcon = UIGraphicsGetImageFromCurrentImageContext() ?? appIcon
+            UIGraphicsEndImageContext()
+            metadata.iconProvider = NSItemProvider(object: opaqueIcon)
+            metadata.imageProvider = NSItemProvider(object: opaqueIcon)
             print("DEBUG: [SHARE] Link metadata created with app icon fallback (no attachments)")
         }
         

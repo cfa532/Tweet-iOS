@@ -521,6 +521,8 @@ class TweetActionBarView: UIView {
         // a standalone image to show the correct preview in its share sheet.
         if let previewImage = attachmentPreviewImage {
             items.append(CustomShareImage(image: previewImage))
+        } else if let appIcon = UIImage(named: "ic_splash_r") {
+            items.append(CustomShareImage(image: appIcon))
         }
 
         return items
