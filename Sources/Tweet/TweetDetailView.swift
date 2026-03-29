@@ -43,9 +43,17 @@ private class BottomBarScrollObserver: NSObject {
 // MARK: - Nav bar scroll tracker with UIKit overlay
 // Uses a real UIView for the nav bar to bypass SwiftUI rendering pipeline entirely.
 // KVO on UIScrollView.contentOffset drives the UIView transform directly.
+
+private class LargeHitButton: UIButton {
+    var hitInset: UIEdgeInsets = UIEdgeInsets(top: -12, left: -16, bottom: -12, right: -24)
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.inset(by: hitInset).contains(point)
+    }
+}
+
 private class NavBarUIView: UIView {
     private let titleLabel = UILabel()
-    private let backButton = UIButton(type: .system)
+    private let backButton = LargeHitButton(type: .system)
     private var onBack: (() -> Void)?
     private var observation: NSKeyValueObservation?
     private var previousOffset: CGFloat = 0
