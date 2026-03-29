@@ -549,7 +549,7 @@ private struct DetailSingletonVideoPlayerView: View {
                manager.currentVideoMid == mid,
                player.currentItem != nil {
                 // Show player
-                DetailAVPlayerView(player: player, aspectRatio: aspectRatio)
+                DetailAVPlayerView(player: player)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if shouldLoad {
                 // Loading — show thumbnail + spinner
@@ -601,17 +601,13 @@ private struct DetailSingletonVideoPlayerView: View {
 
 private struct DetailAVPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
-    let aspectRatio: Float?
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
-        vc.showsPlaybackControls = true
+        vc.showsPlaybackControls = false
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
-        if let ar = aspectRatio, ar > 1.0 {
-            vc.view.transform = CGAffineTransform(rotationAngle: -.pi / 2)
-        }
         return vc
     }
 
