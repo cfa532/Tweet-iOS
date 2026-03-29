@@ -1141,12 +1141,16 @@ class SharedAssetCache: ObservableObject {
         
         let playerItem = AVPlayerItem(asset: asset)
         let player = AVPlayer(playerItem: playerItem)
-        
+
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
-        
+        // Play immediately when play() is called; let AVPlayer's normal stall recovery
+        // handle buffer-empty pauses rather than refusing to start (keepUp heuristic
+        // is unreliable with bursty IPFS delivery and causes indefinite spinners).
+        player.automaticallyWaitsToMinimizeStalling = false
+
         // Cache the player
-        await MainActor.run { 
+        await MainActor.run {
             cachePlayer(player, for: mediaID)
         }
         
@@ -1344,9 +1348,13 @@ class SharedAssetCache: ObservableObject {
         
         // Create player with CachingPlayerItem
         let player = AVPlayer(playerItem: cachingPlayerItem)
-        
+
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
+        // Play immediately when play() is called; let AVPlayer's normal stall recovery
+        // handle buffer-empty pauses rather than refusing to start (keepUp heuristic
+        // is unreliable with bursty IPFS delivery and causes indefinite spinners).
+        player.automaticallyWaitsToMinimizeStalling = false
 
         
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
