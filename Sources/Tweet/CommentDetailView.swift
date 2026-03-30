@@ -244,9 +244,9 @@ struct CommentDetailView: View {
     private var commentContent: some View {
         Group {
             if let content = comment.content, !content.isEmpty {
-                Text(content)
-                    .font(.title3)
+                SelectableTextView(text: content)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal)
                     .padding(.vertical, 8)
             }
