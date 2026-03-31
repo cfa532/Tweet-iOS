@@ -241,7 +241,13 @@ struct ProfileView: View {
                                 user: user,
                                 isCurrentUser: isAppUser,
                                 isFollowing: isFollowing,
-                                onEditTap: { showEditSheet = true },
+                                onEditTap: {
+                                    if hproseInstance.appUser.isGuest {
+                                        onShowLogin?()
+                                    } else {
+                                        showEditSheet = true
+                                    }
+                                },
                                 onFollowToggle: {
                                     isFollowing.toggle()
                                     Task {
@@ -333,7 +339,11 @@ struct ProfileView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 HStack(spacing: 12) {
                     Button {
-                        showChatScreen = true
+                        if hproseInstance.appUser.isGuest {
+                            onShowLogin?()
+                        } else {
+                            showChatScreen = true
+                        }
                     } label: {
                         Image(systemName: "message")
                             .foregroundColor(.blue)
@@ -341,8 +351,12 @@ struct ProfileView: View {
 
                     Menu {
                         Button(role: .destructive) {
-                            Task {
-                                await handleBlockUser()
+                            if hproseInstance.appUser.isGuest {
+                                onShowLogin?()
+                            } else {
+                                Task {
+                                    await handleBlockUser()
+                                }
                             }
                         } label: {
                             Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
