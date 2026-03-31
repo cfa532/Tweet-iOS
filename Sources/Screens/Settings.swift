@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var showCacheCleanedAlert = false
     
     // Account action states
+    @State private var showLoginSheet = false
     @State private var showLogoutConfirmation = false
     @State private var showDeleteAccountConfirmation = false
     @State private var isDeletingAccount = false
@@ -71,13 +72,36 @@ struct SettingsView: View {
                     .disabled(isCleaningCache)
                 }
                 
-                if !hproseInstance.appUser.isGuest {
-                    Section(header: Text(LocalizedStringKey("Account"))) {
+                Section(header: Text(LocalizedStringKey("About"))) {
+                    HStack {
+                        Text(LocalizedStringKey("Version"))
+                        Spacer()
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
+                            .foregroundColor(.gray)
+                    }
+
+                    if hproseInstance.appUser.isGuest {
+                        HStack {
+                            Text(LocalizedStringKey("Server IP"))
+                            Spacer()
+                            Text(currentServerIP)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                Section(header: Text(LocalizedStringKey("Account"))) {
+                    if hproseInstance.appUser.isGuest {
+                        Button {
+                            showLoginSheet = true
+                        } label: {
+                            Text(LocalizedStringKey("Login"))
+                        }
+                    } else {
                         Button {
                             showLogoutConfirmation = true
                         } label: {
                             Text(LocalizedStringKey("Logout"))
-//                                .foregroundColor(.red)
                         }
 
                         Button {
@@ -85,7 +109,6 @@ struct SettingsView: View {
                         } label: {
                             HStack {
                                 Text(LocalizedStringKey("Delete Account"))
-//                                    .foregroundColor(.red)
                                 Spacer()
                                 if isDeletingAccount {
                                     ProgressView()
@@ -96,24 +119,9 @@ struct SettingsView: View {
                         .disabled(isDeletingAccount)
                     }
                 }
-
-                Section(header: Text(LocalizedStringKey("About"))) {
-                    HStack {
-                        Text(LocalizedStringKey("Version"))
-                        Spacer()
-                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")
-                            .foregroundColor(.gray)
-                    }
-                    
-                    if hproseInstance.appUser.isGuest {
-                        HStack {
-                            Text(LocalizedStringKey("Server IP"))
-                            Spacer()
-                            Text(currentServerIP)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
+            }
+            .sheet(isPresented: $showLoginSheet) {
+                LoginView()
             }
             .navigationTitle(NSLocalizedString("Settings", comment: "Settings screen title"))
             .navigationBarItems(trailing: Button(NSLocalizedString("Done", comment: "Done button")) {

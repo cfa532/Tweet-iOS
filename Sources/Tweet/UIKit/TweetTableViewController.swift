@@ -681,6 +681,8 @@ class TweetTableViewController: UITableViewController {
         let oldPinnedTweets = pinnedTweets
         self.pinnedTweets = tweets
 
+        guard tableView.window != nil else { return }
+
         // Rebuild video list when pinned tweets change
         // This ensures pinned tweet videos are registered with the coordinator
         videoCoordinator.buildVideoList(from: self.tweets, pinnedTweets: pinnedTweets)
@@ -730,6 +732,12 @@ class TweetTableViewController: UITableViewController {
         let oldCount = tweets.count
         let oldTweets = tweets
         tweets = newTweets
+
+        // Skip all UIKit table operations if the view is not in the window hierarchy.
+        // This can happen when a pending SwiftUI update fires after navigation has already
+        // popped this view (e.g. immediately after logout). Updating a detached table view
+        // causes UITableView row-count assertion failures.
+        guard tableView.window != nil else { return }
 
         // Pre-fetch embedded tweets for accurate height calculation (pure UIKit optimization)
         // Load embedded tweets in background so they're available when cells are displayed
