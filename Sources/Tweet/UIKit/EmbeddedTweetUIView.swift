@@ -187,6 +187,16 @@ class EmbeddedTweetUIView: UIView {
         // Configure subviews
         if let author = tweet.author {
             avatarView.configure(user: author, size: 32)
+        } else {
+            // Author not yet loaded — subscribe to update avatar when it arrives
+            tweet.$author
+                .compactMap { $0 }
+                .first()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] author in
+                    self?.avatarView.configure(user: author, size: 32)
+                }
+                .store(in: &cancellables)
         }
         headerView.configure(tweet: tweet)
         bodyView.videoCoordinator = videoCoordinator
