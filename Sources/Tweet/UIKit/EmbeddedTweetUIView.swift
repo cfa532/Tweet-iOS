@@ -203,6 +203,10 @@ class EmbeddedTweetUIView: UIView {
         bodyView.configure(tweet: tweet, isEmbedded: true,
                            cellTweetId: quotingTweetId,
                            parentViewController: parentViewController)
+        bodyView.onTweetBodyTap = { [weak self] in
+            guard let self, let tweet = self.loadedTweet else { return }
+            self.onTap?(tweet)
+        }
 
         // Reduce bottom padding when media is present but no caption
         // (image attachments have no caption, so the gap looks excessive)

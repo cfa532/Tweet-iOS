@@ -676,11 +676,7 @@ struct EmbeddedTweetView: View, Equatable {
                 isVisible: isVisible,
                 isEmbedded: isEmbedded,
                 cellTweetId: quotingTweetId,
-                onTweetBodyTap: {
-                    if let callback = onTap {
-                        callback(tweet)
-                    }
-                }
+                onTweetBodyTap: onTap.map { callback in { callback(tweet) } }
             )
             .layoutPriority(1)
             .fixedSize(horizontal: false, vertical: true)

@@ -163,9 +163,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                         imageViewContent(width: width, height: height)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if !isEmbedded {
-                                    handleTap()
-                                }
+                                handleTap()
                             }
                     default:
                         // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
