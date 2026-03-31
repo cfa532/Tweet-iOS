@@ -44,9 +44,9 @@ struct AppConfig {
     static let alphaId: String = {
         switch BuildConfiguration.current {
         case .debug:
-            return "iFG4GC9r0fF22jYBCkuPThybzwO"
+            return "6IQc_t22JUub1TEgDP9Fo_Boosm"
         case .release:
-            return "mwmQCHCEHClCIJy-bItx5ALAhq9"
+            return "mKOihoVuFnQ2xt33R51KTQXSBkX"
         }
     }()
     

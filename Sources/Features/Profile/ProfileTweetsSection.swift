@@ -34,13 +34,19 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
-        // Wait for app initialization if not complete (same as home feed)
+        // Wait for app initialization with timeout — don't block forever when server is unreachable
         if !hproseInstance.isAppInitialized {
-            print("⏳ [PROFILE FETCH] Waiting for app initialization...")
-            while !hproseInstance.isAppInitialized {
+            print("⏳ [PROFILE FETCH] Waiting for app initialization (max 10s)...")
+            var waitCount = 0
+            while !hproseInstance.isAppInitialized && waitCount < 100 {
                 try? await Task.sleep(nanoseconds: 100_000_000)
+                waitCount += 1
             }
-            print("✅ [PROFILE FETCH] App initialization complete")
+            if hproseInstance.isAppInitialized {
+                print("✅ [PROFILE FETCH] App initialization complete")
+            } else {
+                print("⚠️ [PROFILE FETCH] Timed out waiting for app initialization")
+            }
         }
         
         do {
@@ -73,10 +79,10 @@ class ProfileTweetsViewModel: ObservableObject {
             
             return filteredTweets
         } catch {
-            return []
+            throw error
         }
     }
-    
+
     func handleNewTweet(_ tweet: Tweet) {
         // Only show private tweets if the current user is the author
         if !(tweet.isPrivate ?? false) || tweet.authorId == hproseInstance.appUser.mid {
@@ -128,9 +134,11 @@ struct ProfileTweetsSection<Header: View>: View {
     let onAvatarTapInProfile: ((User) -> Void)?
     let onPinnedTweetsRefresh: () async -> Void
     let onScroll: (CGFloat, CGFloat) -> Void  // (offset, delta)
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     @StateObject private var viewModel: ProfileTweetsViewModel
     let header: () -> Header
-    
+
     init(
         pinnedTweets: [Tweet],
         pinnedTweetIds: Set<String>,
@@ -141,6 +149,8 @@ struct ProfileTweetsSection<Header: View>: View {
         onAvatarTapInProfile: ((User) -> Void)? = nil,
         onPinnedTweetsRefresh: @escaping () async -> Void,
         onScroll: @escaping (CGFloat, CGFloat) -> Void,  // (offset, delta)
+        onShowLogin: (() -> Void)? = nil,
+        onShowToast: ((String, Bool) -> Void)? = nil,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.pinnedTweets = pinnedTweets
@@ -152,6 +162,8 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onAvatarTapInProfile = onAvatarTapInProfile
         self.onPinnedTweetsRefresh = onPinnedTweetsRefresh
         self.onScroll = onScroll
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
         self.header = header
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
             hproseInstance: hproseInstance,
@@ -161,17 +173,13 @@ struct ProfileTweetsSection<Header: View>: View {
     }
     
     var body: some View {
-        TweetListView<TweetItemView>(
+        TweetListView(
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache in
                 if isFromCache {
-                    // Fetch from cache for profile tweets - always filter by authorId
-                    // This ensures we only show tweets from the profile user, even if cache contains
-                    // tweets from multiple authors (e.g., from main feed)
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: user.mid, page: page, pageSize: size, currentUserId: hproseInstance.appUser.mid, isProfileView: true)
-                    
                     return cachedTweets
                 } else {
                     return try await viewModel.fetchTweets(page: page, pageSize: size)
@@ -199,17 +207,16 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             ],
             onScroll: onScroll,
-            leadingPadding: 5,  // Profile left padding (reduced by 3 from 8pt)
-            trailingPadding: 7,  // Profile right padding (increased by 2 from 5pt)
-            pinnedTweets: pinnedTweets,  // Pass pinned tweets - they'll be rendered as table rows
-            feedIdentifier: "profile_\(user.mid)",  // Unique identifier per user profile
+            leadingPadding: 5,
+            trailingPadding: 7,
+            pinnedTweets: pinnedTweets,
+            feedIdentifier: "profile_\(user.mid)",
             header: {
                 AnyView(
                     VStack(spacing: 0) {
                         header()
                             .id("top")
                         if !pinnedTweets.isEmpty {
-                            // Show "Pinned" label separator
                             Text(LocalizedStringKey("Pinned"))
                                 .font(.subheadline)
                                 .bold()
@@ -224,26 +231,18 @@ struct ProfileTweetsSection<Header: View>: View {
                 )
             },
             onRefreshExtra: onPinnedTweetsRefresh,
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    isPinned: pinnedTweets.contains { $0.mid == tweet.mid },
-                    isInProfile: true,
-                    showDeleteButton: user.mid == hproseInstance.appUser.mid,
-                    isLastItem: viewModel.tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
-                    onAvatarTap: { user in
-                        onUserSelect(user)
-                    },
-                    onTap: onTweetTap,
-                    onAvatarTapInProfile: onAvatarTapInProfile,
-                    currentProfileUser: user,
-                    onRemove: { tweetId in
-                        if let idx = viewModel.tweets.firstIndex(where: { $0.mid == tweetId }) {
-                            viewModel.tweets.remove(at: idx)
-                        }
-                    }
-                )
-            }
+            onAvatarTap: { user in
+                // If onAvatarTapInProfile is provided, use it (for scroll-to-top in profile)
+                // Otherwise use onUserSelect for navigation
+                if let onAvatarTapInProfile = onAvatarTapInProfile {
+                    onAvatarTapInProfile(user)
+                } else {
+                    onUserSelect(user)
+                }
+            },
+            onTweetTap: onTweetTap,
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast
         )
         .frame(maxHeight: .infinity)
         .onChange(of: user.mid) { _, _ in

@@ -57,6 +57,9 @@ extension Notification.Name {
     static let scrollToTop = Notification.Name("ScrollToTop")
     /// Posted when navigation visibility changes (for scroll-based hiding/showing)
     static let navigationVisibilityChanged = Notification.Name("NavigationVisibilityChanged")
+    /// Posted to show navigation bars without animation after scroll-up ends.
+    /// Avoids layout shift that occurs when animated header expansion pushes the table view down.
+    static let showBarsAfterScrollEnd = Notification.Name("ShowBarsAfterScrollEnd")
     /// Posted when a deeplink URL is received
     static let deeplinkReceived = Notification.Name("DeeplinkReceived")
     /// Posted when a deeplink tweet is not found
@@ -107,6 +110,13 @@ extension Notification.Name {
     /// Posted when app content is covered/uncovered by an overlay (sheet/fullScreenCover/login/share).
     /// userInfo: ["isCovered": Bool, "activeCount": Int, "source": String?]
     static let overlayCoverageChanged = Notification.Name("OverlayCoverageChanged")
+    /// Posted when a feed cell's AVPlayer is loaned to the detail view.
+    /// userInfo: ["videoMid": String]. The owning MediaCellUIView should release its reference.
+    static let videoPlayerLoaned = Notification.Name("VideoPlayerLoaned")
+    /// Posted when a feed cell claims exclusive ownership of an AVPlayer.
+    /// userInfo: ["videoMid": String, "claimerIdentity": Int].
+    /// Other MediaCellUIView instances holding the same player must release it.
+    static let videoPlayerClaimedByCell = Notification.Name("VideoPlayerClaimedByCell")
     /// Posted to force video layer refresh after screen lock recovery
     static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
     /// Posted to reload only visible videos after foreground recovery (not all videos)

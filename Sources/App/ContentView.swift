@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var showComposeSheet = false
     @State private var isNavigationVisible = true
+    @State private var shouldHideHeight = false // Flag for TweetDetailView to hide height
     @State private var navigationPath = NavigationPath()
     @State private var chatNavigationPath = NavigationPath()
     @State private var isInChatScreen = false
@@ -36,6 +37,18 @@ struct ContentView: View {
                             },
                             onReturnToHome: {
                                 selectedTab = 0
+                            },
+                            onShowLogin: {
+                                showLoginSheet = true
+                            },
+                            onShowToast: { message, isError in
+                                toastMessage = message
+                                toastType = isError ? .error : .success
+                                showToast = true
+                                let delay = isError ? 5.0 : 2.0
+                                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                    withAnimation { showToast = false }
+                                }
                             }
                         )
                     }
@@ -49,6 +62,18 @@ struct ContentView: View {
                             onChatNavigate: {
                                 isInProfileFromChat = false
                                 isInChatScreen = true
+                            },
+                            onShowLogin: {
+                                showLoginSheet = true
+                            },
+                            onShowToast: { message, isError in
+                                toastMessage = message
+                                toastType = isError ? .error : .success
+                                showToast = true
+                                let delay = isError ? 5.0 : 2.0
+                                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                    withAnimation { showToast = false }
+                                }
                             }
                         )
                     }
@@ -64,14 +89,23 @@ struct ContentView: View {
                         // If isInProfileFromChat is true, keep tab bar visible (isInChatScreen stays false)
                     }
                 } else if selectedTab == 3 {
-                    SearchScreen()
+                    SearchScreen(
+                        onShowLogin: {
+                            showLoginSheet = true
+                        },
+                        onShowToast: { message, isError in
+                            toastMessage = message
+                            toastType = isError ? .error : .success
+                            showToast = true
+                            let delay = isError ? 5.0 : 2.0
+                            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                                withAnimation { showToast = false }
+                            }
+                        }
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .safeAreaInset(edge: .bottom) {
-                Color.clear
-                    .frame(height: (!isInChatScreen || isInProfileFromChat) ? 40 : 0)
-            }
             
             // Custom Tab Bar - Hide when in chat screen, but show when in profile from chat
             if !isInChatScreen || isInProfileFromChat {
@@ -158,6 +192,8 @@ struct ContentView: View {
             }
             .padding(.top, 16)
             .padding(.bottom, 2)
+            .frame(height: (shouldHideHeight && !isNavigationVisible) ? 0 : nil)
+            .clipped()
             .background(
                 Color(.systemBackground)
                     .opacity(isNavigationVisible ? 1.0 : 0.0)
@@ -166,6 +202,7 @@ struct ContentView: View {
             .opacity(isNavigationVisible ? 1.0 : 0.3)
             .allowsHitTesting(true)
             .animation(.easeInOut(duration: 0.25), value: isNavigationVisible)
+            .animation(.easeInOut(duration: 0.25), value: shouldHideHeight)
         }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -311,9 +348,13 @@ struct ContentView: View {
                 if let isVisible = notification.userInfo?["isVisible"] as? Bool {
                     guard self.isNavigationVisible != isVisible else { return }
                     
-                    print("[ContentView] Navigation visibility changed to: \(isVisible)")
+                    // Check if TweetDetailView wants height hidden (only affects TweetDetailView)
+                    let hideHeight = notification.userInfo?["hideHeight"] as? Bool ?? false
+                    
+                    print("[ContentView] Navigation visibility changed to: \(isVisible), hideHeight: \(hideHeight)")
                     withAnimation(.easeInOut(duration: 0.25)) {
                         self.isNavigationVisible = isVisible
+                        self.shouldHideHeight = hideHeight && !isVisible // Only hide height when hidden and flag is set
                     }
                 }
             }

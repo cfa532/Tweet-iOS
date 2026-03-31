@@ -28,38 +28,28 @@ class MemoryWarningManager: ObservableObject {
     }
     
     @objc private func handleMemoryWarning() {
-        print("DEBUG: [MemoryWarningManager] System memory warning received")
-        
+        // Check memory usage first — skip entirely if low (iOS false alarm from other apps)
+        let memoryUsage = getCurrentMemoryUsage()
+        let memoryUsageMB = memoryUsage / (1024 * 1024)
+        guard memoryUsageMB > 500 else { return }
+
+        print("DEBUG: [MemoryWarningManager] System memory warning received - \(memoryUsageMB)MB")
+
         // CRITICAL: Check if video upload is in progress
-        // During FFmpeg video conversion, memory spikes are expected and temporary
-        // Clearing video player caches during upload breaks existing players
         if UploadProgressManager.shared.isProcessingVideo {
-            print("⚠️ [MemoryWarningManager] Video upload in progress - skipping video cache cleanup to prevent player breakage")
-            print("⚠️ [MemoryWarningManager] Memory spike is expected during FFmpeg conversion and will subside after upload")
-            
-            // Still clean non-video caches to help with memory pressure
+            print("⚠️ [MemoryWarningManager] Video upload in progress - skipping video cache cleanup")
             Task {
                 await releaseNonVideoCaches()
             }
             return
         }
-        
-        // Check if memory usage exceeds 1.4GB before taking action
-        let memoryUsage = getCurrentMemoryUsage()
-        let memoryUsageMB = memoryUsage / (1024 * 1024)
-        
-        print("DEBUG: [MemoryWarningManager] Current memory usage: \(memoryUsageMB)MB")
-        
+
         // Only release caches if memory usage exceeds 1.4GB (preventive cleanup threshold)
         if memoryUsageMB > 1400 {
             print("DEBUG: [MemoryWarningManager] Memory usage exceeds 1.4GB, releasing 20% of caches")
-            
-            // Release 20% of all caches to free memory (less aggressive)
             Task {
                 await releaseMemoryCaches()
             }
-        } else {
-            print("DEBUG: [MemoryWarningManager] Memory usage under 1.4GB, no action needed")
         }
     }
     

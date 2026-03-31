@@ -13,6 +13,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A27 /* ComposeTweetView.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A2A /* PollCreationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */; };
+		1A3CFE1B1A1BAFD64F6CD639 /* MediaGridUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C8AA408976B03795C73F218 /* MediaGridUIView.swift */; };
 		1A510F6D811F4CE89FC9FE05 /* TweetTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2C260FE784A43EF9772A398 /* TweetTableView.swift */; };
 		326BBBB32DFA4E70BEDBF1CD /* GlobalImageLoadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */; };
 		3E4D4013E11E9E4BED23680D /* PDFPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D26DB960D62FB2EB1C7843 /* PDFPreviewView.swift */; };
@@ -35,6 +36,7 @@
 		4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED242E925803005D5B8B /* LocalHTTPServer.swift */; };
 		4612ED272E937091005D5B8B /* DiskCacheCleanupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */; };
 		4612ED2A2E925803005D5B8B /* MemoryCapManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */; };
+		4612ED2D2E924A18005D5B8B /* NodeConnectionPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4612ED2C2E924A18005D5B8B /* NodeConnectionPool.swift */; };
 		461438172E3E426A002D1B22 /* ChatCacheManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438162E3E426A002D1B22 /* ChatCacheManager.swift */; };
 		461438192E3EEE2D002D1B22 /* MimeiId.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461438182E3EEE2D002D1B22 /* MimeiId.swift */; };
 		4614381B2E3F5E97002D1B22 /* BlackList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4614381A2E3F5E97002D1B22 /* BlackList.swift */; };
@@ -61,6 +63,7 @@
 		467494172DF4A1460082FAC6 /* CommentDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467494162DF4A13E0082FAC6 /* CommentDetailView.swift */; };
 		467494212DF885940082FAC6 /* UserRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 467494202DF8858F0082FAC6 /* UserRowView.swift */; };
 		468384A12DFE9EAB0079ECC5 /* MediaBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */; };
+		4683F6312F49578E001E163C /* AgentTokenManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4683F6302F49578D001E163C /* AgentTokenManager.swift */; };
 		468CF20E2E39AF3A00D49038 /* ChatRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20D2E39AF3900D49038 /* ChatRepository.swift */; };
 		468CF2102E39AF5900D49038 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF20F2E39AF5900D49038 /* ChatMessage.swift */; };
 		468CF21A2E39B06900D49038 /* BadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 468CF2172E39B06900D49038 /* BadgeView.swift */; };
@@ -135,15 +138,22 @@
 		46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */; };
 		4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */; };
 		52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */; };
+		690CDAA5E50B4C118321424B /* AvatarUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8847CCE1FD4E422DA4B12B94 /* AvatarUIView.swift */; };
+		6E9CF4D970C641C59844EB14 /* EmbeddedTweetUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D477B4281144A5DA7B41A25 /* EmbeddedTweetUIView.swift */; };
+		7A2BD215882C416E828E8262 /* TweetActionBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 751EADD00B2244AEA43D0D15 /* TweetActionBarView.swift */; };
 		7AEB7F402BE74FD494F95A3F /* ImageLoadManagerDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */; };
+		83EAEC82121BDEBE27822215 /* MediaCellUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 287E3F71119D457C80AEAA81 /* MediaCellUIView.swift */; };
 		87BA2CB8BF2E44C8861960D5 /* TweetUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */; };
 		8BFE5A55ECEA49F3A6FC6D3F /* TweetTableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A8664A026114553AC588E7A /* TweetTableViewController.swift */; };
 		9432536CBF9DB1A3ADCD2067 /* DocumentAttachmentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77454EFF645F6F03E20DC055 /* DocumentAttachmentsView.swift */; };
 		A0F8F09D30F34289B896499E /* UploadProgressOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */; };
 		B3FB362ED05AE5169A33DE6D /* DocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */; };
 		C22045EF1B134C4698599733 /* VideoPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */; };
+		C9B2593C09474D779A5C345A /* TweetHeaderUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A172CBEA1C9C4682B758AE93 /* TweetHeaderUIView.swift */; };
 		CA8FCEEC89259B8FD761147C /* Pods_Tweet.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 16C65942A958AA33DC9832F5 /* Pods_Tweet.framework */; };
+		D81162A1A026497BADF275EF /* TweetBodyUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4578F4CC1DB4228954A2A9B /* TweetBodyUIView.swift */; };
 		E3D452B1D03C4C09827F92B7 /* UploadProgressManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */; };
+		FB5795CA0CC040E9A90A9E45 /* TweetCellContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A65C2418C4764AC0AD757120 /* TweetCellContentView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -158,6 +168,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A2B /* PollCreationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PollCreationView.swift; path = Sources/Features/Compose/PollCreationView.swift; sourceTree = SOURCE_ROOT; };
 		26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetTableViewCell.swift; sourceTree = "<group>"; };
 		272BC479AE354CCB82E251A3 /* TweetUploadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetUploadManager.swift; sourceTree = "<group>"; };
+		287E3F71119D457C80AEAA81 /* MediaCellUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaCellUIView.swift; sourceTree = "<group>"; };
 		460680E92E16302C00D9D15A /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		460680EB2E165F8300D9D15A /* LocalizationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalizationHelper.swift; sourceTree = "<group>"; };
 		460680ED2E1660C700D9D15A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -178,6 +189,7 @@
 		4612ED242E925803005D5B8B /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
 		4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiskCacheCleanupManager.swift; sourceTree = "<group>"; };
 		4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCapManager.swift; sourceTree = "<group>"; };
+		4612ED2C2E924A18005D5B8B /* NodeConnectionPool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NodeConnectionPool.swift; sourceTree = "<group>"; };
 		461438162E3E426A002D1B22 /* ChatCacheManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCacheManager.swift; sourceTree = "<group>"; };
 		461438182E3EEE2D002D1B22 /* MimeiId.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MimeiId.swift; sourceTree = "<group>"; };
 		4614381A2E3F5E97002D1B22 /* BlackList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlackList.swift; sourceTree = "<group>"; };
@@ -205,6 +217,7 @@
 		467494162DF4A13E0082FAC6 /* CommentDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentDetailView.swift; sourceTree = "<group>"; };
 		467494202DF8858F0082FAC6 /* UserRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserRowView.swift; sourceTree = "<group>"; };
 		468384A02DFE9EAB0079ECC5 /* MediaBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaBrowserView.swift; sourceTree = "<group>"; };
+		4683F6302F49578D001E163C /* AgentTokenManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTokenManager.swift; sourceTree = "<group>"; };
 		468CF20D2E39AF3900D49038 /* ChatRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRepository.swift; sourceTree = "<group>"; };
 		468CF20F2E39AF5900D49038 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		468CF2172E39B06900D49038 /* BadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeView.swift; sourceTree = "<group>"; };
@@ -280,15 +293,22 @@
 		46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleAudioPlayer.swift; sourceTree = "<group>"; };
 		5515A99E9BD93216D2C4BCA4 /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
 		68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalImageLoadManager.swift; sourceTree = "<group>"; };
+		751EADD00B2244AEA43D0D15 /* TweetActionBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetActionBarView.swift; sourceTree = "<group>"; };
 		77454EFF645F6F03E20DC055 /* DocumentAttachmentsView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DocumentAttachmentsView.swift; sourceTree = "<group>"; };
 		7A8664A026114553AC588E7A /* TweetTableViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetTableViewController.swift; sourceTree = "<group>"; };
+		8847CCE1FD4E422DA4B12B94 /* AvatarUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarUIView.swift; sourceTree = "<group>"; };
+		8C8AA408976B03795C73F218 /* MediaGridUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaGridUIView.swift; sourceTree = "<group>"; };
+		8D477B4281144A5DA7B41A25 /* EmbeddedTweetUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedTweetUIView.swift; sourceTree = "<group>"; };
 		8FBB19FBBED94263AD0D72FB /* ImageLoadManagerDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadManagerDebugView.swift; sourceTree = "<group>"; };
 		98729E031BD14CADF7E78810 /* Pods-Tweet.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.debug.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.debug.xcconfig"; sourceTree = "<group>"; };
 		9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PendingUploadDialog.swift; sourceTree = "<group>"; };
+		A172CBEA1C9C4682B758AE93 /* TweetHeaderUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetHeaderUIView.swift; sourceTree = "<group>"; };
 		A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackCoordinator.swift; sourceTree = "<group>"; };
+		A65C2418C4764AC0AD757120 /* TweetCellContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetCellContentView.swift; sourceTree = "<group>"; };
 		AAE22D53728C4FCC8ABB5297 /* UploadProgressManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UploadProgressManager.swift; sourceTree = "<group>"; };
 		DF98BA9542DE4CC62FB1C080 /* DocumentPicker.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
 		E2C260FE784A43EF9772A398 /* TweetTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetTableView.swift; sourceTree = "<group>"; };
+		F4578F4CC1DB4228954A2A9B /* TweetBodyUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetBodyUIView.swift; sourceTree = "<group>"; };
 		F8FB6E35582340A0B369D1A1 /* UploadProgressOverlay.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = UploadProgressOverlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -374,6 +394,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A09 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				4683F6302F49578D001E163C /* AgentTokenManager.swift */,
 				46B25DF02F35836100F0EE94 /* TweetHeightCache.swift */,
 				46D907992F2B66D70020F8AA /* CommentsVideoPlaybackCoordinator.swift */,
 				A3F72B7881F44F2DA16A932E /* VideoPlaybackCoordinator.swift */,
@@ -491,6 +512,7 @@
 			isa = PBXGroup;
 			children = (
 				4612ED242E925803005D5B8B /* LocalHTTPServer.swift */,
+				4612ED2C2E924A18005D5B8B /* NodeConnectionPool.swift */,
 				4612ED2B2E925803005D5B8B /* MemoryCapManager.swift */,
 				4612ED262E937091005D5B8B /* DiskCacheCleanupManager.swift */,
 				4612ED132E924A18005D5B8B /* AppLogger.swift */,
@@ -648,6 +670,14 @@
 				7A8664A026114553AC588E7A /* TweetTableViewController.swift */,
 				E2C260FE784A43EF9772A398 /* TweetTableView.swift */,
 				46B795852F21B0D70060DCB3 /* LightweightVideoPlayerView.swift */,
+				8847CCE1FD4E422DA4B12B94 /* AvatarUIView.swift */,
+				A172CBEA1C9C4682B758AE93 /* TweetHeaderUIView.swift */,
+				F4578F4CC1DB4228954A2A9B /* TweetBodyUIView.swift */,
+				751EADD00B2244AEA43D0D15 /* TweetActionBarView.swift */,
+				8D477B4281144A5DA7B41A25 /* EmbeddedTweetUIView.swift */,
+				A65C2418C4764AC0AD757120 /* TweetCellContentView.swift */,
+				287E3F71119D457C80AEAA81 /* MediaCellUIView.swift */,
+				8C8AA408976B03795C73F218 /* MediaGridUIView.swift */,
 			);
 			path = UIKit;
 			sourceTree = "<group>";
@@ -798,6 +828,14 @@
 			files = (
 				C22045EF1B134C4698599733 /* VideoPlaybackCoordinator.swift in Sources */,
 				52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */,
+				690CDAA5E50B4C118321424B /* AvatarUIView.swift in Sources */,
+				C9B2593C09474D779A5C345A /* TweetHeaderUIView.swift in Sources */,
+				D81162A1A026497BADF275EF /* TweetBodyUIView.swift in Sources */,
+				7A2BD215882C416E828E8262 /* TweetActionBarView.swift in Sources */,
+				6E9CF4D970C641C59844EB14 /* EmbeddedTweetUIView.swift in Sources */,
+				FB5795CA0CC040E9A90A9E45 /* TweetCellContentView.swift in Sources */,
+				83EAEC82121BDEBE27822215 /* MediaCellUIView.swift in Sources */,
+				1A3CFE1B1A1BAFD64F6CD639 /* MediaGridUIView.swift in Sources */,
 				8BFE5A55ECEA49F3A6FC6D3F /* TweetTableViewController.swift in Sources */,
 				46B795962F2201920060DCB3 /* TweetHeightCalculator.swift in Sources */,
 				1A510F6D811F4CE89FC9FE05 /* TweetTableView.swift in Sources */,
@@ -811,6 +849,7 @@
 				469CF0F02E27FEC000FBCDB8 /* AppDelegate.swift in Sources */,
 				469A99552DEC744200954049 /* ProfileTweetsSection.swift in Sources */,
 				4612ED252E925803005D5B8B /* LocalHTTPServer.swift in Sources */,
+				4612ED2D2E924A18005D5B8B /* NodeConnectionPool.swift in Sources */,
 				4612ED2A2E925803005D5B8B /* MemoryCapManager.swift in Sources */,
 				4612ED272E937091005D5B8B /* DiskCacheCleanupManager.swift in Sources */,
 				46B03D892E488EC0000E08DF /* CameraView.swift in Sources */,
@@ -884,6 +923,7 @@
 				4642A1DD2DD62CCB00A20E19 /* Gadget.swift in Sources */,
 				4608E2DA2DD5CD920051A92D /* User.swift in Sources */,
 				468CF2252E39CC7C00D49038 /* AppHeaderView.swift in Sources */,
+				4683F6312F49578E001E163C /* AgentTokenManager.swift in Sources */,
 				468CF2262E39CC7C00D49038 /* TabButton.swift in Sources */,
 				460680EC2E165F8300D9D15A /* LocalizationHelper.swift in Sources */,
 				46E5B3632DE1703200AEF31F /* Registration.swift in Sources */,
@@ -1107,7 +1147,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 79;
+				CURRENT_PROJECT_VERSION = 91;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1125,7 +1165,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.4;
+				MARKETING_VERSION = 2.0.4;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -1160,7 +1200,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 79;
+				CURRENT_PROJECT_VERSION = 91;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1177,7 +1217,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.4;
+				MARKETING_VERSION = 2.0.4;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",

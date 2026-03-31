@@ -2,49 +2,54 @@
 //  TweetTableView.swift
 //  Tweet
 //
-//  SwiftUI wrapper for UIKit TweetTableViewController
-//  Provides SwiftUI interface while using UIKit's efficient UITableView
+//  SwiftUI wrapper for UIKit TweetTableViewController.
+//  No longer generic — cells are rendered entirely in UIKit.
 //
 import SwiftUI
 
-struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
+struct TweetTableView: UIViewControllerRepresentable {
     @Binding var tweets: [Tweet]
     let header: (() -> AnyView)?
-    let rowView: (Tweet) -> RowView
+    let hproseInstance: HproseInstance
     @Binding var hasMoreTweets: Bool
     let isLoadingMore: Bool
     let loadMoreTweets: (Bool) -> Void  // Parameter: forceLoad
-    let onRefresh: (() async -> Void)?  // Pull-to-refresh callback
-    let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
-    let leadingPadding: CGFloat  // Leading padding for cells
-    let trailingPadding: CGFloat  // Trailing padding for cells
-    let pinnedTweets: [Tweet]  // Pinned tweets for video coordination and visibility
-    let feedIdentifier: String  // Unique identifier for persistent scroll position
-    
+    let onRefresh: (() async -> Void)?
+    let onScroll: ((CGFloat, CGFloat) -> Void)?
+    let leadingPadding: CGFloat
+    let trailingPadding: CGFloat
+    let pinnedTweets: [Tweet]
+    let feedIdentifier: String
+    let videoCoordinator: VideoPlaybackCoordinator
+    let onAvatarTap: ((User) -> Void)?
+    let onTweetTap: ((Tweet) -> Void)?
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
+    let allowDeleteAll: Bool
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
-    
+
     class Coordinator {
         var lastTweetIds: [String] = []
         var lastPinnedTweetIds: [String] = []
         weak var controller: TweetTableViewController?
-        
+
         func triggerLoadMore() {
             controller?.triggerLoadMore()
         }
-        
+
         func showNoMoreTweetsMessage() {
             controller?.showNoMoreTweetsMessageIfNeeded()
         }
     }
-    
+
     func makeUIViewController(context: Context) -> TweetTableViewController {
-        let controller = TweetTableViewController()
-        
-        // Store controller reference in coordinator
+        let controller = TweetTableViewController(videoCoordinator: videoCoordinator)
+
         context.coordinator.controller = controller
-        
+
         controller.loadMoreTweets = loadMoreTweets
         controller.onRefresh = onRefresh
         controller.onScroll = onScroll
@@ -52,40 +57,43 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         controller.trailingPadding = trailingPadding
         controller.feedIdentifier = feedIdentifier
         controller.headerViewBuilder = header
-        controller.rowViewBuilder = { tweet in
-            AnyView(rowView(tweet))
-        }
-        
-        // Set up header if present
+
+        // UIKit cell configuration
+        controller.hproseInstance = hproseInstance
+        controller.onAvatarTap = onAvatarTap
+        controller.onTweetTap = onTweetTap
+        controller.onShowLogin = onShowLogin
+        controller.onShowToast = onShowToast
+        controller.allowDeleteAll = allowDeleteAll
+
         controller.updateHeader()
-        
-        
+
         return controller
     }
-    
+
     func updateUIViewController(_ uiViewController: TweetTableViewController, context: Context) {
         let coordinator = context.coordinator
-        
-        // Only update tweets if they actually changed (compare IDs for efficiency)
+
+        // Only update tweets if they actually changed
         let currentTweetIds = tweets.map { $0.mid }
         if coordinator.lastTweetIds != currentTweetIds {
             coordinator.lastTweetIds = currentTweetIds
             uiViewController.updateTweets(tweets)
         }
-        
-        // Only update pinned tweets if they actually changed (compare IDs for efficiency)
+
+        // Only update pinned tweets if they actually changed
         let currentPinnedTweetIds = pinnedTweets.map { $0.mid }
         if coordinator.lastPinnedTweetIds != currentPinnedTweetIds {
             coordinator.lastPinnedTweetIds = currentPinnedTweetIds
             uiViewController.updatePinnedTweets(pinnedTweets)
         }
-        
+
         // Update loading state
         uiViewController.updateLoadingState(
             isLoadingMore: isLoadingMore,
             hasMoreTweets: hasMoreTweets
         )
-        
+
         // Update callbacks
         uiViewController.loadMoreTweets = loadMoreTweets
         uiViewController.onRefresh = onRefresh
@@ -93,13 +101,21 @@ struct TweetTableView<RowView: View>: UIViewControllerRepresentable {
         uiViewController.leadingPadding = leadingPadding
         uiViewController.trailingPadding = trailingPadding
         uiViewController.feedIdentifier = feedIdentifier
+
+        // UIKit cell configuration
+        uiViewController.hproseInstance = hproseInstance
+        uiViewController.onAvatarTap = onAvatarTap
+        uiViewController.onTweetTap = onTweetTap
+        uiViewController.onShowLogin = onShowLogin
+        uiViewController.onShowToast = onShowToast
+        uiViewController.allowDeleteAll = allowDeleteAll
+
+        // Only update header if it exists — avoids unnecessary SwiftUI layout work
+        // on every updateUIViewController call (which fires on any SwiftUI state change)
+        let headerChanged = (header != nil) != (uiViewController.headerViewBuilder != nil)
         uiViewController.headerViewBuilder = header
-        uiViewController.rowViewBuilder = { tweet in
-            AnyView(rowView(tweet))
+        if header != nil || headerChanged {
+            uiViewController.updateHeader()
         }
-        
-        // Update header view
-        uiViewController.updateHeader()
     }
 }
-

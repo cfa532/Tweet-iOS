@@ -433,6 +433,7 @@
 "Received" = "受信済み";
 "Yesterday" = "昨日";
 "%@ %@" = "%@ %@";
+"No more comments" = "これ以上コメントはありません";
 "No more messages" = "これ以上メッセージはありません";
 "No more tweets" = "これ以上のツイートはありません";
 

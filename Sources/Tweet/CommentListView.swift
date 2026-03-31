@@ -23,7 +23,7 @@ struct CommentListView<RowView: View>: View {
     let rowView: (Tweet) -> RowView
     let notifications: [CommentListNotification]
     let isEmbedded: Bool // When true, don't use ScrollView (for nested scroll situations)
-    private let pageSize: UInt = 20
+    private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
     @Binding var comments: [Tweet]
@@ -37,6 +37,7 @@ struct CommentListView<RowView: View>: View {
     @State private var toastType: ToastView.ToastType = .info
     @State private var initialLoadComplete = false
     @State private var loadingStartTime: Date? = nil
+    @State private var showNoMoreComments = false
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -75,6 +76,7 @@ struct CommentListView<RowView: View>: View {
                         isLoadingMore: isLoadingMore,
                         isLoading: isLoading,
                         initialLoadComplete: initialLoadComplete,
+                        showNoMoreComments: showNoMoreComments,
                         loadMoreComments: { loadMoreComments() }
                     )
                 } else {
@@ -89,6 +91,7 @@ struct CommentListView<RowView: View>: View {
                             isLoadingMore: isLoadingMore,
                             isLoading: isLoading,
                             initialLoadComplete: initialLoadComplete,
+                            showNoMoreComments: showNoMoreComments,
                             loadMoreComments: { loadMoreComments() }
                         )
                     }
@@ -213,6 +216,9 @@ struct CommentListView<RowView: View>: View {
                     // Use the same logic as TweetListView
                     if newComments.count < pageSize {
                         hasMoreComments = false
+                        if comments.count > 0 {
+                            showNoMoreMessage()
+                        }
                     } else if validComments.isEmpty {
                         // All comments are nil, auto-increment and try again
                         isLoadingMore = false
@@ -242,7 +248,21 @@ struct CommentListView<RowView: View>: View {
                     hasMoreComments = false
                     isLoadingMore = false
                     loadingStartTime = nil
+                    if comments.count > 0 {
+                        showNoMoreMessage()
+                    }
                 }
+            }
+        }
+    }
+
+    private func showNoMoreMessage() {
+        withAnimation(.easeOut(duration: 0.4)) {
+            showNoMoreComments = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeIn(duration: 0.3)) {
+                showNoMoreComments = false
             }
         }
     }
@@ -265,6 +285,7 @@ struct CommentListContentView<RowView: View>: View {
     let isLoadingMore: Bool
     let isLoading: Bool
     let initialLoadComplete: Bool
+    let showNoMoreComments: Bool
     let loadMoreComments: () -> Void
     
     var body: some View {
@@ -323,6 +344,16 @@ struct CommentListContentView<RowView: View>: View {
                                 }
                             }
                         }
+                }
+
+                // "No more comments" message (only after load-more, not initial load)
+                if showNoMoreComments {
+                    Text(NSLocalizedString("No more comments", comment: "Message shown when there are no more comments to load"))
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
         }

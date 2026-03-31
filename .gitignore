@@ -19,3 +19,6 @@ build/Logs/Build/LogStoreManifest.plist
 .DS_Store
 build_test.log
 .DS_Store
+*.log
+*.log
+build_output.log

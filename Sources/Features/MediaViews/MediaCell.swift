@@ -25,6 +25,23 @@ class VideoVisibilityManager: ObservableObject {
     }
 }
 
+// MARK: - Video List Provider Environment Key
+
+/// Closure type for providing a video list for fullscreen navigation.
+/// Parameters: (videoMid, cellTweetId, attachmentIndex) → (list, startIndex)?
+typealias VideoListProvider = (_ videoMid: String, _ cellTweetId: String, _ attachmentIndex: Int) -> ([VideoPlaybackInfo], Int)?
+
+private struct VideoListProviderKey: EnvironmentKey {
+    static let defaultValue: VideoListProvider? = nil
+}
+
+extension EnvironmentValues {
+    var videoListProvider: VideoListProvider? {
+        get { self[VideoListProviderKey.self] }
+        set { self[VideoListProviderKey.self] = newValue }
+    }
+}
+
 // MARK: - MediaCell
 struct MediaCell: View, Equatable, MediaCellDelegate {
     let parentTweet: Tweet
@@ -47,6 +64,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
     @State private var videoFrame: CGRect = .zero
     @State private var isInViewport: Bool = false
     @ObservedObject private var muteState = MuteState.shared
+    @Environment(\.videoListProvider) private var videoListProvider
 
     init(parentTweet: Tweet, attachmentIndex: Int, aspectRatio: Float = 1.0, shouldLoadVideo: Bool = false, onVideoFinished: (() -> Void)? = nil, isVisible: Bool = false, isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
@@ -145,9 +163,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                         imageViewContent(width: width, height: height)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if !isEmbedded {
-                                    handleTap()
-                                }
+                                handleTap()
                             }
                     default:
                         // Documents (PDF, Word, etc.) are shown in DocumentAttachmentsView, not in MediaGrid
@@ -192,7 +208,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             setupForegroundObserver()
 
             // Phase 3: Register as delegate for direct video control communication
-            VideoPlaybackCoordinator.shared.registerDelegate(self, forVideoMid: attachment.mid)
+            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+            VideoPlaybackCoordinator.shared.registerDelegate(self, forIdentifier: videoId)
         }
         .onDisappear {
             // Set visibility to false immediately when cell disappears
@@ -208,7 +225,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
             }
 
             // Phase 3: Unregister delegate
-            VideoPlaybackCoordinator.shared.unregisterDelegate(forVideoMid: attachment.mid)
+            let videoId = "\(cellTweetId ?? parentTweet.mid)_\(attachment.mid)_\(attachmentIndex)"
+            VideoPlaybackCoordinator.shared.unregisterDelegate(forIdentifier: videoId)
 
             // MEMORY FIX: Mark video as not visible when cell disappears
             // Cleanup is handled by background timer (every 10s) to preserve preloading
@@ -316,7 +334,7 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 // Video is going into full-screen mode
                 // Pause all MediaCell videos to avoid multiple videos playing
                 NotificationCenter.default.post(name: .stopAllVideos, object: nil)
-                
+
                 VideoVisibilityManager.shared.videoEnteredFullScreen(attachment.mid)
                 OverlayVisibilityCoordinator.shared.beginOverlay(
                     id: "mediaBrowserFullScreen",
@@ -324,6 +342,13 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 )
                 // Reset loading state once fullscreen is presented
                 isOpeningFullScreen = false
+
+                // Set video list for fullscreen navigation if provider is available (e.g. comments)
+                if isVideoAttachment,
+                   let provider = videoListProvider,
+                   let (list, startIndex) = provider(attachment.mid, cellTweetId ?? parentTweet.mid, attachmentIndex) {
+                    FullScreenVideoManager.shared.setVideoList(list, startIndex: startIndex)
+                }
             } else {
                 // Video is exiting full-screen mode
                 VideoVisibilityManager.shared.videoExitedFullScreen(attachment.mid)
@@ -340,9 +365,16 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         // This allows the video to continue from where it was playing in the cell
         // Get the current time directly from the cached player (more accurate than cached playback info)
         if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid) {
-            let currentTime = cachedState.player.currentTime()
-            let wasPlaying = cachedState.player.rate > 0
-            
+            let player = cachedState.player
+            let isNearEnd: Bool = {
+                guard let item = player.currentItem else { return false }
+                let duration = item.duration
+                guard duration.isValid, !duration.isIndefinite, duration.seconds > 0 else { return false }
+                return duration.seconds - player.currentTime().seconds <= 3.0
+            }()
+            let currentTime = isNearEnd ? .zero : player.currentTime()
+            let wasPlaying = player.rate > 0
+
             PersistentVideoStateManager.shared.saveState(
                 videoMid: attachment.mid,
                 currentTime: currentTime,
@@ -511,6 +543,8 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
                 isVisible: isVisible,
                 mediaType: attachment.type,
                 authorId: parentTweet.authorId,
+                cellTweetId: cellTweetId ?? parentTweet.mid,
+                attachmentIndex: attachmentIndex,
                 autoPlay: shouldAutoPlay,
                 onVideoFinished: onVideoFinished,
                 cellAspectRatio: CGFloat(aspectRatio),
@@ -741,6 +775,10 @@ extension MediaCell {
             updateEffectiveBaseUrl()
         }
     }
+
+    var isActuallyPlaying: Bool { false }
+    var isLoadingForCoordinator: Bool { false }
+    var isRecentlyPlaying: Bool { false }
 }
 
 // MARK: - MuteButton

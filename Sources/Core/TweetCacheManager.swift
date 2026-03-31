@@ -246,6 +246,23 @@ extension TweetCacheManager {
                             
                             // NOTE: baseUrl will be assigned on MainActor after all tweets are collected
                             
+                            // Skip retweets/quoted tweets whose original tweet is not available.
+                            // Load into in-memory singleton so buildVideoListAsync can find
+                            // retweet/quoted tweet videos for correct preload ordering.
+                            if let originalTweetId = tweet.originalTweetId, tweet.originalAuthorId != nil {
+                                if Tweet.getInstance(for: originalTweetId) == nil {
+                                    let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                                    origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
+                                    origRequest.fetchLimit = 1
+                                    if let cdOrigTweet = try? self.context.fetch(origRequest).first,
+                                       let _ = try? Tweet.from(cdTweet: cdOrigTweet) {
+                                        // Original tweet loaded into singleton — retweet can proceed
+                                    } else {
+                                        continue
+                                    }
+                                }
+                            }
+
                             // Filter out tweets with invalid timestamps
                             if tweet.timestamp.timeIntervalSince1970 <= 0 {
                                 print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
@@ -789,21 +806,6 @@ extension TweetCacheManager {
         }
     }
     
-    /// Synchronous save - blocks until complete (use for critical updates like avatar)
-    func saveUserAndWait(_ user: User) {
-        context.performAndWait {
-            let request: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-            request.predicate = NSPredicate(format: "mid == %@", user.mid)
-            let cdUser = (try? self.context.fetch(request).first) ?? CDUser(context: self.context)
-            cdUser.mid = user.mid
-            cdUser.timeCached = Date()
-            if let userData = try? JSONEncoder().encode(user) {
-                cdUser.userData = userData
-                print("DEBUG: [saveUserAndWait] Saved user \(user.mid) with avatar: \(user.avatar ?? "nil")")
-            }
-            try? self.context.save()
-        }
-    }
 
     func deleteExpiredUsers() {
         context.performAndWait {

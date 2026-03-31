@@ -4,8 +4,11 @@ struct ProfileView: View {
     let user: User
     let onLogout: (() -> Void)?
     @Binding var navigationPath: NavigationPath
-    
-    @EnvironmentObject private var hproseInstance: HproseInstance
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
+
+    /// Use singleton so ProfileView works when presented from detached view controllers (e.g. after MediaBrowserView).
+    @ObservedObject private var hproseInstance = HproseInstance.shared
     @Environment(\.dismiss) private var dismiss
     
     /// Track users that have been resynced this app session to avoid redundant long-running operations
@@ -144,6 +147,11 @@ struct ProfileView: View {
                     userInfo: ["isVisible": true]
                 )
             }
+            .onReceive(NotificationCenter.default.publisher(for: .showBarsAfterScrollEnd)) { _ in
+                guard !isNavigationVisible else { return }
+                isNavigationVisible = true
+                postNavigationVisibilityNotification(isVisible: true)
+            }
     }
     
     @ViewBuilder
@@ -162,10 +170,16 @@ struct ProfileView: View {
     private func userDestinationView(for user: User) -> some View {
         // Navigate to user's profile when avatar is tapped from favorites/bookmarks
         let _ = print("🟢 [ProfileView] navigationDestination(selectedUser) TRIGGERED - navigating to user: \(user.username ?? "nil"), mid: \(user.mid)")
-        ProfileView(user: user, onLogout: onLogout, navigationPath: $navigationPath)
-            .onAppear {
-                print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
-            }
+        ProfileView(
+            user: user,
+            onLogout: onLogout,
+            navigationPath: $navigationPath,
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast
+        )
+        .onAppear {
+            print("🟢 [ProfileView] NEW user profile appeared: \(user.username ?? "nil")")
+        }
     }
     
     private func handleSheetDismiss() {
@@ -224,24 +238,25 @@ struct ProfileView: View {
                     pinnedTweetIds: pinnedTweetIds,
                     user: user,
                     hproseInstance: hproseInstance,
-                    onUserSelect: { _ in }, // Not used - NavigationLink handles user navigation
+                    onUserSelect: { _ in }, // Not used - onAvatarTapInProfile handles all avatar navigation
                     onTweetTap: { tweet in
                         // Append tweet to navigationPath to navigate to detail view
                         // This matches the pattern used in HomeViewModel
                         navigationPath.append(tweet)
                     },
                     onAvatarTapInProfile: { tappedUser in
-                        // Check if the tapped avatar is the same as the profile user
                         if tappedUser.mid == user.mid {
-                            // Same user - scroll to top
                             scrollToTop()
+                        } else {
+                            selectedUserForNavigation = tappedUser
                         }
-                        // Different user navigation is handled by NavigationLink in TweetItemView
                     },
                     onPinnedTweetsRefresh: refreshPinnedTweets,
                     onScroll: { offset, delta in
                         handleScroll(offset: offset, delta: delta)
                     },
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
@@ -481,14 +496,17 @@ struct ProfileView: View {
             // Near the top - always show toolbar
             if !isNavigationVisible {
                 // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [self] in
                     withAnimation(.easeInOut(duration: 0.25)) {
                         isNavigationVisible = true
                     }
                     postNavigationVisibilityNotification(isVisible: true)
                 }
             }
-            previousScrollOffset = offset
+            // Defer state update to avoid modifying during view update
+            DispatchQueue.main.async { [self] in
+                previousScrollOffset = offset
+            }
             return
         }
         
@@ -506,26 +524,29 @@ struct ProfileView: View {
         if isScrollingDown && isNavigationVisible {
             // Scrolling down significantly - hide bottom bar
             // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [self] in
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = false
                 }
                 postNavigationVisibilityNotification(isVisible: false)
+                lastSignificantDelta = delta
             }
-            lastSignificantDelta = delta
         } else if isScrollingUp && !isNavigationVisible {
             // Scrolling up significantly - show bottom bar
             // Use DispatchQueue to defer state update to next run loop to avoid modifying state during view update
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [self] in
                 withAnimation(.easeInOut(duration: 0.25)) {
                     isNavigationVisible = true
                 }
                 postNavigationVisibilityNotification(isVisible: true)
+                lastSignificantDelta = delta
             }
-            lastSignificantDelta = delta
         }
-        
-        previousScrollOffset = offset
+
+        // Defer state update to avoid modifying during view update
+        DispatchQueue.main.async { [self] in
+            previousScrollOffset = offset
+        }
     }
     
     // Helper to post navigation visibility notification with throttling
@@ -547,9 +568,14 @@ struct ProfileView: View {
     // MARK: - Helper Methods
     
     private func scrollToTop() {
-        // Scroll to top of the profile view
-        // This will be handled by the ScrollViewReader in ProfileTweetsSection
-        NotificationCenter.default.post(name: .scrollToTop, object: nil)
+        // Scroll to top of this specific profile's feed
+        // Pass the feed identifier to target only this profile's tweet list
+        let feedIdentifier = "profile_\(user.mid)"
+        NotificationCenter.default.post(
+            name: .scrollToTop,
+            object: nil,
+            userInfo: ["feedIdentifier": feedIdentifier]
+        )
     }
     
     private func showToastMessage(_ message: String, type: ToastView.ToastType) {

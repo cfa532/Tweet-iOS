@@ -151,13 +151,7 @@ struct CachingVideoPlayer: View {
                 // This allows videos to buffer properly when they come back into view
                 if let playerItem = player?.currentItem {
                     if let cachingPlayerItem = playerItem as? CachingPlayerItem {
-                        cachingPlayerItem.preferredForwardBufferDuration = 15.0  // Restore normal buffering
                         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
-                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible video: \(mid)")
-                    } else {
-                        // For progressive videos, restore buffer duration
-                        playerItem.preferredForwardBufferDuration = 30.0
-                        print("DEBUG: [CachingVideoPlayer] Restored buffering settings for visible progressive video: \(mid)")
                     }
                 }
 
@@ -479,6 +473,8 @@ struct CachingVideoPlayer: View {
         // The player is managed by SharedAssetCache and should persist
         print("DEBUG: [CachingVideoPlayer] Cleaning up observers but preserving player for \(mid)")
         
+        // Clear delegate from player item so it won't call back after view is gone (prevents stale state updates)
+        cachingPlayerItem?.delegate = nil
         // Clear local references but keep the player alive
         cachingPlayerItem = nil
         playerDelegate = nil

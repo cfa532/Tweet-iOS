@@ -1,0 +1,13 @@
+---
+description: Where backend/server code lives for API and auth changes
+alwaysApply: true
+---
+
+# Backend Server Code Location
+
+Tweet-iOS communicates with a **separate Leither/Hprose backend**. When you need to understand or change server behavior (APIs, auth, agent tokens, add_tweet, login, etc.):
+
+- **Server repo path:** `/Users/cfa532/Documents/GitHub/TweetBackendApp`
+- **GitHub:** repo name `TweetBackendApp` under account `cfa532`
+
+Server entry points are `.js` files; each file is a function invoked via `lapi.RunMApp("filename", params, [])`. All `RunMApp` calls must include mandatory params `aid` and `ver: "last"`. There are no file imports; cross-file calls use `lapi.RunMApp` only.

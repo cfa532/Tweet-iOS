@@ -23,17 +23,25 @@ class FollowingsTweetViewModel: ObservableObject {
         self.hproseInstance = hproseInstance
     }
     
-    func fetchTweets(page: UInt, pageSize: UInt) async -> [Tweet?] {
+    func fetchTweets(page: UInt, pageSize: UInt) async throws -> [Tweet?] {
         let startTime = Date()
         print("🌐 [SERVER FETCH] fetchTweets START - page: \(page), pageSize: \(pageSize)")
         
-        // Wait for app initialization if not complete
+        // Wait for app initialization with timeout — don't block forever when server is unreachable.
+        // fetchTweetFeed has a built-in cache fallback for !isInitializationComplete,
+        // so proceeding after timeout still returns cached tweets instead of hanging.
         if !hproseInstance.isAppInitialized {
-            print("⏳ [SERVER FETCH] Waiting for app initialization...")
-            while !hproseInstance.isAppInitialized {
+            print("⏳ [SERVER FETCH] Waiting for app initialization (max 10s)...")
+            var waitCount = 0
+            while !hproseInstance.isAppInitialized && waitCount < 100 { // 100 × 100ms = 10s
                 try? await Task.sleep(nanoseconds: 100_000_000) // Check every 100ms
+                waitCount += 1
             }
-            print("✅ [SERVER FETCH] App initialization complete, proceeding with fetch")
+            if hproseInstance.isAppInitialized {
+                print("✅ [SERVER FETCH] App initialization complete, proceeding with fetch")
+            } else {
+                print("⚠️ [SERVER FETCH] Timed out waiting for app initialization, proceeding with cache fallback")
+            }
         }
         
         // fetch tweets from server
@@ -51,7 +59,7 @@ class FollowingsTweetViewModel: ObservableObject {
                 }
             } catch {
                 print("[HproseInstance] Error loading tweets for guest user: \(error)")
-                // Don't throw here, allow the app to continue even if tweet loading fails
+                throw error
             }
             return []
         }
@@ -106,7 +114,7 @@ class FollowingsTweetViewModel: ObservableObject {
         } catch {
             let elapsed = Date().timeIntervalSince(startTime) * 1000
             print("❌ [SERVER FETCH] fetchTweets FAILED in \(String(format: "%.1f", elapsed))ms: \(error)")
-            return []
+            throw error
         }
     }
     

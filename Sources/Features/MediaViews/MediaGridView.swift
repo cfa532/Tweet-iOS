@@ -39,7 +39,7 @@ struct MediaGridView: View, Equatable {
     // Account for TweetListView horizontal padding (16pt on each side = 32pt total)
     private static let cachedScreenWidth: CGFloat = UIScreen.main.bounds.width
     private static let cachedGridWidth: CGFloat = max(10, cachedScreenWidth - 32 - 32) // 32 for original spacing + 32 for TweetListView padding
-    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 140) // Narrower width for embedded/quoted tweets
+    private static let cachedEmbeddedGridWidth: CGFloat = max(10, cachedScreenWidth - 80) // Embedded tweet: wider media for better content display
     
     init(parentTweet: Tweet, attachments: [MimeiFileType], isEmbedded: Bool = false, cellTweetId: String? = nil) {
         self.parentTweet = parentTweet
@@ -758,20 +758,28 @@ struct ZoomableView<Content: View>: View {
 
 // MARK: - MediaGridViewModel
 struct MediaGridViewModel {
-    /// Calculate precise height for MediaGrid given attachments and whether it's embedded
-    /// This allows height pre-calculation without rendering
-    static func calculateHeight(for attachments: [MimeiFileType], isEmbedded: Bool) -> CGFloat {
+    /// Calculate precise height for MediaGrid given attachments and actual grid width
+    /// Use this when you know the exact available width (e.g., from view bounds or constraints)
+    static func calculateHeight(for attachments: [MimeiFileType], gridWidth: CGFloat) -> CGFloat {
         guard !attachments.isEmpty else { return 0 }
-
-        let screenWidth = UIScreen.main.bounds.width
-        let gridWidth = isEmbedded
-            ? max(10, screenWidth - 140)  // Embedded width
-            : max(10, screenWidth - 32 - 32)  // Regular width
 
         let gridAspectRatio = aspectRatio(for: attachments)
         let gridHeight = max(10, gridWidth / gridAspectRatio)
 
         return gridHeight
+    }
+
+    /// Calculate precise height for MediaGrid given attachments and whether it's embedded
+    /// This uses screen-width-based estimates - prefer the gridWidth variant when actual width is known
+    static func calculateHeight(for attachments: [MimeiFileType], isEmbedded: Bool) -> CGFloat {
+        guard !attachments.isEmpty else { return 0 }
+
+        let screenWidth = UIScreen.main.bounds.width
+        let gridWidth = isEmbedded
+            ? max(10, screenWidth - 124)  // Match TweetBodyUIView embedded: cell(16) + leading(3) + avatar(42) + spacing(4) + embedded(8+4) + embAvatar(40) + embSpacing(8) - wrapper(-4)
+            : max(10, screenWidth - 32 - 34)  // Regular width (32+32 cell padding + 2 trailing inset)
+
+        return calculateHeight(for: attachments, gridWidth: gridWidth)
     }
 
     /// Get aspect ratio for an attachment, detecting from cached image if nil
@@ -826,8 +834,8 @@ struct MediaGridViewModel {
             let isLandscape0 = ar0 > 1
             let isLandscape1 = ar1 > 1
             if isPortrait0 && isPortrait1 {
-                // Both portrait: horizontal layout
-                return min(1.5, maxAspectRatio)  // Clamped to max
+                // Both portrait: horizontal layout, square grid
+                return 1.0
             } else if isLandscape0 && isLandscape1 {
                 // Both landscape: vertical layout
                 return max(0.8, minAspectRatio)  // Clamped to min

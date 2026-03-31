@@ -7,6 +7,8 @@ struct ChatScreen: View {
     let receiptId: MimeiId
     @Binding var navigationPath: NavigationPath
     let onProfileNavigate: (() -> Void)?
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     @StateObject private var chatRepository = ChatRepository()
     @StateObject private var chatSessionManager = ChatSessionManager.shared
     @State private var messages: [ChatMessage] = []
@@ -27,10 +29,12 @@ struct ChatScreen: View {
     @State private var visibilityCheckTimer: Timer?
     @State private var isChatScreenVisible = true
     
-    init(receiptId: MimeiId, navigationPath: Binding<NavigationPath> = .constant(NavigationPath()), onProfileNavigate: (() -> Void)? = nil) {
+    init(receiptId: MimeiId, navigationPath: Binding<NavigationPath> = .constant(NavigationPath()), onProfileNavigate: (() -> Void)? = nil, onShowLogin: (() -> Void)? = nil, onShowToast: ((String, Bool) -> Void)? = nil) {
         self.receiptId = receiptId
         self._navigationPath = navigationPath
         self.onProfileNavigate = onProfileNavigate
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
     }
     
     // Pagination states
@@ -79,7 +83,13 @@ struct ChatScreen: View {
                 hideKeyboard()
             }
             .navigationDestination(for: User.self) { user in
-                ProfileView(user: user, onLogout: nil, navigationPath: $navigationPath)
+                ProfileView(
+                    user: user,
+                    onLogout: nil,
+                    navigationPath: $navigationPath,
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast
+                )
             }
             .overlay(toastOverlay)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in

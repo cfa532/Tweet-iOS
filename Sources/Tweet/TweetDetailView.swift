@@ -2,6 +2,257 @@ import SwiftUI
 import AVKit
 import UIKit
 
+// MARK: - Bottom bar scroll tracker
+// Observes scroll view and updates SwiftUI state for bottom bar visibility
+private class BottomBarScrollObserver: NSObject {
+    private var observation: NSKeyValueObservation?
+    private var previousOffset: CGFloat = 0
+    weak var scrollView: UIScrollView?
+    var onScrollChange: ((CGFloat, CGFloat, Bool) -> Void)? // (currentOffset, delta, isAtBottom)
+    
+    func attachToScrollView(_ scrollView: UIScrollView) {
+        self.scrollView = scrollView
+        observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, change in
+            guard let self = self, let y = change.newValue?.y else { return }
+            let delta = y - self.previousOffset
+            self.previousOffset = y
+            
+            // Check if we're at the bottom (within 50pt threshold)
+            let contentHeight = scrollView.contentSize.height
+            let scrollViewHeight = scrollView.bounds.height
+            let contentOffsetY = y
+            let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) && 
+                            (contentOffsetY + scrollViewHeight >= contentHeight - 50)
+            
+            // Ensure callback runs on main thread for SwiftUI updates
+            DispatchQueue.main.async {
+                self.onScrollChange?(y, delta, isAtBottom)
+            }
+        }
+    }
+    
+    func reset() {
+        previousOffset = 0
+    }
+    
+    deinit {
+        observation?.invalidate()
+    }
+}
+
+// MARK: - Nav bar scroll tracker with UIKit overlay
+// Uses a real UIView for the nav bar to bypass SwiftUI rendering pipeline entirely.
+// KVO on UIScrollView.contentOffset drives the UIView transform directly.
+
+private class LargeHitButton: UIButton {
+    var hitInset: UIEdgeInsets = UIEdgeInsets(top: -12, left: -16, bottom: -12, right: -24)
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.inset(by: hitInset).contains(point)
+    }
+}
+
+private class NavBarUIView: UIView {
+    private let titleLabel = UILabel()
+    private let backButton = LargeHitButton(type: .system)
+    private var onBack: (() -> Void)?
+    private var observation: NSKeyValueObservation?
+    private var previousOffset: CGFloat = 0
+    weak var scrollView: UIScrollView?
+
+    init(onBack: @escaping () -> Void) {
+        self.onBack = onBack
+        super.init(frame: .zero)
+        setupViews()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setupViews() {
+        backgroundColor = .systemBackground
+
+        // Back button
+        let config = UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)
+        backButton.setImage(UIImage(systemName: "chevron.left", withConfiguration: config), for: .normal)
+        backButton.tintColor = UIColor(named: "ThemeText") ?? .label
+        backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(backButton)
+
+        // Title
+        titleLabel.text = NSLocalizedString("Tweet", comment: "Tweet detail screen title")
+        titleLabel.font = .preferredFont(forTextStyle: .headline)
+        titleLabel.textColor = UIColor(named: "ThemeText") ?? .label
+        titleLabel.textAlignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleLabel)
+
+        NSLayoutConstraint.activate([
+            backButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            backButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @objc private func backTapped() {
+        onBack?()
+    }
+
+    func attachToScrollView(_ scrollView: UIScrollView) {
+        self.scrollView = scrollView
+        observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, change in
+            guard let self = self, let y = change.newValue?.y else { return }
+            self.handleScroll(y, scrollView: scrollView)
+        }
+    }
+
+    private func handleScroll(_ y: CGFloat, scrollView: UIScrollView) {
+        let delta = y - previousOffset
+        previousOffset = y
+
+        if y <= 0 {
+            transform = .identity
+            alpha = 1
+            backButton.isEnabled = true
+            return
+        }
+
+        // Check if we're at the bottom (within 50pt threshold)
+        let contentHeight = scrollView.contentSize.height
+        let scrollViewHeight = scrollView.bounds.height
+        let contentOffsetY = y
+        let isAtBottom = (contentHeight > 0 && scrollViewHeight > 0) && 
+                        (contentOffsetY + scrollViewHeight >= contentHeight - 50)
+        
+        // If at bottom and scrolling up (delta negative), ignore to prevent bounce-induced nav bar reappearance
+        if isAtBottom && delta < 0 {
+            // Don't update nav bar position when bouncing at bottom
+            return
+        }
+
+        // Proportional tracking: translate nav bar upward as user scrolls down
+        let currentTY = transform.ty
+        let newTY = max(-44.0, min(0.0, currentTY - delta))
+        transform = CGAffineTransform(translationX: 0, y: newTY)
+        alpha = CGFloat(max(0.0, 1.0 + newTY / 44.0))
+        backButton.isEnabled = newTY > -22
+    }
+
+    func reset() {
+        previousOffset = 0
+        transform = .identity
+        alpha = 1
+        backButton.isEnabled = true
+    }
+
+    deinit {
+        observation?.invalidate()
+    }
+}
+
+// UIViewRepresentable wrapper that places NavBarUIView and attaches it to the parent UIScrollView
+private struct NavBarOverlay: UIViewRepresentable {
+    let onBack: () -> Void
+
+    func makeUIView(context: Context) -> NavBarUIView {
+        let navBar = NavBarUIView(onBack: onBack)
+        // Find and attach to parent scroll view after hierarchy is built
+        DispatchQueue.main.async {
+            Self.findAndAttach(navBar: navBar)
+        }
+        return navBar
+    }
+
+    func updateUIView(_ uiView: NavBarUIView, context: Context) {}
+
+    // Walk up to find common ancestor, then search downward for UIScrollView
+    private static func findAndAttach(navBar: NavBarUIView) {
+        var current: UIView? = navBar.superview
+        while let ancestor = current {
+            if let scrollView = findScrollView(in: ancestor) {
+                navBar.attachToScrollView(scrollView)
+                return
+            }
+            current = ancestor.superview
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            findAndAttach(navBar: navBar)
+        }
+    }
+
+    private static func findScrollView(in view: UIView) -> UIScrollView? {
+        for subview in view.subviews {
+            if let scrollView = subview as? UIScrollView {
+                return scrollView
+            }
+            if let found = findScrollView(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+}
+
+// Coordinator to hold the observer
+private class BottomBarScrollCoordinator: NSObject {
+    var observer: BottomBarScrollObserver?
+}
+
+// UIViewRepresentable wrapper for bottom bar scroll tracking
+private struct BottomBarScrollTracker: UIViewRepresentable {
+    let onScrollChange: (CGFloat, CGFloat, Bool) -> Void // (currentOffset, delta, isAtBottom)
+    
+    func makeCoordinator() -> BottomBarScrollCoordinator {
+        BottomBarScrollCoordinator()
+    }
+    
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        
+        // Find and attach to parent scroll view after hierarchy is built
+        DispatchQueue.main.async {
+            Self.findAndAttach(view: view, coordinator: context.coordinator, onScrollChange: onScrollChange)
+        }
+        return view
+    }
+    
+    func updateUIView(_ uiView: UIView, context: Context) {}
+    
+    private static func findAndAttach(view: UIView, coordinator: BottomBarScrollCoordinator, onScrollChange: @escaping (CGFloat, CGFloat, Bool) -> Void) {
+        var current: UIView? = view.superview
+        while let ancestor = current {
+            if let scrollView = findScrollView(in: ancestor) {
+                let observer = BottomBarScrollObserver()
+                observer.onScrollChange = onScrollChange
+                observer.attachToScrollView(scrollView)
+                
+                // Store observer in coordinator to keep it alive
+                coordinator.observer = observer
+                
+                return
+            }
+            current = ancestor.superview
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            findAndAttach(view: view, coordinator: coordinator, onScrollChange: onScrollChange)
+        }
+    }
+    
+    private static func findScrollView(in view: UIView) -> UIScrollView? {
+        for subview in view.subviews {
+            if let scrollView = subview as? UIScrollView {
+                return scrollView
+            }
+            if let found = findScrollView(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+}
+
 // Custom text view that enables text selection without NavigationLink interference
 @available(iOS 16.0, *)
 struct SelectableTextView: UIViewRepresentable {
@@ -76,25 +327,15 @@ struct DetailMediaCell: View {
             if let baseUrl = baseUrl, let url = attachment.getUrl(baseUrl) {
                 switch attachment.type {
                 case .video, .hls_video:
-                    // Show video with SimpleVideoPlayer in tweetDetail mode (shares player with grid, bypasses VideoManager)
-                    // Videos already use .fit in tweetDetail mode, wrap in black background
-                    ZStack {
-                        Color.black
-                        SimpleVideoPlayer(
-                            url: url,
-                            mid: attachment.mid,
-                            parentTweetId: parentTweet.mid,
-                            isVisible: shouldLoadVideo, // Control visibility instead of conditionally creating
-                            mediaType: attachment.type,
-                            authorId: parentTweet.authorId, // Pass authorId for health check
-                            autoPlay: shouldLoadVideo, // Only autoplay when selected
-                            videoAspectRatio: CGFloat(attachment.aspectRatio ?? 1.0),
-                            showNativeControls: true,
-                            isMuted: false,
-                            mode: .tweetDetail
-                        )
-                        .opacity(shouldLoadVideo ? 1.0 : 0.0) // Hide when not selected
-                    }
+                    // Singleton video player — only the selected page loads/plays.
+                    // Non-selected pages show a thumbnail placeholder (no invisible playback).
+                    DetailSingletonVideoPlayerView(
+                        url: url,
+                        mid: attachment.mid,
+                        mediaType: attachment.type,
+                        aspectRatio: attachment.aspectRatio,
+                        shouldLoad: shouldLoadVideo
+                    )
                 case .audio:
                     // Show audio player with SimpleAudioPlayer
                     SimpleAudioPlayer(url: url, autoPlay: false)
@@ -294,6 +535,97 @@ struct DetailMediaCell: View {
     }
 }
 
+// MARK: - Detail Singleton Video Player View
+// Mirrors MediaBrowserView's SingletonVideoPlayerView pattern:
+// Only the selected page loads video via DetailVideoManager.loadVideo().
+// Non-selected pages show a cached thumbnail (no invisible playback).
+
+private struct DetailSingletonVideoPlayerView: View {
+    let url: URL
+    let mid: String
+    let mediaType: MediaType
+    let aspectRatio: Float?
+    let shouldLoad: Bool
+
+    @ObservedObject private var manager = DetailVideoManager.shared
+
+    var body: some View {
+        ZStack {
+            Color.black
+
+            if let player = manager.currentPlayer,
+               manager.currentVideoMid == mid,
+               player.currentItem != nil {
+                // Show player
+                DetailAVPlayerView(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if shouldLoad {
+                // Loading — show thumbnail + spinner
+                thumbnailOrBlack
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
+            } else {
+                // Not selected — just show thumbnail
+                thumbnailOrBlack
+            }
+
+            // Buffering overlay
+            if manager.isBuffering && manager.currentVideoMid == mid {
+                Color.black.opacity(0.15)
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(2.0)
+                    .opacity(0.8)
+            }
+        }
+        .onAppear {
+            if shouldLoad {
+                manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
+            }
+        }
+        .onChange(of: shouldLoad) { _, newValue in
+            if newValue {
+                manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
+            } else if manager.currentVideoMid == mid {
+                manager.pause()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnailOrBlack: some View {
+        if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+            Image(uiImage: thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Color.black
+        }
+    }
+}
+
+// MARK: - Detail AVPlayerViewController Wrapper
+
+private struct DetailAVPlayerView: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = false
+        vc.videoGravity = .resizeAspect
+        vc.view.backgroundColor = .black
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player {
+            vc.player = player
+        }
+    }
+}
+
 @MainActor
 @available(iOS 16.0, *)
 struct TweetDetailView: View {
@@ -301,6 +633,9 @@ struct TweetDetailView: View {
     @State private var showBrowser = false
     @State private var selectedMediaIndex = 0
     @State private var showLoginSheet = false
+    @State private var showToast = false
+    @State private var toastMessage = ""
+    @State private var toastIsError = false
     @State private var pinnedTweets: [[String: Any]] = []
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
@@ -310,9 +645,15 @@ struct TweetDetailView: View {
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
 
-    // Scroll detection state for top navigation bar
-    @State private var isTopNavigationVisible = true
-    @State private var previousScrollOffset: CGFloat = 0
+    // Bottom navigation bar scroll tracking
+    @State private var isNavigationBarVisible = true
+    @State private var lastNotificationTime: Date?
+    private let notificationThrottleInterval: TimeInterval = 0.1 // 100ms throttle
+    @State private var bottomBounceDebouncer: Timer?
+    private let bottomBounceDebounceInterval: TimeInterval = 0.3 // 300ms debounce for bottom bounce
+    @State private var lastStateChangeTime: Date?
+    private let stateChangeCooldown: TimeInterval = 0.2 // 200ms cooldown after state changes
+    private let maxDeltaThreshold: CGFloat = 200.0 // Ignore deltas larger than this (programmatic scrolls)
 
     // Comments video playback coordinator
     @StateObject private var commentsVideoCoordinator = CommentsVideoPlaybackCoordinator()
@@ -390,8 +731,12 @@ struct TweetDetailView: View {
                 }
             } else {
                 VStack(spacing: 0) {
+                    ZStack(alignment: .top) {
                     ScrollView {
                         LazyVStack(spacing: 0) {
+                            // Fixed spacer for floating nav bar
+                            Color.clear.frame(height: 44)
+                            
                             // Main tweet section with deeper background
                             VStack(spacing: 0) {
                                 mediaSection
@@ -418,7 +763,7 @@ struct TweetDetailView: View {
                             }
                             .padding(.bottom, 8)
                             .background(Color(UIColor.secondarySystemBackground))
-                            
+
                             commentsListView
                                 .padding(.leading, -4)
                         }
@@ -430,23 +775,18 @@ struct TweetDetailView: View {
                     .refreshable {
                         await refreshTweetAndComments()
                     }
-            .simultaneousGesture(
-                DragGesture()
-                    .onChanged { value in
-                        let offset = value.translation.height
-                        handleScroll(offset: offset)
+
+                    // Floating navigation bar — pure UIKit, driven directly by KVO
+                    NavBarOverlay(onBack: { dismiss() })
+                        .frame(height: 44)
+                    
+                    // Bottom bar scroll tracker — placed outside ScrollView to properly find it
+                    BottomBarScrollTracker { offset, delta, isAtBottom in
+                        handleScrollOffsetChange(offset, delta: delta, isAtBottom: isAtBottom)
                     }
-                    .onEnded { _ in
-                        // When gesture ends, maintain current state for a brief period
-                        // to allow scroll inertia to settle naturally
-                        // Don't immediately change navigation state
-                        // Let the scroll view settle naturally
-                    }
-            )
-            .onAppear {
-                handleScroll(offset: 0)
-            }
-            
+                    .frame(width: 0, height: 0)
+                    } // ZStack
+
             // ReplyEditor as a component at the bottom
             if showReplyEditor {
                 ReplyEditorView(
@@ -460,16 +800,14 @@ struct TweetDetailView: View {
                     },
                     initialExpanded: shouldShowExpandedReply
                 )
-                .padding(.bottom, 48) // Add padding to avoid navigation bar
+                .padding(.bottom, isNavigationBarVisible ? 48 : 8) // Move down when tab bar is hidden
+                .animation(.easeInOut(duration: 0.25), value: isNavigationBarVisible)
             }
                 }
             }
         }
         .background(Color(.systemBackground))
-        .navigationTitle(NSLocalizedString("Tweet", comment: "Tweet detail screen title"))
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarHidden(!isTopNavigationVisible)
-        .animation(.easeInOut(duration: 0.3), value: isTopNavigationVisible)
+        .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(isPresented: $showBrowser) {
             MediaBrowserView(
                 tweet: displayTweet,
@@ -478,6 +816,17 @@ struct TweetDetailView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .overlay(alignment: .top) {
+            if showToast {
+                ToastView(
+                    message: toastMessage,
+                    type: toastIsError ? .error : .success
+                )
+                .padding(.top, 60)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.3), value: showToast)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
             if let deletedTweetId = notification.userInfo?["tweetId"] as? String ?? notification.object as? String,
@@ -515,9 +864,7 @@ struct TweetDetailView: View {
         }
         .onAppear {
 
-            // Ensure top navigation is visible when view appears
-            isTopNavigationVisible = true
-            print("DEBUG: [TweetDetailView] View appeared, top navigation set to visible")
+            print("DEBUG: [TweetDetailView] View appeared")
 
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
@@ -529,13 +876,26 @@ struct TweetDetailView: View {
             // Pass hasVideoAttachment so coordinator knows to suppress comment videos initially
             commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
 
+            // Rebuild video list on re-enter (deactivate clears it, onChange won't fire if count unchanged)
+            commentsVideoCoordinator.buildVideoList(from: comments)
+
+            // Ensure bottom navigation bar is visible when detail view appears
+            // Always post notification to ensure ContentView state is synced
+            isNavigationBarVisible = true
+            postNavigationVisibilityNotification(isVisible: true)
+            print("DEBUG: [TweetDetailView] onAppear - Set navigation bar to visible")
+
             // Detail view playback position is persisted independently (not seeded from feed positions).
         }
         .onChange(of: originalTweet) { _, _ in
             // Clear cache when originalTweet changes
             cachedDisplayTweet = nil
         }
-        .onDisappear {
+        .onChange(of: comments.count) { _, _ in
+            // Rebuild video list for fullscreen navigation when comments change
+            commentsVideoCoordinator.buildVideoList(from: comments)
+        }
+            .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
             print("DEBUG: [TweetDetailView] Cancelling image loads for tweet: \(displayTweet.mid)")
 
@@ -548,26 +908,27 @@ struct TweetDetailView: View {
             // Deactivate comments video playback coordinator
             commentsVideoCoordinator.deactivate()
             
-            // Reset top navigation visibility when view disappears
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isTopNavigationVisible = true
+            // Cancel bottom bounce debouncer
+            bottomBounceDebouncer?.invalidate()
+            bottomBounceDebouncer = nil
+            
+            // Restore bottom navigation bar visibility when leaving detail view
+            if !isNavigationBarVisible {
+                isNavigationBarVisible = true
+                postNavigationVisibilityNotification(isVisible: true)
             }
             
-            // Clean up timers and tasks
-            scrollUpdateTask?.cancel()
-            scrollUpdateTask = nil
-            
+            // Clean up timers
             refreshTimer?.invalidate()
             refreshTimer = nil
             
-            // Cancel any pending image loads to prevent memory leaks
+            // Cancel any pending IMAGE loads to prevent memory leaks.
+            // Only cancel image-type attachments — video/audio mids belong to
+            // SharedAssetCache/VideoStateCache, not GlobalImageLoadManager.
             if let attachments = displayTweet.attachments {
-                for attachment in attachments {
-                    // ✅ FIX: Use only mid as request ID (matching loadImageHighPriority above)
+                for attachment in attachments where attachment.type == .image {
                     let mainLoadId = attachment.mid
-
-                    print("DEBUG: [TweetDetailView] Cancelling load: \(mainLoadId)")
-
+                    print("DEBUG: [TweetDetailView] Cancelling image load: \(mainLoadId)")
                     GlobalImageLoadManager.shared.cancelLoad(id: mainLoadId)
                 }
             }
@@ -683,12 +1044,12 @@ struct TweetDetailView: View {
                             tweet: orig,
                             isPinned: false,
                             onTap: nil, // NavigationLink to quoted tweet detail
-                            backgroundColor: Color(.systemGray6).opacity(0.5),
+                            backgroundColor: Color(.systemGray6).opacity(0.35),
                             isEmbedded: true
                         )
-                        
                     }
                     .cornerRadius(8)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.systemGray4), lineWidth: 1))
                     .padding(.horizontal)
                     .padding(.top, (displayTweet.content?.isEmpty ?? true) ? 8 : 0)
                 } else {
@@ -702,13 +1063,25 @@ struct TweetDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(
+        TweetActionBarRepresentable(
             tweet: displayTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
             },
-            isInDetailView: true  // Tell TweetActionButtonsView we're in detail view context
+            onShowLogin: {
+                showLoginSheet = true
+            },
+            isInDetailView: true,
+            onShowToast: { message, isError in
+                toastMessage = message
+                toastIsError = isError
+                showToast = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    showToast = false
+                }
+            }
         )
+        .frame(height: 30)
         .padding(.leading, 16)
         .padding(.top, 8)
         .padding(.bottom, 4)
@@ -716,7 +1089,7 @@ struct TweetDetailView: View {
     }
     
     private var commentsListView: some View {
-        CommentListView<CommentVideoTrackingWrapper>(
+        CommentListView(
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
@@ -759,6 +1132,16 @@ struct TweetDetailView: View {
                     coordinator: commentsVideoCoordinator,
                     scrollCoordinateSpace: "commentsScroll"
                 )
+                .environment(\.videoListProvider, { videoMid, cellTweetId, attachmentIndex in
+                    let list = commentsVideoCoordinator.getVideoListForFullscreen()
+                    guard !list.isEmpty else { return nil }
+                    let startIndex = list.firstIndex(where: {
+                        $0.videoMid == videoMid && $0.cellTweetId == cellTweetId
+                    }) ?? list.firstIndex(where: {
+                        $0.videoMid == videoMid
+                    }) ?? 0
+                    return (list, startIndex)
+                })
             }
         )
     }
@@ -932,9 +1315,6 @@ struct TweetDetailView: View {
         }
     }
     
-    @State private var scrollUpdateTask: Task<Void, Never>?
-    @State private var lastStateChangeTime: Date = Date()
-
     /// Update main tweet video visibility for comment autoplay coordination
     private func updateMainVideoVisibility(geometry: GeometryProxy) {
         let frame = geometry.frame(in: .named("commentsScroll"))
@@ -957,62 +1337,100 @@ struct TweetDetailView: View {
 
         commentsVideoCoordinator.reportMainTweetVideoVisibility(isVisible: isVisible)
     }
-
-    private func handleScroll(offset: CGFloat) {
-        // Cancel any existing update task
-        scrollUpdateTask?.cancel()
+    
+    /// Handle scroll offset changes to show/hide bottom navigation bar
+    @MainActor
+    private func handleScrollOffsetChange(_ offset: CGFloat, delta: CGFloat, isAtBottom: Bool) {
+        // Threshold for scroll detection (prevents jittery behavior)
+        let scrollThreshold: CGFloat = 5.0
         
-        // Debounce scroll updates - only process after a short delay
-        let capturedOffset = offset
-        scrollUpdateTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 150_000_000) // 0.15 seconds
-            if !Task.isCancelled {
-                processScrollUpdate(offset: capturedOffset)
+        // Ignore very large deltas - these are likely programmatic scrolls from layout changes
+        if abs(delta) > maxDeltaThreshold {
+            return
+        }
+        
+        // Cooldown period after state changes to prevent feedback loops
+        if let lastChangeTime = lastStateChangeTime {
+            let timeSinceChange = Date().timeIntervalSince(lastChangeTime)
+            if timeSinceChange < stateChangeCooldown {
+                return
             }
+        }
+        
+        // Detect scroll direction
+        // When scrolling down: contentOffset.y increases (delta is positive)
+        // When scrolling up: contentOffset.y decreases (delta is negative)
+        let isScrollingDown = delta > scrollThreshold
+        let isScrollingUp = delta < -scrollThreshold
+        
+        // Cancel any pending bottom bounce debouncer if we're not at bottom or scrolling away
+        if !isAtBottom || isScrollingDown {
+            bottomBounceDebouncer?.invalidate()
+            bottomBounceDebouncer = nil
+        }
+        
+        // Update bottom navigation bar visibility based on scroll direction
+        if isScrollingDown && isNavigationBarVisible && offset > 0 {
+            // Scrolling down - hide bottom navigation bar (only if we've scrolled past the top)
+            bottomBounceDebouncer?.invalidate()
+            bottomBounceDebouncer = nil
+            isNavigationBarVisible = false
+            lastStateChangeTime = Date()
+            postNavigationVisibilityNotification(isVisible: false)
+        } else if isScrollingUp && !isNavigationBarVisible {
+            // Scrolling up - show bottom navigation bar
+            // If at bottom, use debouncer to prevent showing due to bounce effect
+            if isAtBottom {
+                // Cancel any existing debouncer
+                bottomBounceDebouncer?.invalidate()
+                // Set debouncer - only show nav bar if still scrolling up after delay
+                bottomBounceDebouncer = Timer.scheduledTimer(withTimeInterval: bottomBounceDebounceInterval, repeats: false) { timer in
+                    DispatchQueue.main.async {
+                        // Check if we're still at bottom - if so, don't show (it was just bounce)
+                        // The scroll observer will call this again if user continues scrolling up
+                    }
+                }
+                // Don't show nav bar when at bottom - prevents overlap with ReplyEditor
+                return
+            } else {
+                // Not at bottom, show immediately
+                bottomBounceDebouncer?.invalidate()
+                bottomBounceDebouncer = nil
+                isNavigationBarVisible = true
+                lastStateChangeTime = Date()
+                postNavigationVisibilityNotification(isVisible: true)
+            }
+        }
+        
+        // Reset to visible if at top of scroll view
+        if offset <= 0 && !isNavigationBarVisible {
+            bottomBounceDebouncer?.invalidate()
+            bottomBounceDebouncer = nil
+            isNavigationBarVisible = true
+            lastStateChangeTime = Date()
+            postNavigationVisibilityNotification(isVisible: true)
         }
     }
     
-    private func processScrollUpdate(offset: CGFloat) {
-        // Prevent rapid state changes - enforce minimum time between changes
-        let timeSinceLastChange = Date().timeIntervalSince(lastStateChangeTime)
-        let minTimeBetweenChanges: TimeInterval = 0.6 // Minimum 0.6 seconds between state changes
-        
-        // Calculate scroll direction and threshold
-        let scrollDelta = offset - previousScrollOffset
-        let scrollThreshold: CGFloat = 60 // Increased threshold for more stability
-        
-        // Determine scroll direction
-        let isScrollingDown = scrollDelta < -scrollThreshold
-        let isScrollingUp = scrollDelta > scrollThreshold
-        
-        // Determine if we should show top navigation
-        let shouldShowTopNavigation: Bool
-        
-        if offset >= 0 {
-            // Always show when at the top
-            shouldShowTopNavigation = true
-        } else if isScrollingDown && isTopNavigationVisible {
-            // Scrolling down and navigation is visible - hide it
-            shouldShowTopNavigation = false
-        } else if isScrollingUp && !isTopNavigationVisible {
-            // Scrolling up and navigation is hidden - show it
-            shouldShowTopNavigation = true
-        } else {
-            // Keep current state
-            shouldShowTopNavigation = isTopNavigationVisible
+    /// Post navigation visibility notification with throttling
+    private func postNavigationVisibilityNotification(isVisible: Bool) {
+        // Throttle notifications to prevent excessive posting during rapid scroll
+        let now = Date()
+        if let lastTime = lastNotificationTime, now.timeIntervalSince(lastTime) < notificationThrottleInterval {
+            return
         }
         
-        // Only update if the state actually changed AND enough time has passed
-        if shouldShowTopNavigation != isTopNavigationVisible && timeSinceLastChange >= minTimeBetweenChanges {
-            lastStateChangeTime = Date()
-            withAnimation(.easeInOut(duration: 0.3)) {
-                isTopNavigationVisible = shouldShowTopNavigation
-            }
-            print("[TweetDetailView] Top navigation visibility changed to: \(shouldShowTopNavigation)")
-        }
-        
-        previousScrollOffset = offset
+        lastNotificationTime = now
+        NotificationCenter.default.post(
+            name: .navigationVisibilityChanged,
+            object: nil,
+            userInfo: [
+                "isVisible": isVisible,
+                "hideHeight": true // TweetDetailView wants height 0 when hidden
+            ]
+        )
     }
+
 }
 
 // MARK: - Comment Video Tracking Wrapper

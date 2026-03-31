@@ -490,6 +490,7 @@
 "Received" = "Received";
 "Yesterday" = "Yesterday";
 "%@ %@" = "%@ %@";
+"No more comments" = "No more comments";
 "No more messages" = "No more messages";
 "No more tweets" = "No more tweets";
 

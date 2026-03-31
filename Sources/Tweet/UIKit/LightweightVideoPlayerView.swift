@@ -12,13 +12,19 @@ import SwiftUI
 /// UIKit video player view that directly uses AVPlayerLayer
 /// This bypasses AVPlayerViewController and its control UI overhead
 class LightweightVideoPlayerView: UIView {
-    
+
     private var playerLayer: AVPlayerLayer?
     private var playerItemObserver: NSKeyValueObservation?
+    private var readyForDisplayObserver: NSKeyValueObservation?
+
+    /// Called once when the player layer renders its first frame (black screen → video visible)
+    var onReadyForDisplay: (() -> Void)?
+
     private var player: AVPlayer? {
         didSet {
             playerLayer?.player = player
             setupPlayerObserver()
+            observeReadyForDisplay()
         }
     }
     
@@ -62,8 +68,39 @@ class LightweightVideoPlayerView: UIView {
         }
     }
     
+    /// Start observing isReadyForDisplay. Fires `onReadyForDisplay` **once** — either
+    /// immediately (if already ready) or when the layer first renders a frame.
+    /// The callback is consumed after firing to prevent re-entrant loops
+    /// (setPlayer → observeReadyForDisplay → callback → setPlayer …).
+    func observeReadyForDisplay() {
+        readyForDisplayObserver?.invalidate()
+        readyForDisplayObserver = nil
+
+        guard let playerLayer else { return }
+
+        // Already rendering — fire immediately (one-shot: nil out before calling)
+        if playerLayer.isReadyForDisplay {
+            let cb = onReadyForDisplay
+            onReadyForDisplay = nil
+            cb?()
+            return
+        }
+
+        readyForDisplayObserver = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async {
+                self?.readyForDisplayObserver?.invalidate()
+                self?.readyForDisplayObserver = nil
+                let cb = self?.onReadyForDisplay
+                self?.onReadyForDisplay = nil
+                cb?()
+            }
+        }
+    }
+
     deinit {
         playerItemObserver?.invalidate()
+        readyForDisplayObserver?.invalidate()
     }
     
     override func layoutSubviews() {
@@ -75,8 +112,17 @@ class LightweightVideoPlayerView: UIView {
         playerLayer?.frame = bounds
     }
     
+    /// Whether the player layer is currently rendering video frames.
+    var isLayerReadyForDisplay: Bool {
+        playerLayer?.isReadyForDisplay ?? false
+    }
+
     func setPlayer(_ player: AVPlayer?) {
         self.player = player
+    }
+
+    func setVideoGravity(_ gravity: AVLayerVideoGravity) {
+        playerLayer?.videoGravity = gravity
     }
 }
 

@@ -648,47 +648,37 @@ struct EmbeddedTweetView: View, Equatable {
     }
     
     private var embeddedContent: some View {
-        HStack(alignment: .top, spacing: 8) {
-            // Use Group to force re-evaluation when tweet.author changes (@Published)
-            Group {
-                if let user = tweet.author {
-                    NavigationLink(value: user) {
-                        Avatar(user: user, size: 42)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                } else {
-                    // Placeholder (same size as Avatar: 42 for embedded tweets)
-                    Circle()
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(width: 42, height: 42)
-                }
-            }
-            // STABILITY: Fixed avatar size prevents layout shifts
-            .frame(width: 40, height: 40)
-            
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    TweetItemHeaderView(tweet: tweet)
-                    Spacer()
-                }
-                
-                TweetItemBodyView(
-                    tweet: tweet,
-                    enableTap: false,
-                    isVisible: isVisible,
-                    isEmbedded: isEmbedded,
-                    cellTweetId: quotingTweetId,  // For embedded videos, use quoting tweet's ID
-                    onTweetBodyTap: {
-                        // Navigate to embedded tweet detail when body is tapped
-                        if let callback = onTap {
-                            callback(tweet)
+        VStack(alignment: .leading, spacing: 4) {
+            // Row 1: avatar + header
+            HStack(alignment: .center, spacing: 6) {
+                Group {
+                    if let user = tweet.author {
+                        NavigationLink(value: user) {
+                            Avatar(user: user, size: 32)
                         }
+                        .buttonStyle(PlainButtonStyle())
+                    } else {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 32, height: 32)
                     }
-                )
-                // STABILITY: Layout priority for embedded tweet body
-                .layoutPriority(1)
+                }
+                .frame(width: 32, height: 32)
+
+                TweetItemHeaderView(tweet: tweet)
+                Spacer()
             }
-            // STABILITY: Fixed size maintains consistent vertical spacing
+
+            // Row 2: body (full width, flush with card edge)
+            TweetItemBodyView(
+                tweet: tweet,
+                enableTap: false,
+                isVisible: isVisible,
+                isEmbedded: isEmbedded,
+                cellTweetId: quotingTweetId,
+                onTweetBodyTap: onTap.map { callback in { callback(tweet) } }
+            )
+            .layoutPriority(1)
             .fixedSize(horizontal: false, vertical: true)
         }
         .padding(8)

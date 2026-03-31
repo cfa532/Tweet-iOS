@@ -36,7 +36,6 @@ class Tweet: Identifiable, Codable, ObservableObject {
                               favorites: favorites, favoriteCount: favoriteCount, bookmarkCount: bookmarkCount,
                               retweetCount: retweetCount, commentCount: commentCount, attachments: attachments,
                               isPrivate: isPrivate, downloadable: downloadable)
-        newInstance.cachedHeight = TweetHeightCache.shared.getHeight(for: mid)
         instances[mid] = newInstance
         return newInstance
     }
@@ -124,6 +123,11 @@ class Tweet: Identifiable, Codable, ObservableObject {
     // TRANSIENT: Cached rendered height (not persisted)
     // Used for scroll stability - once a tweet is rendered, we remember its exact height
     var cachedHeight: CGFloat?
+
+    // TRANSIENT: Cached attributed text for feed display (not persisted)
+    // Built once in calculateTweetHeight(), reused in TweetBodyUIView.configure()
+    var cachedContentAttributedString: NSAttributedString?
+    var cachedContentWidth: CGFloat = 0
     
     /// Update all attachments to observe the current author's baseUrl
     private func updateAttachmentsAuthor() {

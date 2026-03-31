@@ -14,6 +14,38 @@ extension View {
 }
 
 @available(iOS 16.0, *)
+private struct FeedStyleTruncatedTextView: UIViewRepresentable {
+    let content: String
+
+    func makeUIView(context: Context) -> UILabel {
+        let label = UILabel()
+        label.numberOfLines = TweetBodyUIView.maxContentLines
+        label.lineBreakMode = .byTruncatingTail
+        label.font = TweetBodyUIView.contentFont
+        label.textColor = .label
+        return label
+    }
+
+    func updateUIView(_ uiView: UILabel, context: Context) {
+        let width = uiView.bounds.width > 0 ? uiView.bounds.width : UIScreen.main.bounds.width - 32
+        uiView.attributedText = TweetBodyUIView.makeContentAttributedString(
+            content: content,
+            availableWidth: width
+        )
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UILabel, context: Context) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width - 32
+        uiView.attributedText = TweetBodyUIView.makeContentAttributedString(
+            content: content,
+            availableWidth: width
+        )
+        let fitSize = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: ceil(fitSize.height))
+    }
+}
+
+@available(iOS 16.0, *)
 struct TweetItemBodyView: View {
     @ObservedObject var tweet: Tweet
     var enableTap: Bool = false
@@ -69,16 +101,9 @@ struct TweetItemBodyView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                // PERFORMANCE FIX: Explicitly set truncationMode to avoid expensive optimal line breaking
-                // Without truncationMode, SwiftUI/CoreText uses _NSOptimalLineBreaker which has O(n²)
-                // complexity and causes 20-30ms hangs during text layout. Explicit truncation is 10x+ faster.
-                Text(content)
-                    .font(.system(size: 16))
+                FeedStyleTruncatedTextView(content: content)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(7)
-                    .truncationMode(.tail)
                     .if(enableTap) { $0.contentShape(Rectangle()) }
-                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, 2)
                     .if(onTweetBodyTap != nil) { view in
                         view.onTapGesture {

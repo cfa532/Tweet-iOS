@@ -47,10 +47,13 @@ class SimpleVideoPlayerStateHelper: ObservableObject {
             return
         }
         
-        // Get the player from DetailVideoManager
+        // Get the player from DetailVideoManager.
+        // This guard may fail during normal deactivation: TweetDetailView.onDisappear calls
+        // deactivate() → clearCurrentVideo() (which saves state and nils the player) before
+        // DetailMediaCell.onDisappear posts this notification. That's fine — the state was
+        // already saved by clearCurrentVideo().
         guard let player = DetailVideoManager.shared.currentPlayer,
               DetailVideoManager.shared.currentVideoMid == videoMid else {
-            print("⚠️ [StateHelper] No player found for videoMid: \(videoMid)")
             return
         }
         

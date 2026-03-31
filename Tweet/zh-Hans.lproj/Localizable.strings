@@ -119,8 +119,8 @@
 "Fans" = "粉丝";
 "Followings" = "关注";
 "Tweets" = "推文";
-"Bookmarks" = "书签";
-"Favorites" = "收藏";
+"Bookmarks" = "收藏";
+"Favorites" = "点赞";
 "Pinned" = "置顶";
 "username" = "用户名";
 "Noone" = "无";
@@ -128,8 +128,8 @@
 "Followings@%@" = "%@的关注";
 "Your Fans" = "你的粉丝";
 "Your Followings" = "你的关注";
-"Your Bookmarks" = "你的书签";
-"Your Favorites" = "你的收藏";
+"Your Bookmarks" = "我的收藏";
+"Your Favorites" = "我的点赞";
 
 // MARK: - Tweet Actions
 "Show more" = "显示更多";
@@ -234,10 +234,10 @@
 "To post comments, you need to log in to your account." = "要发布评论，您需要登录到您的账户。";
 "Login" = "登录";
 "Cancel" = "取消";
-"Failed to remove favorite. Please try again." = "取消收藏失败，请重试。";
-"Failed to add favorite. Please try again." = "添加收藏失败，请重试。";
-"Failed to remove bookmark. Please try again." = "删除书签失败，请重试。";
-"Failed to add bookmark. Please try again." = "添加书签失败，请重试。";
+"Failed to remove favorite. Please try again." = "取消点赞失败，请重试。";
+"Failed to add favorite. Please try again." = "点赞失败，请重试。";
+"Failed to remove bookmark. Please try again." = "取消收藏失败，请重试。";
+"Failed to add bookmark. Please try again." = "添加收藏失败，请重试。";
 "Failed to load comments." = "加载评论失败。";
 "Failed to load more comments." = "加载更多评论失败。";
 "Avatar updated successfully!" = "头像更新成功！";
@@ -292,8 +292,8 @@
 "Unfollow" = "取关";
 "Like" = "点赞";
 "Unlike" = "取消点赞";
-"Bookmark" = "书签";
-"Remove Bookmark" = "移除书签";
+"Bookmark" = "收藏";
+"Remove Bookmark" = "取消收藏";
 
 // MARK: - Media
 "Photo" = "照片";
@@ -402,10 +402,10 @@
 
 // MARK: - Toast Messages
 "Failed to toggle following status" = "切换关注状态失败";
-"Failed to add favorite" = "添加到收藏失败";
-"Failed to remove favorite" = "从收藏中移除失败";
-"Failed to add bookmark" = "添加到书签失败";
-"Failed to remove bookmark" = "从书签中移除失败";
+"Failed to add favorite" = "点赞失败";
+"Failed to remove favorite" = "取消点赞失败";
+"Failed to add bookmark" = "收藏失败";
+"Failed to remove bookmark" = "取消收藏失败";
 
 // MARK: - Terms of Service
 "Terms of Service" = "服务条款";
@@ -482,6 +482,7 @@
 "Received" = "已接收";
 "Yesterday" = "昨天";
 "%@ %@" = "%@ %@";
+"No more comments" = "没有更多评论了";
 "No more messages" = "没有更多消息了";
 "No more tweets" = "没有更多推文了";
 

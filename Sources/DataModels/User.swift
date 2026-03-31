@@ -9,12 +9,34 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     
     // MARK: - Properties
     @Published var mid: MimeiId
-    @Published var baseUrl: URL?
+    @Published var baseUrl: URL? {
+        didSet {
+            let userId = mid
+            Task { @MainActor in
+                if baseUrl != oldValue {
+                    if userId == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
     @Published var writableUrl: URL?
     @Published var name: String?
     @Published var username: String?
     @Published var password: String?
-    @Published var avatar: MimeiId? // MimeiId
+    @Published var avatar: MimeiId? {
+        didSet {
+            let userId = mid
+            Task { @MainActor in
+                if avatar != oldValue {
+                    if userId == HproseInstance.shared.appUser.mid {
+                        TweetCacheManager.shared.saveUser(self)
+                    }
+                }
+            }
+        }
+    }
     @Published var email: String?
     @Published var profile: String?
     @Published var timestamp: Date
@@ -155,6 +177,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     @Published var hostIds: [MimeiId]? // List of MimeiId
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
+    @Published var agentPublicKey: String? // Public key for AI agent authentication
     
     public var hproseClient: HproseClient? {
         get {
@@ -165,7 +188,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             let client = HproseInstance.shared.clientPool.getClientByUrl(for: baseUrl.absoluteString)
             
             // Configure timeout for regular operations (15 seconds - fast fail for bad servers)
-            client.timeout = 15000  // 15 seconds in milliseconds (detect slow servers quickly)
+            client.timeout = 15  // 15 seconds (detect slow/dead servers quickly)
             
             return client
         }
@@ -181,7 +204,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             
             // Configure timeout for upload operations (10 seconds to detect bad servers)
             // Note: Actual file upload uses URLSession with 10-minute timeout (see HproseInstance.swift:4628)
-            client.timeout = 10000  // 10 seconds - fast fail for slow servers, URLSession handles actual upload
+            client.timeout = 10  // 10 seconds - fast fail for slow servers, URLSession handles actual upload
             
             return client
         }
@@ -397,6 +420,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.cloudDrivePort = user.cloudDrivePort
             instance.domainToShare = user.domainToShare
             instance.hostIds = user.hostIds
+            instance.publicKey = user.publicKey
+            instance.agentPublicKey = user.agentPublicKey
             
             // when user argument is from cache, do not use its baseUrl.
             if (shouldUpdateBaseUrl) {
@@ -435,6 +460,8 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
                 instance.cloudDrivePort = user.cloudDrivePort
                 instance.domainToShare = user.domainToShare
                 instance.hostIds = user.hostIds
+                instance.publicKey = user.publicKey
+                instance.agentPublicKey = user.agentPublicKey
                 
                 // CRITICAL: Never overwrite baseUrl from user parameter - it might be from hostId[0]
                 // baseUrl should only be set via getProviderIP(user.mid) in HproseInstance
@@ -472,7 +499,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case mid, baseUrl, writableUrl, name, username, password, avatar, email, profile, timestamp, lastLogin, cloudDrivePort, domainToShare
         case tweetCount, followingCount, followersCount, bookmarksCount, favoritesCount, commentsCount
-        case hostIds, publicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
+        case hostIds, publicKey, agentPublicKey, fansList, followingList, bookmarkedTweets, favoriteTweets, repliedTweets, commentsList, topTweets, userBlackList
     }
     
     // Required initializer for Codable
@@ -502,6 +529,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         
         hostIds = try container.decodeIfPresent([String].self, forKey: .hostIds)
         publicKey = try container.decodeIfPresent(String.self, forKey: .publicKey)
+        agentPublicKey = try container.decodeIfPresent(String.self, forKey: .agentPublicKey)
         
         fansList = try container.decodeIfPresent([String].self, forKey: .fansList)
         followingList = try container.decodeIfPresent([String].self, forKey: .followingList)
@@ -543,6 +571,7 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         
         try container.encodeIfPresent(hostIds, forKey: .hostIds)
         try container.encodeIfPresent(publicKey, forKey: .publicKey)
+        try container.encodeIfPresent(agentPublicKey, forKey: .agentPublicKey)
         
         try container.encodeIfPresent(fansList, forKey: .fansList)
         try container.encodeIfPresent(followingList, forKey: .followingList)

@@ -244,9 +244,9 @@ struct CommentDetailView: View {
     private var commentContent: some View {
         Group {
             if let content = comment.content, !content.isEmpty {
-                Text(content)
-                    .font(.title3)
+                SelectableTextView(text: content)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal)
                     .padding(.vertical, 8)
             }
@@ -254,14 +254,15 @@ struct CommentDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionButtonsView(
+        TweetActionBarRepresentable(
             tweet: comment,
-            parentTweet: parentTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
             },
-            isInDetailView: true
+            isInDetailView: true,
+            parentTweet: parentTweet
         )
+        .frame(height: 30)
         .padding(.horizontal)
         .padding(.top, 8)
         .padding(.bottom, 4)

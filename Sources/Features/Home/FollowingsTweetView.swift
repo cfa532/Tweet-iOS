@@ -5,28 +5,28 @@ struct FollowingsTweetView: View {
     let onAvatarTap: (User) -> Void
     let onTweetTap: (Tweet) -> Void
     let onScroll: ((CGFloat, CGFloat) -> Void)?  // (offset, delta)
+    let onShowLogin: (() -> Void)?
+    let onShowToast: ((String, Bool) -> Void)?
     
     
     var body: some View {
-        TweetListView<TweetItemView>(
+        TweetListView(
             title: "",
             tweets: $viewModel.tweets,
             tweetFetcher: { page, size, isFromCache in
                 let startTime = Date()
                 if isFromCache {
                     print("📋 [CACHE LOAD] Fetching page \(page) from cache")
-                    // Main feed tweets are cached under appUser.mid
-                    // No authorId filtering - show all tweets from cache (private tweets filtered out)
                     let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(
                         for: viewModel.hproseInstance.appUser.mid, page: page, pageSize: size, currentUserId: viewModel.hproseInstance.appUser.mid, isProfileView: false)
-                    
+
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
                     let validCount = cachedTweets.compactMap{$0}.count
                     print("✅ [CACHE LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms - rendering immediately!")
                     return cachedTweets
                 } else {
                     print("🌐 [SERVER LOAD] Fetching page \(page) from server")
-                    let serverTweets = await viewModel.fetchTweets(page: page, pageSize: size)
+                    let serverTweets = try await viewModel.fetchTweets(page: page, pageSize: size)
                     let elapsed = Date().timeIntervalSince(startTime) * 1000
                     let validCount = serverTweets.compactMap{$0}.count
                     print("✅ [SERVER LOAD] Returned \(validCount) tweets in \(String(format: "%.1f", elapsed))ms")
@@ -38,11 +38,11 @@ struct FollowingsTweetView: View {
                 TweetListNotification(
                     name: .newTweetCreated,
                     key: "tweet",
-                    shouldAccept: { tweet in 
+                    shouldAccept: { tweet in
                         print("DEBUG: [FollowingsTweetView] newTweetCreated notification received - tweetId: \(tweet.mid), isPrivate: \(tweet.isPrivate ?? false)")
                         return !(tweet.isPrivate ?? false)
                     },
-                    action: { tweet in 
+                    action: { tweet in
                         print("DEBUG: [FollowingsTweetView] Calling handleNewTweet for: \(tweet.mid)")
                         viewModel.handleNewTweet(tweet)
                     }
@@ -61,28 +61,13 @@ struct FollowingsTweetView: View {
                 )
             ],
             onScroll: { offset, delta in
-                onScroll?(offset, delta) // Pass both offset and delta to parent
+                onScroll?(offset, delta)
             },
-            rowView: { tweet in
-                TweetItemView(
-                    tweet: tweet,
-                    isPinned: false,
-                    isInProfile: false,
-                    showDeleteButton: true,
-                    isLastItem: viewModel.tweets.last?.mid == tweet.mid,  // Hide separator on last tweet
-                    onAvatarTap: { user in
-                        onAvatarTap(user)
-                    },
-                    onTap: { tweet in
-                        onTweetTap(tweet)
-                    },
-                    onRemove: { tweetId in
-                        if let idx = viewModel.tweets.firstIndex(where: { $0.id == tweetId }) {
-                            viewModel.tweets.remove(at: idx)
-                        }
-                    }
-                )
-            }
+            allowDeleteAll: true,
+            onAvatarTap: { user in onAvatarTap(user) },
+            onTweetTap: { tweet in onTweetTap(tweet) },
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast
         )
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
             // Handle blocked user tweets removal
@@ -110,8 +95,7 @@ struct FollowingsTweetView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in
-            // TweetListView already handles initial loading with correct pageSize
-            // No need to manually trigger here
+            // TweetListView.onAppear handles reloading when returning to an empty feed
         }
         .onAppear {
             onScroll?(0, 0)

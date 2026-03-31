@@ -280,16 +280,16 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: "arrow.2.squarepath")
-                        .frame(width: 20)
-                    Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
-                        .font(.system(.subheadline, design: .monospaced))
-                        .frame(width: 28, alignment: .leading)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.2.squarepath")
+                            .frame(width: 24)
+                        Text((tweet.retweetCount ?? 0) > 0 ? formatCount(tweet.retweetCount!) : "")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .frame(width: 28, alignment: .leading)
+                    }
+                    .frame(width: 52, alignment: .leading)
                 }
-                .frame(width: 52, alignment: .leading)
-            }
             Spacer(minLength: 12)
             // Like button
             DebounceButton(
@@ -297,9 +297,9 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableHaptic: true
             ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
+                    if hproseInstance.appUser.isGuest {
+                        handleGuestAction()
+                    } else {
                     Task {
                         // Store current state before any changes
                         let wasFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] ?? false
@@ -368,16 +368,16 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
-                        .frame(width: 20)
-                    Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
-                        .font(.system(.subheadline, design: .monospaced))
-                        .frame(width: 28, alignment: .leading)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
+                            .frame(width: 20)
+                        Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .frame(width: 28, alignment: .leading)
+                    }
+                    .frame(width: 52, alignment: .leading)
                 }
-                .frame(width: 52, alignment: .leading)
-            }
             Spacer(minLength: 12)
             // Bookmark button
             DebounceButton(
@@ -385,9 +385,9 @@ struct TweetActionButtonsView: View {
                 enableAnimation: true,
                 enableHaptic: true
             ) {
-                if hproseInstance.appUser.isGuest {
-                    handleGuestAction()
-                } else {
+                    if hproseInstance.appUser.isGuest {
+                        handleGuestAction()
+                    } else {
                     Task {
                         // Store current state before any changes
                         let wasBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] ?? false
@@ -456,18 +456,19 @@ struct TweetActionButtonsView: View {
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
-                        .frame(width: 20)
-                    Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
-                        .font(.system(.subheadline, design: .monospaced))
-                        .frame(width: 28, alignment: .leading)
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
+                            .frame(width: 20)
+                        Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
+                            .font(.system(.subheadline, design: .monospaced))
+                            .frame(width: 28, alignment: .leading)
+                    }
+                    .frame(width: 52, alignment: .leading)
                 }
-                .frame(width: 52, alignment: .leading)
-            }
             // Share button
             Spacer(minLength: 16)
+
             ZStack {
                 DebounceButton(
                     cooldownDuration: 0.3,
@@ -476,6 +477,9 @@ struct TweetActionButtonsView: View {
                 ) {
                     // Show spinner immediately when button is tapped (synchronous on main thread)
                     isPreparingShare = true
+
+                    // Capture the current video frame BEFORE overlay pauses the video
+                    captureVideoFrameBeforePause()
 
                     // CRITICAL FIX: Register overlay BEFORE presenting sheet to ensure proper timing
                     // This ensures videos know they're covered before willResignActiveNotification fires
@@ -549,7 +553,9 @@ struct TweetActionButtonsView: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
+            .padding(.trailing, 4)
         }
+        .frame(height: 30)
         .foregroundColor(.themeSecondaryText)
         .sheet(isPresented: $showCommentCompose) {
             if let commentsVM = commentsVM {
@@ -565,31 +571,28 @@ struct TweetActionButtonsView: View {
                 OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionButtonsView")
             }
         }
-        .background(
-            ShareSheet(
-                shareData: $shareSheetItems,
-                onPresented: {
+        .sheet(item: $shareSheetItems, onDismiss: {
+            attachmentPreviewImage = nil
+            isPreparingShare = false
+            print("DEBUG: [SHARE] Sheet dismissed, state cleared")
+            onShareVisibilityChange?(false)
+
+            OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
+                NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
+                print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
+            }
+        }) { sheetData in
+            ShareSheetView(items: sheetData.items)
+                .onAppear {
                     isPreparingShare = false
                     onShareVisibilityChange?(true)
                     print("DEBUG: [SHARE] Share sheet appeared, hiding spinner")
-                },
-                onDismiss: {
-                    attachmentPreviewImage = nil
-                    isPreparingShare = false
-                    print("DEBUG: [SHARE] Sheet dismissed, state cleared")
-                    onShareVisibilityChange?(false)
-
-                    OverlayVisibilityCoordinator.shared.endOverlay(id: "shareSheet", source: "TweetActionButtonsView (onDismiss)")
-
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 300_000_000)
-                        OverlayVisibilityCoordinator.shared.verifyConsistency(source: "TweetActionButtonsView share dismiss")
-                        NotificationCenter.default.post(name: .reloadVisibleVideosOnly, object: nil)
-                        print("DEBUG: [SHARE] Posted reloadVisibleVideosOnly after share sheet dismissed")
-                    }
                 }
-            )
-        )
+        }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
@@ -636,19 +639,15 @@ struct TweetActionButtonsView: View {
     
     private func shareActivityItems() -> [Any] {
         var items: [Any] = [createCustomShareItem()]
-        print("DEBUG: [SHARE] Creating share items, preview image: \(attachmentPreviewImage != nil ? "YES" : "NO")")
+
+        // Add image as separate item — WeChat ignores LPLinkMetadata and needs
+        // a standalone image to show the correct preview in its share sheet.
         if let previewImage = attachmentPreviewImage {
             items.append(CustomShareImage(image: previewImage))
-            print("DEBUG: [SHARE] Added CustomShareImage to share items")
-        } else {
-            // No attachment preview - use app icon as default
-            if let appIcon = UIImage(named: "ic_splash") {
-                items.append(CustomShareImage(image: appIcon))
-                print("DEBUG: [SHARE] Added app icon as default image (no attachments)")
-            } else {
-                print("DEBUG: [SHARE] No preview image to share and app icon not found")
-            }
+        } else if let appIcon = UIImage(named: "ic_splash_r") {
+            items.append(CustomShareImage(image: appIcon))
         }
+
         return items
     }
     
@@ -828,14 +827,91 @@ struct TweetActionButtonsView: View {
         return nil
     }
     
+    /// Synchronously capture the current video frame before overlay pauses playback.
+    /// Uses the AVPlayerItemVideoOutput already attached by MediaCellUIView.
+    /// Sets attachmentPreviewImage directly so the async load is skipped.
+    private func captureVideoFrameBeforePause() {
+        // Resolve the source tweet (retweet → original)
+        let sourceTweet: Tweet
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            sourceTweet = tweet
+        } else if let originalTweetId = tweet.originalTweetId,
+                  let original = Tweet.getInstance(for: originalTweetId),
+                  let attachments = original.attachments, !attachments.isEmpty {
+            sourceTweet = original
+        } else {
+            return
+        }
+
+        guard let firstAttachment = sourceTweet.attachments?.first,
+              (firstAttachment.type == .video || firstAttachment.type == .hls_video) else { return }
+
+        let mediaID = firstAttachment.mid
+
+        // For detail view, capture from DetailVideoManager
+        if isInDetailView,
+           let player = DetailVideoManager.shared.currentPlayer,
+           DetailVideoManager.shared.currentVideoMid == mediaID {
+            if let frame = Self.syncCaptureFrame(from: player) {
+                VideoLastFrameCache.shared.set(frame, for: mediaID)
+                attachmentPreviewImage = cropToCenter(image: frame)
+            }
+            return
+        }
+
+        // For fullscreen, capture from FullScreenVideoManager
+        if isFullScreen,
+           let player = FullScreenVideoManager.shared.singletonPlayer {
+            if let frame = Self.syncCaptureFrame(from: player) {
+                VideoLastFrameCache.shared.set(frame, for: mediaID)
+                attachmentPreviewImage = cropToCenter(image: frame)
+            }
+            return
+        }
+
+        // For feed, get player from SharedAssetCache
+        guard let player = SharedAssetCache.shared.getCachedPlayer(for: mediaID) else { return }
+        if let frame = Self.syncCaptureFrame(from: player) {
+            VideoLastFrameCache.shared.set(frame, for: mediaID)
+            attachmentPreviewImage = cropToCenter(image: frame)
+        }
+    }
+
+    /// Synchronously grab the current frame from a player's existing video output.
+    private static func syncCaptureFrame(from player: AVPlayer) -> UIImage? {
+        guard let playerItem = player.currentItem,
+              playerItem.status == .readyToPlay,
+              !playerItem.loadedTimeRanges.isEmpty else { return nil }
+
+        // Find the AVPlayerItemVideoOutput already attached by MediaCellUIView
+        guard let videoOutput = playerItem.outputs.compactMap({ $0 as? AVPlayerItemVideoOutput }).first else { return nil }
+
+        let currentTime = playerItem.currentTime()
+        guard let pixelBuffer = videoOutput.copyPixelBuffer(forItemTime: currentTime, itemTimeForDisplay: nil) else { return nil }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0, width < 10000, height < 10000 else { return nil }
+
+        return VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 720)
+    }
+
     private func generateVideoPreviewImage(for url: URL, isHLS: Bool = false) async -> UIImage? {
         print("DEBUG: [SHARE] Starting video preview generation for: \(url.absoluteString), isHLS: \(isHLS)")
         let startTime = Date()
-        
+
         // Extract mediaID from URL
         let mediaID = extractMediaID(from: url)
         print("DEBUG: [SHARE] Extracted mediaID: \(mediaID)")
-        
+
+        // Check VideoLastFrameCache — populated by captureVideoFrameBeforePause()
+        // at the moment the share button was tapped, before the overlay paused videos.
+        if let cachedFrame = VideoLastFrameCache.shared.image(for: mediaID) {
+            let elapsed = Date().timeIntervalSince(startTime)
+            print("DEBUG: [SHARE] Using VideoLastFrameCache frame for \(mediaID) in \(String(format: "%.2f", elapsed))s")
+            return cropToCenter(image: cachedFrame)
+        }
+
         // If we're in fullscreen, try to use the fullscreen singleton player first
         if isFullScreen,
            let fullPlayer = FullScreenVideoManager.shared.singletonPlayer,
@@ -1122,9 +1198,8 @@ struct TweetActionButtonsView: View {
             }
         } // swiftlint:disable:this line_length
         
-        // Try capturing at different time positions: 0.1s, 0.3s, 0.5s from the requested time
-        // This increases the chance of finding a valid frame, especially for HLS videos
-        let retryTimes = [0.1, 0.3, 0.5]
+        // Try capturing at exact position first, then with small offsets
+        let retryTimes = [0.0, 0.1, 0.3, 0.5]
         
         for retryOffset in retryTimes {
             // CRITICAL FIX: Check if player item was replaced during capture
@@ -1555,70 +1630,20 @@ struct TweetActionButtonsView: View {
     }
 }
 
-/// Presents UIActivityViewController directly via UIKit to avoid
-/// SwiftUI .sheet safe-area corruption that causes blank space under the tab bar.
-struct ShareSheet: UIViewControllerRepresentable {
-    @Binding var shareData: ShareSheetData?
-    let onPresented: () -> Void
-    let onDismiss: () -> Void
+/// SwiftUI wrapper for UIActivityViewController
+struct ShareSheetView: UIViewControllerRepresentable {
+    let items: [Any]
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        let vc = UIViewController()
-        vc.view.isHidden = true
-        vc.view.frame = .zero
-        return vc
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(
+            activityItems: items,
+            applicationActivities: nil
+        )
+        return controller
     }
 
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        context.coordinator.onPresented = onPresented
-        context.coordinator.onDismiss = onDismiss
-        context.coordinator.dataBinding = $shareData
-
-        if shareData != nil, !context.coordinator.isPresenting {
-            context.coordinator.present(items: shareData!.items)
-        }
-    }
-
-    class Coordinator {
-        var isPresenting = false
-        var dataBinding: Binding<ShareSheetData?>?
-        var onPresented: (() -> Void)?
-        var onDismiss: (() -> Void)?
-
-        func present(items: [Any]) {
-            isPresenting = true
-
-            let activityVC = UIActivityViewController(
-                activityItems: items,
-                applicationActivities: nil
-            )
-
-            activityVC.completionWithItemsHandler = { [weak self] _, _, _, _ in
-                guard let self else { return }
-                self.isPresenting = false
-                DispatchQueue.main.async {
-                    self.dataBinding?.wrappedValue = nil
-                    self.onDismiss?()
-                }
-            }
-
-            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                  let rootVC = windowScene.windows.first?.rootViewController else {
-                isPresenting = false
-                return
-            }
-
-            var topVC = rootVC
-            while let presented = topVC.presentedViewController {
-                topVC = presented
-            }
-
-            topVC.present(activityVC, animated: true) { [weak self] in
-                self?.onPresented?()
-            }
-        }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+        // No updates needed
     }
 }
 
@@ -1681,7 +1706,13 @@ class CustomShareItem: NSObject, UIActivityItemSource {
     @available(iOS 13.0, *)
     func activityViewControllerLinkMetadata(_ activityViewController: UIActivityViewController) -> LPLinkMetadata? {
         let metadata = LPLinkMetadata()
-        
+
+        // Extract URL from shareText for metadata — required for share sheet to display icon
+        if let range = shareText.range(of: "http", options: .backwards),
+           let url = URL(string: String(shareText[range.lowerBound...])) {
+            metadata.url = url
+        }
+
         print("DEBUG: [SHARE] Creating link metadata for tweet: \(tweet.mid)")
         print("DEBUG: [SHARE] Tweet title: '\(tweet.title ?? "nil")'")
         print("DEBUG: [SHARE] Tweet content: '\(tweet.content ?? "nil")'")
@@ -1710,10 +1741,19 @@ class CustomShareItem: NSObject, UIActivityItemSource {
             metadata.iconProvider = NSItemProvider(object: previewImage)
             metadata.imageProvider = NSItemProvider(object: previewImage)
             print("DEBUG: [SHARE] Link metadata created with preview image")
-        } else if let appIcon = UIImage(named: "ic_splash") {
+        } else if let appIcon = UIImage(named: "ic_splash_r") {
             // No attachments - use app icon as default
-            metadata.iconProvider = NSItemProvider(object: appIcon)
-            metadata.imageProvider = NSItemProvider(object: appIcon)
+            // Render onto opaque background — LPLinkMetadata won't display transparent images
+            let opaqueIcon: UIImage
+            let size = appIcon.size
+            UIGraphicsBeginImageContextWithOptions(size, true, appIcon.scale)
+            UIColor.black.setFill()
+            UIRectFill(CGRect(origin: .zero, size: size))
+            appIcon.draw(in: CGRect(origin: .zero, size: size))
+            opaqueIcon = UIGraphicsGetImageFromCurrentImageContext() ?? appIcon
+            UIGraphicsEndImageContext()
+            metadata.iconProvider = NSItemProvider(object: opaqueIcon)
+            metadata.imageProvider = NSItemProvider(object: opaqueIcon)
             print("DEBUG: [SHARE] Link metadata created with app icon fallback (no attachments)")
         }
         

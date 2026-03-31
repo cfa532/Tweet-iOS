@@ -184,7 +184,7 @@ struct RegistrationView: View {
                 }
                 .padding()
             }
-            .navigationBarItems(trailing: Button(NSLocalizedString("Close", comment: "Close button")) { 
+            .navigationBarItems(trailing: Button(NSLocalizedString("Close", comment: "Close button")) {
                 if hasUnsavedChanges {
                     showExitConfirmation = true
                 } else {

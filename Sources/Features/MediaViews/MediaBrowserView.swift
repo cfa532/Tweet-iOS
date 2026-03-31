@@ -443,6 +443,7 @@ struct MediaBrowserView: View {
                 videoIndex: index,
                 mediaType: attachment.type,
                 aspectRatio: attachment.aspectRatio,
+                shouldAutoPlay: shouldAutoPlay,
                 onUserInteraction: {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showControls = true
@@ -927,11 +928,12 @@ struct SingletonVideoPlayerView: View {
     let videoIndex: Int
     let mediaType: MediaType
     let aspectRatio: Float?
+    let shouldAutoPlay: Bool
     let onUserInteraction: () -> Void
     
     @ObservedObject private var manager = FullScreenVideoManager.shared
     @State private var hasAttemptedReload = false
-    
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -947,13 +949,21 @@ struct SingletonVideoPlayerView: View {
                             }
                         )
                 } else {
-                    // Loading placeholder or broken player - attempt to reload
-                    Color.black
+                    // No player, no item, or different video — show lastframe as placeholder.
+                    // This covers the load-failed case (currentVideoMid set to nil, currentItem nil)
+                    // and the initial loading state before the first item is attached.
+                    if let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        Color.black
+                    }
                     ProgressView()
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
                 }
-                
+
                 // Show buffering spinner when waiting for data (non-interactive overlay)
                 if manager.isBuffering && manager.currentVideoMid == mid {
                     ZStack {
@@ -968,38 +978,31 @@ struct SingletonVideoPlayerView: View {
                 }
             }
             .onAppear {
-                    // If player is nil, broken (no currentItem), or doesn't match current video, reload it
-                    // CRITICAL: After background release, singletonPlayer may exist but currentItem is nil
-                    let isPlayerBroken = manager.singletonPlayer != nil && manager.singletonPlayer?.currentItem == nil
-                    if manager.singletonPlayer == nil || isPlayerBroken || manager.currentVideoMid != mid {
-                        if !hasAttemptedReload {
-                            hasAttemptedReload = true
-                            if isPlayerBroken {
-                                print("🔧 [FULLSCREEN] Player exists but broken (no currentItem) - reloading video \(mid)")
-                            }
-                            // Reload the video
-                            manager.loadVideo(
-                                url: url,
-                                mid: mid,
-                                tweetId: tweetId,
-                                cellTweetId: cellTweetId,
-                                videoIndex: videoIndex,
-                                mediaType: mediaType
-                            )
-                        }
+                    // Only load video for the view the user actually tapped (shouldAutoPlay).
+                    // SwiftUI's TabView preloads neighboring pages — without this guard, a
+                    // non-autoplay neighbor's onAppear fires loadVideo() with the wrong mid,
+                    // overriding the correct video the user tapped.
+                    guard shouldAutoPlay else { return }
+                    if !hasAttemptedReload {
+                        hasAttemptedReload = true
+                        manager.loadVideo(
+                            url: url,
+                            mid: mid,
+                            tweetId: tweetId,
+                            cellTweetId: cellTweetId,
+                            videoIndex: videoIndex,
+                            mediaType: mediaType
+                        )
                     }
                 }
                 .onChange(of: manager.currentVideoMid) { _, newMid in
-                    // Reset reload flag when video changes OR when player is cleared (nil)
-                    // This allows retry when loading fails and clears state
-                    if newMid == mid || newMid == nil {
+                    // Reset reload flag when player is cleared (nil) so a failed load can retry.
+                    if newMid == nil {
                         hasAttemptedReload = false
                     }
                 }
                 .onChange(of: manager.singletonPlayer?.currentItem) { _, newItem in
-                    // CRITICAL: Reset reload flag when player item is cleared
-                    // This handles the case where loadVideo fails and clears the player
-                    // Allowing the view to retry loading
+                    // Reset reload flag when player item is cleared so a failed load can retry.
                     if newItem == nil && manager.currentVideoMid == nil {
                         hasAttemptedReload = false
                     }

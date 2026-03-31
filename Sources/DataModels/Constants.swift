@@ -17,7 +17,7 @@ enum Constants {
     // Cache Configuration - RESTORED to original limits for better performance
     static let MAX_ASSET_CACHE_SIZE = 40
     static let MAX_PLAYER_CACHE_SIZE = 10 // number of players to cache (players released on background)
-    static let MAX_CONCURRENT_PLAYER_CREATIONS = 4 // Research-backed: iPhone supports 4 connections/host by default, matches iOS network best practices
+    static let MAX_CONCURRENT_PLAYER_CREATIONS = 2 // Conservative: 1 slot reserved for visible content, preloads only when idle
     static let CACHE_EXPIRATION_SECONDS: TimeInterval = 300 // 5 minutes - reasonable balance of memory vs performance
     
     // File Upload Limits
@@ -25,10 +25,9 @@ enum Constants {
     
     // Video Processing Thresholds
     static let PROGRESSIVE_VIDEO_THRESHOLD_BYTES: Int64 = 32 * 1024 * 1024  // 32MB
-    static let HLS_ROUTE_2_THRESHOLD_BYTES: Int64 = 128 * 1024 * 1024  // 128MB
     
     // Image Loading Timeout
-    static let IMAGE_LOAD_TIMEOUT: TimeInterval = 10.0  // 10 seconds for all image loading requests
+    static let IMAGE_LOAD_TIMEOUT: TimeInterval = 15.0  // 15 seconds for all image loading requests
 }
 
 enum UserContentType: String {
