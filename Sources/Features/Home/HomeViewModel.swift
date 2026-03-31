@@ -147,6 +147,11 @@ struct HomeView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogout)) { _ in
+            // Pop all navigation immediately so profile/detail views are dismissed before
+            // initialize() triggers state changes that would update their table views.
+            if navigationPath.count > 0 {
+                navigationPath.removeLast(navigationPath.count)
+            }
             Task {
                 // Don't clear cache on logout - cache persists per user and is cleared periodically or manually
                 await MainActor.run {
