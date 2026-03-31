@@ -365,9 +365,16 @@ struct MediaCell: View, Equatable, MediaCellDelegate {
         // This allows the video to continue from where it was playing in the cell
         // Get the current time directly from the cached player (more accurate than cached playback info)
         if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid) {
-            let currentTime = cachedState.player.currentTime()
-            let wasPlaying = cachedState.player.rate > 0
-            
+            let player = cachedState.player
+            let isNearEnd: Bool = {
+                guard let item = player.currentItem else { return false }
+                let duration = item.duration
+                guard duration.isValid, !duration.isIndefinite, duration.seconds > 0 else { return false }
+                return duration.seconds - player.currentTime().seconds <= 3.0
+            }()
+            let currentTime = isNearEnd ? .zero : player.currentTime()
+            let wasPlaying = player.rate > 0
+
             PersistentVideoStateManager.shared.saveState(
                 videoMid: attachment.mid,
                 currentTime: currentTime,

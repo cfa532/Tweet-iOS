@@ -1934,7 +1934,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Try to save directly from our player first
         if let player = player, player.currentItem != nil {
-            let currentTime = player.currentTime()
+            let isNearEnd = isVideoAtEnd(player, tolerance: 3.0)
+            let currentTime = isNearEnd ? .zero : player.currentTime()
             let wasPlaying = player.rate > 0
             PersistentVideoStateManager.shared.saveState(
                 videoMid: attachment.mid,
@@ -1943,7 +1944,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 context: .fullScreen
             )
         } else if let cachedState = VideoStateCache.shared.getCachedState(for: attachment.mid) {
-            let currentTime = cachedState.player.currentTime()
+            let isNearEnd = isVideoAtEnd(cachedState.player, tolerance: 3.0)
+            let currentTime = isNearEnd ? .zero : cachedState.player.currentTime()
             let wasPlaying = cachedState.player.rate > 0
             PersistentVideoStateManager.shared.saveState(
                 videoMid: attachment.mid,
