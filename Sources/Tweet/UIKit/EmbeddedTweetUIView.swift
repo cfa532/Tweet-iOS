@@ -59,19 +59,21 @@ class EmbeddedTweetUIView: UIView {
         return v
     }()
 
-    // Content wrapper (avatar + header + body)
+    // Content wrapper (two rows: header row + body row)
     private let contentStack: UIStackView = {
         let sv = UIStackView()
-        sv.axis = .horizontal
-        sv.alignment = .top
-        sv.spacing = 8
+        sv.axis = .vertical
+        sv.alignment = .fill
+        sv.spacing = 4
         return sv
     }()
 
-    private let textStack: UIStackView = {
+    // Row 1: avatar + header side by side
+    private let headerRow: UIStackView = {
         let sv = UIStackView()
-        sv.axis = .vertical
-        sv.spacing = 0
+        sv.axis = .horizontal
+        sv.alignment = .center
+        sv.spacing = 6
         return sv
     }()
 
@@ -100,19 +102,20 @@ class EmbeddedTweetUIView: UIView {
     }
 
     private func setupViews() {
-        backgroundColor = .systemGray4.withAlphaComponent(0.6)
+        backgroundColor = .systemGray5.withAlphaComponent(0.45)
         layer.cornerRadius = 8
         clipsToBounds = true
 
         // Prevent parent stack from stretching this view
         setContentHuggingPriority(.required, for: .vertical)
 
-        // Content layout: [Avatar | [Header, Body]]
-        textStack.addArrangedSubview(headerView)
-        textStack.addArrangedSubview(bodyView)
+        // Row 1: [avatar | header]
+        // Row 2: body (full width)
+        headerRow.addArrangedSubview(avatarView)
+        headerRow.addArrangedSubview(headerView)
 
-        contentStack.addArrangedSubview(avatarView)
-        contentStack.addArrangedSubview(textStack)
+        contentStack.addArrangedSubview(headerRow)
+        contentStack.addArrangedSubview(bodyView)
 
         addSubview(contentStack)
         addSubview(placeholderView)
@@ -125,10 +128,10 @@ class EmbeddedTweetUIView: UIView {
         NSLayoutConstraint.activate([
             contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
 
-            avatarView.widthAnchor.constraint(equalToConstant: 40),
-            avatarView.heightAnchor.constraint(equalToConstant: 40),
+            avatarView.widthAnchor.constraint(equalToConstant: 32),
+            avatarView.heightAnchor.constraint(equalToConstant: 32),
 
             placeholderView.topAnchor.constraint(equalTo: topAnchor),
             placeholderView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -183,7 +186,7 @@ class EmbeddedTweetUIView: UIView {
 
         // Configure subviews
         if let author = tweet.author {
-            avatarView.configure(user: author, size: 40)
+            avatarView.configure(user: author, size: 32)
         }
         headerView.configure(tweet: tweet)
         bodyView.videoCoordinator = videoCoordinator
