@@ -103,6 +103,8 @@
 
 // MARK: - Settings Screen
 "Account" = "アカウント";
+"Server IP" = "サーバーIP";
+"Not connected" = "未接続";
 "App Settings" = "アプリ設定";
 "Clear Media Cache" = "メディアキャッシュをクリア";
 "About" = "アプリについて";
@@ -449,6 +451,25 @@
 
 // MARK: - Media Grid
 "+%d more" = "+%d個追加";
+
+// MARK: - AI Agent Access
+"AI Agent Access" = "AIエージェントアクセス";
+"Agent Token" = "エージェントトークン";
+"Token configured" = "トークン設定済み";
+"Not configured" = "未設定";
+"What is an Agent Token?" = "エージェントトークンとは？";
+"An agent token allows AI agents to post on your behalf without knowing your password. The token contains a cryptographic key that proves the agent is authorized by you." = "エージェントトークンを使用すると、AIエージェントがパスワードを知らずにあなたの代わりに投稿できます。トークンには、エージェントがあなたによって承認されていることを証明する暗号化キーが含まれています。";
+"Security Notice" = "セキュリティ通知";
+"Keep your token secret! Anyone with this token can post as you. If compromised, generate a new token to revoke access." = "トークンを秘密にしてください！このトークンを持つ誰でもあなたとして投稿できます。漏洩した場合は、新しいトークンを生成してアクセスを取り消してください。";
+"Your Agent Token" = "あなたのエージェントトークン";
+"Copy Token" = "トークンをコピー";
+"Token Copied" = "トークンがコピーされました";
+"The agent token has been copied to your clipboard." = "エージェントトークンがクリップボードにコピーされました。";
+"Regenerate Token (Revokes Old)" = "トークンを再生成（古いものを無効化）";
+"Generate Token" = "トークンを生成";
+"Regenerate Token?" = "トークンを再生成しますか？";
+"Regenerate" = "再生成";
+"This will revoke the existing token. Any AI agents using the old token will no longer be able to post as you." = "これにより既存のトークンが無効になります。古いトークンを使用しているAIエージェントはあなたとして投稿できなくなります。";
 
 // MARK: - Profile Menu
 "Delete Account" = "アカウント削除";

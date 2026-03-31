@@ -14,13 +14,13 @@ struct SettingsView: View {
     @State private var isCleaningCache = false
     @State private var showCacheCleanedAlert = false
     
-    // Agent Token states
-    @State private var showAgentTokenSheet = false
-    @State private var agentToken: String = ""
-    @State private var isGeneratingToken = false
-    @State private var showTokenCopiedAlert = false
-    @State private var showRevokeConfirmation = false
-    
+    // Account action states
+    @State private var showLogoutConfirmation = false
+    @State private var showDeleteAccountConfirmation = false
+    @State private var isDeletingAccount = false
+    @State private var deleteAccountError: String?
+    @State private var showDeleteAccountError = false
+
     private var currentServerIP: String {
         // Extract IP from appUser's baseUrl
         if let baseUrl = hproseInstance.appUser.baseUrl?.absoluteString {
@@ -71,30 +71,32 @@ struct SettingsView: View {
                     .disabled(isCleaningCache)
                 }
                 
-                // Agent Token Section - only show for logged-in users
                 if !hproseInstance.appUser.isGuest {
-                    Section(header: Text(LocalizedStringKey("AI Agent Access"))) {
+                    Section(header: Text(LocalizedStringKey("Account"))) {
                         Button {
-                            showAgentTokenSheet = true
+                            showLogoutConfirmation = true
+                        } label: {
+                            Text(LocalizedStringKey("Logout"))
+//                                .foregroundColor(.red)
+                        }
+
+                        Button {
+                            showDeleteAccountConfirmation = true
                         } label: {
                             HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(LocalizedStringKey("Agent Token"))
-                                        .foregroundColor(.primary)
-                                    Text(hproseInstance.appUser.agentPublicKey != nil 
-                                         ? LocalizedStringKey("Token configured") 
-                                         : LocalizedStringKey("Not configured"))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                                Text(LocalizedStringKey("Delete Account"))
+//                                    .foregroundColor(.red)
                                 Spacer()
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.secondary)
+                                if isDeletingAccount {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                }
                             }
                         }
+                        .disabled(isDeletingAccount)
                     }
                 }
-                
+
                 Section(header: Text(LocalizedStringKey("About"))) {
                     HStack {
                         Text(LocalizedStringKey("Version"))
@@ -113,15 +115,6 @@ struct SettingsView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showAgentTokenSheet) {
-                AgentTokenView(
-                    agentToken: $agentToken,
-                    isGenerating: $isGeneratingToken,
-                    showCopiedAlert: $showTokenCopiedAlert,
-                    showRevokeConfirmation: $showRevokeConfirmation,
-                    hproseInstance: hproseInstance
-                )
-            }
             .navigationTitle(NSLocalizedString("Settings", comment: "Settings screen title"))
             .navigationBarItems(trailing: Button(NSLocalizedString("Done", comment: "Done button")) {
                 dismiss()
@@ -131,9 +124,68 @@ struct SettingsView: View {
             } message: {
                 Text(LocalizedStringKey("All caches, users, and tweets have been cleared successfully."))
             }
+            .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
+                Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
+                Button(NSLocalizedString("Logout", comment: "Logout button"), role: .destructive) {
+                    Task { await handleLogout() }
+                }
+            } message: {
+                Text(NSLocalizedString("This action cannot be undone.", comment: "Logout confirmation message"))
+            }
+            .alert(NSLocalizedString("Are you sure you want to delete your account?", comment: "Delete account confirmation alert title"), isPresented: $showDeleteAccountConfirmation) {
+                Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
+                Button(NSLocalizedString("Delete Account", comment: "Delete account button"), role: .destructive) {
+                    Task { await handleDeleteAccount() }
+                }
+            } message: {
+                Text(NSLocalizedString("This action cannot be undone.", comment: "Delete account confirmation message"))
+            }
+            .alert(LocalizedStringKey("Error"), isPresented: $showDeleteAccountError) {
+                Button(LocalizedStringKey("OK")) { }
+            } message: {
+                Text(deleteAccountError ?? NSLocalizedString("Unknown error", comment: "Fallback error message"))
+            }
         }
     }
     
+    private func handleLogout() async {
+        await hproseInstance.logout()
+        await MainActor.run {
+            NotificationCenter.default.post(name: .userDidLogout, object: nil)
+            dismiss()
+        }
+    }
+
+    private func handleDeleteAccount() async {
+        isDeletingAccount = true
+        do {
+            let result = try await hproseInstance.deleteAccount()
+            if let success = result["success"] as? Bool, success {
+                TweetCacheManager.shared.clearAllCache()
+                ImageCacheManager.shared.clearAllCache()
+                await hproseInstance.logout()
+                await MainActor.run {
+                    NotificationCenter.default.post(name: .userDidLogout, object: nil)
+                    isDeletingAccount = false
+                    dismiss()
+                }
+            } else {
+                let message = result["message"] as? String ?? "Unknown error occurred"
+                await MainActor.run {
+                    deleteAccountError = message
+                    showDeleteAccountError = true
+                    isDeletingAccount = false
+                }
+            }
+        } catch {
+            await MainActor.run {
+                deleteAccountError = ErrorMessageHelper.userFriendlyMessage(from: error)
+                showDeleteAccountError = true
+                isDeletingAccount = false
+            }
+        }
+    }
+
     private func cleanupCache() {
         print("DEBUG: [Settings] Starting cache cleanup with spinner")
         isCleaningCache = true
@@ -319,7 +371,7 @@ struct AgentTokenView: View {
             .alert(LocalizedStringKey("Error"), isPresented: $showError) {
                 Button(LocalizedStringKey("OK")) { }
             } message: {
-                Text(errorMessage ?? "Unknown error")
+                Text(errorMessage ?? NSLocalizedString("Unknown error", comment: "Fallback error message"))
             }
         }
     }

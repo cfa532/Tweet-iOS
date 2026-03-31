@@ -43,6 +43,11 @@ struct ProfileEditView: View {
     @State private var originalDomainToShare: String? = nil
     @State private var avatarUpdateTrigger = 0 // Force avatar view update
     @State private var showImageCropper = false
+    @State private var showAgentTokenSheet = false
+    @State private var agentToken: String = ""
+    @State private var isGeneratingToken = false
+    @State private var showTokenCopiedAlert = false
+    @State private var showRevokeConfirmation = false
     @EnvironmentObject private var hproseInstance: HproseInstance
 
     enum Field: Hashable {
@@ -251,6 +256,33 @@ struct ProfileEditView: View {
                     .onTapGesture { focusedField = .shareDomain }
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey("AI Agent Access"))
+                    .font(.caption)
+                    .foregroundColor(.themeText)
+                Button {
+                    showAgentTokenSheet = true
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(LocalizedStringKey("Agent Token"))
+                                .foregroundColor(.primary)
+                            Text(hproseInstance.appUser.agentPublicKey != nil
+                                 ? LocalizedStringKey("Token configured")
+                                 : LocalizedStringKey("Not configured"))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                }
+            }
+
             if let errorMessage = errorMessage {
                 Text(errorMessage)
                     .foregroundColor(.red)
@@ -288,6 +320,15 @@ struct ProfileEditView: View {
         }
         .navigationBarItems(trailing: closeButton)
         .overlay(toastOverlay)
+        .sheet(isPresented: $showAgentTokenSheet) {
+            AgentTokenView(
+                agentToken: $agentToken,
+                isGenerating: $isGeneratingToken,
+                showCopiedAlert: $showTokenCopiedAlert,
+                showRevokeConfirmation: $showRevokeConfirmation,
+                hproseInstance: hproseInstance
+            )
+        }
         .onAppear(perform: loadInitialData)
         .onChange(of: password) { _, _ in checkForChanges() }
         .onChange(of: confirmPassword) { _, _ in checkForChanges() }

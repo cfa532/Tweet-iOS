@@ -49,9 +49,7 @@ struct ProfileView: View {
     }
     
     @State private var isFollowing: Bool = false
-    @State private var showLogoutConfirmation = false
-    @State private var showDeleteAccountConfirmation = false
-    
+
     // Scroll detection state
     @State private var isNavigationVisible = true
     
@@ -65,26 +63,6 @@ struct ProfileView: View {
             }
             .fullScreenCover(isPresented: $showChatScreen) {
                 ChatScreen(receiptId: user.mid)
-            }
-            .alert(NSLocalizedString("Are you sure you want to logout?", comment: "Logout confirmation alert title"), isPresented: $showLogoutConfirmation) {
-                Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
-                Button(NSLocalizedString("Logout", comment: "Logout button"), role: .destructive) {
-                    Task {
-                        await handleLogout()
-                    }
-                }
-            } message: {
-                Text(NSLocalizedString("This action cannot be undone.", comment: "Logout confirmation message"))
-            }
-            .alert(NSLocalizedString("Are you sure you want to delete your account?", comment: "Delete account confirmation alert title"), isPresented: $showDeleteAccountConfirmation) {
-                Button(NSLocalizedString("Cancel", comment: "Cancel button"), role: .cancel) { }
-                Button(NSLocalizedString("Delete Account", comment: "Delete account button"), role: .destructive) {
-                    Task {
-                        await handleDeleteAccount()
-                    }
-                }
-            } message: {
-                Text(NSLocalizedString("This action cannot be undone.", comment: "Delete account confirmation message"))
             }
     }
     
@@ -351,19 +329,17 @@ struct ProfileView: View {
     
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .navigationBarTrailing) {
-            HStack(spacing: 12) {
-                if !isAppUser {
+        if !isAppUser {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 12) {
                     Button {
                         showChatScreen = true
                     } label: {
                         Image(systemName: "message")
                             .foregroundColor(.blue)
                     }
-                }
-                
-                Menu {
-                    if !isAppUser {
+
+                    Menu {
                         Button(role: .destructive) {
                             Task {
                                 await handleBlockUser()
@@ -371,28 +347,14 @@ struct ProfileView: View {
                         } label: {
                             Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                         }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .rotationEffect(.degrees(90))
+                            .foregroundColor(.primary)
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    
-                    if isAppUser {
-                        Button(role: .destructive) {
-                            showLogoutConfirmation = true
-                        } label: {
-                            Label(NSLocalizedString("Logout", comment: "Logout menu item"), systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                        
-                        Button(role: .destructive) {
-                            showDeleteAccountConfirmation = true
-                        } label: {
-                            Label(NSLocalizedString("Delete Account", comment: "Delete account menu item"), systemImage: "trash")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .rotationEffect(.degrees(90))
-                        .foregroundColor(.primary)
-                        .font(.system(size: 16, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
                 }
             }
         }
@@ -806,64 +768,7 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Logout Handling
-    private func handleLogout() async {
-        // Use the same logout logic as Settings
-        await hproseInstance.logout()
-        await MainActor.run {
-            NotificationCenter.default.post(name: .userDidLogout, object: nil)
-            
-            // Show success message
-            showToastMessage(NSLocalizedString("Logged out successfully", comment: "Logout success message"), type: .success)
-            
-            // Call the onLogout callback if provided
-            if let onLogout = onLogout {
-                onLogout()
-            }
-        }
-    }
-    
-    // MARK: - Delete Account Handling
-    private func handleDeleteAccount() async {
-        do {
-            // Call the backend to delete the account
-            let result = try await hproseInstance.deleteAccount()
-            
-            if let success = result["success"] as? Bool, success {
-                // Clear all cached data
-                TweetCacheManager.shared.clearAllCache()
-                ImageCacheManager.shared.clearAllCache()
-                
-                // Use the same logout logic as Settings to reset the app state
-                await hproseInstance.logout()
-                
-                await MainActor.run {
-                    // Show success message first
-                    showToastMessage(NSLocalizedString("Account deleted successfully", comment: "Account deletion success message"), type: .success)
-                    
-                    NotificationCenter.default.post(name: .userDidLogout, object: nil)
-                    
-                    // Call the onLogout callback if provided
-                    if let onLogout = onLogout {
-                        onLogout()
-                    }
-                }
-            } else {
-                await MainActor.run {
-                    // Handle failure case
-                    let errorMessage = result["message"] as? String ?? "Unknown error occurred"
-                    showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), errorMessage), type: .error)
-                }
-            }
-            
-        } catch {
-            // Show error message
-            await MainActor.run {
-                showToastMessage(String(format: NSLocalizedString("Failed to delete account: %@", comment: "Delete account error message"), ErrorMessageHelper.userFriendlyMessage(from: error)), type: .error)
-            }
-        }
-    }
-    
+
 }
 
 enum UserListType {

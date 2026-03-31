@@ -106,6 +106,8 @@
 
 // MARK: - Settings Screen
 "Account" = "账户";
+"Server IP" = "服务器IP";
+"Not connected" = "未连接";
 "App Settings" = "应用设置";
 "Clear Media Cache" = "清除媒体缓存";
 "About" = "关于";
@@ -548,6 +550,25 @@
 "Discard Changes" = "丢弃更改";
 "Continue Editing" = "继续编辑";
 "You have unsaved changes. Are you sure you want to exit without saving?" = "您有未保存的更改。确定要退出而不保存吗？";
+
+// MARK: - AI Agent Access
+"AI Agent Access" = "AI代理访问";
+"Agent Token" = "代理令牌";
+"Token configured" = "令牌已配置";
+"Not configured" = "未配置";
+"What is an Agent Token?" = "什么是代理令牌？";
+"An agent token allows AI agents to post on your behalf without knowing your password. The token contains a cryptographic key that proves the agent is authorized by you." = "代理令牌允许AI代理在不知道您密码的情况下代表您发布内容。令牌包含一个证明代理已获得您授权的加密密钥。";
+"Security Notice" = "安全提示";
+"Keep your token secret! Anyone with this token can post as you. If compromised, generate a new token to revoke access." = "请保管好您的令牌！拥有此令牌的任何人都可以以您的身份发布内容。如果泄露，请生成新令牌以撤销访问权限。";
+"Your Agent Token" = "您的代理令牌";
+"Copy Token" = "复制令牌";
+"Token Copied" = "令牌已复制";
+"The agent token has been copied to your clipboard." = "代理令牌已复制到剪贴板。";
+"Regenerate Token (Revokes Old)" = "重新生成令牌（撤销旧令牌）";
+"Generate Token" = "生成令牌";
+"Regenerate Token?" = "重新生成令牌？";
+"Regenerate" = "重新生成";
+"This will revoke the existing token. Any AI agents using the old token will no longer be able to post as you." = "这将撤销现有令牌。使用旧令牌的AI代理将无法再以您的身份发布内容。";
 
 // MARK: - Profile Menu
 "Delete Account" = "删除账户";

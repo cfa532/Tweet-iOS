@@ -106,6 +106,8 @@
 
 // MARK: - Settings Screen
 "Account" = "Account";
+"Server IP" = "Server IP";
+"Not connected" = "Not connected";
 "App Settings" = "App Settings";
 "Clear Media Cache" = "Clear Media Cache";
 "About" = "About";
@@ -114,6 +116,25 @@
 "Cache Cleared" = "Cache Cleared";
 "Logout" = "Logout";
 "Dark Mode" = "Dark Mode";
+
+// MARK: - AI Agent Access
+"AI Agent Access" = "AI Agent Access";
+"Agent Token" = "Agent Token";
+"Token configured" = "Token configured";
+"Not configured" = "Not configured";
+"What is an Agent Token?" = "What is an Agent Token?";
+"An agent token allows AI agents to post on your behalf without knowing your password. The token contains a cryptographic key that proves the agent is authorized by you." = "An agent token allows AI agents to post on your behalf without knowing your password. The token contains a cryptographic key that proves the agent is authorized by you.";
+"Security Notice" = "Security Notice";
+"Keep your token secret! Anyone with this token can post as you. If compromised, generate a new token to revoke access." = "Keep your token secret! Anyone with this token can post as you. If compromised, generate a new token to revoke access.";
+"Your Agent Token" = "Your Agent Token";
+"Copy Token" = "Copy Token";
+"Token Copied" = "Token Copied";
+"The agent token has been copied to your clipboard." = "The agent token has been copied to your clipboard.";
+"Regenerate Token (Revokes Old)" = "Regenerate Token (Revokes Old)";
+"Generate Token" = "Generate Token";
+"Regenerate Token?" = "Regenerate Token?";
+"Regenerate" = "Regenerate";
+"This will revoke the existing token. Any AI agents using the old token will no longer be able to post as you." = "This will revoke the existing token. Any AI agents using the old token will no longer be able to post as you.";
 
 // MARK: - Profile Menu
 "Delete Account" = "Delete Account";
