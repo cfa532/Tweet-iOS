@@ -18,6 +18,7 @@ private struct ContentHeightPreferenceKey: PreferenceKey {
 struct UserListView: View {
     // MARK: - Properties
     let title: String
+    let userId: String // Profile owner whose baseUrl we watch for refresh
     let userFetcher: @Sendable (Int, Int) async throws -> [String] // Returns user IDs
     let onFollowToggle: ((User) async -> Void)?
     let onUserTap: ((User) -> Void)?
@@ -45,12 +46,14 @@ struct UserListView: View {
     // MARK: - Initialization
     init(
         title: String,
+        userId: String,
         userFetcher: @escaping @Sendable (Int, Int) async throws -> [String],
         navigationPath: Binding<NavigationPath>,
         onFollowToggle: ((User) async -> Void)? = nil,
         onUserTap: ((User) -> Void)? = nil
     ) {
         self.title = title
+        self.userId = userId
         self.userFetcher = userFetcher
         self._navigationPath = navigationPath
         self.onFollowToggle = onFollowToggle
@@ -64,9 +67,22 @@ struct UserListView: View {
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         Color.clear.frame(height: 0).id("top")
-                        ForEach(displayedUserIds, id: \.self) { userId in
+                        if let errorMessage = errorMessage, displayedUserIds.isEmpty, !isLoading {
+                            VStack(spacing: 12) {
+                                Text(errorMessage)
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                                Button(NSLocalizedString("Retry", comment: "Retry button")) {
+                                    Task { await refreshUsers() }
+                                }
+                                .font(.subheadline)
+                            }
+                            .padding()
+                        }
+                        ForEach(displayedUserIds, id: \.self) { rowUserId in
                             UserRowView(
-                                userId: userId,
+                                userId: rowUserId,
                                 cancellationToken: cancellationToken,
                                 onFollowToggle: onFollowToggle,
                                 onTap: { selectedUser in
@@ -76,14 +92,14 @@ struct UserListView: View {
                                     // Remove failed user from both lists
                                     displayedUserIds.removeAll { $0 == failedUserId }
                                     allUserIds.removeAll { $0 == failedUserId }
-                                    
+
                                     // Try to load the next user to fill the gap
                                     Task {
                                         await loadNextUserToFillGap()
                                     }
                                 }
                             )
-                            .id(userId)
+                            .id(rowUserId)
                         }
                         if isLoading {
                             ProgressView()
@@ -145,6 +161,18 @@ struct UserListView: View {
         .onReceive(NotificationCenter.default.publisher(for: .popToRoot)) { _ in
             dismiss()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
+            // ProfileView refreshes the profile owner's baseUrl in a background task when it appears.
+            // If that refresh completes while we're showing an error or still spinning (race with
+            // the user tapping followers/following before the refresh finished), retry automatically.
+            guard let updatedUserId = notification.userInfo?["userId"] as? String,
+                  updatedUserId == userId,
+                  !isLoading,
+                  !isLoadingMore,
+                  errorMessage != nil || displayedUserIds.isEmpty else { return }
+            errorMessage = nil
+            Task { await refreshUsers() }
+        }
         .onDisappear {
             // Cancel any ongoing tasks when view disappears
             refreshTask?.cancel()
@@ -162,6 +190,7 @@ struct UserListView: View {
         // Create a new refresh task
         refreshTask = Task {
             isLoading = true
+            errorMessage = nil
             currentPage = 0
             hasMoreUsers = true
             do {

@@ -318,6 +318,7 @@ struct UserListDestinationView: View {
     var body: some View {
         UserListView(
             title: userListTitle(for: destination),
+            userId: destination.userId,
             userFetcher: { page, size in
                 // Only fetch all IDs once when page is 0
                 if page == 0 {
