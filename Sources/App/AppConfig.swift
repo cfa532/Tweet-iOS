@@ -32,6 +32,8 @@ struct AppConfig {
         }
     }()
     
+    // appId when web application's router hisotry is creatWebHasHistory, which allows
+    // IP address to be used in the place of domain name.
     static let appIdHash: String = {
         switch BuildConfiguration.current {
         case .debug:
