@@ -1480,9 +1480,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // If playback already started before status reached readyToPlay,
                     // reveal player layer now (safe point) instead of relying on an
                     // earlier .playing callback that may have fired while still unknown.
+                    // Also stop the spinner: requestPlaybackStartIfNeeded may have started
+                    // it while waiting for statusKVO, but since rate > 0 the rate==0 guard
+                    // at firstReadyTransition skips requestPlaybackStartIfNeeded, leaving
+                    // the spinner running forever.
                     if let player = self.player,
                        player.timeControlStatus == .playing,
                        (self.videoCellState == .playing || self.videoCellState == .playerReady) {
+                        self.loadingSpinner.stopAnimating()
                         if self.videoPlayerView.isLayerReadyForDisplay {
                             self.imageView.isHidden = true
                         } else {
