@@ -200,13 +200,57 @@ final class HproseInstance: ObservableObject {
         }
     }
     
+    /// If the transport layer returned a JSON object as a string, parse it so v2 unwrapping works.
+    private static func jsonObjectIfEncodedAsString(_ value: Any?) -> Any? {
+        guard let s = value as? String,
+              let data = s.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) else { return value }
+        return obj
+    }
+    
+    /// `NSDictionary` / JSON sometimes fail to cast directly to `[String: Any]`; normalize for parsing.
+    private static func asStringKeyedDictionary(_ value: Any?) -> [String: Any]? {
+        if let d = value as? [String: Any] { return d }
+        if let d = value as? NSDictionary {
+            var out: [String: Any] = [:]
+            out.reserveCapacity(d.count)
+            for (k, v) in d {
+                if let ks = k as? String { out[ks] = v }
+            }
+            return out
+        }
+        if let parsed = jsonObjectIfEncodedAsString(value) as? [String: Any] {
+            return parsed
+        }
+        return nil
+    }
+    
+    /// Pull a string field from a server dict (NSString bridging, optional `commentId` vs `mid`).
+    private static func stringField(_ dict: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let s = dict[key] as? String, !s.isEmpty { return s }
+            if let s = dict[key] as? NSString, s.length > 0 { return s as String }
+        }
+        return nil
+    }
+    
+    /// Parse numeric counts from Hprose / JSON (Int, NSNumber, Int64, Double).
+    private static func intField(_ dict: [String: Any], key: String) -> Int? {
+        if let v = dict[key] as? Int { return v }
+        if let v = dict[key] as? Int64 { return Int(v) }
+        if let v = dict[key] as? NSNumber { return v.intValue }
+        if let v = dict[key] as? Double { return Int(v) }
+        return nil
+    }
+    
     /// Unwrap v2 API response format
     /// v2 format: {success: true, data: result} or {success: false, message: "...", error: ...}
     /// Also handles Int success values: {success: 1, data: result} or {success: 0, message: "..."}
     /// Returns the unwrapped data if success, throws error if failure
     private static func unwrapV2Response(_ response: Any?) throws -> Any? {
-        guard let dict = response as? [String: Any] else {
-            return response
+        let normalizedRoot = jsonObjectIfEncodedAsString(response)
+        guard let dict = asStringKeyedDictionary(normalizedRoot) else {
+            return normalizedRoot
         }
         
         // Check if this is a v2 response - handle both Bool and Int success values
@@ -216,13 +260,15 @@ final class HproseInstance: ObservableObject {
             successValue = successBool
         } else if let successInt = dict["success"] as? Int {
             successValue = (successInt != 0)
+        } else if let successNum = dict["success"] as? NSNumber {
+            successValue = successNum.boolValue
         }
         
         if let success = successValue {
             if success {
                 // Success case - return data field if present, otherwise return the whole dict
                 if let data = dict["data"] {
-                    return data
+                    return jsonObjectIfEncodedAsString(data)
                 }
                 // If no data field, the result might be directly in the dict (e.g., {success: true, mid: "...", count: ...})
                 return dict
@@ -233,8 +279,8 @@ final class HproseInstance: ObservableObject {
             }
         }
         
-        // Not a v2 response, return as-is
-        return response
+        // Not a v2 response — return normalized payload (handles JSON-as-string and NSDictionary).
+        return dict
     }
     
     /// Print detailed app user content for debugging
@@ -2902,56 +2948,63 @@ final class HproseInstance: ObservableObject {
     
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
         return try await withRetry {
-            // Check if app user is blacklisted by the tweet author
-            if let tweetAuthor = tweet.author {
-                if tweetAuthor.isUserBlacklisted(appUser.mid) {
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot comment on this tweet because you are blocked by the author", comment: "Comment blocked error")])
+            // Comments are stored on the tweet author's node (same as get_comments / fetchComments).
+            let author: User
+            if let existingAuthor = tweet.author {
+                author = existingAuthor
+            } else {
+                guard let fetchedAuthor = try await fetchUser(tweet.authorId) else {
+                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch author to post comment", comment: "Comment author error")])
+                }
+                author = fetchedAuthor
+                await MainActor.run {
+                    tweet.author = author
                 }
             }
             
-            // Wait for writableUrl to be resolved
-            let resolvedUrl = try await appUser.resolveWritableUrl()
-            guard resolvedUrl != nil else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable URL not available", comment: "URL resolution error")])
+            if author.isUserBlacklisted(appUser.mid) {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot comment on this tweet because you are blocked by the author", comment: "Comment blocked error")])
             }
             
-            guard let uploadClient = appUser.uploadClient else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+            guard let commentClient = author.hproseClient else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: \(author.baseUrl?.absoluteString ?? "nil")", comment: "Client initialization error")])
             }
+            
+            print("DEBUG: [addComment] add_comment via author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil")), tweet hostid: \(author.hostIds?.first ?? "nil")")
             
             comment.author = nil
             let params: [String: Any] = [
                 "aid": appId,
                 "ver": "last",
                 "version": "v2",
-                "hostid": tweet.author?.hostIds?.first as Any,
+                "hostid": author.hostIds?.first as Any,
                 "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
                 "tweetid": tweet.mid,
                 "appuserid": appUser.mid
             ]
             let entry = "add_comment"
-            let rawResponse = uploadClient.invoke("runMApp", withArgs: [entry, params])
+            let rawResponse = commentClient.invoke("runMApp", withArgs: [entry, params])
+            
+            if let err = rawResponse as? Error {
+                print("DEBUG: [addComment] invoke returned error: \(err)")
+                throw err
+            }
+            
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        
-        guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-        }
-
-        // unwrapV2Response already threw for success=false, so we are in the success path.
-        // Extract comment ID and count.
-        guard let commentId = response["mid"] as? String else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-        }
-
-        // count may arrive as Int, Int64, or NSNumber depending on Hprose serialization
-        let count: Int
-        if let c = response["count"] as? Int {
-            count = c
-        } else if let n = response["count"] as? NSNumber {
-            count = n.intValue
-        } else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-        }
+            guard let response = Self.asStringKeyedDictionary(unwrappedResponse) else {
+                print("DEBUG: [addComment] Unexpected response type: \(Swift.type(of: unwrappedResponse)) value: \(String(describing: unwrappedResponse))")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            }
+            
+            guard let commentId = Self.stringField(response, keys: ["mid", "commentId"]) else {
+                print("DEBUG: [addComment] Missing mid/commentId in response keys: \(Array(response.keys))")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            }
+            
+            guard let count = Self.intField(response, key: "count") else {
+                print("DEBUG: [addComment] Missing or unparsable count in response keys: \(Array(response.keys))")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+            }
             
             await MainActor.run {
                 comment.mid = commentId
@@ -3019,37 +3072,48 @@ final class HproseInstance: ObservableObject {
 
     // both author and tweet author can delete this comment
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
+        let author: User
+        if let existingAuthor = parentTweet.author {
+            author = existingAuthor
+        } else {
+            guard let fetchedAuthor = try await fetchUser(parentTweet.authorId) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch author to delete comment", comment: "Author fetch error")])
+            }
+            author = fetchedAuthor
+            await MainActor.run {
+                parentTweet.author = author
+            }
+        }
+        
         let entry = "delete_comment"
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
             "tweetid": parentTweet.mid,
-            "hostid": parentTweet.author?.hostIds?.first as Any,
+            "hostid": author.hostIds?.first as Any,
             "commentid": commentId,
             "appuserid": appUser.mid
         ]
-        guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+        guard let client = author.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Author's client not initialized. baseUrl: \(author.baseUrl?.absoluteString ?? "nil")", comment: "Client initialization error")])
         }
+        print("DEBUG: [deleteComment] delete_comment via author's baseUrl (\(author.baseUrl?.absoluteString ?? "nil"))")
+        
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        if let err = rawResponse as? Error {
+            throw err
+        }
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        guard let response = unwrappedResponse as? [String: Any] else {
+        guard let response = Self.asStringKeyedDictionary(unwrappedResponse) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
         
-        // unwrapV2Response already threw for success=false
-        guard let deletedCommentId = response["commentId"] as? String else {
+        guard let deletedCommentId = Self.stringField(response, keys: ["commentId"]) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
-
-        // count may arrive as Int, Int64, or NSNumber depending on Hprose serialization
-        let count: Int
-        if let c = response["count"] as? Int {
-            count = c
-        } else if let n = response["count"] as? NSNumber {
-            count = n.intValue
-        } else {
+        
+        guard let count = Self.intField(response, key: "count") else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
 
