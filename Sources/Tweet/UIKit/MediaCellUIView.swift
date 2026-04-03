@@ -853,7 +853,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func handleAlreadyReadyPlayer(_ newPlayer: AVPlayer) {
         guard let item = newPlayer.currentItem, item.status == .readyToPlay else { return }
 
-        transitionTo(.playerReady)
+        // onReadyForDisplay may have fired synchronously during attachPlayerToLayer (stale GPU
+        // frame from the previous video) and already called actuallyStartPlayback, setting
+        // videoCellState = .playing.  Regressing back to .playerReady here would:
+        //   1. Re-show the spinner unnecessarily (transitionTo(.playerReady) shows it when
+        //      coordinatorWantsToPlay=true), creating a window where the spinner is visible
+        //      even though the video is already playing.
+        //   2. Set isRecentlyPlaying = false (it requires videoCellState == .playing), leaving
+        //      the coordinator's 5-second grace period unprotected for a newly-started video.
+        // Skip the state regression; proceed to requestPlaybackStartIfNeeded for volume/timer
+        // side-effects (rate>0 branch won't call actuallyStartPlayback again).
+        if videoCellState != .playing {
+            transitionTo(.playerReady)
+        }
 
         if coordinatorWantsToPlay {
             if isVideoAtEnd(newPlayer) {
