@@ -2973,21 +2973,22 @@ final class HproseInstance: ObservableObject {
         guard let response = unwrappedResponse as? [String: Any] else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
-        
-        // Handle the new JSON response format
-        guard let success = response["success"] as? Bool else {
+
+        // unwrapV2Response already threw for success=false, so we are in the success path.
+        // Extract comment ID and count.
+        guard let commentId = response["mid"] as? String else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
-        
-        if success {
-            // Success case: extract comment ID and count
-            guard let commentId = response["mid"] as? String else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-            
-            guard let count = response["count"] as? Int else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
+
+        // count may arrive as Int, Int64, or NSNumber depending on Hprose serialization
+        let count: Int
+        if let c = response["count"] as? Int {
+            count = c
+        } else if let n = response["count"] as? NSNumber {
+            count = n.intValue
+        } else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        }
             
             await MainActor.run {
                 comment.mid = commentId
@@ -3050,14 +3051,9 @@ final class HproseInstance: ObservableObject {
                 
                 return comment
             }
-        } else {
-            // Failure case: extract error message
-            let errorMessage = response["message"] as? String ?? "Unknown comment upload error"
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
-        }
         }
     }
-    
+
     // both author and tweet author can delete this comment
     func deleteComment(parentTweet: Tweet, commentId: String) async throws -> [String: Any]? {
         let entry = "delete_comment"
