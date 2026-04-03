@@ -763,15 +763,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchTweetFeed"])
         }
         
-        // Check success status first
-        guard let success = response["success"] as? Bool, success else {
-            let errorMessage = response["message"] as? String ?? "Unknown error occurred"
-            print("[fetchTweetFeed] Tweet feed loading failed: \(errorMessage)")
-            print("[fetchTweetFeed] Response: \(response)")
-            
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: localizeBackendError(errorMessage)])
-        }
-        
+        // unwrapV2Response already threw for success=false
         // Extract tweets and originalTweets from the new response format
         let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
@@ -912,15 +904,7 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server in fetchUserTweets"])
         }
         
-        // Check success status first
-        guard let success = response["success"] as? Bool, success else {
-            let errorMessage = response["message"] as? String ?? "Unknown error occurred"
-            print("[fetchUserTweets] Tweets loading failed for user \(user.mid): \(errorMessage)")
-            print("[fetchUserTweets] Response: \(response)")
-            
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
-        }
-        
+        // unwrapV2Response already threw for success=false
         // Extract tweets and originalTweets from the new response format
         let tweetsData = response["tweets"] as? [[String: Any]?] ?? []
         let originalTweetsData = response["originalTweets"] as? [[String: Any]?] ?? []
@@ -2634,12 +2618,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
 
-            // Check if the operation was successful
-            guard let success = response["success"] as? Bool, success else {
-                let errorMessage = response["error"] as? String ?? "toggleFavorite: Operation failed"
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
-            }
-
+            // unwrapV2Response already threw for success=false
             var updatedUser: User?
             var updatedTweet: Tweet?
 
@@ -2692,12 +2671,7 @@ final class HproseInstance: ObservableObject {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
 
-            // Check if the operation was successful
-            guard let success = response["success"] as? Bool, success else {
-                let errorMessage = response["error"] as? String ?? "toggleBookmark: Operation failed"
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
-            }
-            
+            // unwrapV2Response already threw for success=false
             var updatedUser: User?
             var updatedTweet: Tweet?
             
@@ -2900,41 +2874,30 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
         
-        // Handle the new JSON response format
-        guard let success = response["success"] as? Bool else {
+        // unwrapV2Response already threw for success=false
+        guard let deletedTweetId = response["tweetid"] as? String else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
-        
-        if success {
-            // Success case: return the tweet ID
-            guard let deletedTweetId = response["tweetid"] as? String else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-            
-            print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
 
-            // Only decrement tweetCount if appUser is the author
-            // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
-            let tweetAuthorId = Tweet.getInstance(for: tweetId)?.authorId
-            if tweetAuthorId == nil || tweetAuthorId == appUser.mid {
-                await MainActor.run {
-                    let currentCount = self.appUser.tweetCount ?? 0
-                    self.appUser.tweetCount = max(0, currentCount - 1)
-                    print("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
-                }
-            } else {
-                print("DEBUG: [deleteTweet] Skipping tweetCount decrement — tweet authored by \(tweetAuthorId ?? "unknown"), not appUser")
+        print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
+
+        // Only decrement tweetCount if appUser is the author
+        // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
+        let tweetAuthorId = Tweet.getInstance(for: tweetId)?.authorId
+        if tweetAuthorId == nil || tweetAuthorId == appUser.mid {
+            await MainActor.run {
+                let currentCount = self.appUser.tweetCount ?? 0
+                self.appUser.tweetCount = max(0, currentCount - 1)
+                print("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
             }
-            
-            // Refresh appUser from server to get updated tweetCount and other properties
-            try? await self.refreshAppUserFromServer()
-            
-            return deletedTweetId
         } else {
-            // Failure case: extract error message
-            let errorMessage = response["message"] as? String ?? "Unknown tweet deletion error"
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            print("DEBUG: [deleteTweet] Skipping tweetCount decrement — tweet authored by \(tweetAuthorId ?? "unknown"), not appUser")
         }
+
+        // Refresh appUser from server to get updated tweetCount and other properties
+        try? await self.refreshAppUserFromServer()
+
+        return deletedTweetId
     }
     
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
@@ -3075,30 +3038,25 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
         
-        // Handle the new JSON response format
-        guard let success = response["success"] as? Bool else {
+        // unwrapV2Response already threw for success=false
+        guard let deletedCommentId = response["commentId"] as? String else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
-        
-        if success {
-            // Success case: return the response with commentId and count
-            guard let deletedCommentId = response["commentId"] as? String else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-            
-            guard let count = response["count"] as? Int else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-            
-            return [
-                "commentId": deletedCommentId,
-                "count": count
-            ]
+
+        // count may arrive as Int, Int64, or NSNumber depending on Hprose serialization
+        let count: Int
+        if let c = response["count"] as? Int {
+            count = c
+        } else if let n = response["count"] as? NSNumber {
+            count = n.intValue
         } else {
-            // Failure case: extract error message
-            let errorMessage = response["message"] as? String ?? "Unknown comment deletion error"
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
         }
+
+        return [
+            "commentId": deletedCommentId,
+            "count": count
+        ]
     }
     
     // MARK: - File Upload
@@ -6023,19 +5981,12 @@ final class HproseInstance: ObservableObject {
             
             print("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
             
-            guard let success = responseDict["success"] as? Bool else {
-                print("DEBUG: [uploadTweet] ERROR: Missing or invalid 'success' field in response")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format: missing success field"])
+            // unwrapV2Response already threw for success=false
+            guard let newTweetId = responseDict["mid"] as? String else {
+                print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
             }
-            
-            if success {
-                // Success case: extract the tweet ID
-                guard let newTweetId = responseDict["mid"] as? String else {
-                    print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
-                    throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
-                }
-                
-                print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
+            print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
                 
                 // Immediately update appUser tweet count (like favorites/bookmarks)
                 await MainActor.run {
@@ -6064,13 +6015,6 @@ final class HproseInstance: ObservableObject {
                     }
                     return uploadedTweet
                 }
-            } else {
-                // Failure case: extract error message
-                print("DEBUG: [uploadTweet] Server returned success=false, full response: \(responseDict)")
-                let errorMessage = responseDict["message"] as? String ?? responseDict["msg"] as? String ?? responseDict["error"] as? String ?? "Unknown upload error"
-                print("DEBUG: [uploadTweet] Error message: \(errorMessage)")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
-            }
         }
     }
     
