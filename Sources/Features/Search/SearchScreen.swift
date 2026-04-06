@@ -27,7 +27,7 @@ struct SearchScreen: View {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(.gray)
                         
-                        TextField(LocalizedStringKey("Search by username or name..."), text: $searchViewModel.searchText)
+                        TextField(LocalizedStringKey("Search by @username or tweet content..."), text: $searchViewModel.searchText)
                             .textFieldStyle(PlainTextFieldStyle())
                             .focused($isSearchFieldFocused)
                             .onSubmit {
@@ -76,8 +76,14 @@ struct SearchScreen: View {
                 // Search Results
                 if searchViewModel.isLoading {
                     Spacer()
-                    ProgressView()
-                        .scaleEffect(1.2)
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .scaleEffect(2.0)
+                        Text("\(searchViewModel.countdownSeconds)s")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .monospacedDigit()
+                    }
                     Spacer()
                 } else if searchViewModel.userResults.isEmpty && searchViewModel.tweetResults.isEmpty && !searchViewModel.searchText.isEmpty {
                     VStack {
@@ -107,7 +113,7 @@ struct SearchScreen: View {
                         Text(LocalizedStringKey("Search"))
                             .font(.headline)
                             .foregroundColor(.gray)
-                        Text(LocalizedStringKey("Search by username or tweet content"))
+                        Text(LocalizedStringKey("Search by @username or tweet content"))
                             .font(.caption)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
@@ -250,39 +256,73 @@ struct TweetSearchResultRow: View {
 
 class SearchViewModel: ObservableObject {
     static let shared = SearchViewModel()
-    
+
     @Published var userResults: [User] = []
     @Published var tweetResults: [Tweet] = []
     @Published var searchText: String = ""
     @Published var isLoading = false
-    
+    @Published var countdownSeconds: Int = 30
+
     private let hproseInstance = HproseInstance.shared
     private let cacheManager = TweetCacheManager.shared
-    
+    private var countdownTask: Task<Void, Never>?
+    private var activeSearchTask: Task<Void, Never>?
+
+    private static let searchTimeoutSeconds = 30
+
     private init() {}
-    
+
     func search() async {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             await clearResults()
             return
         }
-        
+
         await MainActor.run {
             isLoading = true
+            countdownSeconds = Self.searchTimeoutSeconds
             userResults = []
             tweetResults = []
         }
-        
-        // Check if query starts with @ (username-only search)
+
         let isUsernameOnly = query.hasPrefix("@")
         let userQuery = isUsernameOnly ? String(query.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines) : query
-        
+
+        // Cancel any previous in-flight search
+        activeSearchTask?.cancel()
+
+        // Launch search as an unstructured Task so its lifetime is NOT tied to the
+        // calling Task's cancellation — only the countdown (or a new search) can stop it.
+        let searchTask = Task {
+            await self.runSearchQueries(query: query, isUsernameOnly: isUsernameOnly, userQuery: userQuery)
+        }
+        activeSearchTask = searchTask
+
+        // Countdown: tick every second; cancel the search task when it reaches zero
+        countdownTask?.cancel()
+        countdownTask = Task { @MainActor in
+            for remaining in stride(from: Self.searchTimeoutSeconds - 1, through: 0, by: -1) {
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                countdownSeconds = remaining
+            }
+            searchTask.cancel()  // 30 s elapsed — give up
+        }
+
+        // Wait for the search to finish (naturally or via the 30 s cancel above)
+        await searchTask.value
+
+        countdownTask?.cancel()
+        await MainActor.run {
+            isLoading = false
+        }
+    }
+
+    private func runSearchQueries(query: String, isUsernameOnly: Bool, userQuery: String) async {
         // Search users
         if !userQuery.isEmpty {
-            // When @ is present, do both exact match and partial search
             var exactUser: User? = nil
-            
+
             // Always try exact match when @ is present (get userId from username and fetch from backend)
             if isUsernameOnly {
                 if let userId = try? await hproseInstance.getUserId(userQuery),
@@ -303,7 +343,7 @@ class SearchViewModel: ObservableObject {
                     }
                 }
             }
-            
+
             // Always do partial search of known usernames/names
             // Capture exactUser as immutable to avoid Swift 6 concurrency error
             let capturedExactUser = exactUser
@@ -312,7 +352,7 @@ class SearchViewModel: ObservableObject {
                 guard let self = self else { return }
                 await MainActor.run {
                     var finalResults = users
-                    
+
                     // Merge exact match if found
                     if let exactUser = capturedExactUser {
                         // Add to results if not already there
@@ -326,22 +366,18 @@ class SearchViewModel: ObservableObject {
                             }
                         }
                     }
-                    
+
                     self.userResults = finalResults
                 }
             }
         }
-        
+
         // Only search tweets if query doesn't start with @ (matches Android logic)
         if !isUsernameOnly {
             let tweets = await cacheManager.searchTweets(query: query, limit: 40)
             await MainActor.run {
                 self.tweetResults = tweets
             }
-        }
-        
-        await MainActor.run {
-            isLoading = false
         }
     }
     

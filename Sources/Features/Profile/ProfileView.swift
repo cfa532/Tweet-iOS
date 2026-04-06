@@ -349,25 +349,23 @@ struct ProfileView: View {
                             .foregroundColor(.blue)
                     }
 
-                    Menu {
-                        Button(role: .destructive) {
-                            if hproseInstance.appUser.isGuest {
-                                onShowLogin?()
-                            } else {
+                    if !hproseInstance.appUser.isGuest {
+                        Menu {
+                            Button(role: .destructive) {
                                 Task {
                                     await handleBlockUser()
                                 }
+                            } label: {
+                                Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
                             }
                         } label: {
-                            Label(NSLocalizedString("Block User", comment: "Block user menu item"), systemImage: "slash.circle")
+                            Image(systemName: "ellipsis")
+                                .rotationEffect(.degrees(90))
+                                .foregroundColor(.primary)
+                                .font(.system(size: 16, weight: .medium))
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .rotationEffect(.degrees(90))
-                            .foregroundColor(.primary)
-                            .font(.system(size: 16, weight: .medium))
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
                     }
                 }
             }
