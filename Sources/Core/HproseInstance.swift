@@ -1713,11 +1713,12 @@ final class HproseInstance: ObservableObject {
         let unwrappedResponse = try Self.unwrapV2Response(response)
         
         if let ipList = unwrappedResponse as? [String] {
-            // Filter and trim IP addresses
+            // Filter and trim IP addresses, excluding private/reserved ranges
             let ipAddresses = ipList
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            
+                .filter { Gadget.isValidPublicIpAddress($0) }
+
             print("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
             
             // Test IPs in batches of 4 for faster discovery during high load

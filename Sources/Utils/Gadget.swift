@@ -107,12 +107,21 @@ class Gadget {
 //        }
 //    }
     
+    // 100.64.0.0/10 — RFC 6598 CGNAT / Tailscale (second octet 64–127)
+    private static func isRFC6598Address(_ ip: String) -> Bool {
+        guard ip.starts(with: "100.") else { return false }
+        let parts = ip.split(separator: ".")
+        guard parts.count >= 2, let second = Int(parts[1]) else { return false }
+        return (64...127).contains(second)
+    }
+
     // Helper function to check if an IP is private
     static func isPrivateIP(_ ip: String) -> Bool {
         // IPv4 private ranges
         if ip.starts(with: "10.") ||
            ip.starts(with: "192.168.") ||
-           ip.range(of: "^172\\.(1[6-9]|2[0-9]|3[0-1])\\.", options: .regularExpression) != nil {
+           ip.range(of: "^172\\.(1[6-9]|2[0-9]|3[0-1])\\.", options: .regularExpression) != nil ||
+           isRFC6598Address(ip) { // RFC 6598 Shared Address Space (Tailscale)
             return true
         }
         
@@ -166,11 +175,7 @@ class Gadget {
             guard cleanIP.range(of: ipv4Regex, options: .regularExpression) != nil else { return false }
             let octets = cleanIP.split(separator: ".").compactMap { UInt8($0) }
             guard octets.count == 4 else { return false }
-            // Check for private IP ranges
-            if octets[0] == 10 { return false }
-            if octets[0] == 172 && (16...31).contains(octets[1]) { return false }
-            if octets[0] == 192 && octets[1] == 168 { return false }
-            return true
+            return !isPrivateIP(cleanIP)
         }
     }
 
@@ -194,9 +199,7 @@ class Gadget {
                 guard i.range(of: ipv4Regex, options: .regularExpression) != nil else { continue }
                 let octets = i.split(separator: ".").compactMap { UInt8($0) }
                 guard octets.count == 4 else { continue }
-                if octets[0] == 10 { continue }
-                if octets[0] == 172 && (16...31).contains(octets[1]) { continue }
-                if octets[0] == 192 && octets[1] == 168 { continue }
+                if Gadget.isPrivateIP(i) { continue }
                 ip4 = "\(i):\(p)"
             }
         }
