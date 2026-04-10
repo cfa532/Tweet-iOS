@@ -91,6 +91,7 @@ class TweetCellContentView: UIView {
     var onTweetTap: ((Tweet) -> Void)?
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
+    var onContentExpanded: (() -> Void)?
 
     // MARK: - Init
 
@@ -270,6 +271,10 @@ class TweetCellContentView: UIView {
                     }
                     currentView = currentView?.superview
                 }
+                // Tap is on the content label — let bodyView handle "More..." expansion
+                if bodyView.isMoreLinkPoint(bodyLocation) {
+                    return
+                }
             }
         }
 
@@ -304,6 +309,9 @@ class TweetCellContentView: UIView {
         // Propagate per-feed coordinator to subviews
         bodyView.videoCoordinator = videoCoordinator
         embeddedTweetView.videoCoordinator = videoCoordinator
+
+        // Forward content expansion callback (set before early return so it's always current)
+        bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
         // Skip if same tweet
         if currentTweetId == tweet.mid { return }
@@ -758,5 +766,6 @@ class TweetCellContentView: UIView {
         onTweetTap = nil
         onShowLogin = nil
         onShowToast = nil
+        onContentExpanded = nil
     }
 }

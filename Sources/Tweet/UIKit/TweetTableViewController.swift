@@ -132,6 +132,10 @@ class TweetTableViewController: UITableViewController {
     private var isUserDragging: Bool = false
     private var isDecelerating: Bool = false
     private var isTableViewUpdating: Bool = false
+    /// Tweet IDs whose content is currently expanded by the user ("More..." tapped).
+    /// `heightForRowAt` returns `automaticDimension` for these so the table re-measures
+    /// the cell at full expanded height instead of using the cached truncated height.
+    private var expandedTweetIds = Set<String>()
 
     init(videoCoordinator: VideoPlaybackCoordinator) {
         self.videoCoordinator = videoCoordinator
@@ -1199,6 +1203,36 @@ class TweetTableViewController: UITableViewController {
             )
         }
 
+        // Content expansion callback — fires when user taps "More..." to expand truncated text.
+        // expandedTweetIds makes heightForRowAt return automaticDimension so the table
+        // re-measures the cell at expanded height instead of using the cached truncated value.
+        cell.onContentExpanded = { [weak self, weak cell] in
+            guard let self, let cell,
+                  let indexPath = self.tableView.indexPath(for: cell) else { return }
+            let tweet: Tweet
+            if indexPath.row < self.pinnedTweets.count {
+                tweet = self.pinnedTweets[indexPath.row]
+            } else {
+                let idx = indexPath.row - self.pinnedTweets.count
+                guard idx < self.tweets.count else { return }
+                tweet = self.tweets[idx]
+            }
+
+            self.expandedTweetIds.insert(tweet.mid)
+            tweet.cachedHeight = nil
+
+            let expectedCount = self.pinnedTweets.count + self.tweets.count
+            let currentCount = self.tableView.numberOfRows(inSection: 0)
+            if expectedCount == currentCount {
+                UIView.performWithoutAnimation {
+                    self.isTableViewUpdating = true
+                    self.tableView.beginUpdates()
+                    self.tableView.endUpdates()
+                    self.isTableViewUpdating = false
+                }
+            }
+        }
+
         // Height change callback for embedded tweets that load asynchronously
         // When the embedded tweet loads, the cell expands and the table must re-layout
         cell.onHeightChanged = { [weak self, weak cell] in
@@ -1525,6 +1559,11 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[regularIndex]
         }
 
+        // Expanded tweets need full Auto Layout measurement — skip all caches.
+        if expandedTweetIds.contains(tweet.mid) {
+            return UITableView.automaticDimension
+        }
+
         // Use cached height if available (set by willDisplay from actual Auto Layout).
         if let cachedHeight = tweet.cachedHeight {
             return cachedHeight
@@ -1590,6 +1629,24 @@ class TweetTableViewController: UITableViewController {
         // Forward media invisibility to the cell
         if let tweetCell = cell as? TweetTableViewCell {
             tweetCell.tweetContentView.setMediaVisible(false)
+        }
+
+        // If this cell was showing expanded content, clear the expansion tracking and nil
+        // cachedHeight so that when the tweet scrolls back into view, heightForRowAt falls
+        // back to calculateTweetHeight (truncated height) and the cell remeasures correctly.
+        if let tweetCell = cell as? TweetTableViewCell, let tweetId = tweetCell.tweetId,
+           expandedTweetIds.remove(tweetId) != nil {
+            let totalRows = pinnedTweets.count + tweets.count
+            guard indexPath.row < totalRows else { return }
+            let tweet: Tweet
+            if indexPath.row < pinnedTweets.count {
+                tweet = pinnedTweets[indexPath.row]
+            } else {
+                let idx = indexPath.row - pinnedTweets.count
+                guard idx < tweets.count else { return }
+                tweet = tweets[idx]
+            }
+            tweet.cachedHeight = nil
         }
     }
 

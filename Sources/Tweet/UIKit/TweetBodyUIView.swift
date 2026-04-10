@@ -11,6 +11,10 @@ import UIKit
 import SwiftUI
 import Combine
 
+extension NSAttributedString.Key {
+    static let moreLinkTap = NSAttributedString.Key("com.tweet.moreLinkTap")
+}
+
 class TweetBodyUIView: UIView {
 
     // Internal stack view to manage all content
@@ -58,12 +62,19 @@ class TweetBodyUIView: UIView {
     private var mediaHeightConstraint: NSLayoutConstraint?
 
     var onTweetBodyTap: (() -> Void)?
+    var onContentExpanded: (() -> Void)?
     /// Per-feed video coordinator (set by TweetCellContentView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
     /// Whether the video caption label is currently visible (for single-video tweets with title)
     private(set) var isCaptionVisible: Bool = false
+    /// Whether the content is truncated with a "More..." suffix
+    private(set) var isTruncated: Bool = false
+    /// Whether content has been expanded by the user tapping "More..."
+    private(set) var isExpanded: Bool = false
+    private var currentFullContent: String?
     private var currentTweetId: String?
     private weak var parentViewController: UIViewController?
+    private weak var contentLabelTapGesture: UITapGestureRecognizer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -120,10 +131,69 @@ class TweetBodyUIView: UIView {
         let tap = UITapGestureRecognizer(target: self, action: #selector(bodyTapped))
         contentLabel.addGestureRecognizer(tap)
         contentLabel.isUserInteractionEnabled = true
+        contentLabelTapGesture = tap
     }
 
     @objc private func bodyTapped() {
+        if isTruncated, !isExpanded, let tap = contentLabelTapGesture {
+            let tapPoint = tap.location(in: contentLabel)
+            if isMoreLinkTap(at: tapPoint) {
+                expandContent()
+                return
+            }
+        }
         onTweetBodyTap?()
+    }
+
+    /// Check whether a point (in TweetBodyUIView coordinate space) hits the "More..." link.
+    func isMoreLinkPoint(_ pointInBodyView: CGPoint) -> Bool {
+        guard isTruncated, !isExpanded else { return false }
+        let labelPoint = convert(pointInBodyView, to: contentLabel)
+        return isMoreLinkTap(at: labelPoint)
+    }
+
+    private func isMoreLinkTap(at pointInContentLabel: CGPoint) -> Bool {
+        guard let attrText = contentLabel.attributedText,
+              attrText.length > 0,
+              contentLabel.bounds.contains(pointInContentLabel) else { return false }
+
+        let textStorage = NSTextStorage(attributedString: attrText)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: contentLabel.bounds.size)
+        textContainer.lineFragmentPadding = 0
+        textContainer.maximumNumberOfLines = contentLabel.numberOfLines
+        textContainer.lineBreakMode = contentLabel.lineBreakMode
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let charIndex = layoutManager.characterIndex(
+            for: pointInContentLabel, in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: nil
+        )
+        guard charIndex < attrText.length else { return false }
+        return attrText.attribute(.moreLinkTap, at: charIndex, effectiveRange: nil) != nil
+    }
+
+    private func expandContent() {
+        guard let content = currentFullContent, !isExpanded else { return }
+        isExpanded = true
+
+        let ps = NSMutableParagraphStyle()
+        ps.lineSpacing = 1
+        ps.lineBreakMode = .byWordWrapping
+        let fullAttr = NSAttributedString(string: content, attributes: [
+            .font: Self.contentFont,
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: ps,
+        ])
+
+        contentLabel.numberOfLines = 0
+        contentLabel.lineBreakMode = .byWordWrapping
+        contentLabel.attributedText = fullAttr
+
+        setNeedsLayout()
+        onContentExpanded?()
     }
 
     func configure(tweet: Tweet, isEmbedded: Bool, cellTweetId: String?,
@@ -133,6 +203,13 @@ class TweetBodyUIView: UIView {
         // Skip if same tweet
         if currentTweetId == tweet.mid { return }
         currentTweetId = tweet.mid
+
+        // Reset expansion state for new tweet
+        isExpanded = false
+        isTruncated = false
+        currentFullContent = nil
+        contentLabel.numberOfLines = Self.maxContentLines
+        contentLabel.lineBreakMode = .byTruncatingTail
 
         // Clean up media grid and document hosting
         mediaGridView.prepareForReuse()
@@ -158,6 +235,14 @@ class TweetBodyUIView: UIView {
                 tweet.cachedContentAttributedString = attrString
                 tweet.cachedContentWidth = textWidth
                 contentLabel.attributedText = attrString
+            }
+            // Detect truncation: the "More..." suffix carries the .moreLinkTap attribute
+            let attrText = contentLabel.attributedText
+            let lastIndex = (attrText?.length ?? 0) - 1
+            if lastIndex >= 0, let attr = attrText,
+               attr.attribute(.moreLinkTap, at: lastIndex, effectiveRange: nil) != nil {
+                isTruncated = true
+                currentFullContent = content
             }
             contentLabel.isHidden = false
         } else {
@@ -270,10 +355,16 @@ class TweetBodyUIView: UIView {
     func prepareForReuse() {
         currentTweetId = nil
         contentLabel.attributedText = nil
+        contentLabel.numberOfLines = Self.maxContentLines
+        contentLabel.lineBreakMode = .byTruncatingTail
         captionLabel.text = nil
         captionLabel.isHidden = true
         isCaptionVisible = false
+        isTruncated = false
+        isExpanded = false
+        currentFullContent = nil
         onTweetBodyTap = nil
+        onContentExpanded = nil
         mediaGridView.prepareForReuse()
         removeDocumentHosting()
 
@@ -468,6 +559,7 @@ class TweetBodyUIView: UIView {
         result.append(NSAttributedString(string: moreString, attributes: [
             .font: font,
             .foregroundColor: UIColor.systemBlue,
+            .moreLinkTap: true,
         ]))
 
         return result

@@ -16,6 +16,7 @@ class TweetTableViewCell: UITableViewCell {
     // Height change tracking
     private var lastNotifiedHeight: CGFloat = 0
     var onHeightChanged: (() -> Void)?
+    var onContentExpanded: (() -> Void)?
 
     // Padding constraints (updated per-configure to match list-level padding)
     private var leadingConstraint: NSLayoutConstraint!
@@ -105,6 +106,7 @@ class TweetTableViewCell: UITableViewCell {
         tweetContentView.onTweetTap = onTweetTap
         tweetContentView.onShowLogin = onShowLogin
         tweetContentView.onShowToast = onShowToast
+        tweetContentView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
         tweetContentView.configure(
             tweet: tweet,
@@ -120,6 +122,7 @@ class TweetTableViewCell: UITableViewCell {
         super.prepareForReuse()
         lastNotifiedHeight = 0
         onHeightChanged = nil
+        onContentExpanded = nil
         currentTweetId = nil
         tweetContentView.prepareForReuse()
     }
