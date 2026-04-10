@@ -1572,16 +1572,19 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self,
-                  let videoMid = notification.userInfo?["videoMid"] as? String,
-                  let source = notification.userInfo?["source"] as? String,
-                  source == "commentsCoordinator",
-                  self.mainTweetAttachmentMids.contains(videoMid) else { return }
-            if let baseUrl = self.mainTweetBaseUrl,
-               let entry = self.mainTweetAttachments.first(where: { $0.mid == videoMid }),
-               let url = entry.getUrl(baseUrl) {
-                print("📱 [DetailVideoManager] Coordinator play: \(videoMid)")
-                self.loadVideo(url: url, mid: videoMid, mediaType: entry.type)
+            guard let videoMid = notification.userInfo?["videoMid"] as? String,
+                  let source = notification.userInfo?["source"] as? String else { return }
+
+            Task { @MainActor [weak self] in
+                guard let self,
+                      source == "commentsCoordinator",
+                      self.mainTweetAttachmentMids.contains(videoMid) else { return }
+                if let baseUrl = self.mainTweetBaseUrl,
+                   let entry = self.mainTweetAttachments.first(where: { $0.mid == videoMid }),
+                   let url = entry.getUrl(baseUrl) {
+                    print("📱 [DetailVideoManager] Coordinator play: \(videoMid)")
+                    self.loadVideo(url: url, mid: videoMid, mediaType: entry.type)
+                }
             }
         }
 
@@ -1590,12 +1593,15 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self,
-                  let videoMid = notification.userInfo?["videoMid"] as? String,
-                  self.mainTweetAttachmentMids.contains(videoMid),
-                  self.currentVideoMid == videoMid else { return }
-            print("📱 [DetailVideoManager] Coordinator pause: \(videoMid)")
-            self.pause()
+            guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
+
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.mainTweetAttachmentMids.contains(videoMid),
+                      self.currentVideoMid == videoMid else { return }
+                print("📱 [DetailVideoManager] Coordinator pause: \(videoMid)")
+                self.pause()
+            }
         }
     }
 
