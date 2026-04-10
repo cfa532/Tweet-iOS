@@ -1527,6 +1527,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
         isActive = true
         registerLifecycleObservers()
+        registerCoordinatorNotificationObservers()
         print("📱 [DetailVideoManager] Activated - lifecycle observers registered")
     }
     
@@ -1542,6 +1543,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
         isActive = false
         teardownAppLifecycleNotifications()
+        teardownCoordinatorNotificationObservers()
+        mainTweetAttachmentMids.removeAll()
+        mainTweetAttachments.removeAll()
+        mainTweetBaseUrl = nil
 
         // Cancel the delayed clear from endDetailViewSession() — we're about to clear immediately.
         // Without this, the delayed task fires 0.3s later when the feed cell may have already
@@ -1555,12 +1560,56 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
         print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed, player cleared")
     }
-    
+
     private func teardownAppLifecycleNotifications() {
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
         lifecycleObservers.removeAll()
     }
-    
+
+    private func registerCoordinatorNotificationObservers() {
+        coordinatorPlayObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("shouldPlayVideo"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let videoMid = notification.userInfo?["videoMid"] as? String,
+                  let source = notification.userInfo?["source"] as? String,
+                  source == "commentsCoordinator",
+                  self.mainTweetAttachmentMids.contains(videoMid) else { return }
+            if let baseUrl = self.mainTweetBaseUrl,
+               let entry = self.mainTweetAttachments.first(where: { $0.mid == videoMid }),
+               let url = entry.getUrl(baseUrl) {
+                print("📱 [DetailVideoManager] Coordinator play: \(videoMid)")
+                self.loadVideo(url: url, mid: videoMid, mediaType: entry.type)
+            }
+        }
+
+        coordinatorPauseObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("shouldPauseVideo"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let videoMid = notification.userInfo?["videoMid"] as? String,
+                  self.mainTweetAttachmentMids.contains(videoMid),
+                  self.currentVideoMid == videoMid else { return }
+            print("📱 [DetailVideoManager] Coordinator pause: \(videoMid)")
+            self.pause()
+        }
+    }
+
+    private func teardownCoordinatorNotificationObservers() {
+        if let obs = coordinatorPlayObserver {
+            NotificationCenter.default.removeObserver(obs)
+            coordinatorPlayObserver = nil
+        }
+        if let obs = coordinatorPauseObserver {
+            NotificationCenter.default.removeObserver(obs)
+            coordinatorPauseObserver = nil
+        }
+    }
+
     // Register lifecycle observers and store tokens for later removal
     private func registerLifecycleObservers() {
         lifecycleObservers.append(
@@ -1717,6 +1766,29 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published var currentVideoMid: String?
     @Published var isPlaying = false
     @Published var isBuffering = false
+
+    // MARK: - Attachment Video Tracking (coordinator-driven autoplay)
+    /// Mids of the main tweet's video attachments — coordinator play/pause notifications are
+    /// filtered to only these mids so comment video notifications are ignored.
+    private var mainTweetAttachmentMids: Set<String> = []
+    private var mainTweetAttachments: [MimeiFileType] = []
+    private var mainTweetBaseUrl: URL? = nil
+    private var coordinatorPlayObserver: NSObjectProtocol?
+    private var coordinatorPauseObserver: NSObjectProtocol?
+
+    /// Register the main tweet's video attachments so coordinator notifications can drive playback.
+    /// Call this before activateForDetail() or immediately after.
+    @MainActor
+    func setMainTweetAttachments(_ attachments: [MimeiFileType], baseUrl: URL?) {
+        mainTweetAttachments = attachments
+        mainTweetBaseUrl = baseUrl
+        mainTweetAttachmentMids = Set(
+            attachments
+                .filter { $0.type == .video || $0.type == .hls_video }
+                .map { $0.mid }
+        )
+        print("📱 [DetailVideoManager] Registered \(mainTweetAttachmentMids.count) attachment video mid(s)")
+    }
 
     private var loadGeneration: Int = 0
     private var isItemReady = false

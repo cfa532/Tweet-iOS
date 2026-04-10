@@ -47,14 +47,15 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     private var visibilityDebounceTimer: Timer?
     private let debounceInterval: TimeInterval = 0.15
 
-    /// Minimum visibility ratio required to play a video (30%)
-    private let minimumVisibilityRatio: CGFloat = 0.30
+    /// Minimum visibility ratio required to play a video (50%)
+    private let minimumVisibilityRatio: CGFloat = 0.50
 
     /// Track if coordinator is active
     private var isActive: Bool = false
 
     /// Track if the main tweet's video attachment is visible
     /// When true, comment videos should NOT autoplay
+    /// Kept for backward compatibility but unified tracking now uses visibleCommentVideos
     private var isMainTweetVideoVisible: Bool = false
 
     // MARK: - Lifecycle
@@ -71,12 +72,11 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     // MARK: - Public API
 
     /// Activate the coordinator (call when TweetDetailView appears)
-    /// - Parameter hasMainVideo: Whether the main tweet has a video attachment
+    /// - Parameter hasMainVideo: Whether the main tweet has a video attachment (unused — kept for call-site compat)
     func activate(hasMainVideo: Bool = false) {
         isActive = true
-        // If main tweet has video, assume it's visible initially (view starts at top)
-        isMainTweetVideoVisible = hasMainVideo
-        print("📹 [CommentsVideoCoordinator] Activated, hasMainVideo: \(hasMainVideo)")
+        isMainTweetVideoVisible = false
+        print("📹 [CommentsVideoCoordinator] Activated")
     }
 
     /// Deactivate the coordinator (call when TweetDetailView disappears)
@@ -157,22 +157,43 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     /// Report the visibility of the main tweet's video attachment
     /// When the main tweet video is visible, comment videos should NOT autoplay
     /// - Parameter isVisible: Whether the main tweet video is visible on screen
+    /// Deprecated: use reportAttachmentVideoVisible/NotVisible instead for unified tracking
     func reportMainTweetVideoVisibility(isVisible: Bool) {
         guard isActive else { return }
 
         let wasVisible = isMainTweetVideoVisible
         isMainTweetVideoVisible = isVisible
 
-        // If main tweet video just became hidden, trigger update to start comment video
         if wasVisible && !isVisible {
             print("📹 [CommentsVideoCoordinator] Main tweet video scrolled out - enabling comment autoplay")
             scheduleVisibilityUpdate()
-        }
-        // If main tweet video just became visible, stop any playing comment video
-        else if !wasVisible && isVisible {
+        } else if !wasVisible && isVisible {
             print("📹 [CommentsVideoCoordinator] Main tweet video visible - pausing comment videos")
             stopCurrentVideo()
         }
+    }
+
+    /// Report that a main tweet attachment video became visible (unified tracking)
+    func reportAttachmentVideoVisible(
+        attachmentIndex: Int,
+        videoMid: String,
+        visibilityRatio: CGFloat,
+        yPosition: CGFloat
+    ) {
+        guard isActive else { return }
+        // Synthetic commentId must not contain underscores — stopCurrentVideo() splits on "_"
+        // and expects commentId_videoMid_attachmentIndex format (videoMid at index 1).
+        let syntheticId = "att\(attachmentIndex)"
+        let info = CommentVideoInfo(commentId: syntheticId, videoMid: videoMid, attachmentIndex: attachmentIndex)
+        visibleCommentVideos[syntheticId] = (info: info, ratio: visibilityRatio, yPosition: yPosition)
+        scheduleVisibilityUpdate()
+    }
+
+    /// Report that a main tweet attachment video is no longer visible
+    func reportAttachmentVideoNotVisible(attachmentIndex: Int) {
+        guard isActive else { return }
+        visibleCommentVideos.removeValue(forKey: "att\(attachmentIndex)")
+        scheduleVisibilityUpdate()
     }
 
     // MARK: - Private Methods
@@ -189,13 +210,8 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     private func processVisibilityUpdate() {
         guard isActive else { return }
 
-        // Don't start comment videos while main tweet video is visible
-        if isMainTweetVideoVisible {
-            stopCurrentVideo()
-            return
-        }
-
         // Find the topmost visible video with sufficient visibility
+        // Attachment videos and comment videos compete on equal footing — topmost visible wins
         let eligibleVideos = visibleCommentVideos.values
             .filter { $0.ratio >= minimumVisibilityRatio }
             .sorted { $0.yPosition < $1.yPosition } // Sort by Y position (topmost first)
@@ -336,5 +352,70 @@ extension View {
             coordinator: coordinator,
             scrollCoordinateSpace: scrollCoordinateSpace
         ))
+    }
+
+    /// Track video visibility for main tweet attachment video playback coordination
+    func trackAttachmentVideoVisibility(
+        attachmentIndex: Int,
+        videoMid: String,
+        coordinator: CommentsVideoPlaybackCoordinator,
+        scrollCoordinateSpace: String
+    ) -> some View {
+        self.modifier(AttachmentVideoVisibilityTracker(
+            attachmentIndex: attachmentIndex,
+            videoMid: videoMid,
+            coordinator: coordinator,
+            scrollCoordinateSpace: scrollCoordinateSpace
+        ))
+    }
+}
+
+// MARK: - View Modifier for Attachment Video Visibility Tracking
+
+/// Tracks visibility of a main tweet attachment video in TweetDetailView's scroll space
+@available(iOS 16.0, *)
+struct AttachmentVideoVisibilityTracker: ViewModifier {
+    let attachmentIndex: Int
+    let videoMid: String
+    let coordinator: CommentsVideoPlaybackCoordinator
+    let scrollCoordinateSpace: String
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear {
+                            updateVisibility(geometry: geometry)
+                        }
+                        .onChange(of: geometry.frame(in: .named(scrollCoordinateSpace))) { _, _ in
+                            updateVisibility(geometry: geometry)
+                        }
+                }
+            )
+            .onDisappear {
+                coordinator.reportAttachmentVideoNotVisible(attachmentIndex: attachmentIndex)
+                print("📹 [AttachmentTracker] Disappeared: idx=\(attachmentIndex)")
+            }
+    }
+
+    private func updateVisibility(geometry: GeometryProxy) {
+        let frame = geometry.frame(in: .named(scrollCoordinateSpace))
+        let screenHeight = UIScreen.main.bounds.height
+        let visibleTop = max(frame.minY, 0)
+        let visibleBottom = min(frame.maxY, screenHeight)
+        let visibleHeight = max(0, visibleBottom - visibleTop)
+        let ratio = frame.height > 0 ? visibleHeight / frame.height : 0
+
+        if ratio > 0 {
+            coordinator.reportAttachmentVideoVisible(
+                attachmentIndex: attachmentIndex,
+                videoMid: videoMid,
+                visibilityRatio: ratio,
+                yPosition: frame.minY
+            )
+        } else {
+            coordinator.reportAttachmentVideoNotVisible(attachmentIndex: attachmentIndex)
+        }
     }
 }
