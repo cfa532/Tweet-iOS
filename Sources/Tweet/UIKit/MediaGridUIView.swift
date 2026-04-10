@@ -113,6 +113,10 @@ class MediaGridUIView: UIView {
             cellViews.append(cellView)
         }
 
+        if attachments.count > 4 {
+            addMoreOverlay(count: attachments.count - 4, frame: .zero)
+        }
+
         // Mark that we need to calculate frames in layoutSubviews
         needsFrameRecalculation = true
         setNeedsLayout()
@@ -373,9 +377,10 @@ class MediaGridUIView: UIView {
     private func addMoreOverlay(count: Int, frame: CGRect) {
         let overlay = UIView(frame: frame)
         overlay.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        overlay.isUserInteractionEnabled = false
 
         let label = UILabel()
-        label.text = String(format: NSLocalizedString("+%d more", comment: "Additional media count"), count)
+        label.text = String(format: NSLocalizedString("+%d", comment: "Additional media count"), count)
         label.textColor = .white
         label.font = .systemFont(ofSize: 24, weight: .bold)
         label.textAlignment = .center
