@@ -2561,6 +2561,7 @@ class ChatVideoManager: ObservableObject {
         attachment: MimeiFileType,
         isFromCurrentUser: Bool,
         senderUser: User?,
+        senderBaseUrl: URL? = nil,
         isChatScreenVisible: Bool,
         receiptId: String
     ) async -> AVPlayer? {
@@ -2573,7 +2574,7 @@ class ChatVideoManager: ObservableObject {
             if isFromCurrentUser {
                 return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
             } else {
-                return senderUser?.baseUrl ?? HproseInstance.baseUrl
+                return senderBaseUrl ?? senderUser?.baseUrl ?? HproseInstance.baseUrl
             }
         }()
 

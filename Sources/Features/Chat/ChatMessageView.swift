@@ -19,6 +19,8 @@ struct ChatMessageView: View {
     let currentIndex: Int          // Stable index to compute properties
     let isChatScreenVisible: Bool
     let receiptId: String
+    let chatUser: User?
+    let senderBaseUrl: URL?
     let onResendMessage: ((ChatMessage) -> Void)?
 
     // Computed properties based on stable data
@@ -36,6 +38,14 @@ struct ChatMessageView: View {
 
     private var showTimestamp: Bool {
         isLastFromSender
+    }
+
+    private var messageSenderUser: User? {
+        isFromCurrentUser ? HproseInstance.shared.appUser : (chatUser ?? receiptUser)
+    }
+
+    private var messageSenderBaseUrl: URL? {
+        isFromCurrentUser ? HproseInstance.shared.appUser.baseUrl : (senderBaseUrl ?? chatUser?.baseUrl ?? receiptUser?.baseUrl)
     }
 
     private func isLastMessageFromSender(index: Int, messages: [ChatMessage]) -> Bool {
@@ -57,8 +67,8 @@ struct ChatMessageView: View {
         HStack(alignment: .top, spacing: 8) {
             if !isFromCurrentUser {
                 // Avatar for received messages (LEFT) - use receipt's avatar
-                if let receiptUser = receiptUser {
-                    Avatar(user: receiptUser, size: 36)
+                if let senderUser = messageSenderUser {
+                    Avatar(user: senderUser, size: 36)
                 } else {
                     Circle()
                         .fill(Color.gray.opacity(0.3))
@@ -109,7 +119,8 @@ struct ChatMessageView: View {
                                 ChatImageThumbnail(
                                     attachment: attachment, 
                                     isFromCurrentUser: isFromCurrentUser,
-                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser
+                                    senderUser: messageSenderUser,
+                                    senderBaseUrl: messageSenderBaseUrl
                                 )
                             } else if attachment.type == .video || attachment.type == .hls_video {
                                 // Display the video player with chat-specific UI
@@ -117,16 +128,15 @@ struct ChatMessageView: View {
                                     messageId: message.id,
                                     attachment: attachment,
                                     isFromCurrentUser: isFromCurrentUser,
-                                    senderUser: isFromCurrentUser ? HproseInstance.shared.appUser : receiptUser,
+                                    senderUser: messageSenderUser,
+                                    senderBaseUrl: messageSenderBaseUrl,
                                     isChatScreenVisible: isChatScreenVisible,
                                     receiptId: receiptId
                                 )
                             } else {
                                 // Document attachments - use DocumentAttachmentsView
                                 let documentAttachments = [attachment]
-                                let baseUrl = isFromCurrentUser 
-                                    ? (HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl)
-                                    : (receiptUser?.baseUrl ?? HproseInstance.baseUrl)
+                                let baseUrl = messageSenderBaseUrl ?? HproseInstance.baseUrl
                                 DocumentAttachmentsView(
                                     documents: documentAttachments,
                                     baseUrl: baseUrl,
@@ -171,9 +181,9 @@ struct ChatMessageView: View {
             }
         }
         .task {
-            if !isFromCurrentUser {
-                // Load receipt user for received messages
-                receiptUser = try? await HproseInstance.shared.fetchUser(message.authorId)
+            if !isFromCurrentUser, chatUser == nil {
+                // Load sender user for received messages if the chat screen has not provided it yet.
+                receiptUser = try? await HproseInstance.shared.fetchUser(message.authorId, baseUrl: "")
             }
         }
     }
@@ -289,6 +299,7 @@ struct ChatImageThumbnail: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     let senderUser: User?
+    let senderBaseUrl: URL?
     
     @State private var showFullScreen = false
     @State private var image: UIImage?
@@ -300,8 +311,8 @@ struct ChatImageThumbnail: View {
             // For messages sent by current user, use app user's baseUrl
             return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
         } else {
-            // For messages received from other users, use sender's baseUrl
-            return senderUser?.baseUrl ?? HproseInstance.baseUrl
+            // For messages received from other users, use sender's resolved baseUrl.
+            return senderBaseUrl ?? senderUser?.baseUrl ?? HproseInstance.baseUrl
         }
     }
     
@@ -544,6 +555,7 @@ struct ChatVideoContainer: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
     let senderUser: User?
+    let senderBaseUrl: URL?
     let isChatScreenVisible: Bool
     let receiptId: String
 
@@ -557,6 +569,14 @@ struct ChatVideoContainer: View {
 
     // Cache expensive calculations
     private static let maxWidth = UIScreen.main.bounds.width * 0.7
+
+    private var baseUrl: URL {
+        if isFromCurrentUser {
+            return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
+        } else {
+            return senderBaseUrl ?? senderUser?.baseUrl ?? HproseInstance.baseUrl
+        }
+    }
 
     private var videoAR: CGFloat {
         CGFloat(attachment.aspectRatio ?? 1.0)
@@ -690,6 +710,7 @@ struct ChatVideoContainer: View {
                         attachment: attachment,
                         isFromCurrentUser: isFromCurrentUser,
                         senderUser: senderUser,
+                        senderBaseUrl: senderBaseUrl,
                         isChatScreenVisible: isChatScreenVisible,
                         receiptId: receiptId
                     )
@@ -714,6 +735,39 @@ struct ChatVideoContainer: View {
                 }
             }
         }
+        .onChange(of: baseUrl) { _, newBaseUrl in
+            // Reload video player when sender's baseUrl becomes available.
+            guard !isFromCurrentUser else { return }
+            let oldPlayer = player
+            player = nil
+            isLoading = true
+            oldPlayer?.pause()
+            cancellables.removeAll()
+            ChatVideoManager.shared.removeVideoPlayer(messageId: messageId)
+            Task {
+                let loadedPlayer = await ChatVideoManager.shared.getOrCreateVideoPlayer(
+                    messageId: messageId,
+                    attachment: attachment,
+                    isFromCurrentUser: isFromCurrentUser,
+                    senderUser: senderUser,
+                    senderBaseUrl: senderBaseUrl,
+                    isChatScreenVisible: isChatScreenVisible,
+                    receiptId: receiptId
+                )
+                await MainActor.run {
+                    player = loadedPlayer
+                    if let playerItem = loadedPlayer?.currentItem {
+                        if playerItem.status == .readyToPlay {
+                            isLoading = false
+                        } else {
+                            setupPlayerReadyObserver(for: playerItem)
+                        }
+                    } else {
+                        isLoading = false
+                    }
+                }
+            }
+        }
         .fullScreenCover(isPresented: $showFullScreen, onDismiss: {
             // Resume playing when returning from fullscreen
             if let player = player, isPlaying {
@@ -721,15 +775,7 @@ struct ChatVideoContainer: View {
             }
         }) {
             // Create a temporary tweet-like structure for the video
-            let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? HproseInstance.shared.appUser.mid)
-            let videoAuthor = User.getInstance(mid: authorId)
-            let tempTweet = Tweet.getInstance(
-                mid: "chat_video_\(attachment.mid)",
-                authorId: authorId,
-                content: "",
-                author: videoAuthor,
-                attachments: [attachment]
-            )
+            let tempTweet = createFullScreenVideoTweet()
 
             MediaBrowserView(
                 tweet: tempTweet,
@@ -740,6 +786,23 @@ struct ChatVideoContainer: View {
     
     // MARK: - Helper Functions
     
+    private func createFullScreenVideoTweet() -> Tweet {
+        let authorId = isFromCurrentUser ? HproseInstance.shared.appUser.mid : (senderUser?.mid ?? HproseInstance.shared.appUser.mid)
+        let videoAuthor = User.getInstance(mid: authorId)
+        // Ensure the author's baseUrl is set correctly for MediaBrowserView.
+        if videoAuthor.baseUrl == nil {
+            videoAuthor.baseUrl = baseUrl
+        }
+
+        return Tweet.getInstance(
+            mid: "chat_video_\(attachment.mid)",
+            authorId: authorId,
+            content: "",
+            author: videoAuthor,
+            attachments: [attachment]
+        )
+    }
+
     private func setupVideoCompletionObserver(for player: AVPlayer) {
         // Remove existing observer if any
         removeVideoCompletionObserver()
@@ -791,18 +854,20 @@ struct ChatVideoContainer: View {
 struct ChatAttachmentLoader: View {
     let attachment: MimeiFileType
     let isFromCurrentUser: Bool
-    
+    let senderUser: User?
+    let senderBaseUrl: URL?
+
     @State private var isLoading = true
     @State private var loadError = false
     @State private var documentURLItem: DocumentURLItem?
     @State private var isDownloading = false
     @State private var isDownloadingForShare = false
-    
+
     private var baseUrl: URL {
         if isFromCurrentUser {
             return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
         } else {
-            return HproseInstance.baseUrl
+            return senderBaseUrl ?? senderUser?.baseUrl ?? HproseInstance.baseUrl
         }
     }
     
