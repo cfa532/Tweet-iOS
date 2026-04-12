@@ -6996,6 +6996,9 @@ final class HproseInstance: ObservableObject {
         // Update local user object
         await MainActor.run {
             self.appUser.agentPublicKey = tokenResult.publicKey
+            // User is a separate ObservableObject; views observe HproseInstance, so publish here
+            // so settings/profile UI (e.g. "Token configured") updates without leaving the screen.
+            self.objectWillChange.send()
         }
         
         print("DEBUG: [generateAgentToken] Generated new agent token for user \(appUser.mid)")

@@ -256,32 +256,10 @@ struct ProfileEditView: View {
                     .onTapGesture { focusedField = .shareDomain }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringKey("AI Agent Access"))
-                    .font(.caption)
-                    .foregroundColor(.themeText)
-                Button {
-                    showAgentTokenSheet = true
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(LocalizedStringKey("Agent Token"))
-                                .foregroundColor(.primary)
-                            Text(hproseInstance.appUser.agentPublicKey != nil
-                                 ? LocalizedStringKey("Token configured")
-                                 : LocalizedStringKey("Not configured"))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.secondary)
-                    }
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(8)
-                }
-            }
+            AgentTokenSettingsRow(
+                user: User.getInstance(mid: hproseInstance.appUser.mid),
+                onTap: { showAgentTokenSheet = true }
+            )
 
             if let errorMessage = errorMessage {
                 Text(errorMessage)
@@ -326,6 +304,7 @@ struct ProfileEditView: View {
                 isGenerating: $isGeneratingToken,
                 showCopiedAlert: $showTokenCopiedAlert,
                 showRevokeConfirmation: $showRevokeConfirmation,
+                appUser: User.getInstance(mid: hproseInstance.appUser.mid),
                 hproseInstance: hproseInstance
             )
         }
@@ -666,5 +645,40 @@ struct ProfileEditView: View {
                         normalizedCurrent != normalizedInitial
         
         hasUnsavedChanges = hasChanges
+    }
+}
+
+// MARK: - Agent token row (observes User so "Token configured" updates without leaving the screen)
+
+@available(iOS 16.0, *)
+private struct AgentTokenSettingsRow: View {
+    @ObservedObject var user: User
+    let onTap: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(LocalizedStringKey("AI Agent Access"))
+                .font(.caption)
+                .foregroundColor(.themeText)
+            Button(action: onTap) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(LocalizedStringKey("Agent Token"))
+                            .foregroundColor(.primary)
+                        Text(user.agentPublicKey != nil
+                             ? LocalizedStringKey("Token configured")
+                             : LocalizedStringKey("Not configured"))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(.secondary)
+                }
+                .padding()
+                .background(Color(.systemGray6))
+                .cornerRadius(8)
+            }
+        }
     }
 }
