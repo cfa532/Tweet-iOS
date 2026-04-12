@@ -87,15 +87,11 @@ struct ChatListScreen: View {
                     onChatNavigate?()
                 }
             }
-            .navigationDestination(for: User.self) { user in
-                ProfileView(
-                    user: user,
-                    onLogout: nil,
-                    navigationPath: $navigationPath,
-                    onShowLogin: onShowLogin,
-                    onShowToast: onShowToast
-                )
-            }
+            .appNavigationDestinations(
+                path: $navigationPath,
+                onShowLogin: onShowLogin,
+                onShowToast: onShowToast
+            )
             .sheet(isPresented: $showStartNewChat) {
                 NavigationStack {
                     FollowingsListForChat(

@@ -83,15 +83,6 @@ struct ChatScreen: View {
             .onTapGesture {
                 hideKeyboard()
             }
-            .navigationDestination(for: User.self) { user in
-                ProfileView(
-                    user: user,
-                    onLogout: nil,
-                    navigationPath: $navigationPath,
-                    onShowLogin: onShowLogin,
-                    onShowToast: onShowToast
-                )
-            }
             .overlay(toastOverlay)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
                 if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {

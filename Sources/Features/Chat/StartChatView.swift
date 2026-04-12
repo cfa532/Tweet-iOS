@@ -5,13 +5,23 @@ struct StartChatView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
     @State private var users: [User] = []
-    @State private var isLoading: Bool = false
+    @State private var isLoading = false
     @State private var errorMessage: String? = nil
-    @State private var selectedUser: User? = nil
-    @State private var showChatScreen = false
-    
+    @State private var navigationPath = NavigationPath()
+
+    private let onShowLogin: (() -> Void)?
+    private let onShowToast: ((String, Bool) -> Void)?
+
+    init(
+        onShowLogin: (() -> Void)? = nil,
+        onShowToast: ((String, Bool) -> Void)? = nil
+    ) {
+        self.onShowLogin = onShowLogin
+        self.onShowToast = onShowToast
+    }
+
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             VStack {
                 if isLoading {
                     ProgressView()
@@ -34,15 +44,11 @@ struct StartChatView: View {
                 } else {
                     List(users) { user in
                         Button(action: {
-                            // Navigate to chat screen with this user
-                            print("[StartChatView] Button tapped for user: \(user.username ?? "unknown")")
-                            selectedUser = user
-                            showChatScreen = true
-                            print("[StartChatView] showChatScreen set to: \(showChatScreen)")
+                            navigationPath.append(user.mid)
                         }) {
                             HStack {
                                 Avatar(user: user, size: 40)
-                                
+
                                 VStack(alignment: .leading, spacing: 4) {
                                     HStack {
                                         Text("\(user.name ?? "")@\(user.username ?? "")")
@@ -50,7 +56,7 @@ struct StartChatView: View {
                                             .foregroundColor(.primary)
                                         Spacer()
                                     }
-                                    
+
                                     if let profile = user.profile, !profile.isEmpty {
                                         Text(profile)
                                             .font(.body)
@@ -58,7 +64,7 @@ struct StartChatView: View {
                                             .lineLimit(2)
                                     }
                                 }
-                                
+
                                 Image(systemName: "message")
                                     .foregroundColor(.blue)
                                     .font(.system(size: 16, weight: .medium))
@@ -71,39 +77,43 @@ struct StartChatView: View {
             }
             .navigationTitle(NSLocalizedString("Start Chat", comment: "Start chat screen title"))
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $showChatScreen) {
-                if let selectedUser = selectedUser {
-                    ChatScreen(receiptId: selectedUser.mid)
-                } else {
-                    EmptyView()
-                }
+            .navigationDestination(for: String.self) { receiptId in
+                ChatScreen(
+                    receiptId: receiptId,
+                    navigationPath: $navigationPath,
+                    onProfileNavigate: nil,
+                    onShowLogin: onShowLogin,
+                    onShowToast: onShowToast
+                )
             }
+            .appNavigationDestinations(
+                path: $navigationPath,
+                onShowLogin: onShowLogin,
+                onShowToast: onShowToast
+            )
         }
         .task {
             await loadFollowings()
         }
     }
-    
+
     private func loadFollowings() async {
         isLoading = true
         do {
-            // Get current user's followings
             let followingIds = try await hproseInstance.getListByType(
                 user: hproseInstance.appUser,
                 entry: .FOLLOWING
             )
-            
-            // Fetch user objects for each following ID
+
             var fetchedUsers: [User] = []
             for userId in followingIds {
                 if let user = try await hproseInstance.fetchUser(userId) {
-                    // Ignore invalid users without username
                     if user.username != nil {
                         fetchedUsers.append(user)
                     }
                 }
             }
-            
+
             await MainActor.run {
                 users = fetchedUsers
                 isLoading = false
@@ -115,8 +125,4 @@ struct StartChatView: View {
             }
         }
     }
-    
-
 }
-
- 

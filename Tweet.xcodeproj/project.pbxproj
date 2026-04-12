@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		1A1A1A1A1A1A1A1A1A1A1A1A /* TweetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */; };
+		46F8A0D52E00413000ABCD02 /* AppNavigationDestinations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F8A0D42E00413000ABCD01 /* AppNavigationDestinations.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A24 /* HomeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A25 /* HomeViewModel.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A26 /* ComposeTweetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A27 /* ComposeTweetView.swift */; };
 		1A1A1A1A1A1A1A1A1A1A1A28 /* ComposeTweetViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */; };
@@ -162,6 +163,7 @@
 		1A1A1A1A1A1A1A1A1A1A1A01 /* Tweet.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Tweet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TweetApp.swift; path = Sources/App/TweetApp.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = Sources/App/ContentView.swift; sourceTree = SOURCE_ROOT; };
+		46F8A0D42E00413000ABCD01 /* AppNavigationDestinations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppNavigationDestinations.swift; path = Sources/App/AppNavigationDestinations.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A25 /* HomeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HomeViewModel.swift; path = Sources/Features/Home/HomeViewModel.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A27 /* ComposeTweetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ComposeTweetView.swift; path = Sources/Features/Compose/ComposeTweetView.swift; sourceTree = SOURCE_ROOT; };
 		1A1A1A1A1A1A1A1A1A1A1A29 /* ComposeTweetViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ComposeTweetViewModel.swift; path = Sources/Features/Compose/ComposeTweetViewModel.swift; sourceTree = SOURCE_ROOT; };
@@ -376,6 +378,7 @@
 				46E5B32A2DDA038E00AEF31F /* AppConfig.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */,
+				46F8A0D42E00413000ABCD01 /* AppNavigationDestinations.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -877,6 +880,7 @@
 				462826222EAD92A9000E891A /* CircularImageCropper.swift in Sources */,
 				468CF2282E39CC8900D49038 /* ChatBubbleShape.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
+				46F8A0D52E00413000ABCD02 /* AppNavigationDestinations.swift in Sources */,
 				46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */,
 				46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */,
 				460680EA2E16303100D9D15A /* Constants.swift in Sources */,

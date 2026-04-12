@@ -96,44 +96,15 @@ struct HomeView: View {
         .toolbar(.hidden, for: .navigationBar) // Hide the navigation bar (iOS 17+)
         .toolbarBackground(.hidden, for: .navigationBar) // Hide navigation bar background
         .navigationBarTitleDisplayMode(.inline) // Inline mode to minimize height
-        .navigationDestination(for: User.self) { user in
-            ProfileView(
-                user: user,
-                onLogout: {
-                    navigationPath.removeLast(navigationPath.count)
-                    onReturnToHome?()
-                },
-                navigationPath: $navigationPath,
-                onShowLogin: onShowLogin,
-                onShowToast: onShowToast
-            )
-        }
-        .navigationDestination(for: UserListDestination.self) { destination in
-            UserListDestinationView(destination: destination, navigationPath: $navigationPath)
-        }
-        .navigationDestination(for: TweetListDestination.self) { destination in
-            TweetListDestinationView(
-                destination: destination,
-                navigationPath: $navigationPath,
-                onShowLogin: onShowLogin,
-                onShowToast: onShowToast
-            )
-        }
-        .navigationDestination(for: CommentNavigation.self) { commentNav in
-            CommentDetailView(comment: commentNav.comment, parentTweet: commentNav.parentTweet)
-        }
-        .navigationDestination(for: Tweet.self) { tweet in
-            // Check if this is a comment (has originalTweetId but no content) vs quote tweet (has originalTweetId AND content)
-            if tweet.originalTweetId != nil && (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true) {
-                // This is a comment (retweet with no content), show CommentDetailView with a parent fetcher
-                CommentDetailViewWithParent(comment: tweet)
-
-            } else {
-                // This is a regular tweet or quote tweet, show TweetDetailView
-                TweetDetailView(tweet: tweet)
-
+        .appNavigationDestinations(
+            path: $navigationPath,
+            onShowLogin: onShowLogin,
+            onShowToast: onShowToast,
+            onProfileLogout: {
+                navigationPath.removeLast(navigationPath.count)
+                onReturnToHome?()
             }
-        }
+        )
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
             Task {
                 // After login, appUser and baseUrl are already populated by login() method
