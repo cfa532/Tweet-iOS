@@ -509,6 +509,22 @@ struct ContentView: View {
                 }
             }
         )
+        
+        // 12. After successful login, return to the main (home) screen
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: .userDidLogin,
+                object: nil,
+                queue: .main
+            ) { _ in
+                self.selectedTab = 0
+                self.navigationPath = NavigationPath()
+                self.chatNavigationPath = NavigationPath()
+                self.isInChatScreen = false
+                self.isInProfileFromChat = false
+                NotificationCenter.default.post(name: .scrollToTop, object: nil)
+            }
+        )
     }
     
     private func cleanupNotificationObservers() {
