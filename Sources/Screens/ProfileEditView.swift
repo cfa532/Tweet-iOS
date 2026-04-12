@@ -538,15 +538,10 @@ struct ProfileEditView: View {
             return
         }
         
-        // Validate cloudDrivePort: must be empty/null or between 8000-65535 (inclusive)
+        // Validate cloudDrivePort: must be empty or a valid positive integer
         let trimmedPort = cloudDrivePort.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedPort.isEmpty {
-            if let port = Int(trimmedPort) {
-                if port < 8000 || port > 65535 {
-                    errorMessage = NSLocalizedString("Cloud Drive Port must be between 8000 and 65535.", comment: "Validation error")
-                    return
-                }
-            } else {
+            if Int(trimmedPort) == nil {
                 errorMessage = NSLocalizedString("Cloud Drive Port must be a valid number.", comment: "Validation error")
                 return
             }

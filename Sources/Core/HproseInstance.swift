@@ -2070,23 +2070,25 @@ final class HproseInstance: ObservableObject {
                     user.favoritesCount = userData["favoritesCount"] as? Int
                     user.commentsCount = userData["commentsCount"] as? Int
                     
-                    // Update cloudDrivePort if provided
-                    if let cloudDrivePort = userData["cloudDrivePort"] as? Int {
-                        user.cloudDrivePort = cloudDrivePort
+                    // Update cloudDrivePort if provided (server may return as Int or String)
+                    if let port = userData["cloudDrivePort"] as? Int {
+                        user.cloudDrivePort = port
+                    } else if let portStr = userData["cloudDrivePort"] as? String, let port = Int(portStr) {
+                        user.cloudDrivePort = port
                     }
                 }
                 TweetCacheManager.shared.saveUser(user)
                 return user
             }
-            
+
             print("DEBUG: [resyncUser] Using user's own hproseClient with baseUrl: \(user.baseUrl?.absoluteString ?? "nil") for userId: \(userId)")
-            
+
             let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
             let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
             guard let userData = unwrappedResponse as? [String: Any] else {
                 throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
             }
-            
+
             // Update user properties from the response
             await MainActor.run {
                 user.name = userData["name"] as? String
@@ -2100,10 +2102,12 @@ final class HproseInstance: ObservableObject {
                 user.bookmarksCount = userData["bookmarksCount"] as? Int
                 user.favoritesCount = userData["favoritesCount"] as? Int
                 user.commentsCount = userData["commentsCount"] as? Int
-                
-                // Update cloudDrivePort if provided
-                if let cloudDrivePort = userData["cloudDrivePort"] as? Int {
-                    user.cloudDrivePort = cloudDrivePort
+
+                // Update cloudDrivePort if provided (server may return as Int or String)
+                if let port = userData["cloudDrivePort"] as? Int {
+                    user.cloudDrivePort = port
+                } else if let portStr = userData["cloudDrivePort"] as? String, let port = Int(portStr) {
+                    user.cloudDrivePort = port
                 }
             }
             TweetCacheManager.shared.saveUser(user)
@@ -7002,11 +7006,16 @@ final class HproseInstance: ObservableObject {
     private func updateAgentPublicKey(_ publicKey: String) async throws {
         let entry = "set_author_core_data"
         
-        // Create minimal user object with just the fields we need to update
-        let userUpdate: [String: Any] = [
+        // Include cloudDrivePort and domainToShare to prevent server from deleting them
+        // (set_author_core_data treats absent fields as "delete" for these two fields)
+        var userUpdate: [String: Any] = [
             "mid": appUser.mid,
-            "agentPublicKey": publicKey
+            "agentPublicKey": publicKey,
+            "cloudDrivePort": appUser.cloudDrivePort
         ]
+        if let domainToShare = appUser.domainToShare {
+            userUpdate["domainToShare"] = domainToShare
+        }
         
         guard let userJsonData = try? JSONSerialization.data(withJSONObject: userUpdate),
               let userJsonString = String(data: userJsonData, encoding: .utf8) else {
