@@ -186,18 +186,85 @@ final class TweetCacheManager: @unchecked Sendable {
 
 // MARK: - Tweet Caching
 extension TweetCacheManager {
+    /// One Core Data row maps to either no list slot (skipped) or one slot in `[Tweet?]` (tweet or `nil` placeholder).
+    private enum CachedTweetListSlot {
+        case skip
+        case emit(Tweet?)
+    }
+
+    /// Maps a cached row to a profile/main-feed list slot using the same rules as `fetchCachedTweets`.
+    private func cachedTweetListSlot(
+        cdTweet: CDTweet,
+        userId: String,
+        shouldFilterByAuthorId: Bool,
+        currentUserId: String?
+    ) -> CachedTweetListSlot {
+        do {
+            let tweet = try Tweet.from(cdTweet: cdTweet)
+
+            if shouldFilterByAuthorId && tweet.authorId != userId {
+                return .skip
+            }
+
+            if tweet.author == nil {
+                let authorSingleton = User.getInstance(mid: tweet.authorId)
+                if authorSingleton.username == nil {
+                    let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
+                    userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
+                    if let cdUser = try? context.fetch(userRequest).first {
+                        _ = User.from(cdUser: cdUser)
+                    }
+                }
+                tweet.author = User.getInstance(mid: tweet.authorId)
+            }
+
+            if let originalTweetId = tweet.originalTweetId, tweet.originalAuthorId != nil {
+                if Tweet.getInstance(for: originalTweetId) == nil {
+                    let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
+                    origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
+                    origRequest.fetchLimit = 1
+                    if let cdOrigTweet = try? context.fetch(origRequest).first,
+                       let _ = try? Tweet.from(cdTweet: cdOrigTweet) {
+                    } else {
+                        return .skip
+                    }
+                }
+            }
+
+            if tweet.timestamp.timeIntervalSince1970 <= 0 {
+                print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
+                return .emit(nil)
+            }
+
+            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
+
+            if tweet.isPrivate == true && !isBookmarkOrFavorite {
+                if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
+                    return .emit(tweet)
+                } else {
+                    return .skip
+                }
+            } else {
+                return .emit(tweet)
+            }
+        } catch {
+            print("Error processing tweet: \(error)")
+            return .emit(nil)
+        }
+    }
+
     func fetchCachedTweets(for userId: String, page: UInt, pageSize: UInt, currentUserId: String? = nil, isProfileView: Bool = false) async -> [Tweet?] {
         return await withCheckedContinuation { continuation in
             context.perform {
                 let request: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                
+
                 // For profile views: load from userId cache and filter by authorId
                 // For main feed: load from userId (appUser.mid) cache, no authorId filtering
                 let shouldFilterByAuthorId = isProfileView
-                
+
                 // Always load from userId cache (which equals authorId for profile views)
                 request.predicate = NSPredicate(format: "uid == %@", userId)
-                
+
                 // For bookmarks and favorites, sort by timeCached (when bookmarked/favorited)
                 // For other types, sort by timestamp (tweet creation time)
                 let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
@@ -206,97 +273,70 @@ extension TweetCacheManager {
                 } else {
                     request.sortDescriptors = [NSSortDescriptor(key: "timestamp", ascending: false)]
                 }
-                
-                // Fetch more tweets if filtering by authorId (to account for filtering)
-                let fetchLimit = shouldFilterByAuthorId ? Int(pageSize * 3) : Int(pageSize)
-                request.fetchLimit = fetchLimit
-                request.fetchOffset = Int(page * pageSize)
-                
+
+                let pageSizeInt = Int(pageSize)
+                let startSlot = Int(page) * pageSizeInt
+                let endSlot = startSlot + pageSizeInt
+
+                if shouldFilterByAuthorId {
+                    // Profile: offset/limit on Core Data rows does NOT match filtered list slots (skipped rows
+                    // don't count). Paginate by advancing through sorted CD rows in batches and counting emitted slots.
+                    var slotIndex = 0
+                    var pageTweets: [Tweet?] = []
+                    var cdOffset = 0
+                    let batchSize = max(pageSizeInt * 4, 64)
+
+                    fetchLoop: while pageTweets.count < pageSizeInt {
+                        request.fetchOffset = cdOffset
+                        request.fetchLimit = batchSize
+                        guard let batch = try? self.context.fetch(request), !batch.isEmpty else { break }
+
+                        for cdTweet in batch {
+                            switch self.cachedTweetListSlot(
+                                cdTweet: cdTweet,
+                                userId: userId,
+                                shouldFilterByAuthorId: shouldFilterByAuthorId,
+                                currentUserId: currentUserId
+                            ) {
+                            case .skip:
+                                break
+                            case .emit(let value):
+                                if slotIndex >= startSlot && slotIndex < endSlot {
+                                    pageTweets.append(value)
+                                }
+                                slotIndex += 1
+                                if pageTweets.count >= pageSizeInt { break fetchLoop }
+                            }
+                        }
+
+                        cdOffset += batch.count
+                        if batch.count < batchSize { break }
+                    }
+
+                    continuation.resume(returning: pageTweets)
+                    return
+                }
+
+                request.fetchLimit = pageSizeInt
+                request.fetchOffset = startSlot
+
                 if let cdTweets = try? self.context.fetch(request) {
                     var tweets: [Tweet?] = []
                     for cdTweet in cdTweets {
-                        do {
-                            let tweet = try Tweet.from(cdTweet: cdTweet)
-                            
-                            // For profile views, always filter to only include tweets authored by the profile user
-                            // This ensures we only show that user's tweets, even if cache contains tweets from other authors
-                            if shouldFilterByAuthorId && tweet.authorId != userId {
-                                continue // Skip tweets from other authors
-                            }
-                            
-                            // Load author from cache (Core Data) if available, otherwise use singleton
-                            // This ensures cached user data is used as placeholder until refreshed from server
-                            if tweet.author == nil {
-                                // First get the singleton
-                                let authorSingleton = User.getInstance(mid: tweet.authorId)
-                                
-                                // If singleton doesn't have data, try to load from Core Data cache
-                                if authorSingleton.username == nil {
-                                    let userRequest: NSFetchRequest<CDUser> = CDUser.fetchRequest()
-                                    userRequest.predicate = NSPredicate(format: "mid == %@", tweet.authorId)
-                                    if let cdUser = try? self.context.fetch(userRequest).first {
-                                        // Update singleton with cached data (even if expired)
-                                        _ = User.from(cdUser: cdUser)
-                                    }
-                                }
-                                
-                                // Use the singleton (either populated from cache or skeleton)
-                                tweet.author = User.getInstance(mid: tweet.authorId)
-                            }
-                            
-                            // NOTE: baseUrl will be assigned on MainActor after all tweets are collected
-                            
-                            // Skip retweets/quoted tweets whose original tweet is not available.
-                            // Load into in-memory singleton so buildVideoListAsync can find
-                            // retweet/quoted tweet videos for correct preload ordering.
-                            if let originalTweetId = tweet.originalTweetId, tweet.originalAuthorId != nil {
-                                if Tweet.getInstance(for: originalTweetId) == nil {
-                                    let origRequest: NSFetchRequest<CDTweet> = CDTweet.fetchRequest()
-                                    origRequest.predicate = NSPredicate(format: "tid == %@", originalTweetId)
-                                    origRequest.fetchLimit = 1
-                                    if let cdOrigTweet = try? self.context.fetch(origRequest).first,
-                                       let _ = try? Tweet.from(cdTweet: cdOrigTweet) {
-                                        // Original tweet loaded into singleton — retweet can proceed
-                                    } else {
-                                        continue
-                                    }
-                                }
-                            }
-
-                            // Filter out tweets with invalid timestamps
-                            if tweet.timestamp.timeIntervalSince1970 <= 0 {
-                                print("ERROR: [TweetCacheManager] Found cached tweet with invalid timestamp: \(tweet.timestamp), skipping")
-                                tweets.append(nil)
-                                continue
-                            }
-                            
-                            // Filter private tweets:
-                            // - Main feed: Always filter out private tweets (show all tweets, but no private ones)
-                            // - Profile view: Only show private tweets if appUser is viewing their own profile
-                            // - Bookmarks/Favorites: NEVER filter (user explicitly bookmarked/favorited them)
-                            let isBookmarkOrFavorite = userId.hasPrefix("bookmark_list_") || userId.hasPrefix("favorite_list_")
-                            
-                            if tweet.isPrivate == true && !isBookmarkOrFavorite {
-                                if shouldFilterByAuthorId && currentUserId != nil && userId == currentUserId {
-                                    // Profile view: Allow private tweets only if viewing own profile (appUser == visited user)
-                                    tweets.append(tweet)
-                                } else {
-                                    // Main feed or viewing other user's profile: Filter out private tweets
-                                    continue
-                                }
-                            } else {
-                                // Public tweet OR bookmarked/favorited private tweet: Always include
-                                tweets.append(tweet)
-                            }
-                        } catch {
-                            print("Error processing tweet: \(error)")
-                            tweets.append(nil)
+                        switch self.cachedTweetListSlot(
+                            cdTweet: cdTweet,
+                            userId: userId,
+                            shouldFilterByAuthorId: shouldFilterByAuthorId,
+                            currentUserId: currentUserId
+                        ) {
+                        case .skip:
+                            break
+                        case .emit(let value):
+                            tweets.append(value)
                         }
                     }
-                    
-                    // Filtered results - limit to pageSize
-                    let limitedTweets = Array(tweets.prefix(Int(pageSize)))
-                    continuation.resume(returning: limitedTweets)
+
+                    continuation.resume(returning: tweets)
                 } else {
                     continuation.resume(returning: [])
                 }
