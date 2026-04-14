@@ -565,7 +565,9 @@ private struct DetailSingletonVideoPlayerView: View {
             Color.black
 
             if isThisVideoLoaded {
-                DetailAVPlayerView(player: manager.currentPlayer!)
+                DetailAVPlayerView(
+                    player: manager.currentPlayer!
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 thumbnailOrBlack
@@ -575,14 +577,7 @@ private struct DetailSingletonVideoPlayerView: View {
                         .progressViewStyle(CircularProgressViewStyle(tint: .white))
                         .scaleEffect(1.5)
                 } else {
-                    // Idle — tap to play
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 56))
-                        .foregroundColor(.white.opacity(0.85))
-                        .shadow(color: .black.opacity(0.4), radius: 4)
-                        .onTapGesture {
-                            manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
-                        }
+                    Color.clear
                 }
             }
         }
@@ -605,10 +600,14 @@ private struct DetailSingletonVideoPlayerView: View {
 private struct DetailAVPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
 
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = AVPlayerViewController()
+        let vc = InteractiveDetailAVPlayerViewController()
         vc.player = player
-        vc.showsPlaybackControls = false
+        vc.configureInitialControlsState()
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
         return vc
@@ -618,6 +617,44 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         if vc.player !== player {
             vc.player = player
         }
+        if let interactiveVC = vc as? InteractiveDetailAVPlayerViewController {
+            let playerIdentity = ObjectIdentifier(player)
+            if context.coordinator.lastPlayerIdentity != playerIdentity {
+                interactiveVC.configureInitialControlsState()
+                context.coordinator.lastPlayerIdentity = playerIdentity
+            }
+        }
+    }
+
+    final class Coordinator {
+        var lastPlayerIdentity: ObjectIdentifier?
+    }
+}
+
+private final class InteractiveDetailAVPlayerViewController: AVPlayerViewController, UIGestureRecognizerDelegate {
+    private var revealControlsTapRecognizer: UITapGestureRecognizer?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleRevealControlsTap))
+        tapRecognizer.cancelsTouchesInView = false
+        tapRecognizer.delegate = self
+        view.addGestureRecognizer(tapRecognizer)
+        revealControlsTapRecognizer = tapRecognizer
+    }
+
+    func configureInitialControlsState() {
+        showsPlaybackControls = false
+    }
+
+    @objc private func handleRevealControlsTap() {
+        guard !showsPlaybackControls else { return }
+        showsPlaybackControls = true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
     }
 }
 
@@ -658,6 +695,15 @@ struct TweetDetailView: View {
     private var hasVideoAttachment: Bool {
         guard let attachments = displayTweet.attachments else { return false }
         return attachments.contains { $0.type == .video || $0.type == .hls_video }
+    }
+
+    private var firstMainTweetVideoToAutoplay: (url: URL, mid: String, mediaType: MediaType)? {
+        guard let baseUrl = displayTweet.author?.baseUrl,
+              let attachment = displayTweet.attachments?.first(where: { $0.type == .video || $0.type == .hls_video }),
+              let url = attachment.getUrl(baseUrl) else {
+            return nil
+        }
+        return (url, attachment.mid, attachment.type)
     }
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -860,6 +906,16 @@ struct TweetDetailView: View {
 
             // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
             DetailVideoManager.shared.activateForDetail()
+
+            // Load the initially visible top video immediately so opening detail view
+            // reuses the feed player without waiting for the visibility debounce.
+            if let initialVideo = firstMainTweetVideoToAutoplay {
+                DetailVideoManager.shared.loadVideo(
+                    url: initialVideo.url,
+                    mid: initialVideo.mid,
+                    mediaType: initialVideo.mediaType
+                )
+            }
 
             // Activate comments video playback coordinator
             commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)

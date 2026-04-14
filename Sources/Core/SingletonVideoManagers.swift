@@ -1800,6 +1800,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private var isItemReady = false
     private var itemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
+    private var pendingFeedResumeTime: CMTime?
 
     /// When true, the current player was borrowed from the feed cell's SharedAssetCache.
     /// clearCurrentVideo() must NOT call replaceCurrentItem(with: nil) on a loaned player,
@@ -1856,6 +1857,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             }
             return
         }
+        let wasLoanedPlayer = isPlayerLoaned
 
         // Save old video position before switching
         if let player = currentPlayer, player.currentItem != nil, currentVideoMid != mid {
@@ -1867,7 +1869,11 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     wasPlaying: player.rate > 0, context: .detailView, duration: d)
             }
             player.pause()
-            player.replaceCurrentItem(with: nil)
+            if isPlayerLoaned {
+                player.isMuted = MuteState.shared.isMuted
+            } else {
+                player.replaceCurrentItem(with: nil)
+            }
         }
 
         // Bump generation to ignore stale async completions
@@ -1889,30 +1895,42 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             pi.removeObserver(self, forKeyPath: "status")
             hasKVOObserver = false
         }
+        if wasLoanedPlayer {
+            currentPlayer = nil
+        }
 
         currentVideoMid = mid
         isPlayerLoaned = false
+        pendingFeedResumeTime = preferredFeedResumeTime(for: mid)
 
         // Try cached player path first (fast, synchronous)
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedItem = cachedPlayer.currentItem {
-            let playerItem = AVPlayerItem(asset: cachedItem.asset)
-
             // Clear proxy cancelled state
             LocalHTTPServer.shared.clearCancelledState(for: mid)
 
             AudioSessionManager.shared.activateForVideoPlayback()
 
-            if currentPlayer == nil {
-                currentPlayer = AVPlayer(playerItem: playerItem)
-            } else {
-                currentPlayer?.replaceCurrentItem(with: playerItem)
-            }
-            currentPlayer?.isMuted = false
+            NotificationCenter.default.post(
+                name: .videoPlayerLoaned,
+                object: nil,
+                userInfo: ["videoMid": mid]
+            )
 
-            setupDetailCompletionObserver(playerItem)
+            cachedPlayer.isMuted = false
+            currentPlayer = cachedPlayer
+            isPlayerLoaned = true
+
+            setupDetailCompletionObserver(cachedItem)
             setupDetailTimeControlObserver()
-            startDetailPlayback(playerItem: playerItem, mid: mid)
+            if cachedItem.status == .readyToPlay {
+                isItemReady = true
+                seekAndPlay(playerItem: cachedItem, mid: mid)
+            } else {
+                startDetailPlayback(playerItem: cachedItem, mid: mid)
+                cachedItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                cachedPlayer.play()
+            }
             return
         }
 
@@ -1967,8 +1985,56 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
     }
 
+    private func preferredFeedResumeTime(for mid: String) -> CMTime? {
+        if let player = SharedAssetCache.shared.getCachedPlayer(for: mid) {
+            let currentTime = player.currentTime()
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                return currentTime
+            }
+        }
+
+        if let cachedPlayback = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
+            let currentTime = cachedPlayback.time
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                return currentTime
+            }
+        }
+
+        if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .mediaCell),
+           let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .mediaCell) {
+            let currentTime = saved.currentTime
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                return currentTime
+            }
+        }
+
+        return nil
+    }
+
     private func seekAndPlay(playerItem: AVPlayerItem, mid: String) {
         let duration = playerItem.duration
+        if let feedResumeTime = pendingFeedResumeTime {
+            pendingFeedResumeTime = nil
+            let savedSec = feedResumeTime.seconds
+            if savedSec.isFinite && savedSec > 0.25 {
+                if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
+                    let player = currentPlayer
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                        player?.play()
+                        print("▶️ [DetailVideoManager] Continued from feed at end - rewound")
+                    }
+                    return
+                }
+                let player = currentPlayer
+                currentPlayer?.seek(to: feedResumeTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                    guard finished else { return }
+                    player?.play()
+                    print("▶️ [DetailVideoManager] Continued from feed position \(savedSec)s")
+                }
+                return
+            }
+        }
+
         // Check PersistentVideoStateManager for saved position
         if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .detailView),
            let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) {
@@ -2155,6 +2221,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         timeControlStatusObserver = nil
         isItemReady = false
         isBuffering = false
+        pendingFeedResumeTime = nil
 
         // Remove legacy KVO observer before clearing (only if it was added)
         if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
