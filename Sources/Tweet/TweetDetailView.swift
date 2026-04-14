@@ -1025,17 +1025,15 @@ struct TweetDetailView: View {
                 isPinned: displayTweet.isPinned(in: pinnedTweets),
                 showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid,
                 onShareTap: {
-                    let shareText = TweetActionBarView.buildShareText(
-                        tweet: displayTweet,
-                        hproseInstance: hproseInstance,
-                        isInDetailView: true
-                    )
-                    let item = CustomShareItem(shareText: shareText, tweet: displayTweet, previewImage: nil)
-                    var items: [Any] = [item]
-                    if let appIcon = UIImage(named: "ic_splash_r") {
-                        items.append(CustomShareImage(image: appIcon))
+                    Task {
+                        let items = await TweetActionBarView.buildDetailShareItems(
+                            tweet: displayTweet,
+                            hproseInstance: hproseInstance
+                        )
+                        await MainActor.run {
+                            menuShareItems = ShareSheetData(items: items)
+                        }
                     }
-                    menuShareItems = ShareSheetData(items: items)
                 }
             )
             .padding(.trailing, -20)

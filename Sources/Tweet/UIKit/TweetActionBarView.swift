@@ -528,6 +528,21 @@ class TweetActionBarView: UIView {
         return items
     }
 
+    @MainActor
+    static func buildDetailShareItems(tweet: Tweet, hproseInstance: HproseInstance, parentTweet: Tweet? = nil) async -> [Any] {
+        let helper = TweetActionBarView(frame: .zero)
+        helper.isInDetailView = true
+        helper.parentTweet = parentTweet
+
+        let preferredBaseUrl = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hproseInstance)
+        if let author = tweet.author, let url = URL(string: preferredBaseUrl) {
+            author.baseUrl = url
+        }
+
+        helper.attachmentPreviewImage = await helper.loadAttachmentPreviewImage(for: tweet, hproseInstance: hproseInstance)
+        return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
+    }
+
     /// Build share text for a tweet
     static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
