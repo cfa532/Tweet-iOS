@@ -2,7 +2,6 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import LinkPresentation
-import NaturalLanguage
 
 enum UserActions: Int {
     case FAVORITE = 0
@@ -1667,85 +1666,6 @@ class CustomShareItem: NSObject, UIActivityItemSource {
     func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
         return shareText
     }
-
-    private func normalizedText(_ text: String?, maxLength: Int) -> String? {
-        guard let text else { return nil }
-        let cleaned = text
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !cleaned.isEmpty else { return nil }
-        if cleaned.count <= maxLength {
-            return cleaned
-        }
-        return String(cleaned.prefix(maxLength)) + "..."
-    }
-
-    private func splitContentAtWordBoundary(_ text: String, titleWordLimit: Int) -> (title: String?, body: String?) {
-        let tokenizer = NLTokenizer(unit: .word)
-        tokenizer.string = text
-
-        var tokenCount = 0
-        var splitIndex: String.Index?
-        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
-            let token = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !token.isEmpty {
-                tokenCount += 1
-                if tokenCount == titleWordLimit {
-                    splitIndex = range.upperBound
-                    return false
-                }
-            }
-            return true
-        }
-
-        guard tokenCount > 0 else {
-            return (nil, nil)
-        }
-
-        guard let splitIndex else {
-            return (text, nil)
-        }
-
-        let title = String(text[..<splitIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = String(text[splitIndex...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        return (title.isEmpty ? nil : title, body.isEmpty ? nil : body)
-    }
-
-    private func contentTitleAndBody() -> (title: String?, body: String?) {
-        guard let content = normalizedText(tweet.content, maxLength: 500) else {
-            return (nil, nil)
-        }
-
-        return splitContentAtWordBoundary(content, titleWordLimit: 10)
-    }
-
-    private func metadataTitle() -> String? {
-        if let title = normalizedText(tweet.title, maxLength: 80) {
-            return title
-        }
-        let contentParts = contentTitleAndBody()
-        if let contentTitle = normalizedText(contentParts.title, maxLength: 80) {
-            return contentTitle
-        }
-
-        let attachmentText = composeAttachmentTypeText(for: tweet)
-        return attachmentText.isEmpty ? nil : attachmentText
-    }
-
-    private func metadataSubtitle() -> String? {
-        guard normalizedText(tweet.title, maxLength: 80) != nil else {
-            let contentParts = contentTitleAndBody()
-            return normalizedText(contentParts.body, maxLength: 140)
-        }
-
-        if let content = normalizedText(tweet.content, maxLength: 140) {
-            return content
-        }
-
-        let attachmentText = composeAttachmentTypeText(for: tweet)
-        return attachmentText.isEmpty ? nil : attachmentText
-    }
     
     func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
         // Custom app name with bird icon using the same algorithm as share text
@@ -1798,16 +1718,22 @@ class CustomShareItem: NSObject, UIActivityItemSource {
         print("DEBUG: [SHARE] Tweet content: '\(tweet.content ?? "nil")'")
         print("DEBUG: [SHARE] Tweet attachments count: \(tweet.attachments?.count ?? 0)")
         
-        if let title = metadataTitle() {
+        // Set the title
+        if let title = tweet.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             metadata.title = title
-            print("DEBUG: [SHARE] Final metadata.title value: '\(title)'")
-        }
-
-        // LPLinkMetadata has no public subtitle API, but the share sheet renders
-        // originalURL as a second line of text for custom metadata.
-        if let subtitle = metadataSubtitle() {
-            metadata.originalURL = URL(fileURLWithPath: subtitle)
-            print("DEBUG: [SHARE] Final metadata subtitle value: '\(subtitle)'")
+            print("DEBUG: [SHARE] Link metadata title from tweet title: \(title)")
+        } else if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let maxLength = 80
+            let cleanedContent = content.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            let truncated = cleanedContent.count > maxLength ? String(cleanedContent.prefix(maxLength)) + "..." : cleanedContent
+            metadata.title = truncated
+            print("DEBUG: [SHARE] Link metadata title from tweet content: \(truncated)")
+        } else {
+            // No title or content, compose from first 3 attachment types
+            let attachmentText = composeAttachmentTypeText(for: tweet)
+            metadata.title = attachmentText.isEmpty ? nil : attachmentText
+            print("DEBUG: [SHARE] Link metadata title from attachments: '\(attachmentText)'")
+            print("DEBUG: [SHARE] Final metadata.title value: '\(metadata.title ?? "nil")'")
         }
         
         // Set the icon/thumbnail image
