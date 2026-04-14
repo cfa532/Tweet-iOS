@@ -600,14 +600,10 @@ private struct DetailSingletonVideoPlayerView: View {
 private struct DetailAVPlayerView: UIViewControllerRepresentable {
     let player: AVPlayer
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
     func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = InteractiveDetailAVPlayerViewController()
+        let vc = AVPlayerViewController()
         vc.player = player
-        vc.configureInitialControlsState()
+        vc.showsPlaybackControls = true
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
         return vc
@@ -617,44 +613,9 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
         if vc.player !== player {
             vc.player = player
         }
-        if let interactiveVC = vc as? InteractiveDetailAVPlayerViewController {
-            let playerIdentity = ObjectIdentifier(player)
-            if context.coordinator.lastPlayerIdentity != playerIdentity {
-                interactiveVC.configureInitialControlsState()
-                context.coordinator.lastPlayerIdentity = playerIdentity
-            }
+        if !vc.showsPlaybackControls {
+            vc.showsPlaybackControls = true
         }
-    }
-
-    final class Coordinator {
-        var lastPlayerIdentity: ObjectIdentifier?
-    }
-}
-
-private final class InteractiveDetailAVPlayerViewController: AVPlayerViewController, UIGestureRecognizerDelegate {
-    private var revealControlsTapRecognizer: UITapGestureRecognizer?
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-
-        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleRevealControlsTap))
-        tapRecognizer.cancelsTouchesInView = false
-        tapRecognizer.delegate = self
-        view.addGestureRecognizer(tapRecognizer)
-        revealControlsTapRecognizer = tapRecognizer
-    }
-
-    func configureInitialControlsState() {
-        showsPlaybackControls = false
-    }
-
-    @objc private func handleRevealControlsTap() {
-        guard !showsPlaybackControls else { return }
-        showsPlaybackControls = true
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        true
     }
 }
 
