@@ -637,6 +637,7 @@ struct TweetDetailView: View {
     @State private var comments: [Tweet] = []
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
+    @State private var menuShareItems: ShareSheetData?
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
 
@@ -792,6 +793,9 @@ struct TweetDetailView: View {
         }
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
+        }
+        .sheet(item: $menuShareItems) { data in
+            ShareSheetView(items: data.items)
         }
         .overlay(alignment: .top) {
             if showToast {
@@ -1019,7 +1023,20 @@ struct TweetDetailView: View {
             TweetMenu(
                 tweet: displayTweet, 
                 isPinned: displayTweet.isPinned(in: pinnedTweets),
-                showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid
+                showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid,
+                onShareTap: {
+                    let shareText = TweetActionBarView.buildShareText(
+                        tweet: displayTweet,
+                        hproseInstance: hproseInstance,
+                        isInDetailView: true
+                    )
+                    let item = CustomShareItem(shareText: shareText, tweet: displayTweet, previewImage: nil)
+                    var items: [Any] = [item]
+                    if let appIcon = UIImage(named: "ic_splash_r") {
+                        items.append(CustomShareImage(image: appIcon))
+                    }
+                    menuShareItems = ShareSheetData(items: items)
+                }
             )
             .padding(.trailing, -20)
         }
@@ -1068,22 +1085,10 @@ struct TweetDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionBarRepresentable(
+        TweetActionButtonsView(
             tweet: displayTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
-            },
-            onShowLogin: {
-                showLoginSheet = true
-            },
-            isInDetailView: true,
-            onShowToast: { message, isError in
-                toastMessage = message
-                toastIsError = isError
-                showToast = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    showToast = false
-                }
             }
         )
         .frame(height: 30)

@@ -529,7 +529,7 @@ class TweetActionBarView: UIView {
     }
 
     /// Build share text for a tweet
-    private static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
+    static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
 
         // Priority: title > content > attachment types
