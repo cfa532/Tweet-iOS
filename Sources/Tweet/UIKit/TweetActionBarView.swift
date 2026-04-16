@@ -156,6 +156,7 @@ class TweetActionBarView: UIView {
 
         // Subscribe to count changes
         tweet.$commentCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.commentButton.setCount(count ?? 0)
@@ -163,6 +164,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$retweetCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.retweetButton.setCount(count ?? 0)
@@ -170,6 +172,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$favoriteCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.likeButton.setCount(count ?? 0)
@@ -177,6 +180,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$bookmarkCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.bookmarkButton.setCount(count ?? 0)
@@ -184,6 +188,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$favorites
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let tweet = self?.currentTweet else { return }

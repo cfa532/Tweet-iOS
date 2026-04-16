@@ -54,7 +54,7 @@ class TweetBodyUIView: UIView {
         return v
     }()
 
-    // Document attachments hosting (keeps SwiftUI — not in critical path)
+    // Document attachments hosting (keeps SwiftUI, but reuses one host per cell)
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
 
@@ -83,6 +83,14 @@ class TweetBodyUIView: UIView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let hostingController = documentHostingController {
+            hostingController.willMove(toParent: nil)
+            hostingController.view.removeFromSuperview()
+            hostingController.removeFromParent()
+        }
     }
 
     private func setupViews() {
@@ -211,9 +219,10 @@ class TweetBodyUIView: UIView {
         contentLabel.numberOfLines = Self.maxContentLines
         contentLabel.lineBreakMode = .byTruncatingTail
 
-        // Clean up media grid and document hosting
+        // Clean up media grid and reset document content for reuse
         mediaGridView.prepareForReuse()
-        removeDocumentHosting()
+        documentContainerView.isHidden = true
+        documentHostingController?.rootView = AnyView(EmptyView())
 
         // --- Text content ---
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -318,30 +327,16 @@ class TweetBodyUIView: UIView {
         if hasDocuments {
             documentContainerView.isHidden = false
 
-            // Host SwiftUI DocumentAttachmentsView (not in critical scroll path)
+            // Reuse one hosting controller per cell instead of recreating it on every configure.
             let docView = DocumentAttachmentsView(
                 parentTweet: tweet,
                 documents: documentAttachments,
                 maxDocuments: 2
             )
-            let hostingController = UIHostingController(rootView: AnyView(docView))
-            hostingController.view.backgroundColor = .clear
-            hostingController.view.insetsLayoutMarginsFromSafeArea = false
-            hostingController.sizingOptions = [.intrinsicContentSize]
-
-            parentViewController.addChild(hostingController)
-            documentContainerView.addSubview(hostingController.view)
-            hostingController.didMove(toParent: parentViewController)
-
-            hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                hostingController.view.topAnchor.constraint(equalTo: documentContainerView.topAnchor),
-                hostingController.view.leadingAnchor.constraint(equalTo: documentContainerView.leadingAnchor),
-                hostingController.view.trailingAnchor.constraint(equalTo: documentContainerView.trailingAnchor),
-                hostingController.view.bottomAnchor.constraint(equalTo: documentContainerView.bottomAnchor),
-            ])
-
-            documentHostingController = hostingController
+            let hostingController = ensureDocumentHostingController(parentViewController: parentViewController)
+            hostingController.rootView = AnyView(docView)
+            hostingController.view.invalidateIntrinsicContentSize()
+            hostingController.view.setNeedsLayout()
 
             // Add spacing before documents if there's media or text
             if hasMedia || !contentLabel.isHidden {
@@ -349,6 +344,7 @@ class TweetBodyUIView: UIView {
             }
         } else {
             documentContainerView.isHidden = true
+            documentHostingController?.rootView = AnyView(EmptyView())
         }
     }
 
@@ -366,7 +362,8 @@ class TweetBodyUIView: UIView {
         onTweetBodyTap = nil
         onContentExpanded = nil
         mediaGridView.prepareForReuse()
-        removeDocumentHosting()
+        documentContainerView.isHidden = true
+        documentHostingController?.rootView = AnyView(EmptyView())
 
         // Reset spacing to defaults
         contentStack.setCustomSpacing(4, after: contentLabel)
@@ -374,13 +371,45 @@ class TweetBodyUIView: UIView {
         contentStack.setCustomSpacing(0, after: captionLabel)
     }
 
-    private func removeDocumentHosting() {
-        if let hc = documentHostingController {
-            hc.willMove(toParent: nil)
-            hc.view.removeFromSuperview()
-            hc.removeFromParent()
-            documentHostingController = nil
+    private func ensureDocumentHostingController(parentViewController: UIViewController) -> UIHostingController<AnyView> {
+        if let hostingController = documentHostingController {
+            if hostingController.parent !== parentViewController {
+                hostingController.willMove(toParent: nil)
+                hostingController.view.removeFromSuperview()
+                hostingController.removeFromParent()
+                parentViewController.addChild(hostingController)
+                documentContainerView.addSubview(hostingController.view)
+                hostingController.didMove(toParent: parentViewController)
+                hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    hostingController.view.topAnchor.constraint(equalTo: documentContainerView.topAnchor),
+                    hostingController.view.leadingAnchor.constraint(equalTo: documentContainerView.leadingAnchor),
+                    hostingController.view.trailingAnchor.constraint(equalTo: documentContainerView.trailingAnchor),
+                    hostingController.view.bottomAnchor.constraint(equalTo: documentContainerView.bottomAnchor),
+                ])
+            }
+            return hostingController
         }
+
+        let hostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.insetsLayoutMarginsFromSafeArea = false
+        hostingController.sizingOptions = [.intrinsicContentSize]
+
+        parentViewController.addChild(hostingController)
+        documentContainerView.addSubview(hostingController.view)
+        hostingController.didMove(toParent: parentViewController)
+
+        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hostingController.view.topAnchor.constraint(equalTo: documentContainerView.topAnchor),
+            hostingController.view.leadingAnchor.constraint(equalTo: documentContainerView.leadingAnchor),
+            hostingController.view.trailingAnchor.constraint(equalTo: documentContainerView.trailingAnchor),
+            hostingController.view.bottomAnchor.constraint(equalTo: documentContainerView.bottomAnchor),
+        ])
+
+        documentHostingController = hostingController
+        return hostingController
     }
 
     // MARK: - Helpers
