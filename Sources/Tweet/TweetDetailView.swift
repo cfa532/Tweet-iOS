@@ -868,8 +868,9 @@ struct TweetDetailView: View {
             // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
             DetailVideoManager.shared.activateForDetail()
 
-            // Load the initially visible top video immediately so opening detail view
-            // reuses the feed player without waiting for the visibility debounce.
+            // Prevent audible playback during the push transition while still allowing
+            // immediate player attachment (avoids black flicker on open).
+            DetailVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
             if let initialVideo = firstMainTweetVideoToAutoplay {
                 DetailVideoManager.shared.loadVideo(
                     url: initialVideo.url,
@@ -916,7 +917,7 @@ struct TweetDetailView: View {
             // Cancel bottom bounce debouncer
             bottomBounceDebouncer?.invalidate()
             bottomBounceDebouncer = nil
-            
+
             // Restore bottom navigation bar visibility when leaving detail view
             if !isNavigationBarVisible {
                 isNavigationBarVisible = true

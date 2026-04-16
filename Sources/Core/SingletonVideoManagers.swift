@@ -252,6 +252,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard isActive else { return }
         isActive = false
         teardownAppLifecycleNotifications()
+        startupAudioUnmuteTask?.cancel()
+        startupAudioUnmuteTask = nil
+        startupAudioMuteUntil = .distantPast
 
         // Save playback position so the feed cell and the next fullscreen open can restore it.
         if let player = singletonPlayer,
@@ -469,6 +472,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     // Debouncing for buffering state to prevent rapid spinner blinking during seeks
     private var bufferingDebounceTask: DispatchWorkItem?
+    private var startupAudioMuteUntil: Date = .distantPast
+    private var startupAudioUnmuteTask: Task<Void, Never>?
 
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var loadGeneration: Int = 0
@@ -634,8 +639,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 self.singletonPlayer?.replaceCurrentItem(with: playerItem)
             }
 
-            // Always unmuted in fullscreen
-            self.singletonPlayer?.isMuted = false
+            applyStartupAudioMuteIfNeeded()
 
             // CRITICAL: Setup fullscreen's unique functionality
             self.setupVideoCompletionObserver(playerItem)
@@ -670,8 +674,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         self.singletonPlayer?.replaceCurrentItem(with: playerItem)
                     }
                     
-                    // Always unmuted in fullscreen
-                    self.singletonPlayer?.isMuted = false
+                    self.applyStartupAudioMuteIfNeeded()
                     
                     // Setup video completion observer
                     self.setupVideoCompletionObserver(playerItem)
@@ -703,6 +706,30 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.isPlaying = false
                 }
             }
+        }
+    }
+    
+    func setStartupAudioMuteWindow(duration: TimeInterval) {
+        let safeDuration = max(0, duration)
+        startupAudioMuteUntil = Date().addingTimeInterval(safeDuration)
+        applyStartupAudioMuteIfNeeded()
+    }
+
+    private func applyStartupAudioMuteIfNeeded() {
+        guard let player = singletonPlayer else { return }
+        let now = Date()
+        if now < startupAudioMuteUntil {
+            player.isMuted = true
+            startupAudioUnmuteTask?.cancel()
+            let delay = startupAudioMuteUntil.timeIntervalSince(now)
+            let nanos = UInt64(max(0, delay) * 1_000_000_000)
+            startupAudioUnmuteTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: nanos)
+                guard Date() >= self.startupAudioMuteUntil else { return }
+                self.singletonPlayer?.isMuted = false
+            }
+        } else {
+            player.isMuted = false
         }
     }
     
@@ -1544,6 +1571,9 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         isActive = false
         teardownAppLifecycleNotifications()
         teardownCoordinatorNotificationObservers()
+        startupAudioUnmuteTask?.cancel()
+        startupAudioUnmuteTask = nil
+        startupAudioMuteUntil = .distantPast
         mainTweetAttachmentMids.removeAll()
         mainTweetAttachments.removeAll()
         mainTweetBaseUrl = nil
@@ -1801,6 +1831,8 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private var itemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
     private var pendingFeedResumeTime: CMTime?
+    private var startupAudioMuteUntil: Date = .distantPast
+    private var startupAudioUnmuteTask: Task<Void, Never>?
 
     /// When true, the current player was borrowed from the feed cell's SharedAssetCache.
     /// clearCurrentVideo() must NOT call replaceCurrentItem(with: nil) on a loaned player,
@@ -1839,6 +1871,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     func loadVideo(url: URL, mid: String, mediaType: MediaType) {
         // Fast path: same video already loaded and healthy
         if currentVideoMid == mid, currentPlayer?.currentItem != nil, !isPlayerBroken() {
+            applyStartupAudioMuteIfNeeded()
             if isItemReady {
                 isPlaying = true
                 // Rewind if at end, then play
@@ -1917,9 +1950,10 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 userInfo: ["videoMid": mid]
             )
 
-            cachedPlayer.isMuted = false
+            cachedPlayer.isMuted = true
             currentPlayer = cachedPlayer
             isPlayerLoaned = true
+            applyStartupAudioMuteIfNeeded()
 
             setupDetailCompletionObserver(cachedItem)
             setupDetailTimeControlObserver()
@@ -1947,7 +1981,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     } else {
                         self.currentPlayer?.replaceCurrentItem(with: playerItem)
                     }
-                    self.currentPlayer?.isMuted = false
+                    self.applyStartupAudioMuteIfNeeded()
                     self.setupDetailCompletionObserver(playerItem)
                     self.setupDetailTimeControlObserver()
                     self.startDetailPlayback(playerItem: playerItem, mid: mid)
@@ -1958,6 +1992,30 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     print("❌ [DetailVideoManager] Failed to load video: \(error)")
                 }
             }
+        }
+    }
+    
+    func setStartupAudioMuteWindow(duration: TimeInterval) {
+        let safeDuration = max(0, duration)
+        startupAudioMuteUntil = Date().addingTimeInterval(safeDuration)
+        applyStartupAudioMuteIfNeeded()
+    }
+
+    private func applyStartupAudioMuteIfNeeded() {
+        guard let player = currentPlayer else { return }
+        let now = Date()
+        if now < startupAudioMuteUntil {
+            player.isMuted = true
+            startupAudioUnmuteTask?.cancel()
+            let delay = startupAudioMuteUntil.timeIntervalSince(now)
+            let nanos = UInt64(max(0, delay) * 1_000_000_000)
+            startupAudioUnmuteTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: nanos)
+                guard Date() >= self.startupAudioMuteUntil else { return }
+                self.currentPlayer?.isMuted = false
+            }
+        } else {
+            player.isMuted = false
         }
     }
 

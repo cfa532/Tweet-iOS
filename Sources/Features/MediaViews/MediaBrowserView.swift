@@ -104,6 +104,7 @@ struct MediaBrowserView: View {
             .onAppear {
                 // Activate manager first to register lifecycle observers
                 FullScreenVideoManager.shared.activateForFullscreen()
+                FullScreenVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
                 setupFullScreenManager()
                 OverlayVisibilityCoordinator.shared.beginOverlay(id: "mediaBrowserView", source: "MediaBrowserView")
 
