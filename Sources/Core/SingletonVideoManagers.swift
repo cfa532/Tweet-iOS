@@ -1950,7 +1950,6 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 userInfo: ["videoMid": mid]
             )
 
-            cachedPlayer.isMuted = true
             currentPlayer = cachedPlayer
             isPlayerLoaned = true
             applyStartupAudioMuteIfNeeded()
@@ -2077,17 +2076,23 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             if savedSec.isFinite && savedSec > 0.25 {
                 if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
                     let player = currentPlayer
-                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                        player?.play()
-                        print("▶️ [DetailVideoManager] Continued from feed at end - rewound")
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            self?.applyStartupAudioMuteIfNeeded()
+                            player?.play()
+                            print("▶️ [DetailVideoManager] Continued from feed at end - rewound")
+                        }
                     }
                     return
                 }
                 let player = currentPlayer
-                currentPlayer?.seek(to: feedResumeTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                currentPlayer?.seek(to: feedResumeTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                     guard finished else { return }
-                    player?.play()
-                    print("▶️ [DetailVideoManager] Continued from feed position \(savedSec)s")
+                    Task { @MainActor [weak self] in
+                        self?.applyStartupAudioMuteIfNeeded()
+                        player?.play()
+                        print("▶️ [DetailVideoManager] Continued from feed position \(savedSec)s")
+                    }
                 }
                 return
             }
@@ -2101,17 +2106,23 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 // If near end, restart from beginning
                 if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
                     let player = currentPlayer
-                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                        player?.play()
-                        print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            self?.applyStartupAudioMuteIfNeeded()
+                            player?.play()
+                            print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
+                        }
                     }
                     return
                 }
                 let player = currentPlayer
-                currentPlayer?.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                currentPlayer?.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                     guard finished else { return }
-                    player?.play()
-                    print("▶️ [DetailVideoManager] Playing from saved position \(savedSec)s")
+                    Task { @MainActor [weak self] in
+                        self?.applyStartupAudioMuteIfNeeded()
+                        player?.play()
+                        print("▶️ [DetailVideoManager] Playing from saved position \(savedSec)s")
+                    }
                 }
                 return
             }
@@ -2121,13 +2132,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             let remaining = duration.seconds - playerItem.currentTime().seconds
             if remaining <= 0.5 {
                 let player = currentPlayer
-                currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                    player?.play()
-                    print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
+                currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.applyStartupAudioMuteIfNeeded()
+                        player?.play()
+                        print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
+                    }
                 }
                 return
             }
         }
+        applyStartupAudioMuteIfNeeded()
         currentPlayer?.play()
         print("▶️ [DetailVideoManager] Playing immediately")
     }
