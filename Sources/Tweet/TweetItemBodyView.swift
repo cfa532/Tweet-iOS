@@ -131,7 +131,7 @@ struct TweetItemBodyView: View {
                             .clipped()
                             .cornerRadius(8)
                             .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
-                            .padding(.top, 4)
+                            .padding(.top, 6)
                             // STABILITY: Layout priority ensures media grid maintains consistent sizing
                             .layoutPriority(1)
                             // STABILITY: Fixed vertical size prevents content from shifting media position
