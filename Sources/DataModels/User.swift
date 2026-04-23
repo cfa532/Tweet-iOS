@@ -1,4 +1,3 @@
- import Foundation
 import Foundation
 import hprose
 
@@ -174,7 +173,9 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
     
-    @Published var hostIds: [MimeiId]? // List of MimeiId
+    @Published var hostIds: [MimeiId]? // hostIds[0]=writable host, hostIds[1]=best access node
+    /// For read RPCs: prefer hostIds[1] (best access node from provider resolution), fall back to hostIds[0].
+    var accessHostId: MimeiId? { hostIds.flatMap { $0.count > 1 ? $0[1] : $0.first } }
     @Published var hasAcceptedTerms: Bool = false // Terms of Service acceptance
     @Published var publicKey: String?
     @Published var agentPublicKey: String? // Public key for AI agent authentication
