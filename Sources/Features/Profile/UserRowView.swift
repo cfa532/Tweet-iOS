@@ -24,6 +24,7 @@ struct UserRowView: View {
     @State private var showToast: Bool = false
     @State private var toastMessage: String = ""
     @State private var toastType: ToastView.ToastType = .error
+    @State private var isToggling: Bool = false
     @EnvironmentObject private var hproseInstance: HproseInstance
     
     // MARK: - Initialization
@@ -115,15 +116,17 @@ struct UserRowView: View {
                     }
                     Spacer()
                     // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
-                    if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest {
+                    if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest, userId != hproseInstance.appUser.mid {
                         DebounceButton(
                             cooldownDuration: 0.5,
                             enableHaptic: false
                         ) {
-                            // Toggle optimistically first
+                            guard !isToggling else { return }
+                            isToggling = true
                             isFollowing.toggle()
                             Task {
                                 await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
+                                await MainActor.run { isToggling = false }
                             }
                         } label: {
                             Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
@@ -137,6 +140,8 @@ struct UserRowView: View {
                                 )
                                 .foregroundColor(isFollowing ? .red : .blue)
                         }
+                        .disabled(isToggling)
+                        .opacity(isToggling ? 0.6 : 1.0)
                     }
                 }
                 .padding(.horizontal, 12)
