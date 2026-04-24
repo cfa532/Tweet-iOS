@@ -22,3 +22,4 @@ build_test.log
 *.log
 *.log
 build_output.log
+/.claude
