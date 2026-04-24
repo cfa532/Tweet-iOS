@@ -1491,7 +1491,9 @@ class TweetTableViewController: UITableViewController {
                 var embeddedBodyH: CGFloat = 2 // contentStack top padding
 
                 if hasEmbeddedText {
-                    let embeddedWidth = contentWidth - 16 - 40 - 8 // embedded padding + avatar + spacing
+                    // bodyView spans full EmbeddedTweetUIView contentStack width (NOT beside avatar)
+                    // contentStack.width = screenWidth - 77 = contentWidth - 12
+                    let embeddedWidth = contentWidth - 12
                     // Build (or retrieve cached) attributed string for embedded tweet
                     let attrString: NSAttributedString
                     if let cached = embeddedTweet.cachedContentAttributedString,

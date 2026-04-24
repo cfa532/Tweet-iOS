@@ -230,8 +230,11 @@ class TweetBodyUIView: UIView {
             let screenWidth = UIScreen.main.bounds.width
             let textWidth: CGFloat
             if isEmbedded {
-                // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4) - embPad(16) - embAvatar(40) - embSpacing(8)
-                textWidth = screenWidth - 129
+                // bodyView is below headerRow (full contentStack width, NOT beside embedded avatar)
+                // screenWidth - cellPad(16) - mainLeading(3) - mainAvatar(42) - mainSpacing(4)
+                //             - embViewLeadingOffset(-4) - embContentStackPad(8+8)
+                // = screenWidth - 77
+                textWidth = screenWidth - 77
             } else {
                 // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4)
                 textWidth = screenWidth - 65
