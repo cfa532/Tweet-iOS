@@ -64,6 +64,9 @@ class TweetActionBarView: UIView {
     private var attachmentPreviewImage: UIImage?
     private var isPreparingShare = false
 
+    // Comment overlay cleanup observer (stored to prevent accumulation)
+    private var commentDismissObserver: NSObjectProtocol?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setupViews()
@@ -254,14 +257,21 @@ class TweetActionBarView: UIView {
             // Present modally
             parentVC.present(hostingController, animated: true)
 
-            // Observe dismissal to clean up overlay
-            NotificationCenter.default.addObserver(
+            // Observe dismissal to clean up overlay — store token to prevent accumulation
+            if let existing = commentDismissObserver {
+                NotificationCenter.default.removeObserver(existing)
+            }
+            commentDismissObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
                 guard let self = self, let tweet = self.currentTweet else { return }
                 if parentVC.presentedViewController == nil {
+                    if let obs = self.commentDismissObserver {
+                        NotificationCenter.default.removeObserver(obs)
+                        self.commentDismissObserver = nil
+                    }
                     Task { @MainActor in
                         OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
                     }
@@ -1094,6 +1104,10 @@ class TweetActionBarView: UIView {
 
     func prepareForReuse() {
         cancellables.removeAll()
+        if let obs = commentDismissObserver {
+            NotificationCenter.default.removeObserver(obs)
+            commentDismissObserver = nil
+        }
         currentTweetId = nil
         currentTweet = nil
         hproseInstance = nil
