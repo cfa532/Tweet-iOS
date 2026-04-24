@@ -1416,7 +1416,8 @@ class TweetTableViewController: UITableViewController {
                         !(displayTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
                     let hasFileName = att.fileName != nil &&
                         !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                    if hasTitle || hasFileName {
+                    // fileName caption only shown when tweet has no text (matches singleVideoCaption)
+                    if hasTitle || (hasFileName && !hasTextContent) {
                         bodyHeight += 2 // customSpacing(after: mediaContainerView)
                         bodyHeight += 17 // caption label height (14pt font, single line)
                         hasCaptionLabel = true
@@ -1468,7 +1469,12 @@ class TweetTableViewController: UITableViewController {
 
                 let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
 
+                // Must be computed before hasEmbeddedCaption (fileName caption depends on it)
+                let hasEmbeddedText = embeddedTweet.content != nil &&
+                    !(embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+
                 // Check for video caption in embedded tweet
+                // fileName caption only shown when embedded tweet has no text (matches singleVideoCaption)
                 var hasEmbeddedCaption = false
                 if embeddedMedia.count == 1 {
                     let att = embeddedMedia[0]
@@ -1477,14 +1483,12 @@ class TweetTableViewController: UITableViewController {
                             !(embeddedTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
                         let hasFileName = att.fileName != nil &&
                             !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                        hasEmbeddedCaption = hasTitle || hasFileName
+                        hasEmbeddedCaption = hasTitle || (hasFileName && !hasEmbeddedText)
                     }
                 }
 
                 // Calculate embedded bodyView height (matches TweetBodyUIView auto layout)
                 var embeddedBodyH: CGFloat = 2 // contentStack top padding
-                let hasEmbeddedText = embeddedTweet.content != nil &&
-                    !(embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
 
                 if hasEmbeddedText {
                     let embeddedWidth = contentWidth - 16 - 40 - 8 // embedded padding + avatar + spacing
@@ -1503,26 +1507,28 @@ class TweetTableViewController: UITableViewController {
                     Self.measurementLabel.attributedText = attrString
                     let textSize = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude))
                     embeddedBodyH += ceil(textSize.height)
-                    embeddedBodyH += 4 // spacing after contentLabel to mediaContainer
                 }
 
                 if !embeddedMedia.isEmpty {
+                    if hasEmbeddedText {
+                        embeddedBodyH += 4 // customSpacing(after: contentLabel) only when text+media both present
+                    }
                     embeddedBodyH += MediaGridViewModel.calculateHeight(for: embeddedMedia, isEmbedded: true)
                     if hasEmbeddedCaption {
                         embeddedBodyH += 2 + 17 // spacing + caption label
                     }
                 }
 
-                // textStack = header + bodyView (same font as main header)
-                let textStackH = headerHeight + embeddedBodyH
-                let contentStackH = max(40, textStackH)
-
+                // EmbeddedTweetUIView.contentStack (spacing=4):
+                //   headerRow height = max(32pt avatar, ~21pt header text) = 32pt
+                //   bodyView height = embeddedBodyH
+                // Total: 32 + 4 + embeddedBodyH = 36 + embeddedBodyH
                 // Bottom padding: 0 when media present without caption, 8 otherwise
                 let hasMedia = !embeddedMedia.isEmpty
                 let reduceBottom = hasMedia && !hasEmbeddedCaption
                 let bottomPadding: CGFloat = reduceBottom ? 0 : 8
 
-                let embeddedHeight: CGFloat = 8 + contentStackH + bottomPadding
+                let embeddedHeight: CGFloat = 8 + 36 + embeddedBodyH + bottomPadding
                 height += embeddedHeight
             } else {
                 // Not loaded: show placeholder (60pt)
