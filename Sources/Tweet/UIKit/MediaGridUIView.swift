@@ -237,28 +237,18 @@ class MediaGridUIView: UIView {
         let isLandscape1 = ar1 > 1
 
         if isLandscape0 && isLandscape1 {
-            // Both landscape: vertical stack
-            let idealHeight0 = gridWidth / CGFloat(ar0)
-            let idealHeight1 = gridWidth / CGFloat(ar1)
-            let totalIdealHeight = idealHeight0 + idealHeight1
-            let height0 = (gridHeight - spacing) * (idealHeight0 / totalIdealHeight)
-            let height1 = (gridHeight - spacing) * (idealHeight1 / totalIdealHeight)
-
+            // Both landscape: vertical stack, equal height
+            let height = (gridHeight - spacing) / 2
             return [
-                CGRect(x: 0, y: 0, width: gridWidth, height: height0),
-                CGRect(x: 0, y: height0 + spacing, width: gridWidth, height: height1)
+                CGRect(x: 0, y: 0, width: gridWidth, height: height),
+                CGRect(x: 0, y: height + spacing, width: gridWidth, height: height)
             ]
         } else {
-            // Both portrait, mixed, or same: horizontal side-by-side
-            let idealWidth0 = gridHeight * CGFloat(ar0)
-            let idealWidth1 = gridHeight * CGFloat(ar1)
-            let totalIdealWidth = idealWidth0 + idealWidth1
-            let width0 = (gridWidth - spacing) * (idealWidth0 / totalIdealWidth)
-            let width1 = (gridWidth - spacing) * (idealWidth1 / totalIdealWidth)
-
+            // Side-by-side, equal width
+            let width = (gridWidth - spacing) / 2
             return [
-                CGRect(x: 0, y: 0, width: width0, height: gridHeight),
-                CGRect(x: width0 + spacing, y: 0, width: width1, height: gridHeight)
+                CGRect(x: 0, y: 0, width: width, height: gridHeight),
+                CGRect(x: width + spacing, y: 0, width: width, height: gridHeight)
             ]
         }
     }
