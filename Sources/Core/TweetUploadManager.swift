@@ -586,9 +586,9 @@ extension TweetUploadManager {
                 
                 print("📝 [Background Submit] Submitting tweet with image attachments...")
                 
-                // Submit with retry
+                // Submit with retry — one retry, two total attempts
                 var submitRetryCount = 0
-                let maxRetries = 2
+                let maxRetries = 1
                 
                 while submitRetryCount <= maxRetries {
                     do {
@@ -849,8 +849,8 @@ extension TweetUploadManager {
         } catch {
             print("❌ [Submit] Failed to post tweet (attempt \(retryCount + 1)): \(error)")
             
-            // Retry up to 2 times
-            let maxRetries = 2
+            // One retry, two total attempts
+            let maxRetries = 1
             if retryCount < maxRetries {
                 print("🔄 [Submit] Retrying tweet submission (\(retryCount + 1)/\(maxRetries))...")
                 let delay = UInt64(retryCount + 1) * 2_000_000_000 // 2s, 4s

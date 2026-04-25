@@ -5957,129 +5957,127 @@ final class HproseInstance: ObservableObject {
     typealias PendingTweetUpload = TweetUploadManager.PendingTweetUpload
     
     func uploadTweet(_ tweet: Tweet) async throws -> Tweet? {
-        return try await withRetry {
-            // Create a clean upload payload with only allowed fields (excluding nil values)
-            var uploadPayload: [String: Any] = [
-                "mid": tweet.mid,
-                "authorId": tweet.authorId,
-                "timestamp": tweet.timestamp.timeIntervalSince1970 * 1000 // milliseconds
-            ]
-            
-            // Add optional fields only if they are not nil
-            if let content = tweet.content {
-                uploadPayload["content"] = content
-            }
-            if let title = tweet.title {
-                uploadPayload["title"] = title
-            }
-            if let originalTweetId = tweet.originalTweetId {
-                uploadPayload["originalTweetId"] = originalTweetId
-            }
-            if let originalAuthorId = tweet.originalAuthorId {
-                uploadPayload["originalAuthorId"] = originalAuthorId
-            }
-            if let attachments = tweet.attachments, !attachments.isEmpty {
-                uploadPayload["attachments"] = attachments.map { attachment in
-                    var attachmentDict: [String: Any] = [
-                        "mid": attachment.mid,
-                        "type": attachment.type.rawValue
-                    ]
-                    attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
-                    
-                    // Add optional fields
-                    if let size = attachment.size {
-                        attachmentDict["size"] = size
-                    }
-                    if let fileName = attachment.fileName {
-                        attachmentDict["fileName"] = fileName
-                    }
-                    if let aspectRatio = attachment.aspectRatio {
-                        attachmentDict["aspectRatio"] = aspectRatio
-                    }
-                    
-                    return attachmentDict
+        // Create a clean upload payload with only allowed fields (excluding nil values)
+        var uploadPayload: [String: Any] = [
+            "mid": tweet.mid,
+            "authorId": tweet.authorId,
+            "timestamp": tweet.timestamp.timeIntervalSince1970 * 1000 // milliseconds
+        ]
+
+        // Add optional fields only if they are not nil
+        if let content = tweet.content {
+            uploadPayload["content"] = content
+        }
+        if let title = tweet.title {
+            uploadPayload["title"] = title
+        }
+        if let originalTweetId = tweet.originalTweetId {
+            uploadPayload["originalTweetId"] = originalTweetId
+        }
+        if let originalAuthorId = tweet.originalAuthorId {
+            uploadPayload["originalAuthorId"] = originalAuthorId
+        }
+        if let attachments = tweet.attachments, !attachments.isEmpty {
+            uploadPayload["attachments"] = attachments.map { attachment in
+                var attachmentDict: [String: Any] = [
+                    "mid": attachment.mid,
+                    "type": attachment.type.rawValue
+                ]
+                attachmentDict["timestamp"] = attachment.timestamp.timeIntervalSince1970 * 1000
+
+                // Add optional fields
+                if let size = attachment.size {
+                    attachmentDict["size"] = size
                 }
-            }
-            if let isPrivate = tweet.isPrivate {
-                uploadPayload["isPrivate"] = isPrivate
-            }
-            if let downloadable = tweet.downloadable {
-                uploadPayload["downloadable"] = downloadable
-            }
-            
-            // Convert to JSON string
-            let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
-            let tweetJSON = String(data: jsonData, encoding: .utf8) ?? ""
-            
-            // Capture appUser properties on main thread to avoid publishing warnings
-            let hostId = await MainActor.run {
-                self.appUser.hostIds?.first
-            }
-            let client = await MainActor.run {
-                self.appUser.hproseClient
-            }
-            
-            let params: [String: Any] = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "hostid": hostId as Any,
-                "tweet": tweetJSON
-            ]
-            
-            print("DEBUG: [uploadTweet] Complete params: \(params)")
-            print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
-            print("DEBUG: [uploadTweet] Tweet authorId: \(tweet.authorId), content: \(tweet.content ?? "nil"), attachments count: \(tweet.attachments?.count ?? 0)")
-            
-            let rawResponse = client?.invoke("runMApp", withArgs: ["add_tweet", params])
-            
-            print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
-            
-            // Unwrap v2 response
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
-            // Handle the JSON response format
-            guard let responseDict = unwrappedResponse as? [String: Any] else {
-                print("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
-            }
-            
-            print("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
-            
-            // unwrapV2Response already threw for success=false
-            guard let newTweetId = responseDict["mid"] as? String else {
-                print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
-            }
-            print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
-                
-                // Immediately update appUser tweet count (like favorites/bookmarks)
-                await MainActor.run {
-                    let currentCount = self.appUser.tweetCount ?? 0
-                    self.appUser.tweetCount = currentCount + 1
-                    print("DEBUG: [uploadTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+                if let fileName = attachment.fileName {
+                    attachmentDict["fileName"] = fileName
                 }
-                
-                // Refresh appUser from server to get updated tweetCount and other properties
-                try? await self.refreshAppUserFromServer()
-                
-                // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
-                // This ensures all server-generated fields are populated correctly
-                print("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
-                if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweet.authorId) {
-                    print("DEBUG: [uploadTweet] Successfully fetched complete tweet with all fields")
-                    return completeTweet
-                } else {
-                    print("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
-                    // Fallback: return partial tweet if fetch fails
-                    let uploadedTweet = tweet
-                    let author = try? await self.fetchUser(tweet.authorId)
-                    await MainActor.run {
-                        uploadedTweet.mid = newTweetId
-                        uploadedTweet.author = author
-                    }
-                    return uploadedTweet
+                if let aspectRatio = attachment.aspectRatio {
+                    attachmentDict["aspectRatio"] = aspectRatio
                 }
+
+                return attachmentDict
+            }
+        }
+        if let isPrivate = tweet.isPrivate {
+            uploadPayload["isPrivate"] = isPrivate
+        }
+        if let downloadable = tweet.downloadable {
+            uploadPayload["downloadable"] = downloadable
+        }
+
+        // Convert to JSON string
+        let jsonData = try JSONSerialization.data(withJSONObject: uploadPayload, options: [])
+        let tweetJSON = String(data: jsonData, encoding: .utf8) ?? ""
+
+        // Capture appUser properties on main thread to avoid publishing warnings
+        let hostId = await MainActor.run {
+            self.appUser.hostIds?.first
+        }
+        let client = await MainActor.run {
+            self.appUser.hproseClient
+        }
+
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "hostid": hostId as Any,
+            "tweet": tweetJSON
+        ]
+
+        print("DEBUG: [uploadTweet] Complete params: \(params)")
+        print("DEBUG: [uploadTweet] Tweet JSON: \(tweetJSON)")
+        print("DEBUG: [uploadTweet] Tweet authorId: \(tweet.authorId), content: \(tweet.content ?? "nil"), attachments count: \(tweet.attachments?.count ?? 0)")
+
+        let rawResponse = client?.invoke("runMApp", withArgs: ["add_tweet", params])
+
+        print("DEBUG: [uploadTweet] Raw response: \(String(describing: rawResponse))")
+
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+
+        // Handle the JSON response format
+        guard let responseDict = unwrappedResponse as? [String: Any] else {
+            print("DEBUG: [uploadTweet] ERROR: Invalid response format - not a dictionary")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response format from server"])
+        }
+
+        print("DEBUG: [uploadTweet] Response dictionary keys: \(responseDict.keys)")
+
+        // unwrapV2Response already threw for success=false
+        guard let newTweetId = responseDict["mid"] as? String else {
+            print("DEBUG: [uploadTweet] ERROR: Success response missing tweet ID")
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Success response missing tweet ID"])
+        }
+        print("DEBUG: [uploadTweet] Successfully uploaded tweet with ID: \(newTweetId)")
+
+        // Immediately update appUser tweet count (like favorites/bookmarks)
+        await MainActor.run {
+            let currentCount = self.appUser.tweetCount ?? 0
+            self.appUser.tweetCount = currentCount + 1
+            print("DEBUG: [uploadTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
+        }
+
+        // Refresh appUser from server to get updated tweetCount and other properties
+        try? await self.refreshAppUserFromServer()
+
+        // IMPORTANT: Fetch the complete tweet from server to avoid showing partial data
+        // This ensures all server-generated fields are populated correctly
+        print("DEBUG: [uploadTweet] Fetching complete tweet from server: \(newTweetId)")
+        if let completeTweet = try? await self.getTweet(tweetId: newTweetId, authorId: tweet.authorId) {
+            print("DEBUG: [uploadTweet] Successfully fetched complete tweet with all fields")
+            return completeTweet
+        } else {
+            print("DEBUG: [uploadTweet] Warning: Failed to fetch complete tweet, returning partial")
+            // Fallback: return partial tweet if fetch fails
+            let uploadedTweet = tweet
+            let author = try? await self.fetchUser(tweet.authorId)
+            await MainActor.run {
+                uploadedTweet.mid = newTweetId
+                uploadedTweet.author = author
+            }
+            return uploadedTweet
         }
     }
     
