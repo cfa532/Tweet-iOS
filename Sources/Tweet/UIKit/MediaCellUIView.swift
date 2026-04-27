@@ -51,7 +51,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }()
 
     private let loadingSpinner: UIActivityIndicatorView = {
-        let spinner = UIActivityIndicatorView(style: .medium)
+        let spinner = UIActivityIndicatorView(style: .large)
         spinner.hidesWhenStopped = true
         return spinner
     }()
@@ -132,6 +132,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// KVO observers
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
+    /// Buffer-recovery observer. With automaticallyWaitsToMinimizeStalling=false the player
+    /// goes to .paused on buffer drain and won't auto-resume — we re-issue play() when this
+    /// flag flips back to true.
+    private var playbackLikelyToKeepUpObserver: NSKeyValueObservation?
 
     /// Notification observers
     private var videoCompletionObserver: NSObjectProtocol?
@@ -365,8 +369,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         case .playing, .paused:
             videoPlayerView.isHidden = false
-            // Show spinner while player is buffering (told to play but waiting for data)
-            if state == .playing && player?.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            // Spinner stays on as long as the video is supposed to be playing but isn't
+            // actually rendering frames yet — covers the transient .paused window between
+            // play() and the first .waitingToPlayAtSpecifiedRate / .playing KVO callback.
+            if state == .playing,
+               let player = self.player,
+               player.timeControlStatus != .playing,
+               !isVideoAtEnd(player) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -1643,6 +1652,24 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
             }
         }
+
+        // KVO: isPlaybackLikelyToKeepUp — resume playback after a buffer-drain stall.
+        // automaticallyWaitsToMinimizeStalling=false means the player won't auto-resume
+        // when data arrives, so we re-issue play() when the buffer can keep up again.
+        playbackLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self,
+                      item.isPlaybackLikelyToKeepUp,
+                      let player = self.player,
+                      self.coordinatorWantsToPlay,
+                      self.videoCellState == .playing,
+                      player.timeControlStatus == .paused,
+                      player.rate == 0,
+                      !self.isVideoAtEnd(player) else { return }
+                print("\(self.logPrefix) 🔄 buffer recovered — resuming at \(String(format: "%.1f", player.currentTime().seconds))s")
+                player.play()
+            }
+        }
     }
 
     private func removePlayerObservers() {
@@ -1652,6 +1679,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerItemStatusObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        playbackLikelyToKeepUpObserver?.invalidate()
+        playbackLikelyToKeepUpObserver = nil
     }
 
 
@@ -2306,6 +2335,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             player != nil ||
             playerItemStatusObserver != nil ||
             timeControlStatusObserver != nil ||
+            playbackLikelyToKeepUpObserver != nil ||
             videoCompletionObserver != nil ||
             stopAllObserver != nil ||
             playerLoanedObserver != nil ||
@@ -2451,6 +2481,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         playerItemStatusObserver?.invalidate()
         timeControlStatusObserver?.invalidate()
+        playbackLikelyToKeepUpObserver?.invalidate()
         removePlayerTimeObserver()
         timerHideTask?.cancel()
         setupPlayerTask?.cancel()
