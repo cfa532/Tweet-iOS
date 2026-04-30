@@ -55,7 +55,6 @@ struct ProfileView: View {
     @State private var isNavigationVisible = true
     
     var body: some View {
-        let _ = print("DEBUG: [ProfileView.body] user.mid=\(user.mid), self=\(ObjectIdentifier(hproseInstance).hashValue), isFollowing=\(isFollowing)")
         contentWithNavigation
             .sheet(isPresented: $showEditSheet, onDismiss: handleSheetDismiss) {
                 profileEditSheet
@@ -89,14 +88,8 @@ struct ProfileView: View {
     private var contentWithNavigation: some View {
         mainContentView
             .onAppear {
-                let list = hproseInstance.appUser.followingList
-                isFollowing = list?.contains(user.mid) ?? false
-                print("DEBUG: [ProfileView.onAppear] user.mid=\(user.mid), appUser.mid=\(hproseInstance.appUser.mid), followingList=\(list ?? []), isFollowing=\(isFollowing)")
-            }
-            .onReceive(hproseInstance.appUser.$followingList) { newList in
-                let newVal = newList?.contains(user.mid) ?? false
-                print("DEBUG: [ProfileView.onReceive followingList] user.mid=\(user.mid), newList=\(newList ?? []), newVal=\(newVal)")
-                isFollowing = newVal
+                // Calculate isFollowing by checking if the user's mid is in the app user's followingList
+                isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -262,7 +255,6 @@ struct ProfileView: View {
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast,
                     header: {
-                        let _ = print("DEBUG: [ProfileView header closure] user.mid=\(user.mid), isFollowing=\(isFollowing)")
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
                                 user: user,
