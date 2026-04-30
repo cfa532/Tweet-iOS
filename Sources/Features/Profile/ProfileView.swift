@@ -55,8 +55,13 @@ struct ProfileView: View {
     @State private var isNavigationVisible = true
     
     var body: some View {
-        let _ = print("DEBUG: [ProfileView.body] user.mid=\(user.mid), self=\(ObjectIdentifier(hproseInstance).hashValue), isFollowing=\(isFollowing)")
-        contentWithNavigation
+        // The follow button reads `isFollowing` only inside the `header:` closure that
+        // is later executed by a UIHostingController inside TweetTableView. SwiftUI's
+        // @State dependency tracking does not see reads inside escaping closures, so
+        // without a synchronous read here `body` would not re-run when `isFollowing`
+        // flips and the header would render with a stale value.
+        _ = isFollowing
+        return contentWithNavigation
             .sheet(isPresented: $showEditSheet, onDismiss: handleSheetDismiss) {
                 profileEditSheet
             }
@@ -89,14 +94,12 @@ struct ProfileView: View {
     private var contentWithNavigation: some View {
         mainContentView
             .onAppear {
-                let list = hproseInstance.appUser.followingList
-                isFollowing = list?.contains(user.mid) ?? false
-                print("DEBUG: [ProfileView.onAppear] user.mid=\(user.mid), appUser.mid=\(hproseInstance.appUser.mid), followingList=\(list ?? []), isFollowing=\(isFollowing)")
+                // Calculate isFollowing by checking if the user's mid is in the app user's followingList
+                isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
             }
             .onReceive(hproseInstance.appUser.$followingList) { newList in
-                let newVal = newList?.contains(user.mid) ?? false
-                print("DEBUG: [ProfileView.onReceive followingList] user.mid=\(user.mid), newList=\(newList ?? []), newVal=\(newVal)")
-                isFollowing = newVal
+                // followingList may load asynchronously after onAppear; keep button state in sync
+                isFollowing = newList?.contains(user.mid) ?? false
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -262,7 +265,6 @@ struct ProfileView: View {
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast,
                     header: {
-                        let _ = print("DEBUG: [ProfileView header closure] user.mid=\(user.mid), isFollowing=\(isFollowing)")
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
                                 user: user,

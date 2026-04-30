@@ -172,6 +172,12 @@ struct UserRowView: View {
             // Cancel any ongoing loading task when view disappears
             loadingTask?.cancel()
         }
+        .onReceive(hproseInstance.appUser.$followingList) { newList in
+            // Keep button state in sync with appUser's followingList — needed when
+            // returning from a profile screen where the follow state may have changed,
+            // and to backfill the initial value once followingList finishes loading.
+            isFollowing = newList?.contains(userId) ?? false
+        }
         .onChange(of: cancellationToken) { _, newToken in
             // Cancel loading task when cancellation token changes
             if newToken != currentCancellationToken {
