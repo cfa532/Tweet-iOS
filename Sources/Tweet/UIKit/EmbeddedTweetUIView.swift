@@ -249,17 +249,20 @@ class EmbeddedTweetUIView: UIView {
             return
         }
 
-        // 2. Check disk cache synchronously
-        if let cached = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-            configure(tweet: cached, quotingTweetId: quotingTweet.mid,
-                      parentViewController: parentViewController)
-            registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: cached)
-        } else {
-            showPlaceholder()
-        }
+        showPlaceholder()
 
-        // 3. Fetch from server asynchronously
+        // 2. Fetch from cache/server asynchronously so row configuration stays off the hot path.
         loadTask = Task { [weak self] in
+            if let cached = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId) {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self?.configure(tweet: cached, quotingTweetId: quotingTweet.mid,
+                                    parentViewController: parentViewController)
+                    self?.registerVideoRelationship(quotingTweet: quotingTweet, originalTweet: cached)
+                }
+                return
+            }
+
             if let serverTweet = try? await hproseInstance.getTweet(
                 tweetId: originalTweetId, authorId: originalAuthorId
             ) {

@@ -545,50 +545,40 @@ private struct DetailSingletonVideoPlayerView: View {
     let mid: String
     let mediaType: MediaType
     let aspectRatio: Float?
+    /// Retained for call-site compatibility but no longer used for autoplay.
+    /// Playback is driven by CommentsVideoPlaybackCoordinator notifications via DetailVideoManager.
     let shouldLoad: Bool
 
     @ObservedObject private var manager = DetailVideoManager.shared
+
+    private var isThisVideoLoaded: Bool {
+        manager.currentVideoMid == mid && manager.currentPlayer?.currentItem != nil
+    }
+
+    /// True when loadVideo has been called for this mid but the item isn't ready yet
+    private var isThisVideoLoading: Bool {
+        manager.currentVideoMid == mid && manager.currentPlayer?.currentItem == nil
+    }
 
     var body: some View {
         ZStack {
             Color.black
 
-            if let player = manager.currentPlayer,
-               manager.currentVideoMid == mid,
-               player.currentItem != nil {
-                // Show player
-                DetailAVPlayerView(player: player)
+            if isThisVideoLoaded {
+                DetailAVPlayerView(
+                    player: manager.currentPlayer!
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if shouldLoad {
-                // Loading — show thumbnail + spinner
-                thumbnailOrBlack
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(1.5)
             } else {
-                // Not selected — just show thumbnail
                 thumbnailOrBlack
-            }
-
-            // Buffering overlay
-            if manager.isBuffering && manager.currentVideoMid == mid {
-                Color.black.opacity(0.15)
-                ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                    .scaleEffect(2.0)
-                    .opacity(0.8)
-            }
-        }
-        .onAppear {
-            if shouldLoad {
-                manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
-            }
-        }
-        .onChange(of: shouldLoad) { _, newValue in
-            if newValue {
-                manager.loadVideo(url: url, mid: mid, mediaType: mediaType)
-            } else if manager.currentVideoMid == mid {
-                manager.pause()
+                if isThisVideoLoading || (manager.isBuffering && manager.currentVideoMid == mid) {
+                    // Loading / buffering — show spinner
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                        .scaleEffect(1.5)
+                } else {
+                    Color.clear
+                }
             }
         }
     }
@@ -613,7 +603,7 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let vc = AVPlayerViewController()
         vc.player = player
-        vc.showsPlaybackControls = false
+        vc.showsPlaybackControls = true
         vc.videoGravity = .resizeAspect
         vc.view.backgroundColor = .black
         return vc
@@ -622,6 +612,9 @@ private struct DetailAVPlayerView: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
         if vc.player !== player {
             vc.player = player
+        }
+        if !vc.showsPlaybackControls {
+            vc.showsPlaybackControls = true
         }
     }
 }
@@ -642,6 +635,7 @@ struct TweetDetailView: View {
     @State private var comments: [Tweet] = []
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
+    @State private var menuShareItems: ShareSheetData?
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
 
@@ -658,13 +652,19 @@ struct TweetDetailView: View {
     // Comments video playback coordinator
     @StateObject private var commentsVideoCoordinator = CommentsVideoPlaybackCoordinator()
 
-    // Track if the main tweet's media section is visible (for video pause/resume)
-    @State private var isMainMediaVisible = true
-
     // Track if the main tweet has video attachments
     private var hasVideoAttachment: Bool {
         guard let attachments = displayTweet.attachments else { return false }
         return attachments.contains { $0.type == .video || $0.type == .hls_video }
+    }
+
+    private var firstMainTweetVideoToAutoplay: (url: URL, mid: String, mediaType: MediaType)? {
+        guard let baseUrl = displayTweet.author?.baseUrl,
+              let attachment = displayTweet.attachments?.first(where: { $0.type == .video || $0.type == .hls_video }),
+              let url = attachment.getUrl(baseUrl) else {
+            return nil
+        }
+        return (url, attachment.mid, attachment.type)
     }
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -740,22 +740,6 @@ struct TweetDetailView: View {
                             // Main tweet section with deeper background
                             VStack(spacing: 0) {
                                 mediaSection
-                                    .background(
-                                        // Track main tweet video visibility for comment autoplay coordination
-                                        Group {
-                                            if hasVideoAttachment {
-                                                GeometryReader { geometry in
-                                                    Color.clear
-                                                        .onAppear {
-                                                            updateMainVideoVisibility(geometry: geometry)
-                                                        }
-                                                        .onChange(of: geometry.frame(in: .named("commentsScroll"))) { _, _ in
-                                                            updateMainVideoVisibility(geometry: geometry)
-                                                        }
-                                                }
-                                            }
-                                        }
-                                    )
                                 tweetHeader
                                 documentsSection
                                 tweetContent
@@ -817,6 +801,9 @@ struct TweetDetailView: View {
         .sheet(isPresented: $showLoginSheet) {
             LoginView()
         }
+        .sheet(item: $menuShareItems) { data in
+            ShareSheetView(items: data.items)
+        }
         .overlay(alignment: .top) {
             if showToast {
                 ToastView(
@@ -869,11 +856,30 @@ struct TweetDetailView: View {
             // Mark detail view as active to prevent MediaCell autoplay
             NavigationStateManager.shared.setDetailViewActive(true)
 
+            // Register main tweet video attachments before activating so the coordinator
+            // notification observers can filter incoming play/pause commands correctly.
+            if let attachments = displayTweet.attachments {
+                DetailVideoManager.shared.setMainTweetAttachments(
+                    attachments,
+                    baseUrl: displayTweet.author?.baseUrl
+                )
+            }
+
             // Activate manager and coordinate singleton lifecycle across nested detail navigations (quoted -> original).
             DetailVideoManager.shared.activateForDetail()
 
+            // Prevent audible playback during the push transition while still allowing
+            // immediate player attachment (avoids black flicker on open).
+            DetailVideoManager.shared.setStartupAudioMuteWindow(duration: 0.2)
+            if let initialVideo = firstMainTweetVideoToAutoplay {
+                DetailVideoManager.shared.loadVideo(
+                    url: initialVideo.url,
+                    mid: initialVideo.mid,
+                    mediaType: initialVideo.mediaType
+                )
+            }
+
             // Activate comments video playback coordinator
-            // Pass hasVideoAttachment so coordinator knows to suppress comment videos initially
             commentsVideoCoordinator.activate(hasMainVideo: hasVideoAttachment)
 
             // Rebuild video list on re-enter (deactivate clears it, onChange won't fire if count unchanged)
@@ -911,7 +917,7 @@ struct TweetDetailView: View {
             // Cancel bottom bounce debouncer
             bottomBounceDebouncer?.invalidate()
             bottomBounceDebouncer = nil
-            
+
             // Restore bottom navigation bar visibility when leaving detail view
             if !isNavigationBarVisible {
                 isNavigationBarVisible = true
@@ -941,32 +947,53 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
-                // Filter to only show media types (images, videos, audio)
                 let mediaAttachments = attachments.filter { isMediaType($0.type) }
-                
+
                 if !mediaAttachments.isEmpty {
-                    // Use a fixed height based on media attachments only
-                    let fixedAspect = calculateFixedAspectRatio(for: mediaAttachments)
-                    TabView(selection: $selectedMediaIndex) {
-                        ForEach(mediaAttachments.indices, id: \.self) { index in
-                            let attachment = mediaAttachments[index]
-                            DetailMediaCell(
-                                parentTweet: displayTweet,
-                                attachmentIndex: attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? index,
-                                aspectRatio: Float(aspectRatio(for: attachment, at: index)),
-                                shouldLoadVideo: index == selectedMediaIndex && isMainMediaVisible, // Only play when selected AND visible
-                                showMuteButton: false
-                            )
-                            .tag(index)
+                    let cellWidth = UIScreen.main.bounds.width
+                    LazyVStack(spacing: 1) {
+                        ForEach(mediaAttachments.indices, id: \.self) { idx in
+                            let attachment = mediaAttachments[idx]
+                            let origIdx = attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? idx
+                            let ar = CGFloat(aspectRatio(for: attachment, at: idx))
+                            let cellHeight = cellWidth / ar
+
+                            Group {
+                                if attachment.type == .video || attachment.type == .hls_video {
+                                    if let baseUrl = displayTweet.author?.baseUrl,
+                                       let url = attachment.getUrl(baseUrl) {
+                                        DetailSingletonVideoPlayerView(
+                                            url: url,
+                                            mid: attachment.mid,
+                                            mediaType: attachment.type,
+                                            aspectRatio: attachment.aspectRatio,
+                                            shouldLoad: false
+                                        )
+                                        .trackAttachmentVideoVisibility(
+                                            attachmentIndex: idx,
+                                            videoMid: attachment.mid,
+                                            coordinator: commentsVideoCoordinator,
+                                            scrollCoordinateSpace: "commentsScroll"
+                                        )
+                                    }
+                                } else {
+                                    DetailMediaCell(
+                                        parentTweet: displayTweet,
+                                        attachmentIndex: origIdx,
+                                        aspectRatio: Float(ar),
+                                        shouldLoadVideo: false,
+                                        showMuteButton: false
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedMediaIndex = idx
+                                        showBrowser = true
+                                    }
+                                }
+                            }
+                            .frame(width: cellWidth, height: cellHeight)
+                            .background(Color.black)
                         }
-                    }
-                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .always))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.width / fixedAspect)
-                    .background(Color.black)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        showBrowser = true
                     }
                 }
             }
@@ -1014,7 +1041,18 @@ struct TweetDetailView: View {
             TweetMenu(
                 tweet: displayTweet, 
                 isPinned: displayTweet.isPinned(in: pinnedTweets),
-                showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid
+                showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid,
+                onShareTap: {
+                    Task {
+                        let items = await TweetActionBarView.buildDetailShareItems(
+                            tweet: displayTweet,
+                            hproseInstance: hproseInstance
+                        )
+                        await MainActor.run {
+                            menuShareItems = ShareSheetData(items: items)
+                        }
+                    }
+                }
             )
             .padding(.trailing, -20)
         }
@@ -1063,22 +1101,10 @@ struct TweetDetailView: View {
     }
     
     private var actionButtons: some View {
-        TweetActionBarRepresentable(
+        TweetActionButtonsView(
             tweet: displayTweet,
             onCommentTap: {
                 shouldShowExpandedReply = true
-            },
-            onShowLogin: {
-                showLoginSheet = true
-            },
-            isInDetailView: true,
-            onShowToast: { message, isError in
-                toastMessage = message
-                toastIsError = isError
-                showToast = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    showToast = false
-                }
             }
         )
         .frame(height: 30)
@@ -1313,29 +1339,6 @@ struct TweetDetailView: View {
         default:
             return false
         }
-    }
-    
-    /// Update main tweet video visibility for comment autoplay coordination
-    private func updateMainVideoVisibility(geometry: GeometryProxy) {
-        let frame = geometry.frame(in: .named("commentsScroll"))
-        let screenBounds = UIScreen.main.bounds
-
-        // Calculate how much of the video section is visible
-        let visibleTop = max(frame.minY, 0)
-        let visibleBottom = min(frame.maxY, screenBounds.height)
-        let visibleHeight = max(0, visibleBottom - visibleTop)
-        let totalHeight = frame.height
-
-        // Consider video visible if at least 30% is on screen
-        let visibilityRatio = totalHeight > 0 ? visibleHeight / totalHeight : 0
-        let isVisible = visibilityRatio >= 0.30
-
-        // Update state to control main video playback
-        if isMainMediaVisible != isVisible {
-            isMainMediaVisible = isVisible
-        }
-
-        commentsVideoCoordinator.reportMainTweetVideoVisibility(isVisible: isVisible)
     }
     
     /// Handle scroll offset changes to show/hide bottom navigation bar

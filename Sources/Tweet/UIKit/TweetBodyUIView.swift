@@ -11,6 +11,10 @@ import UIKit
 import SwiftUI
 import Combine
 
+extension NSAttributedString.Key {
+    static let moreLinkTap = NSAttributedString.Key("com.tweet.moreLinkTap")
+}
+
 class TweetBodyUIView: UIView {
 
     // Internal stack view to manage all content
@@ -50,7 +54,7 @@ class TweetBodyUIView: UIView {
         return v
     }()
 
-    // Document attachments hosting (keeps SwiftUI — not in critical path)
+    // Document attachments hosting (keeps SwiftUI, but reuses one host per cell)
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
 
@@ -58,12 +62,19 @@ class TweetBodyUIView: UIView {
     private var mediaHeightConstraint: NSLayoutConstraint?
 
     var onTweetBodyTap: (() -> Void)?
+    var onContentExpanded: (() -> Void)?
     /// Per-feed video coordinator (set by TweetCellContentView)
     weak var videoCoordinator: VideoPlaybackCoordinator?
     /// Whether the video caption label is currently visible (for single-video tweets with title)
     private(set) var isCaptionVisible: Bool = false
+    /// Whether the content is truncated with a "More..." suffix
+    private(set) var isTruncated: Bool = false
+    /// Whether content has been expanded by the user tapping "More..."
+    private(set) var isExpanded: Bool = false
+    private var currentFullContent: String?
     private var currentTweetId: String?
     private weak var parentViewController: UIViewController?
+    private weak var contentLabelTapGesture: UITapGestureRecognizer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -72,6 +83,14 @@ class TweetBodyUIView: UIView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let hostingController = documentHostingController {
+            hostingController.willMove(toParent: nil)
+            hostingController.view.removeFromSuperview()
+            hostingController.removeFromParent()
+        }
     }
 
     private func setupViews() {
@@ -120,10 +139,69 @@ class TweetBodyUIView: UIView {
         let tap = UITapGestureRecognizer(target: self, action: #selector(bodyTapped))
         contentLabel.addGestureRecognizer(tap)
         contentLabel.isUserInteractionEnabled = true
+        contentLabelTapGesture = tap
     }
 
     @objc private func bodyTapped() {
+        if isTruncated, !isExpanded, let tap = contentLabelTapGesture {
+            let tapPoint = tap.location(in: contentLabel)
+            if isMoreLinkTap(at: tapPoint) {
+                expandContent()
+                return
+            }
+        }
         onTweetBodyTap?()
+    }
+
+    /// Check whether a point (in TweetBodyUIView coordinate space) hits the "More..." link.
+    func isMoreLinkPoint(_ pointInBodyView: CGPoint) -> Bool {
+        guard isTruncated, !isExpanded else { return false }
+        let labelPoint = convert(pointInBodyView, to: contentLabel)
+        return isMoreLinkTap(at: labelPoint)
+    }
+
+    private func isMoreLinkTap(at pointInContentLabel: CGPoint) -> Bool {
+        guard let attrText = contentLabel.attributedText,
+              attrText.length > 0,
+              contentLabel.bounds.contains(pointInContentLabel) else { return false }
+
+        let textStorage = NSTextStorage(attributedString: attrText)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: contentLabel.bounds.size)
+        textContainer.lineFragmentPadding = 0
+        textContainer.maximumNumberOfLines = contentLabel.numberOfLines
+        textContainer.lineBreakMode = contentLabel.lineBreakMode
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let charIndex = layoutManager.characterIndex(
+            for: pointInContentLabel, in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: nil
+        )
+        guard charIndex < attrText.length else { return false }
+        return attrText.attribute(.moreLinkTap, at: charIndex, effectiveRange: nil) != nil
+    }
+
+    private func expandContent() {
+        guard let content = currentFullContent, !isExpanded else { return }
+        isExpanded = true
+
+        let ps = NSMutableParagraphStyle()
+        ps.lineSpacing = 1
+        ps.lineBreakMode = .byWordWrapping
+        let fullAttr = NSAttributedString(string: content, attributes: [
+            .font: Self.contentFont,
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: ps,
+        ])
+
+        contentLabel.numberOfLines = 0
+        contentLabel.lineBreakMode = .byWordWrapping
+        contentLabel.attributedText = fullAttr
+
+        setNeedsLayout()
+        onContentExpanded?()
     }
 
     func configure(tweet: Tweet, isEmbedded: Bool, cellTweetId: String?,
@@ -134,9 +212,17 @@ class TweetBodyUIView: UIView {
         if currentTweetId == tweet.mid { return }
         currentTweetId = tweet.mid
 
-        // Clean up media grid and document hosting
+        // Reset expansion state for new tweet
+        isExpanded = false
+        isTruncated = false
+        currentFullContent = nil
+        contentLabel.numberOfLines = Self.maxContentLines
+        contentLabel.lineBreakMode = .byTruncatingTail
+
+        // Clean up media grid and reset document content for reuse
         mediaGridView.prepareForReuse()
-        removeDocumentHosting()
+        documentContainerView.isHidden = true
+        documentHostingController?.rootView = AnyView(EmptyView())
 
         // --- Text content ---
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -144,8 +230,11 @@ class TweetBodyUIView: UIView {
             let screenWidth = UIScreen.main.bounds.width
             let textWidth: CGFloat
             if isEmbedded {
-                // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4) - embPad(16) - embAvatar(40) - embSpacing(8)
-                textWidth = screenWidth - 129
+                // bodyView is below headerRow (full contentStack width, NOT beside embedded avatar)
+                // screenWidth - cellPad(16) - mainLeading(3) - mainAvatar(42) - mainSpacing(4)
+                //             - embViewLeadingOffset(-4) - embContentStackPad(8+8)
+                // = screenWidth - 77
+                textWidth = screenWidth - 77
             } else {
                 // screenWidth - cellPad(16) - leading(3) - avatar(42) - spacing(4)
                 textWidth = screenWidth - 65
@@ -158,6 +247,14 @@ class TweetBodyUIView: UIView {
                 tweet.cachedContentAttributedString = attrString
                 tweet.cachedContentWidth = textWidth
                 contentLabel.attributedText = attrString
+            }
+            // Detect truncation: the "More..." suffix carries the .moreLinkTap attribute
+            let attrText = contentLabel.attributedText
+            let lastIndex = (attrText?.length ?? 0) - 1
+            if lastIndex >= 0, let attr = attrText,
+               attr.attribute(.moreLinkTap, at: lastIndex, effectiveRange: nil) != nil {
+                isTruncated = true
+                currentFullContent = content
             }
             contentLabel.isHidden = false
         } else {
@@ -233,30 +330,16 @@ class TweetBodyUIView: UIView {
         if hasDocuments {
             documentContainerView.isHidden = false
 
-            // Host SwiftUI DocumentAttachmentsView (not in critical scroll path)
+            // Reuse one hosting controller per cell instead of recreating it on every configure.
             let docView = DocumentAttachmentsView(
                 parentTweet: tweet,
                 documents: documentAttachments,
                 maxDocuments: 2
             )
-            let hostingController = UIHostingController(rootView: AnyView(docView))
-            hostingController.view.backgroundColor = .clear
-            hostingController.view.insetsLayoutMarginsFromSafeArea = false
-            hostingController.sizingOptions = [.intrinsicContentSize]
-
-            parentViewController.addChild(hostingController)
-            documentContainerView.addSubview(hostingController.view)
-            hostingController.didMove(toParent: parentViewController)
-
-            hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                hostingController.view.topAnchor.constraint(equalTo: documentContainerView.topAnchor),
-                hostingController.view.leadingAnchor.constraint(equalTo: documentContainerView.leadingAnchor),
-                hostingController.view.trailingAnchor.constraint(equalTo: documentContainerView.trailingAnchor),
-                hostingController.view.bottomAnchor.constraint(equalTo: documentContainerView.bottomAnchor),
-            ])
-
-            documentHostingController = hostingController
+            let hostingController = ensureDocumentHostingController(parentViewController: parentViewController)
+            hostingController.rootView = AnyView(docView)
+            hostingController.view.invalidateIntrinsicContentSize()
+            hostingController.view.setNeedsLayout()
 
             // Add spacing before documents if there's media or text
             if hasMedia || !contentLabel.isHidden {
@@ -264,18 +347,26 @@ class TweetBodyUIView: UIView {
             }
         } else {
             documentContainerView.isHidden = true
+            documentHostingController?.rootView = AnyView(EmptyView())
         }
     }
 
     func prepareForReuse() {
         currentTweetId = nil
         contentLabel.attributedText = nil
+        contentLabel.numberOfLines = Self.maxContentLines
+        contentLabel.lineBreakMode = .byTruncatingTail
         captionLabel.text = nil
         captionLabel.isHidden = true
         isCaptionVisible = false
+        isTruncated = false
+        isExpanded = false
+        currentFullContent = nil
         onTweetBodyTap = nil
+        onContentExpanded = nil
         mediaGridView.prepareForReuse()
-        removeDocumentHosting()
+        documentContainerView.isHidden = true
+        documentHostingController?.rootView = AnyView(EmptyView())
 
         // Reset spacing to defaults
         contentStack.setCustomSpacing(4, after: contentLabel)
@@ -283,13 +374,45 @@ class TweetBodyUIView: UIView {
         contentStack.setCustomSpacing(0, after: captionLabel)
     }
 
-    private func removeDocumentHosting() {
-        if let hc = documentHostingController {
-            hc.willMove(toParent: nil)
-            hc.view.removeFromSuperview()
-            hc.removeFromParent()
-            documentHostingController = nil
+    private func ensureDocumentHostingController(parentViewController: UIViewController) -> UIHostingController<AnyView> {
+        if let hostingController = documentHostingController {
+            if hostingController.parent !== parentViewController {
+                hostingController.willMove(toParent: nil)
+                hostingController.view.removeFromSuperview()
+                hostingController.removeFromParent()
+                parentViewController.addChild(hostingController)
+                documentContainerView.addSubview(hostingController.view)
+                hostingController.didMove(toParent: parentViewController)
+                hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    hostingController.view.topAnchor.constraint(equalTo: documentContainerView.topAnchor),
+                    hostingController.view.leadingAnchor.constraint(equalTo: documentContainerView.leadingAnchor),
+                    hostingController.view.trailingAnchor.constraint(equalTo: documentContainerView.trailingAnchor),
+                    hostingController.view.bottomAnchor.constraint(equalTo: documentContainerView.bottomAnchor),
+                ])
+            }
+            return hostingController
         }
+
+        let hostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.insetsLayoutMarginsFromSafeArea = false
+        hostingController.sizingOptions = [.intrinsicContentSize]
+
+        parentViewController.addChild(hostingController)
+        documentContainerView.addSubview(hostingController.view)
+        hostingController.didMove(toParent: parentViewController)
+
+        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hostingController.view.topAnchor.constraint(equalTo: documentContainerView.topAnchor),
+            hostingController.view.leadingAnchor.constraint(equalTo: documentContainerView.leadingAnchor),
+            hostingController.view.trailingAnchor.constraint(equalTo: documentContainerView.trailingAnchor),
+            hostingController.view.bottomAnchor.constraint(equalTo: documentContainerView.bottomAnchor),
+        ])
+
+        documentHostingController = hostingController
+        return hostingController
     }
 
     // MARK: - Helpers
@@ -468,6 +591,7 @@ class TweetBodyUIView: UIView {
         result.append(NSAttributedString(string: moreString, attributes: [
             .font: font,
             .foregroundColor: UIColor.systemBlue,
+            .moreLinkTap: true,
         ]))
 
         return result

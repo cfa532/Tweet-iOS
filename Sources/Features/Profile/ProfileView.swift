@@ -25,6 +25,7 @@ struct ProfileView: View {
     @State private var showEditSheet = false
     @State private var showAvatarFullScreen = false
     @State private var showChatScreen = false
+    @State private var chatNavigationPath = NavigationPath()
     @State private var showBlockUserMenu = false
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
@@ -54,7 +55,13 @@ struct ProfileView: View {
     @State private var isNavigationVisible = true
     
     var body: some View {
-        contentWithNavigation
+        // The follow button reads `isFollowing` only inside the `header:` closure that
+        // is later executed by a UIHostingController inside TweetTableView. SwiftUI's
+        // @State dependency tracking does not see reads inside escaping closures, so
+        // without a synchronous read here `body` would not re-run when `isFollowing`
+        // flips and the header would render with a stale value.
+        _ = isFollowing
+        return contentWithNavigation
             .sheet(isPresented: $showEditSheet, onDismiss: handleSheetDismiss) {
                 profileEditSheet
             }
@@ -62,7 +69,25 @@ struct ProfileView: View {
                 AvatarFullScreenView(user: user, isPresented: $showAvatarFullScreen)
             }
             .fullScreenCover(isPresented: $showChatScreen) {
-                ChatScreen(receiptId: user.mid)
+                NavigationStack(path: $chatNavigationPath) {
+                    ChatScreen(
+                        receiptId: user.mid,
+                        navigationPath: $chatNavigationPath,
+                        onProfileNavigate: nil,
+                        onShowLogin: onShowLogin,
+                        onShowToast: onShowToast
+                    )
+                    .appNavigationDestinations(
+                        path: $chatNavigationPath,
+                        onShowLogin: onShowLogin,
+                        onShowToast: onShowToast
+                    )
+                }
+            }
+            .onChange(of: showChatScreen) { _, isShowing in
+                if !isShowing {
+                    chatNavigationPath.removeLast(chatNavigationPath.count)
+                }
             }
     }
     
@@ -71,6 +96,10 @@ struct ProfileView: View {
             .onAppear {
                 // Calculate isFollowing by checking if the user's mid is in the app user's followingList
                 isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
+            }
+            .onReceive(hproseInstance.appUser.$followingList) { newList in
+                // followingList may load asynchronously after onAppear; keep button state in sync
+                isFollowing = newList?.contains(user.mid) ?? false
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)

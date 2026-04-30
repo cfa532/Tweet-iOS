@@ -150,24 +150,17 @@ struct SearchScreen: View {
             }
             .navigationTitle(LocalizedStringKey("Search"))
             .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: User.self) { user in
-                ProfileView(
-                    user: user,
-                    onLogout: {
-                        navigationPath.removeLast(navigationPath.count)
-                    },
-                    navigationPath: $navigationPath,
-                    onShowLogin: onShowLogin,
-                    onShowToast: onShowToast
-                )
-                .onAppear {
-                        // Dismiss keyboard when navigating to profile
-                        hideKeyboard()
-                    }
-            }
-            .navigationDestination(for: Tweet.self) { tweet in
-                TweetDetailView(tweet: tweet)
-            }
+            .appNavigationDestinations(
+                path: $navigationPath,
+                onShowLogin: onShowLogin,
+                onShowToast: onShowToast,
+                onProfileLogout: {
+                    navigationPath.removeLast(navigationPath.count)
+                },
+                onUserProfileAppear: {
+                    hideKeyboard()
+                }
+            )
         }
     }
 }

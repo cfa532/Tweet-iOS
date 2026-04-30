@@ -64,6 +64,9 @@ class TweetActionBarView: UIView {
     private var attachmentPreviewImage: UIImage?
     private var isPreparingShare = false
 
+    // Comment overlay cleanup observer (stored to prevent accumulation)
+    private var commentDismissObserver: NSObjectProtocol?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setupViews()
@@ -156,6 +159,7 @@ class TweetActionBarView: UIView {
 
         // Subscribe to count changes
         tweet.$commentCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.commentButton.setCount(count ?? 0)
@@ -163,6 +167,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$retweetCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.retweetButton.setCount(count ?? 0)
@@ -170,6 +175,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$favoriteCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.likeButton.setCount(count ?? 0)
@@ -177,6 +183,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$bookmarkCount
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] count in
                 self?.bookmarkButton.setCount(count ?? 0)
@@ -184,6 +191,7 @@ class TweetActionBarView: UIView {
             .store(in: &cancellables)
 
         tweet.$favorites
+            .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let tweet = self?.currentTweet else { return }
@@ -249,14 +257,21 @@ class TweetActionBarView: UIView {
             // Present modally
             parentVC.present(hostingController, animated: true)
 
-            // Observe dismissal to clean up overlay
-            NotificationCenter.default.addObserver(
+            // Observe dismissal to clean up overlay — store token to prevent accumulation
+            if let existing = commentDismissObserver {
+                NotificationCenter.default.removeObserver(existing)
+            }
+            commentDismissObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
                 guard let self = self, let tweet = self.currentTweet else { return }
                 if parentVC.presentedViewController == nil {
+                    if let obs = self.commentDismissObserver {
+                        NotificationCenter.default.removeObserver(obs)
+                        self.commentDismissObserver = nil
+                    }
                     Task { @MainActor in
                         OverlayVisibilityCoordinator.shared.endOverlay(id: "commentCompose_\(tweet.mid)", source: "TweetActionBarView")
                     }
@@ -528,8 +543,23 @@ class TweetActionBarView: UIView {
         return items
     }
 
+    @MainActor
+    static func buildDetailShareItems(tweet: Tweet, hproseInstance: HproseInstance, parentTweet: Tweet? = nil) async -> [Any] {
+        let helper = TweetActionBarView(frame: .zero)
+        helper.isInDetailView = true
+        helper.parentTweet = parentTweet
+
+        let preferredBaseUrl = await Self.getIPv4PreferredBaseUrl(for: tweet, hproseInstance: hproseInstance)
+        if let author = tweet.author, let url = URL(string: preferredBaseUrl) {
+            author.baseUrl = url
+        }
+
+        helper.attachmentPreviewImage = await helper.loadAttachmentPreviewImage(for: tweet, hproseInstance: hproseInstance)
+        return await helper.buildShareItems(for: tweet, hproseInstance: hproseInstance)
+    }
+
     /// Build share text for a tweet
-    private static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
+    static func buildShareText(tweet: Tweet, hproseInstance: HproseInstance, isInDetailView: Bool = false, parentTweet: Tweet? = nil) -> String {
         var shareText = ""
 
         // Priority: title > content > attachment types
@@ -1074,6 +1104,10 @@ class TweetActionBarView: UIView {
 
     func prepareForReuse() {
         cancellables.removeAll()
+        if let obs = commentDismissObserver {
+            NotificationCenter.default.removeObserver(obs)
+            commentDismissObserver = nil
+        }
         currentTweetId = nil
         currentTweet = nil
         hproseInstance = nil

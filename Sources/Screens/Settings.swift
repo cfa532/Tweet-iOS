@@ -247,13 +247,15 @@ struct AgentTokenView: View {
     @Binding var isGenerating: Bool
     @Binding var showCopiedAlert: Bool
     @Binding var showRevokeConfirmation: Bool
+    /// Observed directly: `agentPublicKey` lives on `User`; `HproseInstance` does not republish when it changes.
+    @ObservedObject var appUser: User
     @ObservedObject var hproseInstance: HproseInstance
     
     @State private var errorMessage: String?
     @State private var showError = false
     
     private var hasExistingToken: Bool {
-        hproseInstance.appUser.agentPublicKey != nil
+        appUser.agentPublicKey != nil || !agentToken.isEmpty
     }
     
     var body: some View {

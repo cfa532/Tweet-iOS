@@ -33,6 +33,8 @@ class AvatarUIView: UIView {
     private var currentUserId: String?
     private var currentAvatarId: String?
     private var avatarSize: CGFloat = 40
+    private var widthConstraint: NSLayoutConstraint?
+    private var heightConstraint: NSLayoutConstraint?
 
     var onTap: (() -> Void)?
 
@@ -69,6 +71,7 @@ class AvatarUIView: UIView {
 
     func configure(user: User, size: CGFloat) {
         avatarSize = size
+        updateSizeIfNeeded(size)
 
         // Skip if same user and avatar hasn't changed
         if currentUserId == user.mid && currentAvatarId == user.avatar {
@@ -83,19 +86,6 @@ class AvatarUIView: UIView {
         removeNotificationObservers()
         loadTask?.cancel()
 
-        // Set fixed size
-        let widthConstraint = constraints.first { $0.firstAttribute == .width }
-        let heightConstraint = constraints.first { $0.firstAttribute == .height }
-        if widthConstraint == nil {
-            NSLayoutConstraint.activate([
-                widthAnchor.constraint(equalToConstant: size),
-                heightAnchor.constraint(equalToConstant: size)
-            ])
-        } else {
-            widthConstraint?.constant = size
-            heightConstraint?.constant = size
-        }
-
         // Try loading avatar
         loadAvatarImage(user: user)
 
@@ -109,18 +99,6 @@ class AvatarUIView: UIView {
                 self.loadAvatarImage(user: user)
             }
             .store(in: &cancellables)
-
-        // Listen for avatar change notifications
-        let avatarObserver = NotificationCenter.default.addObserver(
-            forName: .avatarDidChange, object: nil, queue: .main
-        ) { [weak self, weak user] notification in
-            guard let self, let user,
-                  let userId = notification.userInfo?["userId"] as? String,
-                  userId == user.mid else { return }
-            self.imageView.image = nil
-            self.loadAvatarImage(user: user)
-        }
-        notificationObservers.append(avatarObserver)
 
         // Listen for user update notifications (baseUrl resolved)
         let userUpdateObserver = NotificationCenter.default.addObserver(
@@ -138,23 +116,19 @@ class AvatarUIView: UIView {
             self.loadAvatarImage(user: user)
         }
         notificationObservers.append(userUpdateObserver)
+    }
 
-        // Listen for image cached notifications
-        let imageCachedObserver = NotificationCenter.default.addObserver(
-            forName: .imageCached, object: nil, queue: .main
-        ) { [weak self, weak user] notification in
-            guard let self, let user,
-                  let avatarId = notification.userInfo?["avatarId"] as? String,
-                  avatarId == user.avatar,
-                  self.imageView.image == nil else { return }
-            let cacheKey = "avatar_\(user.avatar ?? "")"
-            let avatarAttachment = MimeiFileType(mid: cacheKey, mediaType: .image)
-            if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
-                self.imageView.image = cached
-                self.placeholderImageView.isHidden = true
-            }
+    private func updateSizeIfNeeded(_ size: CGFloat) {
+        if widthConstraint == nil || heightConstraint == nil {
+            let width = widthAnchor.constraint(equalToConstant: size)
+            let height = heightAnchor.constraint(equalToConstant: size)
+            NSLayoutConstraint.activate([width, height])
+            widthConstraint = width
+            heightConstraint = height
+        } else {
+            widthConstraint?.constant = size
+            heightConstraint?.constant = size
         }
-        notificationObservers.append(imageCachedObserver)
     }
 
     private func loadAvatarImage(user: User) {

@@ -132,6 +132,11 @@ class TweetTableViewController: UITableViewController {
     private var isUserDragging: Bool = false
     private var isDecelerating: Bool = false
     private var isTableViewUpdating: Bool = false
+    /// Tweet IDs whose content is currently expanded by the user ("More..." tapped).
+    /// `heightForRowAt` returns `automaticDimension` for these so the table re-measures
+    /// the cell at full expanded height instead of using the cached truncated height.
+    private var expandedTweetIds = Set<String>()
+    private var embeddedTweetPrefetchInFlight = Set<String>()
 
     init(videoCoordinator: VideoPlaybackCoordinator) {
         self.videoCoordinator = videoCoordinator
@@ -188,6 +193,7 @@ class TweetTableViewController: UITableViewController {
         // Clean up timers
         noMoreTweetsMessageTimer?.invalidate()
         loadingTimeoutTimer?.invalidate()
+        embeddedTweetPrefetchInFlight.removeAll()
 
         // NOTE: Removed .shouldStopAllVideos notification from deinit
         // This was causing issues when navigating back from profile - it would stop
@@ -664,6 +670,34 @@ class TweetTableViewController: UITableViewController {
         customRefreshControl?.addTarget(self, action: #selector(handleRefresh), for: .valueChanged)
         tableView.refreshControl = customRefreshControl
     }
+
+    private func tweetForRow(_ row: Int) -> Tweet? {
+        let totalRows = pinnedTweets.count + tweets.count
+        guard row >= 0, row < totalRows else { return nil }
+        if row < pinnedTweets.count {
+            return pinnedTweets[row]
+        }
+        let regularIndex = row - pinnedTweets.count
+        guard regularIndex < tweets.count else { return nil }
+        return tweets[regularIndex]
+    }
+
+    private func prefetchEmbeddedTweetIdsIfNeeded(_ tweetIds: Set<String>) {
+        for tweetId in tweetIds {
+            prefetchEmbeddedTweetIfNeeded(originalTweetId: tweetId)
+        }
+    }
+
+    private func prefetchEmbeddedTweetIfNeeded(originalTweetId: String) {
+        guard Tweet.getInstance(for: originalTweetId)?.author == nil else { return }
+        guard !embeddedTweetPrefetchInFlight.contains(originalTweetId) else { return }
+
+        embeddedTweetPrefetchInFlight.insert(originalTweetId)
+        Task(priority: .utility) { [weak self] in
+            _ = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
+            self?.embeddedTweetPrefetchInFlight.remove(originalTweetId)
+        }
+    }
     
     @objc private func handleRefresh() {
         Task {
@@ -679,9 +713,13 @@ class TweetTableViewController: UITableViewController {
     func updatePinnedTweets(_ tweets: [Tweet]) {
         let oldCount = pinnedTweets.count
         let oldPinnedTweets = pinnedTweets
+        let oldOriginalTweetIds = Set(oldPinnedTweets.compactMap(\.originalTweetId))
         self.pinnedTweets = tweets
 
         guard tableView.window != nil else { return }
+
+        let newOriginalTweetIds = Set(tweets.compactMap(\.originalTweetId))
+        prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds.subtracting(oldOriginalTweetIds))
 
         // Rebuild video list when pinned tweets change
         // This ensures pinned tweet videos are registered with the coordinator
@@ -739,29 +777,18 @@ class TweetTableViewController: UITableViewController {
         // causes UITableView row-count assertion failures.
         guard tableView.window != nil else { return }
 
-        // Pre-fetch embedded tweets for accurate height calculation (pure UIKit optimization)
-        // Load embedded tweets in background so they're available when cells are displayed
-        Task.detached(priority: .userInitiated) {
-            for tweet in newTweets {
-                if let originalTweetId = tweet.originalTweetId {
-                    // Check if already loaded
-                    if Tweet.getInstance(for: originalTweetId)?.author == nil {
-                        // Try to fetch from cache (fast, async)
-                        _ = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId)
-                    }
-                }
-            }
-        }
-
         // Cleanup old tweet instances to prevent memory growth
         Task.detached(priority: .background) {
             let activeTweetIds = Set(newTweets.map { $0.mid })
             Tweet.cleanupOldInstances(activeTweetIds: activeTweetIds)
         }
+
+        let newOriginalTweetIds = Set(newTweets.compactMap(\.originalTweetId))
         
         
         // Handle initial load
         if oldCount == 0 && newTweets.count > 0 {
+            prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds)
             isTableViewUpdating = true
             tableView.reloadData()
             isTableViewUpdating = false
@@ -794,6 +821,9 @@ class TweetTableViewController: UITableViewController {
                 return
             }
         }
+
+        let oldOriginalTweetIds = Set(oldTweets.compactMap(\.originalTweetId))
+        prefetchEmbeddedTweetIdsIfNeeded(newOriginalTweetIds.subtracting(oldOriginalTweetIds))
         
         // Smart update: Check for common patterns
         // Lazy evaluation - only create ID arrays when needed
@@ -1150,32 +1180,8 @@ class TweetTableViewController: UITableViewController {
             tweet = tweets[indexPath.row - pinnedTweets.count]
         }
 
-        // CRITICAL: Load embedded/quoted tweet BEFORE configuring cell
-        // This prevents layout shifts and overlapping when the embedded tweet loads
-        // Prefetching will have already warmed the cache, making this fast
         if let originalTweetId = tweet.originalTweetId {
-            // Try to get from cache synchronously and ensure it's in the singleton store
-            if let cachedEmbeddedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-                // Get or create the singleton instance with full data from cache
-                _ = Tweet.getInstance(
-                    mid: cachedEmbeddedTweet.mid,
-                    authorId: cachedEmbeddedTweet.authorId,
-                    content: cachedEmbeddedTweet.content,
-                    timestamp: cachedEmbeddedTweet.timestamp,
-                    title: cachedEmbeddedTweet.title,
-                    originalTweetId: cachedEmbeddedTweet.originalTweetId,
-                    originalAuthorId: cachedEmbeddedTweet.originalAuthorId,
-                    author: cachedEmbeddedTweet.author,
-                    favorites: cachedEmbeddedTweet.favorites,
-                    favoriteCount: cachedEmbeddedTweet.favoriteCount ?? 0,
-                    bookmarkCount: cachedEmbeddedTweet.bookmarkCount ?? 0,
-                    retweetCount: cachedEmbeddedTweet.retweetCount ?? 0,
-                    commentCount: cachedEmbeddedTweet.commentCount ?? 0,
-                    attachments: cachedEmbeddedTweet.attachments,
-                    isPrivate: cachedEmbeddedTweet.isPrivate,
-                    downloadable: cachedEmbeddedTweet.downloadable
-                )
-            }
+            prefetchEmbeddedTweetIfNeeded(originalTweetId: originalTweetId)
         }
 
         let totalRows = pinnedTweets.count + tweets.count
@@ -1197,6 +1203,36 @@ class TweetTableViewController: UITableViewController {
                 onShowToast: onShowToast,
                 allowDeleteAll: allowDeleteAll
             )
+        }
+
+        // Content expansion callback — fires when user taps "More..." to expand truncated text.
+        // expandedTweetIds makes heightForRowAt return automaticDimension so the table
+        // re-measures the cell at expanded height instead of using the cached truncated value.
+        cell.onContentExpanded = { [weak self, weak cell] in
+            guard let self, let cell,
+                  let indexPath = self.tableView.indexPath(for: cell) else { return }
+            let tweet: Tweet
+            if indexPath.row < self.pinnedTweets.count {
+                tweet = self.pinnedTweets[indexPath.row]
+            } else {
+                let idx = indexPath.row - self.pinnedTweets.count
+                guard idx < self.tweets.count else { return }
+                tweet = self.tweets[idx]
+            }
+
+            self.expandedTweetIds.insert(tweet.mid)
+            tweet.cachedHeight = nil
+
+            let expectedCount = self.pinnedTweets.count + self.tweets.count
+            let currentCount = self.tableView.numberOfRows(inSection: 0)
+            if expectedCount == currentCount {
+                UIView.performWithoutAnimation {
+                    self.isTableViewUpdating = true
+                    self.tableView.beginUpdates()
+                    self.tableView.endUpdates()
+                    self.isTableViewUpdating = false
+                }
+            }
         }
 
         // Height change callback for embedded tweets that load asynchronously
@@ -1380,7 +1416,8 @@ class TweetTableViewController: UITableViewController {
                         !(displayTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
                     let hasFileName = att.fileName != nil &&
                         !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                    if hasTitle || hasFileName {
+                    // fileName caption only shown when tweet has no text (matches singleVideoCaption)
+                    if hasTitle || (hasFileName && !hasTextContent) {
                         bodyHeight += 2 // customSpacing(after: mediaContainerView)
                         bodyHeight += 17 // caption label height (14pt font, single line)
                         hasCaptionLabel = true
@@ -1432,7 +1469,12 @@ class TweetTableViewController: UITableViewController {
 
                 let embeddedMedia = embeddedTweet.attachments?.filter { TweetBodyUIView.isMediaType($0.type) } ?? []
 
+                // Must be computed before hasEmbeddedCaption (fileName caption depends on it)
+                let hasEmbeddedText = embeddedTweet.content != nil &&
+                    !(embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+
                 // Check for video caption in embedded tweet
+                // fileName caption only shown when embedded tweet has no text (matches singleVideoCaption)
                 var hasEmbeddedCaption = false
                 if embeddedMedia.count == 1 {
                     let att = embeddedMedia[0]
@@ -1441,17 +1483,17 @@ class TweetTableViewController: UITableViewController {
                             !(embeddedTweet.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
                         let hasFileName = att.fileName != nil &&
                             !(att.fileName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                        hasEmbeddedCaption = hasTitle || hasFileName
+                        hasEmbeddedCaption = hasTitle || (hasFileName && !hasEmbeddedText)
                     }
                 }
 
                 // Calculate embedded bodyView height (matches TweetBodyUIView auto layout)
                 var embeddedBodyH: CGFloat = 2 // contentStack top padding
-                let hasEmbeddedText = embeddedTweet.content != nil &&
-                    !(embeddedTweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
 
                 if hasEmbeddedText {
-                    let embeddedWidth = contentWidth - 16 - 40 - 8 // embedded padding + avatar + spacing
+                    // bodyView spans full EmbeddedTweetUIView contentStack width (NOT beside avatar)
+                    // contentStack.width = screenWidth - 77 = contentWidth - 12
+                    let embeddedWidth = contentWidth - 12
                     // Build (or retrieve cached) attributed string for embedded tweet
                     let attrString: NSAttributedString
                     if let cached = embeddedTweet.cachedContentAttributedString,
@@ -1467,26 +1509,28 @@ class TweetTableViewController: UITableViewController {
                     Self.measurementLabel.attributedText = attrString
                     let textSize = Self.measurementLabel.sizeThatFits(CGSize(width: embeddedWidth, height: .greatestFiniteMagnitude))
                     embeddedBodyH += ceil(textSize.height)
-                    embeddedBodyH += 4 // spacing after contentLabel to mediaContainer
                 }
 
                 if !embeddedMedia.isEmpty {
+                    if hasEmbeddedText {
+                        embeddedBodyH += 4 // customSpacing(after: contentLabel) only when text+media both present
+                    }
                     embeddedBodyH += MediaGridViewModel.calculateHeight(for: embeddedMedia, isEmbedded: true)
                     if hasEmbeddedCaption {
                         embeddedBodyH += 2 + 17 // spacing + caption label
                     }
                 }
 
-                // textStack = header + bodyView (same font as main header)
-                let textStackH = headerHeight + embeddedBodyH
-                let contentStackH = max(40, textStackH)
-
+                // EmbeddedTweetUIView.contentStack (spacing=4):
+                //   headerRow height = max(32pt avatar, ~21pt header text) = 32pt
+                //   bodyView height = embeddedBodyH
+                // Total: 32 + 4 + embeddedBodyH = 36 + embeddedBodyH
                 // Bottom padding: 0 when media present without caption, 8 otherwise
                 let hasMedia = !embeddedMedia.isEmpty
                 let reduceBottom = hasMedia && !hasEmbeddedCaption
                 let bottomPadding: CGFloat = reduceBottom ? 0 : 8
 
-                let embeddedHeight: CGFloat = 8 + contentStackH + bottomPadding
+                let embeddedHeight: CGFloat = 8 + 36 + embeddedBodyH + bottomPadding
                 height += embeddedHeight
             } else {
                 // Not loaded: show placeholder (60pt)
@@ -1523,6 +1567,11 @@ class TweetTableViewController: UITableViewController {
                 return UITableView.automaticDimension
             }
             tweet = tweets[regularIndex]
+        }
+
+        // Expanded tweets need full Auto Layout measurement — skip all caches.
+        if expandedTweetIds.contains(tweet.mid) {
+            return UITableView.automaticDimension
         }
 
         // Use cached height if available (set by willDisplay from actual Auto Layout).
@@ -1590,6 +1639,24 @@ class TweetTableViewController: UITableViewController {
         // Forward media invisibility to the cell
         if let tweetCell = cell as? TweetTableViewCell {
             tweetCell.tweetContentView.setMediaVisible(false)
+        }
+
+        // If this cell was showing expanded content, clear the expansion tracking and nil
+        // cachedHeight so that when the tweet scrolls back into view, heightForRowAt falls
+        // back to calculateTweetHeight (truncated height) and the cell remeasures correctly.
+        if let tweetCell = cell as? TweetTableViewCell, let tweetId = tweetCell.tweetId,
+           expandedTweetIds.remove(tweetId) != nil {
+            let totalRows = pinnedTweets.count + tweets.count
+            guard indexPath.row < totalRows else { return }
+            let tweet: Tweet
+            if indexPath.row < pinnedTweets.count {
+                tweet = pinnedTweets[indexPath.row]
+            } else {
+                let idx = indexPath.row - pinnedTweets.count
+                guard idx < tweets.count else { return }
+                tweet = tweets[idx]
+            }
+            tweet.cachedHeight = nil
         }
     }
 
@@ -1806,49 +1873,28 @@ class TweetTableViewController: UITableViewController {
         let visibleBottom = tableView.contentOffset.y + tableView.bounds.height - insets.bottom
         let visibleRect = CGRect(x: 0, y: visibleTop, width: tableView.bounds.width, height: max(0, visibleBottom - visibleTop))
 
-        // Only include tweets whose cells are at least 50% visible in the user-visible area.
-        // This ensures videos stop/pause when scrolled mostly out of view, not only when
-        // the cell fully leaves the screen (didEndDisplaying).
-        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
-            let totalRows = pinnedTweets.count + tweets.count
-            guard indexPath.row < totalRows else { return nil }
-
-            // Require ≥50% of cell height visible (was: any intersection)
-            let cellRect = tableView.rectForRow(at: indexPath)
-            let intersection = cellRect.intersection(visibleRect)
-            let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
-            guard ratio >= 0.5 else { return nil }
-
-            // Determine which tweet this row represents
-            if indexPath.row < pinnedTweets.count {
-                return pinnedTweets[indexPath.row].mid
-            } else {
-                let regularIndex = indexPath.row - pinnedTweets.count
-                guard regularIndex < tweets.count else { return nil }
-                return tweets[regularIndex].mid
-            }
-        })
-
-        // Forward visibility to cells based on the same 50% threshold.
-        // MediaGridUIView and MediaCellUIView both guard against redundant state changes.
-        for indexPath in visibleIndexPaths {
-            guard let tweetCell = tableView.cellForRow(at: indexPath) as? TweetTableViewCell else { continue }
-            let cellRect = tableView.rectForRow(at: indexPath)
-            let intersection = cellRect.intersection(visibleRect)
-            let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
-            tweetCell.tweetContentView.setMediaVisible(ratio >= 0.5)
-        }
-
-        // Compute per-media-cell on-screen identifiers for fine-grained video switching.
-        // This allows the coordinator to detect when a specific video cell within a
-        // multi-video tweet scrolls off the viewport, even if the tweet cell is still visible.
+        // Single pass over visible cells: compute tweet visibility, toggle media visibility,
+        // and gather on-screen video IDs together so scrolling does less repeated work.
+        var visibleTweetIds = Set<String>()
         var onScreenVideoIds = Set<String>()
         for indexPath in visibleIndexPaths {
             guard let tweetCell = tableView.cellForRow(at: indexPath) as? TweetTableViewCell else { continue }
-            let ids = tweetCell.tweetContentView.onScreenVideoIdentifiers(
-                visibleRect: visibleRect, coordinateSpace: tableView
+
+            let cellRect = tableView.rectForRow(at: indexPath)
+            let intersection = cellRect.intersection(visibleRect)
+            let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
+            let isVisible = ratio >= 0.5
+
+            tweetCell.tweetContentView.setMediaVisible(isVisible)
+
+            guard isVisible, let tweet = tweetForRow(indexPath.row) else { continue }
+            visibleTweetIds.insert(tweet.mid)
+            onScreenVideoIds.formUnion(
+                tweetCell.tweetContentView.onScreenVideoIdentifiers(
+                    visibleRect: visibleRect,
+                    coordinateSpace: tableView
+                )
             )
-            onScreenVideoIds.formUnion(ids)
         }
         if onScreenVideoIds != lastOnScreenVideoIds {
             lastOnScreenVideoIds = onScreenVideoIds
@@ -2037,55 +2083,16 @@ class TweetTableViewController: UITableViewController {
 // MARK: - Prefetching (Performance Optimization)
 extension TweetTableViewController: UITableViewDataSourcePrefetching {
     func tableView(_ tableView: UITableView, prefetchRowsAt indexPaths: [IndexPath]) {
-        // PERFORMANCE: Prefetch limited cells ahead (max 3) to prevent height jumps
-        // Synchronous execution ensures embedded tweets are loaded before cells display
+        // PERFORMANCE: Prefetch limited quoted/retweet payloads ahead (max 3) without blocking UI.
         let limitedPrefetch = Array(indexPaths.prefix(3))
-
-        // CRITICAL: Prefetch synchronously on main thread to ensure embedded tweets are loaded
-        // BEFORE cells are displayed. This prevents height jumps from late-loading embedded tweets.
-        // The cache fetch is fast (in-memory), so this won't block scrolling.
         for indexPath in limitedPrefetch {
-            let totalRows = self.pinnedTweets.count + self.tweets.count
-            guard indexPath.row < totalRows else { continue }
-
-            let tweet: Tweet
-            if indexPath.row < self.pinnedTweets.count {
-                tweet = self.pinnedTweets[indexPath.row]
-            } else {
-                let regularIndex = indexPath.row - self.pinnedTweets.count
-                guard regularIndex < self.tweets.count else { continue }
-                tweet = self.tweets[regularIndex]
-            }
-
-            // Prefetch embedded tweet data if present
-            // SYNCHRONOUS load ensures it's available before cell is displayed
-            if let originalTweetId = tweet.originalTweetId {
-                if let cachedEmbeddedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
-                    // Warm up the singleton immediately (already on main thread)
-                    _ = Tweet.getInstance(
-                        mid: cachedEmbeddedTweet.mid,
-                        authorId: cachedEmbeddedTweet.authorId,
-                        content: cachedEmbeddedTweet.content,
-                        timestamp: cachedEmbeddedTweet.timestamp,
-                        title: cachedEmbeddedTweet.title,
-                        originalTweetId: cachedEmbeddedTweet.originalTweetId,
-                        originalAuthorId: cachedEmbeddedTweet.originalAuthorId,
-                        author: cachedEmbeddedTweet.author,
-                        favorites: cachedEmbeddedTweet.favorites,
-                        favoriteCount: cachedEmbeddedTweet.favoriteCount ?? 0,
-                        bookmarkCount: cachedEmbeddedTweet.bookmarkCount ?? 0,
-                        retweetCount: cachedEmbeddedTweet.retweetCount ?? 0,
-                        commentCount: cachedEmbeddedTweet.commentCount ?? 0,
-                        attachments: cachedEmbeddedTweet.attachments,
-                        isPrivate: cachedEmbeddedTweet.isPrivate,
-                        downloadable: cachedEmbeddedTweet.downloadable
-                    )
-                }
-            }
+            guard let tweet = tweetForRow(indexPath.row),
+                  let originalTweetId = tweet.originalTweetId else { continue }
+            prefetchEmbeddedTweetIfNeeded(originalTweetId: originalTweetId)
         }
     }
 
     func tableView(_ tableView: UITableView, cancelPrefetchingForRowsAt indexPaths: [IndexPath]) {
-        // No action needed - prefetch is lightweight synchronous work
+        // No action needed - prefetch is async cache warming only.
     }
 }

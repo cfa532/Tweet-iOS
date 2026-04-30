@@ -51,7 +51,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     }()
 
     private let loadingSpinner: UIActivityIndicatorView = {
-        let spinner = UIActivityIndicatorView(style: .medium)
+        let spinner = UIActivityIndicatorView(style: .large)
         spinner.hidesWhenStopped = true
         return spinner
     }()
@@ -132,6 +132,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// KVO observers
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
+    /// Buffer-recovery observer. With automaticallyWaitsToMinimizeStalling=false the player
+    /// goes to .paused on buffer drain and won't auto-resume — we re-issue play() when this
+    /// flag flips back to true.
+    private var playbackLikelyToKeepUpObserver: NSKeyValueObservation?
 
     /// Notification observers
     private var videoCompletionObserver: NSObjectProtocol?
@@ -365,8 +369,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         case .playing, .paused:
             videoPlayerView.isHidden = false
-            // Show spinner while player is buffering (told to play but waiting for data)
-            if state == .playing && player?.timeControlStatus == .waitingToPlayAtSpecifiedRate {
+            // Spinner stays on as long as the video is supposed to be playing but isn't
+            // actually rendering frames yet — covers the transient .paused window between
+            // play() and the first .waitingToPlayAtSpecifiedRate / .playing KVO callback.
+            if state == .playing,
+               let player = self.player,
+               player.timeControlStatus != .playing,
+               !isVideoAtEnd(player) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -827,6 +836,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 self.transitionTo(.playerReady)
             }
 
+            if let player = self.player {
+                self.updateLoadingSpinnerForPlayback(player)
+                if self.isVisibleVideoFrameReady(player),
+                   self.videoCellState == .playing || self.videoCellState == .playerReady {
+                    self.imageView.isHidden = true
+                }
+            }
+
             // If coordinator already told us to play, attempt now — covers the case
             // where KVO fired before onReadyForDisplay (or didn't fire for preloaded players).
             if self.coordinatorWantsToPlay, let player = self.player {
@@ -896,6 +913,33 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func isActuallyPlayerReady(_ player: AVPlayer?) -> Bool {
         guard let status = player?.currentItem?.status else { return false }
         return status == .readyToPlay
+    }
+
+    /// A video is visually ready only once playback has started and the layer can display frames.
+    private func isVisibleVideoFrameReady(_ player: AVPlayer) -> Bool {
+        player.timeControlStatus == .playing && videoPlayerView.isLayerReadyForDisplay
+    }
+
+    /// Keep the spinner up until the user can actually see moving video content.
+    private func updateLoadingSpinnerForPlayback(_ player: AVPlayer) {
+        let shouldShowSpinner = coordinatorWantsToPlay
+            && !isVideoAtEnd(player)
+            && !isVisibleVideoFrameReady(player)
+        if shouldShowSpinner {
+            loadingSpinner.startAnimating()
+        } else {
+            loadingSpinner.stopAnimating()
+        }
+    }
+
+    /// Queue extra work for the next first-frame event without discarding an existing callback.
+    private func addReadyForDisplayAction(_ action: @escaping () -> Void) {
+        let existingAction = videoPlayerView.onReadyForDisplay
+        videoPlayerView.onReadyForDisplay = {
+            existingAction?()
+            action()
+        }
+        videoPlayerView.observeReadyForDisplay()
     }
 
 
@@ -1224,11 +1268,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Only stop spinner if actually rendering frames. rate > 0 just means
             // play() was called; the player may still be buffering (timeControlStatus
             // == .waitingToPlayAtSpecifiedRate) with no frames to show.
-            if player.timeControlStatus == .playing {
-                loadingSpinner.stopAnimating()
-            } else {
-                loadingSpinner.startAnimating()
-            }
+            updateLoadingSpinnerForPlayback(player)
             retryButton.isHidden = true
             player.isMuted = MuteState.shared.isMuted
             player.volume = 1.0
@@ -1487,15 +1527,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     if let player = self.player,
                        player.timeControlStatus == .playing,
                        (self.videoCellState == .playing || self.videoCellState == .playerReady) {
-                        self.loadingSpinner.stopAnimating()
+                        self.updateLoadingSpinnerForPlayback(player)
                         if self.videoPlayerView.isLayerReadyForDisplay {
                             self.imageView.isHidden = true
                         } else {
-                            self.videoPlayerView.onReadyForDisplay = { [weak self] in
-                                guard let self else { return }
+                            self.addReadyForDisplayAction { [weak self] in
+                                guard let self, let player = self.player else { return }
+                                self.updateLoadingSpinnerForPlayback(player)
                                 self.imageView.isHidden = true
                             }
-                            self.videoPlayerView.observeReadyForDisplay()
                         }
                     }
 
@@ -1587,29 +1627,47 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
                 if player.timeControlStatus == .playing {
                     self.lastActualPlaybackDate = Date()
-                    self.loadingSpinner.stopAnimating()
+                    self.updateLoadingSpinnerForPlayback(player)
                     // Smooth playback confirmed — hide thumbnail cover to reveal actual video
                     if self.isActuallyPlayerReady(player) && (self.videoCellState == .playing || self.videoCellState == .playerReady) {
                         if self.videoPlayerView.isLayerReadyForDisplay {
                             self.imageView.isHidden = true
                         } else {
-                            self.videoPlayerView.onReadyForDisplay = { [weak self] in
-                                guard let self else { return }
+                            self.addReadyForDisplayAction { [weak self] in
+                                guard let self, let player = self.player else { return }
+                                self.updateLoadingSpinnerForPlayback(player)
                                 self.imageView.isHidden = true
                             }
-                            self.videoPlayerView.observeReadyForDisplay()
                         }
                     }
                 } else if player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                           self.videoCellState == .playing || self.videoCellState == .playerReady {
                     guard !self.isVideoAtEnd(player) else { return }
-                    self.loadingSpinner.startAnimating()
+                    self.updateLoadingSpinnerForPlayback(player)
                 } else if player.timeControlStatus == .paused
                             && self.coordinatorWantsToPlay
                             && self.videoCellState == .playing
                             && !self.isVideoAtEnd(player) {
-                    self.loadingSpinner.startAnimating()
+                    self.updateLoadingSpinnerForPlayback(player)
                 }
+            }
+        }
+
+        // KVO: isPlaybackLikelyToKeepUp — resume playback after a buffer-drain stall.
+        // automaticallyWaitsToMinimizeStalling=false means the player won't auto-resume
+        // when data arrives, so we re-issue play() when the buffer can keep up again.
+        playbackLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self,
+                      item.isPlaybackLikelyToKeepUp,
+                      let player = self.player,
+                      self.coordinatorWantsToPlay,
+                      self.videoCellState == .playing,
+                      player.timeControlStatus == .paused,
+                      player.rate == 0,
+                      !self.isVideoAtEnd(player) else { return }
+                print("\(self.logPrefix) 🔄 buffer recovered — resuming at \(String(format: "%.1f", player.currentTime().seconds))s")
+                player.play()
             }
         }
     }
@@ -1621,6 +1679,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerItemStatusObserver = nil
         timeControlStatusObserver?.invalidate()
         timeControlStatusObserver = nil
+        playbackLikelyToKeepUpObserver?.invalidate()
+        playbackLikelyToKeepUpObserver = nil
     }
 
 
@@ -2275,6 +2335,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             player != nil ||
             playerItemStatusObserver != nil ||
             timeControlStatusObserver != nil ||
+            playbackLikelyToKeepUpObserver != nil ||
             videoCompletionObserver != nil ||
             stopAllObserver != nil ||
             playerLoanedObserver != nil ||
@@ -2420,6 +2481,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
         playerItemStatusObserver?.invalidate()
         timeControlStatusObserver?.invalidate()
+        playbackLikelyToKeepUpObserver?.invalidate()
         removePlayerTimeObserver()
         timerHideTask?.cancel()
         setupPlayerTask?.cancel()

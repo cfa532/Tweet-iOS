@@ -15,6 +15,7 @@ struct ChatScreen: View {
     @State private var allCachedMessages: [ChatMessage] = [] // All messages from cache for pagination
     @State private var messageText = ""
     @State private var user: User?
+    @State private var receiptBaseUrl: URL?
     @State private var selectedAttachment: MimeiFileType?
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var selectedDocuments: [DocumentFile] = []
@@ -82,15 +83,6 @@ struct ChatScreen: View {
             .onTapGesture {
                 hideKeyboard()
             }
-            .navigationDestination(for: User.self) { user in
-                ProfileView(
-                    user: user,
-                    onLogout: nil,
-                    navigationPath: $navigationPath,
-                    onShowLogin: onShowLogin,
-                    onShowToast: onShowToast
-                )
-            }
             .overlay(toastOverlay)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
                 if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
@@ -105,6 +97,13 @@ struct ChatScreen: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .chatMessageSendFailed)) { notification in
                 handleMessageSendFailed(notification)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .userDidUpdate)) { notification in
+                guard let userId = notification.userInfo?["userId"] as? String,
+                      userId == receiptId else { return }
+                let updatedUser = User.getInstance(mid: receiptId)
+                user = updatedUser
+                receiptBaseUrl = updatedUser.baseUrl
             }
             .task {
                 print("[ChatScreen] Starting to load chat for receiptId: \(receiptId)")
@@ -233,6 +232,8 @@ struct ChatScreen: View {
                             currentIndex: index,
                             isChatScreenVisible: isChatScreenVisible,
                             receiptId: receiptId,
+                            chatUser: user,
+                            senderBaseUrl: receiptBaseUrl,
                             onResendMessage: { failedMessage in
                                 resendMessage(failedMessage)
                             }
@@ -725,9 +726,10 @@ struct ChatScreen: View {
     
     private func loadUser() async {
         do {
-            let fetchedUser = try await HproseInstance.shared.fetchUser(receiptId)
+            let fetchedUser = try await HproseInstance.shared.fetchUser(receiptId, baseUrl: "")
             await MainActor.run {
                 user = fetchedUser
+                receiptBaseUrl = fetchedUser?.baseUrl
             }
         } catch {
             print("[ChatScreen] Error loading user: \(error)")

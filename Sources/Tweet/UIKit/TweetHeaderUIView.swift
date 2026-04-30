@@ -63,8 +63,10 @@ class TweetHeaderUIView: UIView {
         return sv
     }()
 
-    private var cancellables = Set<AnyCancellable>()
+    private var tweetCancellables = Set<AnyCancellable>()
+    private var userCancellables = Set<AnyCancellable>()
     private var currentTweetId: String?
+    private var currentAuthorId: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -122,7 +124,9 @@ class TweetHeaderUIView: UIView {
             return
         }
         currentTweetId = tweet.mid
-        cancellables.removeAll()
+        tweetCancellables.removeAll()
+        userCancellables.removeAll()
+        currentAuthorId = nil
 
         // Set timestamp (static - doesn't change)
         timestampLabel.text = Self.timeDifference(from: tweet.timestamp)
@@ -130,51 +134,56 @@ class TweetHeaderUIView: UIView {
         // Set author info
         updateAuthorLabels(user: tweet.author)
 
-        // Subscribe to author changes
+        // Track author attachment/replacement without duplicating per-user subscriptions.
         tweet.$author
+            .dropFirst()
+            .removeDuplicates(by: { $0?.mid == $1?.mid })
             .receive(on: DispatchQueue.main)
             .sink { [weak self] user in
                 self?.updateAuthorLabels(user: user)
             }
-            .store(in: &cancellables)
-
-        // If author exists, subscribe to name/username changes
-        if let author = tweet.author {
-            subscribeToUserChanges(author)
-        }
+            .store(in: &tweetCancellables)
     }
 
     private func subscribeToUserChanges(_ user: User) {
+        userCancellables.removeAll()
+        currentAuthorId = user.mid
+
         user.$name
             .receive(on: DispatchQueue.main)
             .sink { [weak self] name in
                 self?.nameLabel.text = name ?? "No one"
             }
-            .store(in: &cancellables)
+            .store(in: &userCancellables)
 
         user.$username
             .receive(on: DispatchQueue.main)
             .sink { [weak self] username in
                 self?.usernameLabel.text = "@\(username ?? NSLocalizedString("username", comment: "Default username"))"
             }
-            .store(in: &cancellables)
+            .store(in: &userCancellables)
     }
 
     private func updateAuthorLabels(user: User?) {
         if let user = user {
             nameLabel.text = user.name ?? "No one"
             usernameLabel.text = "@\(user.username ?? NSLocalizedString("username", comment: "Default username"))"
-            // Re-subscribe to user property changes when author changes
-            subscribeToUserChanges(user)
+            if currentAuthorId != user.mid {
+                subscribeToUserChanges(user)
+            }
         } else {
+            userCancellables.removeAll()
+            currentAuthorId = nil
             nameLabel.text = "No one"
             usernameLabel.text = "@\(NSLocalizedString("username", comment: "Default username"))"
         }
     }
 
     func prepareForReuse() {
-        cancellables.removeAll()
+        tweetCancellables.removeAll()
+        userCancellables.removeAll()
         currentTweetId = nil
+        currentAuthorId = nil
         currentTweet = nil
         nameLabel.text = nil
         usernameLabel.text = nil

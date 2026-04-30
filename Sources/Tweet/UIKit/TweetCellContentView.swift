@@ -10,6 +10,17 @@ import SwiftUI
 import Combine
 
 class TweetCellContentView: UIView {
+    private static let authorLoadQueue = DispatchQueue(label: "TweetCellContentView.authorLoad")
+    private static var authorCacheLoadsInFlight = Set<String>()
+    private static var authorRefreshesInFlight = Set<String>()
+
+    private struct MenuCacheKey: Equatable {
+        let tweetId: String
+        let isPinned: Bool
+        let showDelete: Bool
+        let isPrivate: Bool
+        let isOwnTweet: Bool
+    }
 
     // MARK: - Subviews
 
@@ -79,6 +90,9 @@ class TweetCellContentView: UIView {
 
     // MARK: - State
     private var cancellables = Set<AnyCancellable>()
+    private var retweetLoadTask: Task<Void, Never>?
+    private var currentMenuKey: MenuCacheKey?
+    private var cachedMenu: UIMenu?
     private var currentTweetId: String?
     private weak var currentTweet: Tweet?
     private weak var parentViewController: UIViewController?
@@ -91,6 +105,7 @@ class TweetCellContentView: UIView {
     var onTweetTap: ((Tweet) -> Void)?
     var onShowLogin: (() -> Void)?
     var onShowToast: ((String, Bool) -> Void)?
+    var onContentExpanded: (() -> Void)?
 
     // MARK: - Init
 
@@ -270,6 +285,10 @@ class TweetCellContentView: UIView {
                     }
                     currentView = currentView?.superview
                 }
+                // Tap is on the content label — let bodyView handle "More..." expansion
+                if bodyView.isMoreLinkPoint(bodyLocation) {
+                    return
+                }
             }
         }
 
@@ -305,8 +324,22 @@ class TweetCellContentView: UIView {
         bodyView.videoCoordinator = videoCoordinator
         embeddedTweetView.videoCoordinator = videoCoordinator
 
+        // Forward content expansion callback (set before early return so it's always current)
+        bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
+
+        let showDelete = allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid
+        separatorView.isHidden = isLastItem
+        applyTweetMenuIfNeeded(
+            tweet: tweet,
+            isPinned: isPinned,
+            showDelete: showDelete,
+            hproseInstance: hproseInstance
+        )
+
         // Skip if same tweet
         if currentTweetId == tweet.mid { return }
+        retweetLoadTask?.cancel()
+        retweetLoadTask = nil
         currentTweetId = tweet.mid
         cancellables.removeAll()
 
@@ -322,9 +355,6 @@ class TweetCellContentView: UIView {
                                     isPinned: isPinned, parentViewController: parentViewController,
                                     allowDeleteAll: allowDeleteAll)
         }
-
-        // Separator
-        separatorView.isHidden = isLastItem
 
         // Load author if needed (background task)
         loadAuthorIfNeeded(tweet: tweet, hproseInstance: hproseInstance)
@@ -358,23 +388,21 @@ class TweetCellContentView: UIView {
             avatarView.onTap = nil
         }
 
-        // Subscribe to author appearing
-        tweet.$author
-            .compactMap { $0 }
-            .first()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] author in
-                self?.avatarView.configure(user: author, size: 42)
-                self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
-            }
-            .store(in: &cancellables)
+        // Only observe author attachment when it is still missing.
+        if tweet.author == nil {
+            tweet.$author
+                .compactMap { $0 }
+                .first()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] author in
+                    self?.avatarView.configure(user: author, size: 42)
+                    self?.avatarView.onTap = { [weak self] in self?.onAvatarTap?(author) }
+                }
+                .store(in: &cancellables)
+        }
 
         // Header
         headerView.configure(tweet: tweet)
-        let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
-                                   showDelete: allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid,
-                                   hproseInstance: hproseInstance)
-        headerView.setMenu(menu)
 
         // Body
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
@@ -400,9 +428,8 @@ class TweetCellContentView: UIView {
         let hasOwnContent = (tweet.content != nil && !(tweet.content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true))
             || (tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true))
 
-        // Try to get embedded tweet from cache
+        // Keep quoted-tweet configuration on the fast path by using only the in-memory singleton.
         let embeddedTweet = Tweet.getInstance(for: originalTweetId)
-            ?? TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId)
 
         if !hasOwnContent, let embeddedTweet {
             // Pure retweet: show original tweet's content directly, with retweet banner
@@ -410,6 +437,36 @@ class TweetCellContentView: UIView {
                                   hproseInstance: hproseInstance, isPinned: isPinned,
                                   parentViewController: parentViewController,
                                   allowDeleteAll: allowDeleteAll)
+        } else if !hasOwnContent {
+            if let cachedEmbeddedTweet = TweetCacheManager.shared.fetchTweetSync(mid: originalTweetId) {
+                configurePureRetweet(tweet: tweet, originalTweet: cachedEmbeddedTweet,
+                                      hproseInstance: hproseInstance, isPinned: isPinned,
+                                      parentViewController: parentViewController,
+                                      allowDeleteAll: allowDeleteAll)
+            } else {
+                configureQuotedTweet(tweet: tweet, embeddedTweet: nil,
+                                      originalTweetId: originalTweetId,
+                                      originalAuthorId: originalAuthorId,
+                                      hproseInstance: hproseInstance, isPinned: isPinned,
+                                      parentViewController: parentViewController,
+                                      allowDeleteAll: allowDeleteAll)
+
+                retweetLoadTask = Task { [weak self] in
+                    guard let loadedTweet = await TweetCacheManager.shared.fetchTweet(mid: originalTweetId),
+                          !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard let self, self.currentTweetId == tweet.mid else { return }
+                        self.configurePureRetweet(
+                            tweet: tweet,
+                            originalTweet: loadedTweet,
+                            hproseInstance: hproseInstance,
+                            isPinned: isPinned,
+                            parentViewController: parentViewController,
+                            allowDeleteAll: allowDeleteAll
+                        )
+                    }
+                }
+            }
         } else {
             // Quoted tweet: show own content + embedded original tweet below
             configureQuotedTweet(tweet: tweet, embeddedTweet: embeddedTweet,
@@ -459,10 +516,6 @@ class TweetCellContentView: UIView {
 
         // Header from original tweet
         headerView.configure(tweet: originalTweet)
-        let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
-                                   showDelete: allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid,
-                                   hproseInstance: hproseInstance)
-        headerView.setMenu(menu)
 
         // Body from original tweet
         bodyView.configure(tweet: originalTweet, isEmbedded: false, cellTweetId: tweet.mid,
@@ -510,10 +563,6 @@ class TweetCellContentView: UIView {
 
         // Header from quoting tweet
         headerView.configure(tweet: tweet)
-        let menu = createTweetMenu(tweet: tweet, isPinned: isPinned,
-                                   showDelete: allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid,
-                                   hproseInstance: hproseInstance)
-        headerView.setMenu(menu)
 
         // Body from quoting tweet
         bodyView.configure(tweet: tweet, isEmbedded: false, cellTweetId: nil,
@@ -559,30 +608,101 @@ class TweetCellContentView: UIView {
 
     // MARK: - Author Loading
 
+    private static func beginAuthorCacheLoad(_ authorId: String) -> Bool {
+        authorLoadQueue.sync {
+            authorCacheLoadsInFlight.insert(authorId).inserted
+        }
+    }
+
+    private static func endAuthorCacheLoad(_ authorId: String) {
+        _ = authorLoadQueue.sync {
+            authorCacheLoadsInFlight.remove(authorId)
+        }
+    }
+
+    private static func beginAuthorRefresh(_ authorId: String) -> Bool {
+        authorLoadQueue.sync {
+            authorRefreshesInFlight.insert(authorId).inserted
+        }
+    }
+
+    private static func endAuthorRefresh(_ authorId: String) {
+        _ = authorLoadQueue.sync {
+            authorRefreshesInFlight.remove(authorId)
+        }
+    }
+
+    private func requestAuthorRefreshIfNeeded(authorId: String, hproseInstance: HproseInstance) {
+        guard Self.beginAuthorRefresh(authorId) else { return }
+        Task(priority: .background) {
+            _ = try? await hproseInstance.fetchUser(authorId)
+            Self.endAuthorRefresh(authorId)
+        }
+    }
+
     private func loadAuthorIfNeeded(tweet: Tweet, hproseInstance: HproseInstance) {
+        let authorId = tweet.authorId
+
         if tweet.author == nil {
-            // Try cache first
+            // Reuse any already-populated singleton immediately on the main path.
+            let singletonAuthor = User.getInstance(mid: authorId)
+            if singletonAuthor.username != nil {
+                tweet.author = singletonAuthor
+                if singletonAuthor.baseUrl == nil {
+                    requestAuthorRefreshIfNeeded(authorId: authorId, hproseInstance: hproseInstance)
+                }
+                return
+            }
+
+            guard Self.beginAuthorCacheLoad(authorId) else {
+                tweet.author = singletonAuthor
+                return
+            }
+
             Task {
-                let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: tweet.authorId)
+                defer { Self.endAuthorCacheLoad(authorId) }
+                let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: authorId)
                 await MainActor.run {
+                    guard tweet.author == nil || tweet.author?.username == nil else { return }
                     if cachedAuthor.username != nil {
                         tweet.author = cachedAuthor
                     } else {
-                        tweet.author = User.getInstance(mid: tweet.authorId)
+                        tweet.author = User.getInstance(mid: authorId)
                     }
                 }
-                Task.detached(priority: .background) {
-                    _ = try? await hproseInstance.fetchUser(tweet.authorId)
-                }
+                requestAuthorRefreshIfNeeded(authorId: authorId, hproseInstance: hproseInstance)
             }
         } else if tweet.author?.username == nil || tweet.author?.baseUrl == nil {
-            Task.detached(priority: .background) {
-                _ = try? await hproseInstance.fetchUser(tweet.authorId)
-            }
+            requestAuthorRefreshIfNeeded(authorId: authorId, hproseInstance: hproseInstance)
         }
     }
 
     // MARK: - Menu Creation
+
+    private func applyTweetMenuIfNeeded(tweet: Tweet, isPinned: Bool, showDelete: Bool,
+                                        hproseInstance: HproseInstance) {
+        let key = MenuCacheKey(
+            tweetId: tweet.mid,
+            isPinned: isPinned,
+            showDelete: showDelete,
+            isPrivate: tweet.isPrivate == true,
+            isOwnTweet: tweet.authorId == hproseInstance.appUser.mid
+        )
+
+        if currentMenuKey != key {
+            cachedMenu = createTweetMenu(
+                tweet: tweet,
+                isPinned: isPinned,
+                showDelete: showDelete,
+                hproseInstance: hproseInstance
+            )
+            currentMenuKey = key
+        }
+
+        if let cachedMenu {
+            headerView.setMenu(cachedMenu)
+        }
+    }
 
     private func createTweetMenu(tweet: Tweet, isPinned: Bool, showDelete: Bool,
                                   hproseInstance: HproseInstance) -> UIMenu {
@@ -738,7 +858,11 @@ class TweetCellContentView: UIView {
     // MARK: - Reuse
 
     func prepareForReuse() {
+        retweetLoadTask?.cancel()
+        retweetLoadTask = nil
         cancellables.removeAll()
+        currentMenuKey = nil
+        cachedMenu = nil
         currentTweetId = nil
         currentTweet = nil
 
@@ -758,5 +882,6 @@ class TweetCellContentView: UIView {
         onTweetTap = nil
         onShowLogin = nil
         onShowToast = nil
+        onContentExpanded = nil
     }
 }

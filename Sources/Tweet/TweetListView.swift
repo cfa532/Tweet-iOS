@@ -241,6 +241,13 @@ struct TweetListView: View {
                     screenHeight = geometry.size.height
                 }
             
+            if isLoading && tweets.isEmpty {
+                ProgressView()
+                    .scaleEffect(2.0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(UIColor.systemBackground))
+            }
+
             if showToast {
                 VStack {
                     Spacer()

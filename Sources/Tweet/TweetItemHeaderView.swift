@@ -50,6 +50,7 @@ struct TweetMenu: View {
     @ObservedObject var tweet: Tweet
     let isPinned: Bool
     let showDeleteButton: Bool
+    let onShareTap: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var appUser = HproseInstance.shared.appUser
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -58,10 +59,11 @@ struct TweetMenu: View {
     @State private var showReportSheet = false
     @State private var showFilterSheet = false
     
-    init(tweet: Tweet, isPinned: Bool, showDeleteButton: Bool = false) {
+    init(tweet: Tweet, isPinned: Bool, showDeleteButton: Bool = false, onShareTap: (() -> Void)? = nil) {
         self.tweet = tweet
         self.isPinned = isPinned
         self.showDeleteButton = showDeleteButton
+        self.onShareTap = onShareTap
         self._isCurrentlyPinned = State(initialValue: isPinned)
     }
     
@@ -72,6 +74,12 @@ struct TweetMenu: View {
                     UIPasteboard.general.string = tweet.mid
                 }) {
                     Label(truncatedTweetId(tweet.mid), systemImage: "doc.on.clipboard")
+                }
+
+                Button(action: {
+                    onShareTap?()
+                }) {
+                    Label(LocalizedStringKey("Share"), systemImage: "square.and.arrow.up")
                 }
                 
                 // Content filtering option

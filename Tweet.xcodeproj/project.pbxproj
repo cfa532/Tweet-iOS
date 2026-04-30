@@ -136,6 +136,7 @@
 		46E8A7D52DE9F15100A30FBA /* CommentsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */; };
 		46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */; };
 		46F3BFCE2DFB3F1100059F18 /* SimpleAudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */; };
+		46F8A0D52E00413000ABCD02 /* AppNavigationDestinations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F8A0D42E00413000ABCD01 /* AppNavigationDestinations.swift */; };
 		4BA4BBE5140F4B81A9A2E76D /* PendingUploadDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF2E21EAAD24E6197485603 /* PendingUploadDialog.swift */; };
 		52BDEABE7ED042D98A4A6030 /* TweetTableViewCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C23D1D6A734A4BBAAF1B18 /* TweetTableViewCell.swift */; };
 		690CDAA5E50B4C118321424B /* AvatarUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8847CCE1FD4E422DA4B12B94 /* AvatarUIView.swift */; };
@@ -291,6 +292,7 @@
 		46E8A7D42DE9F14A00A30FBA /* CommentsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommentsViewModel.swift; sourceTree = "<group>"; };
 		46F3BFCB2DFB06F400059F18 /* SimpleVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleVideoPlayer.swift; sourceTree = "<group>"; };
 		46F3BFCD2DFB3F1100059F18 /* SimpleAudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleAudioPlayer.swift; sourceTree = "<group>"; };
+		46F8A0D42E00413000ABCD01 /* AppNavigationDestinations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppNavigationDestinations.swift; path = Sources/App/AppNavigationDestinations.swift; sourceTree = SOURCE_ROOT; };
 		5515A99E9BD93216D2C4BCA4 /* Pods-Tweet.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Tweet.release.xcconfig"; path = "Target Support Files/Pods-Tweet/Pods-Tweet.release.xcconfig"; sourceTree = "<group>"; };
 		68C25B0E0F984E038FE22DE1 /* GlobalImageLoadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalImageLoadManager.swift; sourceTree = "<group>"; };
 		751EADD00B2244AEA43D0D15 /* TweetActionBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TweetActionBarView.swift; sourceTree = "<group>"; };
@@ -376,6 +378,7 @@
 				46E5B32A2DDA038E00AEF31F /* AppConfig.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1B /* TweetApp.swift */,
 				1A1A1A1A1A1A1A1A1A1A1A1D /* ContentView.swift */,
+				46F8A0D42E00413000ABCD01 /* AppNavigationDestinations.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -877,6 +880,7 @@
 				462826222EAD92A9000E891A /* CircularImageCropper.swift in Sources */,
 				468CF2282E39CC8900D49038 /* ChatBubbleShape.swift in Sources */,
 				1A1A1A1A1A1A1A1A1A1A1A1C /* ContentView.swift in Sources */,
+				46F8A0D52E00413000ABCD02 /* AppNavigationDestinations.swift in Sources */,
 				46F3BFCC2DFB06F500059F18 /* SimpleVideoPlayer.swift in Sources */,
 				46E5B3592DE005EC00AEF31F /* ThumbnailView.swift in Sources */,
 				460680EA2E16303100D9D15A /* Constants.swift in Sources */,
@@ -1147,7 +1151,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 98;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -1165,7 +1169,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0.5;
+				MARKETING_VERSION = 2.0.7;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -1200,8 +1204,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 93;
+				CURRENT_PROJECT_VERSION = 98;
 				DEVELOPMENT_ASSET_PATHS = "\"Tweet/Preview Content\"";
+				DEVELOPMENT_TEAM = 96LBXG78A7;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1217,7 +1222,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0.5;
+				MARKETING_VERSION = 2.0.7;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",

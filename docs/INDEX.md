@@ -54,6 +54,7 @@
 | [architecture/SCROLL_POSITION_FLOW.md](./architecture/SCROLL_POSITION_FLOW.md) | Scroll position preservation flow |
 | [architecture/SCROLL_POSITION_PRESERVATION.md](./architecture/SCROLL_POSITION_PRESERVATION.md) | In-memory scroll position (no disk persistence) |
 | [STARTUP_PERFORMANCE_OPTIMIZATION.md](./STARTUP_PERFORMANCE_OPTIMIZATION.md) | Phased startup with lazy initialization |
+| [TWEETLIST_PERFORMANCE_OPTIMIZATION.md](./TWEETLIST_PERFORMANCE_OPTIMIZATION.md) | Summary of feed scroll and cell performance optimizations |
 
 ---
 

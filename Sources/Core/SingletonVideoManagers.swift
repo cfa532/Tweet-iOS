@@ -252,6 +252,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard isActive else { return }
         isActive = false
         teardownAppLifecycleNotifications()
+        startupAudioUnmuteTask?.cancel()
+        startupAudioUnmuteTask = nil
+        startupAudioMuteUntil = .distantPast
 
         // Save playback position so the feed cell and the next fullscreen open can restore it.
         if let player = singletonPlayer,
@@ -469,6 +472,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     // Debouncing for buffering state to prevent rapid spinner blinking during seeks
     private var bufferingDebounceTask: DispatchWorkItem?
+    private var startupAudioMuteUntil: Date = .distantPast
+    private var startupAudioUnmuteTask: Task<Void, Never>?
 
     // Prevent stale async loads from clobbering current state (fixes stuck spinner after repeated opens)
     private var loadGeneration: Int = 0
@@ -634,8 +639,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 self.singletonPlayer?.replaceCurrentItem(with: playerItem)
             }
 
-            // Always unmuted in fullscreen
-            self.singletonPlayer?.isMuted = false
+            applyStartupAudioMuteIfNeeded()
 
             // CRITICAL: Setup fullscreen's unique functionality
             self.setupVideoCompletionObserver(playerItem)
@@ -670,8 +674,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         self.singletonPlayer?.replaceCurrentItem(with: playerItem)
                     }
                     
-                    // Always unmuted in fullscreen
-                    self.singletonPlayer?.isMuted = false
+                    self.applyStartupAudioMuteIfNeeded()
                     
                     // Setup video completion observer
                     self.setupVideoCompletionObserver(playerItem)
@@ -703,6 +706,30 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     self.isPlaying = false
                 }
             }
+        }
+    }
+    
+    func setStartupAudioMuteWindow(duration: TimeInterval) {
+        let safeDuration = max(0, duration)
+        startupAudioMuteUntil = Date().addingTimeInterval(safeDuration)
+        applyStartupAudioMuteIfNeeded()
+    }
+
+    private func applyStartupAudioMuteIfNeeded() {
+        guard let player = singletonPlayer else { return }
+        let now = Date()
+        if now < startupAudioMuteUntil {
+            player.isMuted = true
+            startupAudioUnmuteTask?.cancel()
+            let delay = startupAudioMuteUntil.timeIntervalSince(now)
+            let nanos = UInt64(max(0, delay) * 1_000_000_000)
+            startupAudioUnmuteTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: nanos)
+                guard Date() >= self.startupAudioMuteUntil else { return }
+                self.singletonPlayer?.isMuted = false
+            }
+        } else {
+            player.isMuted = false
         }
     }
     
@@ -1527,6 +1554,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
         isActive = true
         registerLifecycleObservers()
+        registerCoordinatorNotificationObservers()
         print("📱 [DetailVideoManager] Activated - lifecycle observers registered")
     }
     
@@ -1542,6 +1570,13 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
         isActive = false
         teardownAppLifecycleNotifications()
+        teardownCoordinatorNotificationObservers()
+        startupAudioUnmuteTask?.cancel()
+        startupAudioUnmuteTask = nil
+        startupAudioMuteUntil = .distantPast
+        mainTweetAttachmentMids.removeAll()
+        mainTweetAttachments.removeAll()
+        mainTweetBaseUrl = nil
 
         // Cancel the delayed clear from endDetailViewSession() — we're about to clear immediately.
         // Without this, the delayed task fires 0.3s later when the feed cell may have already
@@ -1555,12 +1590,62 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
 
         print("📱 [DetailVideoManager] Deactivated - lifecycle observers removed, player cleared")
     }
-    
+
     private func teardownAppLifecycleNotifications() {
         lifecycleObservers.forEach { NotificationCenter.default.removeObserver($0) }
         lifecycleObservers.removeAll()
     }
-    
+
+    private func registerCoordinatorNotificationObservers() {
+        coordinatorPlayObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("shouldPlayVideo"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let videoMid = notification.userInfo?["videoMid"] as? String,
+                  let source = notification.userInfo?["source"] as? String else { return }
+
+            Task { @MainActor [weak self] in
+                guard let self,
+                      source == "commentsCoordinator",
+                      self.mainTweetAttachmentMids.contains(videoMid) else { return }
+                if let baseUrl = self.mainTweetBaseUrl,
+                   let entry = self.mainTweetAttachments.first(where: { $0.mid == videoMid }),
+                   let url = entry.getUrl(baseUrl) {
+                    print("📱 [DetailVideoManager] Coordinator play: \(videoMid)")
+                    self.loadVideo(url: url, mid: videoMid, mediaType: entry.type)
+                }
+            }
+        }
+
+        coordinatorPauseObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name("shouldPauseVideo"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let videoMid = notification.userInfo?["videoMid"] as? String else { return }
+
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.mainTweetAttachmentMids.contains(videoMid),
+                      self.currentVideoMid == videoMid else { return }
+                print("📱 [DetailVideoManager] Coordinator pause: \(videoMid)")
+                self.pause()
+            }
+        }
+    }
+
+    private func teardownCoordinatorNotificationObservers() {
+        if let obs = coordinatorPlayObserver {
+            NotificationCenter.default.removeObserver(obs)
+            coordinatorPlayObserver = nil
+        }
+        if let obs = coordinatorPauseObserver {
+            NotificationCenter.default.removeObserver(obs)
+            coordinatorPauseObserver = nil
+        }
+    }
+
     // Register lifecycle observers and store tokens for later removal
     private func registerLifecycleObservers() {
         lifecycleObservers.append(
@@ -1718,10 +1803,36 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published var isPlaying = false
     @Published var isBuffering = false
 
+    // MARK: - Attachment Video Tracking (coordinator-driven autoplay)
+    /// Mids of the main tweet's video attachments — coordinator play/pause notifications are
+    /// filtered to only these mids so comment video notifications are ignored.
+    private var mainTweetAttachmentMids: Set<String> = []
+    private var mainTweetAttachments: [MimeiFileType] = []
+    private var mainTweetBaseUrl: URL? = nil
+    private var coordinatorPlayObserver: NSObjectProtocol?
+    private var coordinatorPauseObserver: NSObjectProtocol?
+
+    /// Register the main tweet's video attachments so coordinator notifications can drive playback.
+    /// Call this before activateForDetail() or immediately after.
+    @MainActor
+    func setMainTweetAttachments(_ attachments: [MimeiFileType], baseUrl: URL?) {
+        mainTweetAttachments = attachments
+        mainTweetBaseUrl = baseUrl
+        mainTweetAttachmentMids = Set(
+            attachments
+                .filter { $0.type == .video || $0.type == .hls_video }
+                .map { $0.mid }
+        )
+        print("📱 [DetailVideoManager] Registered \(mainTweetAttachmentMids.count) attachment video mid(s)")
+    }
+
     private var loadGeneration: Int = 0
     private var isItemReady = false
     private var itemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
+    private var pendingFeedResumeTime: CMTime?
+    private var startupAudioMuteUntil: Date = .distantPast
+    private var startupAudioUnmuteTask: Task<Void, Never>?
 
     /// When true, the current player was borrowed from the feed cell's SharedAssetCache.
     /// clearCurrentVideo() must NOT call replaceCurrentItem(with: nil) on a loaned player,
@@ -1760,6 +1871,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     func loadVideo(url: URL, mid: String, mediaType: MediaType) {
         // Fast path: same video already loaded and healthy
         if currentVideoMid == mid, currentPlayer?.currentItem != nil, !isPlayerBroken() {
+            applyStartupAudioMuteIfNeeded()
             if isItemReady {
                 isPlaying = true
                 // Rewind if at end, then play
@@ -1778,6 +1890,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             }
             return
         }
+        let wasLoanedPlayer = isPlayerLoaned
 
         // Save old video position before switching
         if let player = currentPlayer, player.currentItem != nil, currentVideoMid != mid {
@@ -1789,7 +1902,11 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     wasPlaying: player.rate > 0, context: .detailView, duration: d)
             }
             player.pause()
-            player.replaceCurrentItem(with: nil)
+            if isPlayerLoaned {
+                player.isMuted = MuteState.shared.isMuted
+            } else {
+                player.replaceCurrentItem(with: nil)
+            }
         }
 
         // Bump generation to ignore stale async completions
@@ -1811,30 +1928,42 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             pi.removeObserver(self, forKeyPath: "status")
             hasKVOObserver = false
         }
+        if wasLoanedPlayer {
+            currentPlayer = nil
+        }
 
         currentVideoMid = mid
         isPlayerLoaned = false
+        pendingFeedResumeTime = preferredFeedResumeTime(for: mid)
 
         // Try cached player path first (fast, synchronous)
         if let cachedPlayer = SharedAssetCache.shared.getCachedPlayer(for: mid),
            let cachedItem = cachedPlayer.currentItem {
-            let playerItem = AVPlayerItem(asset: cachedItem.asset)
-
             // Clear proxy cancelled state
             LocalHTTPServer.shared.clearCancelledState(for: mid)
 
             AudioSessionManager.shared.activateForVideoPlayback()
 
-            if currentPlayer == nil {
-                currentPlayer = AVPlayer(playerItem: playerItem)
-            } else {
-                currentPlayer?.replaceCurrentItem(with: playerItem)
-            }
-            currentPlayer?.isMuted = false
+            NotificationCenter.default.post(
+                name: .videoPlayerLoaned,
+                object: nil,
+                userInfo: ["videoMid": mid]
+            )
 
-            setupDetailCompletionObserver(playerItem)
+            currentPlayer = cachedPlayer
+            isPlayerLoaned = true
+            applyStartupAudioMuteIfNeeded()
+
+            setupDetailCompletionObserver(cachedItem)
             setupDetailTimeControlObserver()
-            startDetailPlayback(playerItem: playerItem, mid: mid)
+            if cachedItem.status == .readyToPlay {
+                isItemReady = true
+                seekAndPlay(playerItem: cachedItem, mid: mid)
+            } else {
+                startDetailPlayback(playerItem: cachedItem, mid: mid)
+                cachedItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                cachedPlayer.play()
+            }
             return
         }
 
@@ -1851,7 +1980,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     } else {
                         self.currentPlayer?.replaceCurrentItem(with: playerItem)
                     }
-                    self.currentPlayer?.isMuted = false
+                    self.applyStartupAudioMuteIfNeeded()
                     self.setupDetailCompletionObserver(playerItem)
                     self.setupDetailTimeControlObserver()
                     self.startDetailPlayback(playerItem: playerItem, mid: mid)
@@ -1862,6 +1991,30 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     print("❌ [DetailVideoManager] Failed to load video: \(error)")
                 }
             }
+        }
+    }
+    
+    func setStartupAudioMuteWindow(duration: TimeInterval) {
+        let safeDuration = max(0, duration)
+        startupAudioMuteUntil = Date().addingTimeInterval(safeDuration)
+        applyStartupAudioMuteIfNeeded()
+    }
+
+    private func applyStartupAudioMuteIfNeeded() {
+        guard let player = currentPlayer else { return }
+        let now = Date()
+        if now < startupAudioMuteUntil {
+            player.isMuted = true
+            startupAudioUnmuteTask?.cancel()
+            let delay = startupAudioMuteUntil.timeIntervalSince(now)
+            let nanos = UInt64(max(0, delay) * 1_000_000_000)
+            startupAudioUnmuteTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: nanos)
+                guard Date() >= self.startupAudioMuteUntil else { return }
+                self.currentPlayer?.isMuted = false
+            }
+        } else {
+            player.isMuted = false
         }
     }
 
@@ -1889,8 +2042,62 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         }
     }
 
+    private func preferredFeedResumeTime(for mid: String) -> CMTime? {
+        if let player = SharedAssetCache.shared.getCachedPlayer(for: mid) {
+            let currentTime = player.currentTime()
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                return currentTime
+            }
+        }
+
+        if let cachedPlayback = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
+            let currentTime = cachedPlayback.time
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                return currentTime
+            }
+        }
+
+        if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .mediaCell),
+           let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .mediaCell) {
+            let currentTime = saved.currentTime
+            if currentTime.isValid, currentTime.seconds.isFinite, currentTime.seconds > 0.25 {
+                return currentTime
+            }
+        }
+
+        return nil
+    }
+
     private func seekAndPlay(playerItem: AVPlayerItem, mid: String) {
         let duration = playerItem.duration
+        if let feedResumeTime = pendingFeedResumeTime {
+            pendingFeedResumeTime = nil
+            let savedSec = feedResumeTime.seconds
+            if savedSec.isFinite && savedSec > 0.25 {
+                if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
+                    let player = currentPlayer
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            self?.applyStartupAudioMuteIfNeeded()
+                            player?.play()
+                            print("▶️ [DetailVideoManager] Continued from feed at end - rewound")
+                        }
+                    }
+                    return
+                }
+                let player = currentPlayer
+                currentPlayer?.seek(to: feedResumeTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                    guard finished else { return }
+                    Task { @MainActor [weak self] in
+                        self?.applyStartupAudioMuteIfNeeded()
+                        player?.play()
+                        print("▶️ [DetailVideoManager] Continued from feed position \(savedSec)s")
+                    }
+                }
+                return
+            }
+        }
+
         // Check PersistentVideoStateManager for saved position
         if PersistentVideoStateManager.shared.shouldRestorePlayback(videoMid: mid, context: .detailView),
            let saved = PersistentVideoStateManager.shared.getState(videoMid: mid, context: .detailView) {
@@ -1899,17 +2106,23 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 // If near end, restart from beginning
                 if duration.isValid && duration.seconds > 0 && savedSec >= duration.seconds - 0.5 {
                     let player = currentPlayer
-                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                        player?.play()
-                        print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
+                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                        Task { @MainActor [weak self] in
+                            self?.applyStartupAudioMuteIfNeeded()
+                            player?.play()
+                            print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
+                        }
                     }
                     return
                 }
                 let player = currentPlayer
-                currentPlayer?.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                currentPlayer?.seek(to: saved.currentTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                     guard finished else { return }
-                    player?.play()
-                    print("▶️ [DetailVideoManager] Playing from saved position \(savedSec)s")
+                    Task { @MainActor [weak self] in
+                        self?.applyStartupAudioMuteIfNeeded()
+                        player?.play()
+                        print("▶️ [DetailVideoManager] Playing from saved position \(savedSec)s")
+                    }
                 }
                 return
             }
@@ -1919,13 +2132,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             let remaining = duration.seconds - playerItem.currentTime().seconds
             if remaining <= 0.5 {
                 let player = currentPlayer
-                currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                    player?.play()
-                    print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
+                currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.applyStartupAudioMuteIfNeeded()
+                        player?.play()
+                        print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
+                    }
                 }
                 return
             }
         }
+        applyStartupAudioMuteIfNeeded()
         currentPlayer?.play()
         print("▶️ [DetailVideoManager] Playing immediately")
     }
@@ -2077,6 +2294,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         timeControlStatusObserver = nil
         isItemReady = false
         isBuffering = false
+        pendingFeedResumeTime = nil
 
         // Remove legacy KVO observer before clearing (only if it was added)
         if hasKVOObserver, let player = currentPlayer, let playerItem = player.currentItem {
@@ -2489,6 +2707,7 @@ class ChatVideoManager: ObservableObject {
         attachment: MimeiFileType,
         isFromCurrentUser: Bool,
         senderUser: User?,
+        senderBaseUrl: URL? = nil,
         isChatScreenVisible: Bool,
         receiptId: String
     ) async -> AVPlayer? {
@@ -2501,7 +2720,7 @@ class ChatVideoManager: ObservableObject {
             if isFromCurrentUser {
                 return HproseInstance.shared.appUser.baseUrl ?? HproseInstance.baseUrl
             } else {
-                return senderUser?.baseUrl ?? HproseInstance.baseUrl
+                return senderBaseUrl ?? senderUser?.baseUrl ?? HproseInstance.baseUrl
             }
         }()
 

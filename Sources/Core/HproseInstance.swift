@@ -2589,7 +2589,7 @@ final class HproseInstance: ObservableObject {
         userId: MimeiId? = nil
     )  async throws -> Bool? {
         let effectiveUserId = userId ?? appUser.mid
-        
+
         // Check if app user is blacklisted by the target user
         guard let targetUser = try await fetchUser(followingId) else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Target user not found", comment: "User lookup error")])
@@ -2597,37 +2597,36 @@ final class HproseInstance: ObservableObject {
         if targetUser.isUserBlacklisted(effectiveUserId) {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("You cannot follow this user because you are blocked", comment: "Follow blocked error")])
         }
-        
-        return try await withRetry {
-            let entry = "toggle_following"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "followingid": followingId,
-                "userid": effectiveUserId,
-            ]
-            guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            
-            // For v2 API: server returns {success: true, data: {isFollowing: bool}}
-            // After unwrapV2Response, we get {isFollowing: bool}
-            if let dataDict = unwrappedResponse as? [String: Any] {
-                if let isFollowing = dataDict["isFollowing"] as? Bool {
-                    return isFollowing
-                }
-            }
-            
-            // Fallback: check if it's a direct Bool (legacy format)
-            if let boolResponse = unwrappedResponse as? Bool {
-                return boolResponse
-            }
-            
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
+
+        // toggle_following is NOT idempotent — never retry. A timed-out request
+        // may still be processed server-side; a retry would flip the state back.
+        let entry = "toggle_following"
+        let cachedFollowing = User.getInstance(mid: followingId)
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "followingid": followingId,
+            "userid": effectiveUserId,
+            "followingid_hostid": cachedFollowing.hostIds?.first as Any,
+        ]
+        guard let client = appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
+        let originalTimeout = client.timeout
+        client.timeout = 30.0
+        defer { client.timeout = originalTimeout }
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+
+        if let dataDict = unwrappedResponse as? [String: Any],
+           let isFollowing = dataDict["isFollowing"] as? Bool {
+            return isFollowing
+        }
+        if let boolResponse = unwrappedResponse as? Bool {
+            return boolResponse
+        }
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Nil response from server", comment: "Server response error")])
     }
     
     /*

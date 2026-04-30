@@ -1,6 +1,6 @@
 # Sharing System
 
-**Last Updated:** November 14, 2025  
+**Last Updated:** April 14, 2026  
 **Status:** ✅ Production
 
 ---
@@ -8,6 +8,13 @@
 ## Overview
 
 The sharing system provides context-aware URL generation that adapts based on where the share action is initiated. It uses IP-based URLs for detail view sharing to ensure compatibility with the web application's Vue HashHistory router.
+
+On iOS, the share flow also provides rich metadata to the system share sheet using `UIActivityItemSource` and `LPLinkMetadata`. That metadata is what allows apps such as WeChat to render a card-like preview even though the app is not using the WeChat SDK.
+
+This behavior is platform-specific. Android's generic `ACTION_SEND` flow does not expose an equivalent metadata path that WeChat reliably turns into the same card UI. Matching the iOS result on Android would generally require either:
+
+1. WeChat Open SDK integration with a registered WeChat `AppID`, or
+2. A public URL that WeChat can unfurl server-side into a preview card based on webpage metadata.
 
 ---
 
@@ -156,6 +163,32 @@ The share button also captures context-appropriate video screenshots:
 - Uses player cache key: `\{mediaID}`
 - May differ from detail view if user scrolled
 
+### Rich Share Metadata on iOS
+
+The iOS implementation does more than share plain text plus a URL:
+
+1. `CustomShareItem` returns the actual share text for all targets.
+2. `activityViewControllerLinkMetadata(...)` provides `LPLinkMetadata` with:
+   - the share URL
+   - a title derived from tweet title/content/attachment types
+   - `iconProvider` / `imageProvider` backed by the preview image
+3. A standalone `CustomShareImage` is also supplied because WeChat's iOS share extension responds better when a separate image item is present.
+
+This is why the iOS app can produce a WeChat card-like share result without a WeChat `AppID`: the card is being inferred from Apple's share metadata APIs, not from the WeChat native SDK.
+
+### Android Limitation
+
+Android currently shares as plain `text/plain` through the system sharesheet. That is enough to share a tweet URL, but not enough to force WeChat to render the same app-provided card format that iOS gets through `LPLinkMetadata`.
+
+If Android needs a native WeChat card with app-controlled title/description/thumbnail, it would need:
+
+1. WeChat Open Platform registration
+2. a WeChat `AppID`
+3. WeChat Android SDK integration using `WXWebpageObject` / `WXMediaMessage`
+4. a compressed thumbnail that fits WeChat's size limits
+
+If no `AppID` is available, the fallback path is to rely on WeChat previewing a public webpage URL on its own.
+
 ### BaseURL Resolution
 
 The system uses a fallback chain for baseUrl resolution:
@@ -226,6 +259,23 @@ http://125.229.161.122:8080/entry?aid=h5U5jxPr2p2tg2kMr8UeyRMNIJ_&ver=last#/twee
 [Screenshot attachment]
 ```
 
+### Platform Comparison
+
+**iOS**
+- Shares text + URL
+- Supplies `LPLinkMetadata` title/image metadata
+- Supplies a separate preview image item
+- Can appear as a rich card in WeChat without WeChat SDK integration
+
+**Android (current)**
+- Shares only text + URL through `ACTION_SEND`
+- Does not provide app-controlled rich link metadata to WeChat
+- Cannot reliably reproduce the same WeChat card UI without WeChat SDK integration
+
+**Android (without WeChat AppID)**
+- Best possible outcome is a plain shared URL that WeChat may unfurl on its own
+- Final preview depends on the shared webpage's public metadata and WeChat's crawler/cache behavior
+
 ---
 
 ## Files Modified
@@ -276,9 +326,19 @@ http://125.229.161.122:8080/entry?aid=h5U5jxPr2p2tg2kMr8UeyRMNIJ_&ver=last#/twee
 
 1. **QR Code Generation**: Generate QR codes for easy mobile sharing
 2. **Deep Links**: Support app-to-app sharing with custom URL scheme
-3. **Link Preview**: Rich link previews for social media platforms
+3. **Public Metadata Optimization**: Improve webpage `og:title`, `og:description`, and `og:image` so platforms like WeChat can unfurl shared URLs more consistently
 4. **Analytics**: Track share actions and conversions
 5. **Custom Share Messages**: Allow users to customize share text
+
+### WeChat Notes
+
+If Android cannot obtain a WeChat `AppID`, there is no native SDK path to guarantee the same share card behavior as iOS. In that case, the practical strategy is:
+
+1. Keep sharing a stable public tweet URL
+2. Make sure the destination webpage exposes strong public metadata
+3. Treat WeChat card rendering as server-side URL unfurling behavior rather than app-driven share metadata
+
+Important limitation: detail-view share URLs currently encode the tweet route in the hash fragment (`#/tweet/...`). Server-side crawlers do not send URL fragments in HTTP requests, so WeChat unfurling cannot reliably derive tweet-specific metadata from those URLs alone. A clean canonical URL such as `/tweet/{mid}/{authorId}` is much more suitable for crawler-generated cards.
 
 ### Migration Notes
 
