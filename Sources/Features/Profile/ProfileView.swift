@@ -91,6 +91,10 @@ struct ProfileView: View {
                 // Calculate isFollowing by checking if the user's mid is in the app user's followingList
                 isFollowing = (hproseInstance.appUser.followingList)?.contains(user.mid) ?? false
             }
+            .onReceive(hproseInstance.appUser.$followingList) { newList in
+                // followingList may load asynchronously after onAppear; keep button state in sync
+                isFollowing = newList?.contains(user.mid) ?? false
+            }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
