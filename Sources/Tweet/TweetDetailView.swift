@@ -258,11 +258,19 @@ private struct BottomBarScrollTracker: UIViewRepresentable {
 struct SelectableTextView: UIViewRepresentable {
     let text: String
     
+    private func makeAttributedString(_ text: String) -> NSAttributedString {
+        let ps = NSMutableParagraphStyle()
+        ps.lineSpacing = 3
+        return NSAttributedString(string: text, attributes: [
+            .font: UIFont.preferredFont(forTextStyle: .body),
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: ps,
+        ])
+    }
+
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
-        textView.text = text
-        textView.font = UIFont.preferredFont(forTextStyle: .body)
-        textView.textColor = UIColor.label
+        textView.attributedText = makeAttributedString(text)
         textView.backgroundColor = .clear
         textView.isEditable = false
         textView.isSelectable = true
@@ -270,14 +278,14 @@ struct SelectableTextView: UIViewRepresentable {
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
-        textView.linkTextAttributes = [:] // Prevent links from being tappable
+        textView.linkTextAttributes = [:]
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return textView
     }
-    
+
     func updateUIView(_ uiView: UITextView, context: Context) {
         if uiView.text != text {
-            uiView.text = text
+            uiView.attributedText = makeAttributedString(text)
         }
     }
     
