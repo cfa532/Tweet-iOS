@@ -439,15 +439,19 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
             instance.favoritesCount = user.favoritesCount
             instance.commentsCount = user.commentsCount
             
-            // Update array properties
-            instance.fansList = user.fansList
-            instance.followingList = user.followingList
-            instance.bookmarkedTweets = user.bookmarkedTweets
-            instance.favoriteTweets = user.favoriteTweets
-            instance.repliedTweets = user.repliedTweets
-            instance.commentsList = user.commentsList
-            instance.topTweets = user.topTweets
-            instance.userBlackList = user.userBlackList
+            // Update array properties — only when the source actually provided them.
+            // Server responses (e.g. get_user_core_data) sometimes omit list fields entirely,
+            // which decodes to `nil`. Overwriting locally-mutated lists with `nil` would wipe
+            // optimistic updates such as a freshly-appended followingList entry.
+            // An empty `[]` from the server IS treated as authoritative.
+            if let v = user.fansList { instance.fansList = v }
+            if let v = user.followingList { instance.followingList = v }
+            if let v = user.bookmarkedTweets { instance.bookmarkedTweets = v }
+            if let v = user.favoriteTweets { instance.favoriteTweets = v }
+            if let v = user.repliedTweets { instance.repliedTweets = v }
+            if let v = user.commentsList { instance.commentsList = v }
+            if let v = user.topTweets { instance.topTweets = v }
+            if let v = user.userBlackList { instance.userBlackList = v }
         } else {
             DispatchQueue.main.async {
                 instance.name = user.name
