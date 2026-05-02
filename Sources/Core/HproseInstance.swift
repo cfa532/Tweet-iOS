@@ -2610,7 +2610,20 @@ final class HproseInstance: ObservableObject {
             "userid": effectiveUserId,
             "followingid_hostid": cachedFollowing.hostIds?.first as Any,
         ]
-        guard let client = appUser.hproseClient else {
+        // Route the call directly to appUser's primary host (hostIds[0]) so the
+        // backend's `userHostId === nodeId` check fires and the local handler
+        // runs. The cross-node delegation path in toggle_following.js drops the
+        // response payload (Java-Map-backed bridge object whose keys are not
+        // JS-enumerable), making a clearly successful operation look like a
+        // failure on the client. By calling the home node directly we bypass it.
+        // Falls back to appUser.hproseClient if the writable host can't be
+        // resolved, so the call still goes out (just risks the stale-payload bug).
+        let client: HproseClient
+        if let writableUrl = try? await appUser.resolveWritableUrl() {
+            client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
+        } else if let fallback = appUser.hproseClient {
+            client = fallback
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let originalTimeout = client.timeout
