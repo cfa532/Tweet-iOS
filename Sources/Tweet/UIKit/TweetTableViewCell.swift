@@ -15,7 +15,13 @@ class TweetTableViewCell: UITableViewCell {
 
     // Height change tracking
     private var lastNotifiedHeight: CGFloat = 0
-    var onHeightChanged: (() -> Void)?
+    /// Last desired height we asked the table to grow to. Prevents firing
+    /// onHeightChanged repeatedly for the same overflow before the table reacts.
+    private var lastReportedDesiredHeight: CGFloat = 0
+    /// Fired when the cell's content needs more height than the table allotted.
+    /// Parameter is the Auto Layout fitting height the cell wants — the controller
+    /// should cache this and re-layout the table.
+    var onHeightChanged: ((CGFloat) -> Void)?
     var onContentExpanded: (() -> Void)?
 
     // Padding constraints (updated per-configure to match list-level padding)
@@ -33,16 +39,33 @@ class TweetTableViewCell: UITableViewCell {
         let currentHeight = bounds.height
         guard currentHeight > 0 else { return }
 
+        // 1. Track table-driven height changes (cell got resized externally).
         if lastNotifiedHeight == 0 {
-            // Initial layout after reuse — record height without firing callback.
-            // This prevents a spurious beginUpdates/endUpdates on every first display.
+            // Initial layout after reuse — record height without firing callback
+            // to avoid a spurious beginUpdates/endUpdates on every first display.
             lastNotifiedHeight = currentHeight
-            return
+            lastReportedDesiredHeight = 0
+        } else if abs(currentHeight - lastNotifiedHeight) > 1 {
+            lastNotifiedHeight = currentHeight
+            // Bounds caught up — clear the reported-desired guard so the next
+            // legitimate overflow can fire again.
+            lastReportedDesiredHeight = 0
         }
 
-        if abs(currentHeight - lastNotifiedHeight) > 1 {
-            lastNotifiedHeight = currentHeight
-            onHeightChanged?()
+        // 2. Detect content overflow: cell wants more height than the table
+        //    allotted. Happens when async content (embedded tweet, image
+        //    attachment metadata) finishes loading after the initial render.
+        //    bounds.height is fixed by heightForRowAt, so we can't see the
+        //    growth via bounds; we have to ask Auto Layout for the fitting size.
+        let desired = ceil(tweetContentView.systemLayoutSizeFitting(
+            CGSize(width: bounds.width, height: 0),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        ).height)
+
+        if desired > currentHeight + 1 && abs(desired - lastReportedDesiredHeight) > 1 {
+            lastReportedDesiredHeight = desired
+            onHeightChanged?(desired)
         }
     }
 
@@ -121,6 +144,7 @@ class TweetTableViewCell: UITableViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         lastNotifiedHeight = 0
+        lastReportedDesiredHeight = 0
         onHeightChanged = nil
         onContentExpanded = nil
         currentTweetId = nil
