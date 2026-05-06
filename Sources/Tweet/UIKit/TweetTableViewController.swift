@@ -1237,10 +1237,12 @@ class TweetTableViewController: UITableViewController {
 
         // Height change callback for embedded tweets that load asynchronously
         // When the embedded tweet loads, the cell expands and the table must re-layout
-        cell.onHeightChanged = { [weak self, weak cell] in
+        cell.onHeightChanged = { [weak self, weak cell] desiredHeight in
             guard let self, let cell,
                   let indexPath = self.tableView.indexPath(for: cell) else { return }
-            // Invalidate cached height so Auto Layout remeasures
+            // Use Auto Layout's fitting height directly. calculateTweetHeight is a
+            // manual estimate that can disagree with the cell's actual content
+            // (esp. when an embedded tweet finishes loading after first render).
             let tweet: Tweet
             if indexPath.row < self.pinnedTweets.count {
                 tweet = self.pinnedTweets[indexPath.row]
@@ -1249,7 +1251,8 @@ class TweetTableViewController: UITableViewController {
                 guard idx < self.tweets.count else { return }
                 tweet = self.tweets[idx]
             }
-            tweet.cachedHeight = nil
+            tweet.cachedHeight = desiredHeight
+            TweetHeightCache.shared.setHeight(desiredHeight, for: tweet.mid)
 
             // Guard: only trigger height recalc if data source is still consistent
             // If pinnedTweets/tweets changed since last reload, a reloadData is pending
@@ -1262,26 +1265,10 @@ class TweetTableViewController: UITableViewController {
                     self.tableView.endUpdates()
                     self.isTableViewUpdating = false
                 }
-
-                // CRITICAL: Cache the new height immediately after re-layout
-                // willDisplay is NOT called for already-visible cells, so we must cache here
-                // to prevent scroll jumps when the cell scrolls away and back
-                if cell.frame.height > 0 {
-                    // Verify embedded tweet is still loaded (in case of rapid changes)
-                    let needsEmbeddedTweet = tweet.originalTweetId != nil
-                    let embeddedTweetLoaded = !needsEmbeddedTweet ||
-                                             (Tweet.getInstance(for: tweet.originalTweetId!)?.author != nil)
-                    if embeddedTweetLoaded {
-                        // Sanity check: don't cache if significantly smaller than expected
-                        // (indicates cell hasn't fully rendered — e.g., media grid pending)
-                        let expectedHeight = Self.calculateTweetHeight(for: tweet)
-                        let isReasonable = cell.frame.height >= expectedHeight - 20
-                        if isReasonable {
-                            tweet.cachedHeight = cell.frame.height
-                            TweetHeightCache.shared.setHeight(cell.frame.height, for: tweet.mid)
-                        }
-                    }
-                }
+                // No post-beginUpdates re-caching: we already cached the Auto Layout
+                // fitting height above. Re-querying cell.frame.height here can read
+                // a transient pre-layout value, and calling calculateTweetHeight as
+                // a sanity check would re-introduce the broken estimate.
             }
         }
 

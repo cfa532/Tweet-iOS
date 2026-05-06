@@ -115,7 +115,13 @@ final class HproseInstance: ObservableObject {
             Task { @MainActor in
                 // Update the singleton instance with new values
                 instance.baseUrl = newValue.baseUrl
-                instance.writableUrl = newValue.writableUrl
+                // writableUrl is resolved lazily by resolveWritableUrl() and is
+                // typically not present on a server-fetched User. Only overwrite
+                // when newValue actually provides one — otherwise we'd wipe a
+                // valid cached resolution and force re-resolution on every refresh.
+                if let newWritableUrl = newValue.writableUrl {
+                    instance.writableUrl = newWritableUrl
+                }
                 instance.name = newValue.name
                 instance.username = newValue.username
                 instance.avatar = newValue.avatar
@@ -2610,7 +2616,20 @@ final class HproseInstance: ObservableObject {
             "userid": effectiveUserId,
             "followingid_hostid": cachedFollowing.hostIds?.first as Any,
         ]
-        guard let client = appUser.hproseClient else {
+        // Route the call directly to appUser's primary host (hostIds[0]) so the
+        // backend's `userHostId === nodeId` check fires and the local handler
+        // runs. The cross-node delegation path in toggle_following.js drops the
+        // response payload (Java-Map-backed bridge object whose keys are not
+        // JS-enumerable), making a clearly successful operation look like a
+        // failure on the client. By calling the home node directly we bypass it.
+        // Falls back to appUser.hproseClient if the writable host can't be
+        // resolved, so the call still goes out (just risks the stale-payload bug).
+        let client: HproseClient
+        if let writableUrl = try? await appUser.resolveWritableUrl() {
+            client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
+        } else if let fallback = appUser.hproseClient {
+            client = fallback
+        } else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
         let originalTimeout = client.timeout
@@ -2841,62 +2860,69 @@ final class HproseInstance: ObservableObject {
     }
     
     /**
-     * Update tweet privacy (public/private). Only appUser can update its own tweet.
+     * Toggle tweet privacy (public/private). Only appUser can update its own tweet.
      * Returns the new privacy status as a boolean.
      * */
-    func updateTweetPrivacy(tweetId: String) async throws -> Bool {
-        return try await withRetry {
-            let entry = "update_tweet_privacy"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "appuserid": appUser.mid,
-                "tweetid": tweetId
-            ]
-            guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            print("[updateTweetPrivacy] Raw response: \(String(describing: rawResponse))")
-            
-            // Unwrap v2 response
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            print("[updateTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
-            
-            // For v2 API: server returns {success: true, data: {isPrivate: bool}}
-            // After unwrapV2Response, we get {isPrivate: bool}
-            if let dataDict = unwrappedResponse as? [String: Any] {
-                if let isPrivate = dataDict["isPrivate"] as? Bool {
-                    print("[updateTweetPrivacy] Privacy status from v2 format: \(isPrivate)")
-                    return isPrivate
-                }
-            }
-            
-            // Fallback: check if it's a direct Bool (legacy format)
-            if let isPrivateBool = unwrappedResponse as? Bool {
-                print("[updateTweetPrivacy] Direct boolean response: \(isPrivateBool)")
-                return isPrivateBool
-            }
-            
-            // Handle numeric responses (0 = false, 1 = true) - legacy format
-            if let numericResponse = unwrappedResponse as? NSNumber {
-                let isPrivate = numericResponse.boolValue
-                print("[updateTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
-                return isPrivate
-            }
-            
-            // Handle integer responses (0 = false, 1 = true) - legacy format
-            if let intResponse = unwrappedResponse as? Int {
-                let isPrivate = intResponse != 0
-                print("[updateTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
-                return isPrivate
-            }
-            
-            print("[updateTweetPrivacy] Unexpected response format: \(String(describing: unwrappedResponse))")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+    func toggleTweetPrivacy(tweetId: String) async throws -> Bool {
+        // toggle_tweet_privacy is NON-idempotent — never retry. A timed-out
+        // request may still be processed server-side; a retry would flip it back.
+        let entry = "toggle_tweet_privacy"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "appuserid": appUser.mid,
+            "tweetid": tweetId
+        ]
+        // Mutation: send directly to the user's writable node. The server-side
+        // delegation path was returning empty objects; routing here avoids it.
+        // writableUrl is lazy-resolved — make sure it's populated first.
+        _ = try await appUser.resolveWritableUrl()
+        guard let client = appUser.writableClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
+        let originalTimeout = client.timeout
+        client.timeout = 30.0
+        defer { client.timeout = originalTimeout }
+
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        print("[toggleTweetPrivacy] Raw response: \(String(describing: rawResponse))")
+
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        print("[toggleTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
+
+        // For v2 API: server returns {success: true, data: {isPrivate: bool}}
+        // After unwrapV2Response, we get {isPrivate: bool}.
+        // Hprose bridges JS booleans to NSNumber, so accept both Bool and NSNumber.
+        if let dataDict = unwrappedResponse as? [String: Any],
+           let isPrivate = (dataDict["isPrivate"] as? Bool) ?? (dataDict["isPrivate"] as? NSNumber)?.boolValue {
+            print("[toggleTweetPrivacy] Privacy status from v2 format: \(isPrivate)")
+            return isPrivate
+        }
+
+        // Fallback: check if it's a direct Bool (legacy format)
+        if let isPrivateBool = unwrappedResponse as? Bool {
+            print("[toggleTweetPrivacy] Direct boolean response: \(isPrivateBool)")
+            return isPrivateBool
+        }
+
+        // Handle numeric responses (0 = false, 1 = true) - legacy format
+        if let numericResponse = unwrappedResponse as? NSNumber {
+            let isPrivate = numericResponse.boolValue
+            print("[toggleTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
+            return isPrivate
+        }
+
+        // Handle integer responses (0 = false, 1 = true) - legacy format
+        if let intResponse = unwrappedResponse as? Int {
+            let isPrivate = intResponse != 0
+            print("[toggleTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
+            return isPrivate
+        }
+
+        print("[toggleTweetPrivacy] Unexpected response format: \(String(describing: unwrappedResponse))")
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
     }
     
     /**
@@ -4861,95 +4887,6 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
         }
         
-        /// Poll process-zip status to get CID when processing is complete
-        private static func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
-            print("DEBUG: Polling process-zip status for job ID: \(jobId)")
-            
-            guard let writableUrl = appUser.writableUrl else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
-            }
-            
-            // Get host from writableUrl - no fallback, must succeed
-            guard let host = writableUrl.host else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
-            }
-            
-            // Get cloud drive port - no fallback, must be configured
-            guard appUser.cloudDrivePort > 0 else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
-            }
-            
-            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
-            }
-            let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
-            print("DEBUG: Polling status at: \(statusURL)")
-            
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 30  // 30 seconds for status checks
-            config.timeoutIntervalForResource = 30
-            let session = URLSession(configuration: config)
-            
-            var attempts = 0
-            let maxAttempts = 2880 // 4 hours with 5-second intervals (4 * 60 * 60 / 5 = 2880)
-            let pollInterval: TimeInterval = 5.0
-            
-            while attempts < maxAttempts {
-                attempts += 1
-                print("DEBUG: Process-zip status polling attempt \(attempts)/\(maxAttempts)")
-                
-                do {
-                    let (responseData, response) = try await session.data(from: statusURL)
-                    
-                    if let httpResponse = response as? HTTPURLResponse {
-                        if httpResponse.statusCode == 200 {
-                            if let responseString = String(data: responseData, encoding: .utf8) {
-                                print("DEBUG: Process-zip status response: \(responseString)")
-                                
-                                // Parse JSON response
-                                if let jsonData = responseString.data(using: .utf8),
-                                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                                    
-                                    if let status = json["status"] as? String {
-                                        if status == "completed" {
-                                            if let cid = json["cid"] as? String {
-                                                print("DEBUG: Process-zip completed with CID: \(cid)")
-                                                return cid
-                                            } else {
-                                                throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process completed but no CID found"])
-                                            }
-                                        } else if status == "failed" {
-                                            let errorMessage = json["error"] as? String ?? "Unknown error"
-                                            throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process failed: \(errorMessage)"])
-                                        } else if status == "processing" {
-                                            // Still processing, continue polling
-                                            progressCallback?("Processing HLS video... (\(attempts * 5)s)", 70 + (attempts * 2))
-                                            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
-                                            continue
-                                        }
-                                    }
-                                }
-                            }
-                        } else if httpResponse.statusCode == 404 {
-                            // Job not found, might still be starting
-                            print("DEBUG: Job not found yet, continuing to poll...")
-                            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
-                            continue
-                        } else {
-                            print("DEBUG: Status check failed with status code: \(httpResponse.statusCode)")
-                        }
-                    }
-                } catch {
-                    print("DEBUG: Status check error: \(error)")
-                }
-                
-                // Wait before next attempt
-                try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
-            }
-            
-            throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process-zip timeout after 4 hours"])
-        }
-        
         /// Wait for server to return CID via message pull
         private func waitForServerCID(cid: String, appUser: User) async throws -> (MimeiFileType?, String?) {
             print("DEBUG: Waiting for server CID: \(cid)")
@@ -5049,12 +4986,8 @@ final class HproseInstance: ObservableObject {
                 do {
                     // Resolve writableUrl (may use NodePool cache or resolve fresh)
                     let writableUrl = try await appUser.resolveWritableUrl()
-                    print("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl?.absoluteString ?? "nil")")
-                    
-                    guard let writableUrl = writableUrl else {
-                        throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
-                    }
-                    
+                    print("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl.absoluteString)")
+
                     // Try to upload with current writableUrl
                     return try await performBackendVideoUpload(
                         data: data,
@@ -5245,9 +5178,9 @@ final class HproseInstance: ObservableObject {
                 do {
                     // Resolve writable URL (may use NodePool cache or resolve fresh)
                     let writableUrl = try await appUser.resolveWritableUrl()
-                    print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl?.absoluteString ?? "nil")")
+                    print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl.absoluteString)")
                     
-                    guard let uploadClient = appUser.uploadClient else {
+                    guard let uploadClient = appUser.writableClient else {
                         throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
                     }
                     

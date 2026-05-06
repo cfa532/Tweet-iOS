@@ -188,7 +188,7 @@ class TweetBodyUIView: UIView {
         isExpanded = true
 
         let ps = NSMutableParagraphStyle()
-        ps.lineSpacing = 1
+        ps.lineSpacing = 3
         ps.lineBreakMode = .byWordWrapping
         let fullAttr = NSAttributedString(string: content, attributes: [
             .font: Self.contentFont,
@@ -479,7 +479,7 @@ class TweetBodyUIView: UIView {
         let maxLines = maxContentLines
 
         let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = 1
+        paragraphStyle.lineSpacing = 3
         paragraphStyle.lineBreakMode = .byWordWrapping
 
         let textAttributes: [NSAttributedString.Key: Any] = [
@@ -506,7 +506,7 @@ class TweetBodyUIView: UIView {
         // No truncation needed — return plain text
         guard needsTruncation else {
             let ps = NSMutableParagraphStyle()
-            ps.lineSpacing = 1
+            ps.lineSpacing = 3
             ps.lineBreakMode = .byWordWrapping
             return NSAttributedString(string: content, attributes: [
                 .font: font,
@@ -538,7 +538,7 @@ class TweetBodyUIView: UIView {
         // Return plain text — UILabel will naturally truncate via numberOfLines=7.
         guard lineGlyphRanges.count > maxLines else {
             let ps = NSMutableParagraphStyle()
-            ps.lineSpacing = 1
+            ps.lineSpacing = 3
             ps.lineBreakMode = .byWordWrapping
             return NSAttributedString(string: content, attributes: [
                 .font: font,
@@ -580,7 +580,7 @@ class TweetBodyUIView: UIView {
 
         // Build final attributed string
         let bodyPs = NSMutableParagraphStyle()
-        bodyPs.lineSpacing = 1
+        bodyPs.lineSpacing = 3
         bodyPs.lineBreakMode = .byWordWrapping
 
         let result = NSMutableAttributedString(string: bodyText, attributes: [

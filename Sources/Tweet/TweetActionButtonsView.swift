@@ -369,11 +369,15 @@ struct TweetActionButtonsView: View {
                     }
                 }
                 } label: {
+                    let isFavorite = tweet.favorites?[UserActions.FAVORITE.rawValue] == true
+                    let favoriteColor: Color = isFavorite ? .red : .themeSecondaryText
                     HStack(spacing: 2) {
-                        Image(systemName: tweet.favorites?[UserActions.FAVORITE.rawValue] == true ? "heart.fill" : "heart")
+                        Image(systemName: isFavorite ? "heart.fill" : "heart")
+                            .foregroundColor(favoriteColor)
                             .frame(width: 20)
                         Text((tweet.favoriteCount ?? 0) > 0 ? formatCount(tweet.favoriteCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
+                            .foregroundColor(favoriteColor)
                             .frame(width: 28, alignment: .leading)
                     }
                     .frame(width: 52, alignment: .leading)
@@ -457,11 +461,15 @@ struct TweetActionButtonsView: View {
                     }
                 }
                 } label: {
+                    let isBookmarked = tweet.favorites?[UserActions.BOOKMARK.rawValue] == true
+                    let bookmarkColor: Color = isBookmarked ? .blue : .themeSecondaryText
                     HStack(spacing: 2) {
-                        Image(systemName: tweet.favorites?[UserActions.BOOKMARK.rawValue] == true ? "bookmark.fill" : "bookmark")
+                        Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
+                            .foregroundColor(bookmarkColor)
                             .frame(width: 20)
                         Text((tweet.bookmarkCount ?? 0) > 0 ? formatCount(tweet.bookmarkCount!) : "")
                             .font(.system(.subheadline, design: .monospaced))
+                            .foregroundColor(bookmarkColor)
                             .frame(width: 28, alignment: .leading)
                     }
                     .frame(width: 52, alignment: .leading)
