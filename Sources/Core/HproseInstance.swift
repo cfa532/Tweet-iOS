@@ -115,7 +115,13 @@ final class HproseInstance: ObservableObject {
             Task { @MainActor in
                 // Update the singleton instance with new values
                 instance.baseUrl = newValue.baseUrl
-                instance.writableUrl = newValue.writableUrl
+                // writableUrl is resolved lazily by resolveWritableUrl() and is
+                // typically not present on a server-fetched User. Only overwrite
+                // when newValue actually provides one — otherwise we'd wipe a
+                // valid cached resolution and force re-resolution on every refresh.
+                if let newWritableUrl = newValue.writableUrl {
+                    instance.writableUrl = newWritableUrl
+                }
                 instance.name = newValue.name
                 instance.username = newValue.username
                 instance.avatar = newValue.avatar
@@ -4881,95 +4887,6 @@ final class HproseInstance: ObservableObject {
             throw NSError(domain: "VideoUpload", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
         }
         
-        /// Poll process-zip status to get CID when processing is complete
-        private static func pollProcessZipStatus(jobId: String, appUser: User, progressCallback: ((String, Int) -> Void)?) async throws -> String {
-            print("DEBUG: Polling process-zip status for job ID: \(jobId)")
-            
-            guard let writableUrl = appUser.writableUrl else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
-            }
-            
-            // Get host from writableUrl - no fallback, must succeed
-            guard let host = writableUrl.host else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not get host from writable URL"])
-            }
-            
-            // Get cloud drive port - no fallback, must be configured
-            guard appUser.cloudDrivePort > 0 else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Cloud drive port not configured"])
-            }
-            
-            guard let cloudBaseURL = URL(string: "http://\(host):\(HproseInstance.shared.appUser.cloudDrivePort)") else {
-                throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to construct cloud drive URL"])
-            }
-            let statusURL = cloudBaseURL.appendingPathComponent("process-zip/status/\(jobId)")
-            print("DEBUG: Polling status at: \(statusURL)")
-            
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 30  // 30 seconds for status checks
-            config.timeoutIntervalForResource = 30
-            let session = URLSession(configuration: config)
-            
-            var attempts = 0
-            let maxAttempts = 2880 // 4 hours with 5-second intervals (4 * 60 * 60 / 5 = 2880)
-            let pollInterval: TimeInterval = 5.0
-            
-            while attempts < maxAttempts {
-                attempts += 1
-                print("DEBUG: Process-zip status polling attempt \(attempts)/\(maxAttempts)")
-                
-                do {
-                    let (responseData, response) = try await session.data(from: statusURL)
-                    
-                    if let httpResponse = response as? HTTPURLResponse {
-                        if httpResponse.statusCode == 200 {
-                            if let responseString = String(data: responseData, encoding: .utf8) {
-                                print("DEBUG: Process-zip status response: \(responseString)")
-                                
-                                // Parse JSON response
-                                if let jsonData = responseString.data(using: .utf8),
-                                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                                    
-                                    if let status = json["status"] as? String {
-                                        if status == "completed" {
-                                            if let cid = json["cid"] as? String {
-                                                print("DEBUG: Process-zip completed with CID: \(cid)")
-                                                return cid
-                                            } else {
-                                                throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process completed but no CID found"])
-                                            }
-                                        } else if status == "failed" {
-                                            let errorMessage = json["error"] as? String ?? "Unknown error"
-                                            throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process failed: \(errorMessage)"])
-                                        } else if status == "processing" {
-                                            // Still processing, continue polling
-                                            progressCallback?("Processing HLS video... (\(attempts * 5)s)", 70 + (attempts * 2))
-                                            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
-                                            continue
-                                        }
-                                    }
-                                }
-                            }
-                        } else if httpResponse.statusCode == 404 {
-                            // Job not found, might still be starting
-                            print("DEBUG: Job not found yet, continuing to poll...")
-                            try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
-                            continue
-                        } else {
-                            print("DEBUG: Status check failed with status code: \(httpResponse.statusCode)")
-                        }
-                    }
-                } catch {
-                    print("DEBUG: Status check error: \(error)")
-                }
-                
-                // Wait before next attempt
-                try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
-            }
-            
-            throw NSError(domain: "ProcessZip", code: -1, userInfo: [NSLocalizedDescriptionKey: "Process-zip timeout after 4 hours"])
-        }
-        
         /// Wait for server to return CID via message pull
         private func waitForServerCID(cid: String, appUser: User) async throws -> (MimeiFileType?, String?) {
             print("DEBUG: Waiting for server CID: \(cid)")
@@ -5069,12 +4986,8 @@ final class HproseInstance: ObservableObject {
                 do {
                     // Resolve writableUrl (may use NodePool cache or resolve fresh)
                     let writableUrl = try await appUser.resolveWritableUrl()
-                    print("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl?.absoluteString ?? "nil")")
-                    
-                    guard let writableUrl = writableUrl else {
-                        throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: "Writable URL not available"])
-                    }
-                    
+                    print("DEBUG: [Backend Conversion] Attempt \(attempt)/\(maxRetries) - writableUrl: \(writableUrl.absoluteString)")
+
                     // Try to upload with current writableUrl
                     return try await performBackendVideoUpload(
                         data: data,
@@ -5265,7 +5178,7 @@ final class HproseInstance: ObservableObject {
                 do {
                     // Resolve writable URL (may use NodePool cache or resolve fresh)
                     let writableUrl = try await appUser.resolveWritableUrl()
-                    print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl?.absoluteString ?? "nil")")
+                    print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl.absoluteString)")
                     
                     guard let uploadClient = appUser.writableClient else {
                         throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])

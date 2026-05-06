@@ -634,53 +634,77 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
     }
     
     // MARK: - Writable URL Resolution
-    /// Returns the writable URL for the user, resolving via hostIds if needed
-    /// Follows NodePool pattern: check pool -> resolve fresh -> update pool on success
+
+    /// Tracks an in-flight `resolveWritableUrl()` call so concurrent first-time
+    /// callers all await the same Task instead of each performing a redundant
+    /// network resolution.
+    private var resolveWritableUrlTask: Task<URL, Error>?
+
+    /// Returns the writable URL for the user, resolving via hostIds if needed.
+    /// Follows NodePool pattern: check pool -> resolve fresh -> update pool on success.
+    /// Throws if no host ID is configured or the writable host can't be reached;
+    /// otherwise always returns a valid URL.
     @MainActor
-    func resolveWritableUrl() async throws -> URL? {
-        // Return cached writableUrl if available
+    func resolveWritableUrl() async throws -> URL {
+        // 1. Return cached writableUrl if available
         if let writableUrl = self.writableUrl {
             print("DEBUG: [resolveWritableUrl] Using cached writableUrl: \(writableUrl.absoluteString)")
             return writableUrl
         }
-        
+
+        // 2. Coalesce concurrent first-time callers onto a single resolve Task.
+        if let inFlight = resolveWritableUrlTask {
+            print("DEBUG: [resolveWritableUrl] Awaiting in-flight resolve Task")
+            return try await inFlight.value
+        }
+
+        let task = Task<URL, Error> { @MainActor in
+            defer { self.resolveWritableUrlTask = nil }
+            return try await self.performWritableUrlResolution()
+        }
+        resolveWritableUrlTask = task
+        return try await task.value
+    }
+
+    @MainActor
+    private func performWritableUrlResolution() async throws -> URL {
         print("DEBUG: [resolveWritableUrl] No cached writableUrl, checking NodePool...")
         print("DEBUG: [resolveWritableUrl] hostIds: \(self.hostIds?.description ?? "nil")")
-        
+
         guard let hostId = self.hostIds?.first, !hostId.isEmpty else {
             print("ERROR: [resolveWritableUrl] hostIds[0] is nil or empty")
             throw NSError(domain: "HproseService", code: -1, userInfo: [
                 NSLocalizedDescriptionKey: NSLocalizedString("Upload server not configured. Please set Host ID in profile settings.", comment: "Upload error")
             ])
         }
-        
+
         print("DEBUG: [resolveWritableUrl] Writable host ID: \(hostId)")
-        
+
         // Step 1: Check if writable host (hostIds[0]) is in NodePool
-        if let poolIP = NodePool.shared.getIPForNode(nodeMid: hostId) {
+        if let poolIP = NodePool.shared.getIPForNode(nodeMid: hostId),
+           let url = URL(string: "http://\(poolIP)") {
             print("DEBUG: [resolveWritableUrl] ✅ Found IP in NodePool for writable host \(hostId): \(poolIP)")
-            let url = URL(string: "http://\(poolIP)")
             self.writableUrl = url
             return url
         }
-        
+
         print("DEBUG: [resolveWritableUrl] Writable host \(hostId) not in pool, resolving fresh IP...")
-        
+
         // Step 2: Resolve fresh IP from hostIds[0] via getHostIP (includes health check)
-        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: true) {
+        if let hostIP = await HproseInstance.shared.getHostIP(hostId, v4Only: true),
+           let url = URL(string: "http://\(hostIP)") {
             print("DEBUG: [resolveWritableUrl] ✅ Resolved and health-checked IP: \(hostIP)")
-            
+
             // Step 3: Update NodePool with successful writable host IP
             NodePool.shared.updateNodeIP(nodeMid: hostId, newIP: "http://\(hostIP)")
             print("DEBUG: [resolveWritableUrl] ✅ Updated NodePool with writable host \(hostId) -> \(hostIP)")
-            
-            let url = URL(string: "http://\(hostIP)")
+
             self.writableUrl = url
             return url
         }
-        
+
         print("ERROR: [resolveWritableUrl] getHostIP returned nil for hostId: \(hostId) (all IPs failed health check)")
-        
+
         // No fallback - if writable host is unavailable, upload should fail
         throw NSError(domain: "HproseService", code: -1, userInfo: [
             NSLocalizedDescriptionKey: NSLocalizedString("Upload server not responding. Please try again later.", comment: "Upload error"),
