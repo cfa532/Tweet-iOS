@@ -104,12 +104,20 @@ class ProfileTweetsViewModel: ObservableObject {
     }
     
     func handlePrivacyChange(tweetId: String) {
-        // For profile view, handle privacy changes based on user type
+        // TweetListView's .tweetPrivacyChanged listener unconditionally removes
+        // the tweet from the bound array before calling this action. For the
+        // appUser's own profile we want to keep it visible (the cell renders the
+        // updated public/private state). Re-insert from the singleton.
         if user.mid == hproseInstance.appUser.mid {
-            // For appUser's profile, keep all tweets (public and private)
-            // Privacy change will be reflected in UI, no need to remove/add
+            guard let tweet = Tweet.getInstance(for: tweetId) else { return }
+            // Don't add the tweet if it's pinned (pinned section renders separately)
+            if !pinnedTweetIds.contains(tweet.mid) {
+                tweets.mergeTweets([tweet])
+            }
         } else {
-            // For other users' profiles, remove the tweet since it became private
+            // For other users' profiles, removal already happened in TweetListView.
+            // Calling removeAll again here is harmless but redundant — keep it as
+            // a safety net in case TweetListView's contract changes.
             tweets.removeAll { $0.mid == tweetId }
         }
     }

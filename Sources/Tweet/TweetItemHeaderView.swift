@@ -139,7 +139,7 @@ struct TweetMenu: View {
                     Button(action: {
                         Task {
                             do {
-                                let newPrivacyStatus = try await hproseInstance.updateTweetPrivacy(tweetId: tweet.mid)
+                                let newPrivacyStatus = try await hproseInstance.toggleTweetPrivacy(tweetId: tweet.mid)
                                 await MainActor.run {
                                     // Update the tweet's privacy status locally
                                     tweet.isPrivate = newPrivacyStatus

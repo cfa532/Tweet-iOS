@@ -195,18 +195,24 @@ class User: ObservableObject, Codable, Identifiable, Hashable {
         }
     }
     
-    public var uploadClient: HproseClient? {
+    /// Hprose client targeting the user's writable node. Use for any RPC that
+    /// mutates server-side data (uploads, toggles, edits, deletes) so the
+    /// request lands directly on the writable host instead of being delegated.
+    /// Returns nil when the writable URL hasn't been resolved yet — callers
+    /// should treat that as an error.
+    public var writableClient: HproseClient? {
         get {
-            guard let writableUrl = writableUrl else { 
-                return nil 
+            guard let writableUrl = writableUrl else {
+                return nil
             }
-            
+
             let client = HproseInstance.shared.clientPool.getClientByUrl(for: writableUrl.absoluteString)
-            
-            // Configure timeout for upload operations (10 seconds to detect bad servers)
-            // Note: Actual file upload uses URLSession with 10-minute timeout (see HproseInstance.swift:4628)
-            client.timeout = 10  // 10 seconds - fast fail for slow servers, URLSession handles actual upload
-            
+
+            // Default timeout: 10s. Fast-fail on bad servers. Long-running mutations
+            // (e.g. file uploads use URLSession with its own 10-minute timeout;
+            // toggle operations override this per-call to ~30s).
+            client.timeout = 10
+
             return client
         }
     }

@@ -2854,62 +2854,69 @@ final class HproseInstance: ObservableObject {
     }
     
     /**
-     * Update tweet privacy (public/private). Only appUser can update its own tweet.
+     * Toggle tweet privacy (public/private). Only appUser can update its own tweet.
      * Returns the new privacy status as a boolean.
      * */
-    func updateTweetPrivacy(tweetId: String) async throws -> Bool {
-        return try await withRetry {
-            let entry = "update_tweet_privacy"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "appuserid": appUser.mid,
-                "tweetid": tweetId
-            ]
-            guard let client = appUser.hproseClient else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            print("[updateTweetPrivacy] Raw response: \(String(describing: rawResponse))")
-            
-            // Unwrap v2 response
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            print("[updateTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
-            
-            // For v2 API: server returns {success: true, data: {isPrivate: bool}}
-            // After unwrapV2Response, we get {isPrivate: bool}
-            if let dataDict = unwrappedResponse as? [String: Any] {
-                if let isPrivate = dataDict["isPrivate"] as? Bool {
-                    print("[updateTweetPrivacy] Privacy status from v2 format: \(isPrivate)")
-                    return isPrivate
-                }
-            }
-            
-            // Fallback: check if it's a direct Bool (legacy format)
-            if let isPrivateBool = unwrappedResponse as? Bool {
-                print("[updateTweetPrivacy] Direct boolean response: \(isPrivateBool)")
-                return isPrivateBool
-            }
-            
-            // Handle numeric responses (0 = false, 1 = true) - legacy format
-            if let numericResponse = unwrappedResponse as? NSNumber {
-                let isPrivate = numericResponse.boolValue
-                print("[updateTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
-                return isPrivate
-            }
-            
-            // Handle integer responses (0 = false, 1 = true) - legacy format
-            if let intResponse = unwrappedResponse as? Int {
-                let isPrivate = intResponse != 0
-                print("[updateTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
-                return isPrivate
-            }
-            
-            print("[updateTweetPrivacy] Unexpected response format: \(String(describing: unwrappedResponse))")
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+    func toggleTweetPrivacy(tweetId: String) async throws -> Bool {
+        // toggle_tweet_privacy is NON-idempotent — never retry. A timed-out
+        // request may still be processed server-side; a retry would flip it back.
+        let entry = "toggle_tweet_privacy"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "appuserid": appUser.mid,
+            "tweetid": tweetId
+        ]
+        // Mutation: send directly to the user's writable node. The server-side
+        // delegation path was returning empty objects; routing here avoids it.
+        // writableUrl is lazy-resolved — make sure it's populated first.
+        _ = try await appUser.resolveWritableUrl()
+        guard let client = appUser.writableClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
         }
+        let originalTimeout = client.timeout
+        client.timeout = 30.0
+        defer { client.timeout = originalTimeout }
+
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        print("[toggleTweetPrivacy] Raw response: \(String(describing: rawResponse))")
+
+        // Unwrap v2 response
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        print("[toggleTweetPrivacy] Unwrapped response: \(String(describing: unwrappedResponse))")
+
+        // For v2 API: server returns {success: true, data: {isPrivate: bool}}
+        // After unwrapV2Response, we get {isPrivate: bool}.
+        // Hprose bridges JS booleans to NSNumber, so accept both Bool and NSNumber.
+        if let dataDict = unwrappedResponse as? [String: Any],
+           let isPrivate = (dataDict["isPrivate"] as? Bool) ?? (dataDict["isPrivate"] as? NSNumber)?.boolValue {
+            print("[toggleTweetPrivacy] Privacy status from v2 format: \(isPrivate)")
+            return isPrivate
+        }
+
+        // Fallback: check if it's a direct Bool (legacy format)
+        if let isPrivateBool = unwrappedResponse as? Bool {
+            print("[toggleTweetPrivacy] Direct boolean response: \(isPrivateBool)")
+            return isPrivateBool
+        }
+
+        // Handle numeric responses (0 = false, 1 = true) - legacy format
+        if let numericResponse = unwrappedResponse as? NSNumber {
+            let isPrivate = numericResponse.boolValue
+            print("[toggleTweetPrivacy] Numeric response: \(numericResponse) -> boolean: \(isPrivate)")
+            return isPrivate
+        }
+
+        // Handle integer responses (0 = false, 1 = true) - legacy format
+        if let intResponse = unwrappedResponse as? Int {
+            let isPrivate = intResponse != 0
+            print("[toggleTweetPrivacy] Integer response: \(intResponse) -> boolean: \(isPrivate)")
+            return isPrivate
+        }
+
+        print("[toggleTweetPrivacy] Unexpected response format: \(String(describing: unwrappedResponse))")
+        throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
     }
     
     /**
@@ -5260,7 +5267,7 @@ final class HproseInstance: ObservableObject {
                     let writableUrl = try await appUser.resolveWritableUrl()
                     print("DEBUG: [uploadRegularFile] Attempt \(attempt)/\(maxRetries) - Using writableUrl: \(writableUrl?.absoluteString ?? "nil")")
                     
-                    guard let uploadClient = appUser.uploadClient else {
+                    guard let uploadClient = appUser.writableClient else {
                         throw NSError(domain: "MediaProcessor", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Upload client not available", comment: "Upload error")])
                     }
                     

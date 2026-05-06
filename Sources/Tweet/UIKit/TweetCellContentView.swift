@@ -763,7 +763,7 @@ class TweetCellContentView: UIView {
             let privacyAction = UIAction(title: privacyTitle, image: UIImage(systemName: privacyIcon)) { _ in
                 Task {
                     do {
-                        let newPrivacy = try await hproseInstance.updateTweetPrivacy(tweetId: tweet.mid)
+                        let newPrivacy = try await hproseInstance.toggleTweetPrivacy(tweetId: tweet.mid)
                         await MainActor.run {
                             tweet.isPrivate = newPrivacy
                             TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
