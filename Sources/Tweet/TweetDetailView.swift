@@ -1049,7 +1049,11 @@ struct TweetDetailView: View {
             TweetMenu(
                 tweet: displayTweet, 
                 isPinned: displayTweet.isPinned(in: pinnedTweets),
-                showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid,
+                showDeleteButton: Gadget.canShowTweetDeleteMenu(
+                    appUser: hproseInstance.appUser,
+                    tweetAuthorId: displayTweet.authorId,
+                    allowDeleteAll: false
+                ),
                 onShareTap: {
                     Task {
                         let items = await TweetActionBarView.buildDetailShareItems(

@@ -73,8 +73,10 @@ class TweetBodyUIView: UIView {
     private(set) var isExpanded: Bool = false
     private var currentFullContent: String?
     private var currentTweetId: String?
+    private var currentIsEmbedded: Bool = false
     private weak var parentViewController: UIViewController?
     private weak var contentLabelTapGesture: UITapGestureRecognizer?
+    private var contentCancellable: AnyCancellable?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -204,27 +206,7 @@ class TweetBodyUIView: UIView {
         onContentExpanded?()
     }
 
-    func configure(tweet: Tweet, isEmbedded: Bool, cellTweetId: String?,
-                   parentViewController: UIViewController) {
-        self.parentViewController = parentViewController
-
-        // Skip if same tweet
-        if currentTweetId == tweet.mid { return }
-        currentTweetId = tweet.mid
-
-        // Reset expansion state for new tweet
-        isExpanded = false
-        isTruncated = false
-        currentFullContent = nil
-        contentLabel.numberOfLines = Self.maxContentLines
-        contentLabel.lineBreakMode = .byTruncatingTail
-
-        // Clean up media grid and reset document content for reuse
-        mediaGridView.prepareForReuse()
-        documentContainerView.isHidden = true
-        documentHostingController?.rootView = AnyView(EmptyView())
-
-        // --- Text content ---
+    private func renderTextContent(tweet: Tweet, isEmbedded: Bool) {
         if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // Compute available text width (must match deterministic height calculator)
             let screenWidth = UIScreen.main.bounds.width
@@ -255,12 +237,65 @@ class TweetBodyUIView: UIView {
                attr.attribute(.moreLinkTap, at: lastIndex, effectiveRange: nil) != nil {
                 isTruncated = true
                 currentFullContent = content
+            } else {
+                isTruncated = false
+                currentFullContent = nil
             }
             contentLabel.isHidden = false
         } else {
             contentLabel.attributedText = nil
             contentLabel.isHidden = true
+            isTruncated = false
+            currentFullContent = nil
         }
+    }
+
+    private func bindTweetContentUpdates(_ tweet: Tweet) {
+        // Rebind only when switching to a different tweet object.
+        guard observedTweet !== tweet else { return }
+        observedTweet = tweet
+        contentCancellable?.cancel()
+        contentCancellable = tweet.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                guard let self else { return }
+                // If content changed remotely/local-edit, collapse and redraw immediately.
+                self.isExpanded = false
+                self.contentLabel.numberOfLines = Self.maxContentLines
+                self.contentLabel.lineBreakMode = .byTruncatingTail
+                self.renderTextContent(tweet: tweet, isEmbedded: self.currentIsEmbedded)
+                self.setNeedsLayout()
+                self.superview?.setNeedsLayout()
+                self.onContentExpanded?()
+            }
+    }
+
+    private weak var observedTweet: Tweet?
+
+    func configure(tweet: Tweet, isEmbedded: Bool, cellTweetId: String?,
+                   parentViewController: UIViewController) {
+        self.parentViewController = parentViewController
+        self.currentIsEmbedded = isEmbedded
+        bindTweetContentUpdates(tweet)
+
+        // Skip if same tweet
+        if currentTweetId == tweet.mid { return }
+        currentTweetId = tweet.mid
+
+        // Reset expansion state for new tweet
+        isExpanded = false
+        isTruncated = false
+        currentFullContent = nil
+        contentLabel.numberOfLines = Self.maxContentLines
+        contentLabel.lineBreakMode = .byTruncatingTail
+
+        // Clean up media grid and reset document content for reuse
+        mediaGridView.prepareForReuse()
+        documentContainerView.isHidden = true
+        documentHostingController?.rootView = AnyView(EmptyView())
+
+        // --- Text content ---
+        renderTextContent(tweet: tweet, isEmbedded: isEmbedded)
 
         // --- Attachments ---
         let mediaAttachments = tweet.attachments?.filter { Self.isMediaType($0.type) } ?? []

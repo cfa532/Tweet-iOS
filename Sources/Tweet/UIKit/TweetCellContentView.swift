@@ -20,6 +20,7 @@ class TweetCellContentView: UIView {
         let showDelete: Bool
         let isPrivate: Bool
         let isOwnTweet: Bool
+        let showsAdminEdit: Bool
     }
 
     // MARK: - Subviews
@@ -327,7 +328,11 @@ class TweetCellContentView: UIView {
         // Forward content expansion callback (set before early return so it's always current)
         bodyView.onContentExpanded = { [weak self] in self?.onContentExpanded?() }
 
-        let showDelete = allowDeleteAll || tweet.authorId == hproseInstance.appUser.mid
+        let showDelete = Gadget.canShowTweetDeleteMenu(
+            appUser: hproseInstance.appUser,
+            tweetAuthorId: tweet.authorId,
+            allowDeleteAll: allowDeleteAll
+        )
         separatorView.isHidden = isLastItem
         applyTweetMenuIfNeeded(
             tweet: tweet,
@@ -681,12 +686,14 @@ class TweetCellContentView: UIView {
 
     private func applyTweetMenuIfNeeded(tweet: Tweet, isPinned: Bool, showDelete: Bool,
                                         hproseInstance: HproseInstance) {
+        let showsAdminEdit = Gadget.isResearchAdminUser(hproseInstance.appUser)
         let key = MenuCacheKey(
             tweetId: tweet.mid,
             isPinned: isPinned,
             showDelete: showDelete,
             isPrivate: tweet.isPrivate == true,
-            isOwnTweet: tweet.authorId == hproseInstance.appUser.mid
+            isOwnTweet: tweet.authorId == hproseInstance.appUser.mid,
+            showsAdminEdit: showsAdminEdit
         )
 
         if currentMenuKey != key {
@@ -694,6 +701,7 @@ class TweetCellContentView: UIView {
                 tweet: tweet,
                 isPinned: isPinned,
                 showDelete: showDelete,
+                showsAdminEdit: showsAdminEdit,
                 hproseInstance: hproseInstance
             )
             currentMenuKey = key
@@ -704,7 +712,7 @@ class TweetCellContentView: UIView {
         }
     }
 
-    private func createTweetMenu(tweet: Tweet, isPinned: Bool, showDelete: Bool,
+    private func createTweetMenu(tweet: Tweet, isPinned: Bool, showDelete: Bool, showsAdminEdit: Bool,
                                   hproseInstance: HproseInstance) -> UIMenu {
         var actions: [UIAction] = []
 
@@ -722,6 +730,21 @@ class TweetCellContentView: UIView {
             print("Filter content tapped")
         }
         actions.append(filterAction)
+
+        if showsAdminEdit {
+            let editAction = UIAction(
+                title: NSLocalizedString("Edit content (admin)", comment: "Admin research menu"),
+                image: UIImage(systemName: "pencil.line")
+            ) { [weak self] _ in
+                guard let self, let pvc = self.parentViewController else { return }
+                let sheet = UIHostingController(
+                    rootView: AdminTweetContentEditSheet(tweet: tweet).environmentObject(hproseInstance)
+                )
+                sheet.modalPresentationStyle = .pageSheet
+                pvc.present(sheet, animated: true)
+            }
+            actions.append(editAction)
+        }
 
         // Report (only for others' tweets)
         if tweet.authorId != hproseInstance.appUser.mid {
@@ -795,8 +818,9 @@ class TweetCellContentView: UIView {
                 )
                 Task {
                     do {
-                        _ = try await hproseInstance.deleteTweet(tweet.mid)
+                        _ = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId)
                     } catch {
+                        print("DEBUG: [TweetCellContentView] deleteTweet FAILED — raw error: \(error) | localizedDescription: \(error.localizedDescription)")
                         // Restore tweet on failure
                         NotificationCenter.default.post(
                             name: .tweetRestored,

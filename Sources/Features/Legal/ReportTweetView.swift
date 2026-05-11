@@ -219,6 +219,7 @@ struct ReportTweetView: View {
                 // Submit the report to backend
                 try await hproseInstance.reportTweet(
                     tweetId: tweet.mid,
+                    tweetAuthorId: tweet.authorId,
                     category: category.rawValue,
                     comments: additionalComments
                 )

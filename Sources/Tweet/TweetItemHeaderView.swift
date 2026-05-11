@@ -1,5 +1,92 @@
 import SwiftUI
 
+/// TweetWeb-style admin edit (username `admin`); same API as web `updateTweet(..., authorId)`.
+struct AdminTweetContentEditSheet: View {
+    @ObservedObject var tweet: Tweet
+    @EnvironmentObject private var hproseInstance: HproseInstance
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+    @State private var saving = false
+    @State private var showErrorAlert = false
+    @State private var errorMessage = ""
+
+    init(tweet: Tweet) {
+        self.tweet = tweet
+        _text = State(initialValue: tweet.content ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            TextEditor(text: $text)
+                .padding(8)
+                .navigationTitle("Edit (admin)")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task {
+                                await MainActor.run { saving = true }
+                                defer { Task { @MainActor in saving = false } }
+                                do {
+                                    try await hproseInstance.updateTweetContent(
+                                        tweetId: tweet.mid,
+                                        content: text,
+                                        tweetAuthorId: tweet.authorId
+                                    )
+                                    await MainActor.run {
+                                        tweet.performBatchUpdate {
+                                            tweet.content = text
+                                            // Invalidate rendered text cache so feed/detail re-render
+                                            // uses the new content immediately.
+                                            tweet.cachedContentAttributedString = nil
+                                            tweet.cachedContentWidth = 0
+                                            tweet.cachedHeight = nil
+                                        }
+                                        if let singleton = Tweet.getInstance(for: tweet.mid), singleton !== tweet {
+                                            singleton.performBatchUpdate {
+                                                singleton.content = text
+                                                singleton.cachedContentAttributedString = nil
+                                                singleton.cachedContentWidth = 0
+                                                singleton.cachedHeight = nil
+                                            }
+                                        }
+                                        TweetCacheManager.shared.saveTweet(tweet, userId: tweet.authorId)
+                                        dismiss()
+                                    }
+                                } catch {
+                                    await MainActor.run {
+                                        errorMessage = ErrorMessageHelper.userFriendlyMessage(from: error)
+                                        showErrorAlert = true
+                                        NotificationCenter.default.post(name: .errorOccurred, object: error)
+                                    }
+                                }
+                            }
+                        }
+                        .disabled(saving)
+                    }
+                }
+        }
+        .overlay {
+            if saving {
+                ZStack {
+                    Color.black.opacity(0.08).ignoresSafeArea()
+                    ProgressView("Saving...")
+                        .padding(12)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+        .alert("Update Failed", isPresented: $showErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
+        }
+    }
+}
+
 struct TweetItemHeaderView: View {
     @ObservedObject var tweet: Tweet
     
@@ -58,6 +145,7 @@ struct TweetMenu: View {
     @State private var isPressed = false
     @State private var showReportSheet = false
     @State private var showFilterSheet = false
+    @State private var showAdminEditSheet = false
     
     init(tweet: Tweet, isPinned: Bool, showDeleteButton: Bool = false, onShareTap: (() -> Void)? = nil) {
         self.tweet = tweet
@@ -95,6 +183,12 @@ struct TweetMenu: View {
                         showReportSheet = true
                     }) {
                         Label(LocalizedStringKey("Report Tweet"), systemImage: "flag")
+                    }
+                }
+
+                if Gadget.isResearchAdminUser(appUser) {
+                    Button(action: { showAdminEditSheet = true }) {
+                        Label("Edit content (admin)", systemImage: "pencil.line")
                     }
                 }
                 
@@ -253,6 +347,10 @@ struct TweetMenu: View {
         .sheet(isPresented: $showReportSheet) {
             ReportTweetView(tweet: tweet)
         }
+        .sheet(isPresented: $showAdminEditSheet) {
+            AdminTweetContentEditSheet(tweet: tweet)
+                .environmentObject(hproseInstance)
+        }
     }
     
     private func deleteTweet(_ tweet: Tweet) async throws {
@@ -268,7 +366,7 @@ struct TweetMenu: View {
         
         // Attempt actual deletion
         do {
-            if let tweetId = try await hproseInstance.deleteTweet(tweet.mid) {
+            if let tweetId = try await hproseInstance.deleteTweet(tweet.mid, tweetAuthorId: tweet.authorId) {
                 print("DEBUG: [TweetItemHeaderView] Successfully deleted tweet: \(tweetId)")
                 
                 // Note: tweetCount is updated by refreshAppUserFromServer() inside deleteTweet()
