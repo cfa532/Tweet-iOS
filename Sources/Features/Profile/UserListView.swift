@@ -19,7 +19,8 @@ struct UserListView: View {
     @State private var displayedUserIds: [String] = []
     @State private var isLoading: Bool = false
     @State private var isLoadingMore: Bool = false
-    @State private var hasMoreUsers: Bool = true
+    /// False until IDs are loaded — avoids a phantom bottom loader firing during push.
+    @State private var hasMoreUsers: Bool = false
     @State private var errorMessage: String? = nil
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
@@ -90,7 +91,7 @@ struct UserListView: View {
                 if isLoading {
                     ProgressView()
                         .padding()
-                } else if hasMoreUsers {
+                } else if hasMoreUsers, !allUserIds.isEmpty {
                     ProgressView()
                         .padding()
                         .onAppear {
@@ -105,10 +106,13 @@ struct UserListView: View {
         .refreshable {
             await refreshUsers()
         }
-        .onAppear {
-            if allUserIds.isEmpty {
-                Task { await refreshUsers() }
-            }
+        /// Run initial fetch after the navigation transition so the push animation stays fluid.
+        /// `id: title` distinguishes follower vs following for the same `userId`.
+        .task(id: title) {
+            guard allUserIds.isEmpty, displayedUserIds.isEmpty else { return }
+            try? await Task.sleep(for: .milliseconds(380))
+            guard !Task.isCancelled else { return }
+            await refreshUsers()
         }
         .navigationTitle(title)
         .onReceive(NotificationCenter.default.publisher(for: .popToRoot)) { _ in
@@ -138,7 +142,7 @@ struct UserListView: View {
             await MainActor.run {
                 isLoading = true
                 errorMessage = nil
-                hasMoreUsers = true
+                hasMoreUsers = false
             }
             do {
                 let allIds = try await userFetcher(0, Int.max)
