@@ -2926,7 +2926,10 @@ final class HproseInstance: ObservableObject {
     }
     
     /**
-     * Delete a tweet. Pass **tweet author's** mid as `tweetAuthorId` — same as TweetWeb (`userid` is the tweet owner), so routing and author checks match the web client.
+     * Delete a tweet.
+     * For the caller's own tweets: uses appUser's writable client with appUser.mid as userid.
+     * For others' tweets (admin path): fetches the author, routes through the author's own
+     * writable client so the request lands on their node where getUser() always has hostIds.
      */
     func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String? {
         let entry = "delete_tweet"
@@ -2937,19 +2940,26 @@ final class HproseInstance: ObservableObject {
             "userid": tweetAuthorId,
             "tweetid": tweetId
         ]
-        // Prefer the logged-in user's writable host (same as TweetWeb), but fall back
-        // to the regular read client if writable resolution fails — mirrors TweetWeb's
-        // try/catch that warns and continues with loginUser.client.
-        guard let fallbackClient = appUser.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-        }
-        let client: HproseClient
-        if let _ = try? await appUser.resolveWritableUrl(), let wc = appUser.writableClient {
-            client = wc
-            print("DEBUG: [deleteTweet] Using writable client")
+
+        // Resolve which client to use:
+        // - Own tweet  → appUser's writable client (fast path, same as before)
+        // - Other's tweet → fetch the author and use THEIR writable client so the call
+        //   lands on the author's own node; getUser() always has hostIds there.
+        let requestUser: User
+        if tweetAuthorId == appUser.mid {
+            requestUser = appUser
         } else {
-            client = fallbackClient
-            print("DEBUG: [deleteTweet] Writable client unavailable, using regular client")
+            guard let author = try await fetchUser(tweetAuthorId) else {
+                throw NSError(domain: "HproseClient", code: -1,
+                              userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "")])
+            }
+            requestUser = author
+        }
+
+        _ = try await requestUser.resolveWritableUrl()
+        guard let client = requestUser.writableClient ?? appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "")])
         }
         let originalTimeout = client.timeout
         client.timeout = 30.0
@@ -2959,8 +2969,8 @@ final class HproseInstance: ObservableObject {
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
 
         // unwrapV2Response already threw for success=false.
-        // Server may delegate to author's node and not echo `tweetid`; trust success
-        // and fall back to the input tweetId so we don't spuriously restore the UI.
+        // Trust the success signal; fall back to the input tweetId if the server
+        // doesn't echo it back, so we never spuriously restore the UI.
         var deletedTweetId: String = tweetId
         if let response = unwrappedResponse as? [String: Any] {
             if let tid = response["tweetid"] as? String, !tid.isEmpty {
