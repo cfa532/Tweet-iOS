@@ -762,7 +762,46 @@ final class HproseInstance: ObservableObject {
                     commentsWithAuthors.append(comment)
                 } catch {
                     print("Error processing comment: \(error)")
-                    commentsWithAuthors.append(nil)
+                    if let commentId = dict["mid"] as? String,
+                       let authorHostId = author.hostIds?.first {
+                        // Comment data missing on this node — sync from author's host then retry
+                        let updateParams: [String: Any] = [
+                            "aid": appId,
+                            "ver": "last",
+                            "version": "v2",
+                            "hostid": authorHostId,
+                            "userid": parentTweet.authorId,
+                            "mid": commentId
+                        ]
+                        _ = client.invoke("runMApp", withArgs: ["node_update_mid_by_score", updateParams])
+
+                        let retryParams: [String: Any] = [
+                            "aid": appId,
+                            "ver": "last",
+                            "version": "v2",
+                            "tweetid": commentId,
+                            "appuserid": appUser.mid
+                        ]
+                        let rawComment = client.invoke("runMApp", withArgs: ["get_tweet", retryParams])
+                        if let unwrapped = try? Self.unwrapV2Response(rawComment),
+                           let commentDict = unwrapped as? [String: Any],
+                           let refetched = try? await MainActor.run(body: { try Tweet.from(dict: commentDict) }) {
+                            let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: refetched.authorId)
+                            if cachedAuthor.username != nil && cachedAuthor.baseUrl != nil {
+                                await MainActor.run { refetched.author = cachedAuthor }
+                            } else if let commentAuthor = try? await fetchUser(refetched.authorId) {
+                                await MainActor.run { refetched.author = commentAuthor }
+                            } else {
+                                await MainActor.run { refetched.author = User.getInstance(mid: refetched.authorId) }
+                            }
+                            commentsWithAuthors.append(refetched)
+                        } else {
+                            blackList.recordFailure(commentId)
+                            commentsWithAuthors.append(nil)
+                        }
+                    } else {
+                        commentsWithAuthors.append(nil)
+                    }
                 }
             } else {
                 commentsWithAuthors.append(nil)
