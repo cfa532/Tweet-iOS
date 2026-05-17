@@ -642,6 +642,10 @@ struct TweetDetailView: View {
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
     @State private var failedCommentIds: Set<String> = []
+    // Flipped to true on the first real user pan, detected via the
+    // BottomBarScrollTracker observing the parent UIScrollView. Used by
+    // CommentListView to suppress the open-time auto-probe's flash.
+    @State private var hasUserScrolledComments = false
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var menuShareItems: ShareSheetData?
@@ -1176,6 +1180,7 @@ struct TweetDetailView: View {
                 )
             ],
             isEmbedded: true, // Embedded in TweetDetailView's ScrollView, avoid nested scrolling
+            hasUserScrolled: $hasUserScrolledComments,
             rowView: { comment in
                 CommentVideoTrackingWrapper(
                     parentTweet: displayTweet,
@@ -1402,10 +1407,16 @@ struct TweetDetailView: View {
     private func handleScrollOffsetChange(_ offset: CGFloat, delta: CGFloat, isAtBottom: Bool) {
         // Threshold for scroll detection (prevents jittery behavior)
         let scrollThreshold: CGFloat = 5.0
-        
+
         // Ignore very large deltas - these are likely programmatic scrolls from layout changes
         if abs(delta) > maxDeltaThreshold {
             return
+        }
+
+        // Mark the comment list as user-scrolled on the first real pan.
+        // The auto-probe at open completes silently before this flips.
+        if !hasUserScrolledComments && abs(delta) > scrollThreshold {
+            hasUserScrolledComments = true
         }
         
         // Cooldown period after state changes to prevent feedback loops

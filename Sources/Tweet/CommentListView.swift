@@ -23,6 +23,11 @@ struct CommentListView<RowView: View>: View {
     let rowView: (Tweet) -> RowView
     let notifications: [CommentListNotification]
     let isEmbedded: Bool // When true, don't use ScrollView (for nested scroll situations)
+    // Bound to a parent-owned flag (driven by the parent's UIScrollView
+    // observer) that flips to true on the first real user pan. Used to
+    // suppress the open-time auto-probe's "No more comments" flash. The
+    // default is a non-functional constant binding for non-embedded usage.
+    var hasUserScrolled: Binding<Bool> = .constant(true)
     private let pageSize: UInt = 10
 
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -50,6 +55,7 @@ struct CommentListView<RowView: View>: View {
         showTitle: Bool = true,
         notifications: [CommentListNotification]? = nil,
         isEmbedded: Bool = false,
+        hasUserScrolled: Binding<Bool> = .constant(true),
         rowView: @escaping (Tweet) -> RowView
     ) {
         self.title = title
@@ -58,6 +64,7 @@ struct CommentListView<RowView: View>: View {
         self.showTitle = showTitle
         self.notifications = notifications ?? []
         self.isEmbedded = isEmbedded
+        self.hasUserScrolled = hasUserScrolled
         self.rowView = rowView
     }
 
@@ -137,6 +144,14 @@ struct CommentListView<RowView: View>: View {
                    let notification = notifications.first(where: { $0.name == .commentDeleted }),
                    notification.shouldAccept(comment) {
                     notification.action(comment, parentTweetId)
+                }
+            }
+            // The silent open-time auto-probe may have set `hasMoreComments`
+            // to false without flashing the label. Re-arm on first user
+            // scroll so a subsequent bottom-reach can retry.
+            .onChange(of: hasUserScrolled.wrappedValue) { _, scrolled in
+                if scrolled && !hasMoreComments && !comments.isEmpty {
+                    hasMoreComments = true
                 }
             }
         }
@@ -255,19 +270,23 @@ struct CommentListView<RowView: View>: View {
         }
     }
 
-    // Called whenever the last comment row appears on screen. If there's more to fetch,
-    // load it (which shows the inline spinner via `isLoadingMore`); otherwise briefly
-    // flash the "No more comments" label so the user gets feedback at the bottom.
+    // Called whenever the last comment row appears on screen. Triggers a
+    // load-more fetch when something is fetchable. The "No more comments"
+    // flash and the open-time suppression live in `showNoMoreMessage`.
     private func handleReachBottom() {
-        guard initialLoadComplete, !isLoading, !isLoadingMore else { return }
-        if hasMoreComments {
-            loadMoreComments()
-        } else if !comments.isEmpty && !showNoMoreComments {
-            showNoMoreMessage()
-        }
+        guard initialLoadComplete, !isLoading, !isLoadingMore, hasMoreComments else { return }
+        loadMoreComments()
     }
 
+    // Flash "No more comments" for 2s, then re-arm `hasMoreComments` so the
+    // user can scroll up and back down to retry — other users may post new
+    // comments at any time, so "no more" is not a permanent state.
+    //
+    // Suppress the flash entirely while the user hasn't scrolled yet. The
+    // initial auto-probe (fired by the last row's onAppear at open when all
+    // comments already fit on screen) shouldn't surface UI noise.
     private func showNoMoreMessage() {
+        guard hasUserScrolled.wrappedValue else { return }
         withAnimation(.easeOut(duration: 0.4)) {
             showNoMoreComments = true
         }
@@ -275,6 +294,7 @@ struct CommentListView<RowView: View>: View {
             withAnimation(.easeIn(duration: 0.3)) {
                 showNoMoreComments = false
             }
+            hasMoreComments = true
         }
     }
 
@@ -353,19 +373,14 @@ struct CommentListContentView<RowView: View>: View {
 
                 // Spinner — shown while loading more
                 if isLoadingMore {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text(NSLocalizedString("Loading more comments...", comment: "Loading more comments inline spinner label"))
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
                 }
 
-                // "No more comments" label — shown briefly after reaching the bottom
-                // with nothing more to load
-                if showNoMoreComments {
+                // "No more comments" label — shown briefly after a user-driven
+                // load-more returned no new data.
+                if showNoMoreComments && !isLoadingMore {
                     Text(NSLocalizedString("No more comments", comment: "Message shown when there are no more comments to load"))
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(.secondary)
