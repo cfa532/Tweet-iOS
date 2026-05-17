@@ -3113,7 +3113,7 @@ final class HproseInstance: ObservableObject {
                 "hostid": author.hostIds?.first as Any,
                 "comment": String(data: try JSONEncoder().encode(comment), encoding: .utf8) ?? "",
                 "tweetid": tweet.mid,
-                "appuserid": appUser.mid
+                "tweetauthorid": author.mid
             ]
             let entry = "add_comment"
             let rawResponse = commentClient.invoke("runMApp", withArgs: [entry, params])
