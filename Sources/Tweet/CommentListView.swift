@@ -77,7 +77,7 @@ struct CommentListView<RowView: View>: View {
                         isLoading: isLoading,
                         initialLoadComplete: initialLoadComplete,
                         showNoMoreComments: showNoMoreComments,
-                        loadMoreComments: { loadMoreComments() }
+                        onReachBottom: { handleReachBottom() }
                     )
                 } else {
                     // Standalone mode: use ScrollView
@@ -92,7 +92,7 @@ struct CommentListView<RowView: View>: View {
                             isLoading: isLoading,
                             initialLoadComplete: initialLoadComplete,
                             showNoMoreComments: showNoMoreComments,
-                            loadMoreComments: { loadMoreComments() }
+                            onReachBottom: { handleReachBottom() }
                         )
                     }
                     .refreshable {
@@ -255,6 +255,18 @@ struct CommentListView<RowView: View>: View {
         }
     }
 
+    // Called whenever the last comment row appears on screen. If there's more to fetch,
+    // load it (which shows the inline spinner via `isLoadingMore`); otherwise briefly
+    // flash the "No more comments" label so the user gets feedback at the bottom.
+    private func handleReachBottom() {
+        guard initialLoadComplete, !isLoading, !isLoadingMore else { return }
+        if hasMoreComments {
+            loadMoreComments()
+        } else if !comments.isEmpty && !showNoMoreComments {
+            showNoMoreMessage()
+        }
+    }
+
     private func showNoMoreMessage() {
         withAnimation(.easeOut(duration: 0.4)) {
             showNoMoreComments = true
@@ -285,12 +297,12 @@ struct CommentListContentView<RowView: View>: View {
     let isLoading: Bool
     let initialLoadComplete: Bool
     let showNoMoreComments: Bool
-    let loadMoreComments: () -> Void
-    
+    let onReachBottom: () -> Void
+
     var body: some View {
         LazyVStack(spacing: 0) {
             Color.clear.frame(height: 0)
-            
+
             // Show loading state
             if isLoading {
                 VStack(spacing: 16) {
@@ -319,7 +331,7 @@ struct CommentListContentView<RowView: View>: View {
                 ForEach(Array(comments.enumerated()), id: \.element.mid) { index, comment in
                     VStack(spacing: 0) {
                         rowView(comment)
-                        
+
                         // Add divider under each comment except the last one
                         if index < comments.count - 1 {
                             Rectangle()
@@ -328,32 +340,37 @@ struct CommentListContentView<RowView: View>: View {
                                 .foregroundColor(Color(.systemGray).opacity(0.4))
                         }
                     }
-                }
-                
-                // Spinner — shown while loading more, matches TweetListView footer pattern
-                if isLoadingMore {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 40)
-                }
-
-                // Sentinel — invisible scroll trigger, fires immediately with no debounce
-                if hasMoreComments {
-                    Color.clear
-                        .frame(height: 1)
-                        .onAppear {
-                            guard initialLoadComplete && !isLoadingMore else { return }
-                            loadMoreComments()
+                    // Trigger from the last row directly — more reliable than a sentinel
+                    // when the surrounding LazyVStack is itself nested inside another
+                    // LazyVStack (as in TweetDetailView). Fires for both "load more" and
+                    // "no more" feedback.
+                    .onAppear {
+                        if index == comments.count - 1 {
+                            onReachBottom()
                         }
+                    }
                 }
 
-                // "No more comments" label — shown briefly after the last page loads
+                // Spinner — shown while loading more
+                if isLoadingMore {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text(NSLocalizedString("Loading more comments...", comment: "Loading more comments inline spinner label"))
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                }
+
+                // "No more comments" label — shown briefly after reaching the bottom
+                // with nothing more to load
                 if showNoMoreComments {
                     Text(NSLocalizedString("No more comments", comment: "Message shown when there are no more comments to load"))
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
+                        .padding(.vertical, 24)
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
