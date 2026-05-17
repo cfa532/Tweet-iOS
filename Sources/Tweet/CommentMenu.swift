@@ -18,9 +18,15 @@ struct CommentMenu: View {
     @State private var alertMessage = ""
     @State private var isDeleting = false
 
+    private var canDeleteComment: Bool {
+        comment.authorId == appUser.mid
+            || parentTweet.authorId == appUser.mid
+            || Gadget.isResearchAdminUser(appUser)
+    }
+
     var body: some View {
         Menu {
-            if comment.authorId == appUser.mid || parentTweet.authorId == appUser.mid {
+            if canDeleteComment {
                 Button(role: .destructive) {
                     isDeleting = true
                     // Start deletion in background

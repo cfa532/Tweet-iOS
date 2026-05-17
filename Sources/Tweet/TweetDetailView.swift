@@ -1049,7 +1049,11 @@ struct TweetDetailView: View {
             TweetMenu(
                 tweet: displayTweet, 
                 isPinned: displayTweet.isPinned(in: pinnedTweets),
-                showDeleteButton: displayTweet.authorId == hproseInstance.appUser.mid,
+                showDeleteButton: Gadget.canShowTweetDeleteMenu(
+                    appUser: hproseInstance.appUser,
+                    tweetAuthorId: displayTweet.authorId,
+                    allowDeleteAll: false
+                ),
                 onShareTap: {
                     Task {
                         let items = await TweetActionBarView.buildDetailShareItems(
@@ -1181,10 +1185,10 @@ struct TweetDetailView: View {
     }
     
     private func setupInitialData() {
-        // Refresh immediately in background - the Task inside refreshTweet() makes it non-blocking
-        // View will display with current data, then update when refresh completes
+        // Refresh tweet immediately in background (non-blocking)
+        // Comments are owned by CommentListView — it refreshes on appear via .task
         refreshTweet()
-        
+
         // Set up periodic refresh timer (every 5 minutes)
         // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in onDisappear
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in

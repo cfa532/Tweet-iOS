@@ -2926,50 +2926,118 @@ final class HproseInstance: ObservableObject {
     }
     
     /**
-     * Delete a tweet and returned the deleted tweetId. Only appUser can delete its own tweet.
-     * */
-    func deleteTweet(_ tweetId: String) async throws -> String? {
+     * Delete a tweet.
+     * For the caller's own tweets: uses appUser's writable client with appUser.mid as userid.
+     * For others' tweets (admin path): fetches the author, routes through the author's own
+     * writable client so the request lands on their node where getUser() always has hostIds.
+     */
+    func deleteTweet(_ tweetId: String, tweetAuthorId: String) async throws -> String? {
         let entry = "delete_tweet"
         let params = [
             "aid": appId,
             "ver": "last",
             "version": "v2",
-            "userid": appUser.mid,
+            "userid": tweetAuthorId,
             "tweetid": tweetId
         ]
-        guard let client = appUser.hproseClient else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
+
+        // Resolve which client to use:
+        // - Own tweet  → appUser's writable client (fast path, same as before)
+        // - Other's tweet → fetch the author and use THEIR writable client so the call
+        //   lands on the author's own node; getUser() always has hostIds there.
+        let requestUser: User
+        if tweetAuthorId == appUser.mid {
+            requestUser = appUser
+        } else {
+            guard let author = try await fetchUser(tweetAuthorId) else {
+                throw NSError(domain: "HproseClient", code: -1,
+                              userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "")])
+            }
+            requestUser = author
         }
+
+        _ = try await requestUser.resolveWritableUrl()
+        guard let client = requestUser.writableClient ?? appUser.hproseClient else {
+            throw NSError(domain: "HproseClient", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "")])
+        }
+        let originalTimeout = client.timeout
+        client.timeout = 30.0
+        defer { client.timeout = originalTimeout }
+
         let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
         let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-        guard let response = unwrappedResponse as? [String: Any] else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-        }
-        
-        // unwrapV2Response already threw for success=false
-        guard let deletedTweetId = response["tweetid"] as? String else {
-            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+
+        // unwrapV2Response already threw for success=false.
+        // Trust the success signal; fall back to the input tweetId if the server
+        // doesn't echo it back, so we never spuriously restore the UI.
+        var deletedTweetId: String = tweetId
+        if let response = unwrappedResponse as? [String: Any] {
+            if let tid = response["tweetid"] as? String, !tid.isEmpty {
+                deletedTweetId = tid
+            } else if let tid = response["tweetid"] as? NSString, tid.length > 0 {
+                deletedTweetId = tid as String
+            }
         }
 
         print("DEBUG: [deleteTweet] Successfully deleted tweet \(deletedTweetId)")
 
         // Only decrement tweetCount if appUser is the author
         // When deleting others' tweets from main feed, it's a local copy removal — not own tweet
-        let tweetAuthorId = Tweet.getInstance(for: tweetId)?.authorId
-        if tweetAuthorId == nil || tweetAuthorId == appUser.mid {
+        if tweetAuthorId == appUser.mid {
             await MainActor.run {
                 let currentCount = self.appUser.tweetCount ?? 0
                 self.appUser.tweetCount = max(0, currentCount - 1)
                 print("DEBUG: [deleteTweet] Updated appUser.tweetCount to \(self.appUser.tweetCount ?? 0)")
             }
         } else {
-            print("DEBUG: [deleteTweet] Skipping tweetCount decrement — tweet authored by \(tweetAuthorId ?? "unknown"), not appUser")
+            print("DEBUG: [deleteTweet] Skipping tweetCount decrement — tweet authored by \(tweetAuthorId), not appUser")
         }
 
         // Refresh appUser from server to get updated tweetCount and other properties
         try? await self.refreshAppUserFromServer()
 
         return deletedTweetId
+    }
+
+    /// TweetWeb passes `appuserid: target author` so the server author check passes.
+    func updateTweetContent(tweetId: String, content: String, tweetAuthorId: String) async throws {
+        guard Gadget.isResearchAdminUser(appUser) else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not available in this distribution"])
+        }
+        // Execute mutation using the original author's writable client context so
+        // the update is performed in the author's name, not the admin's.
+        let requestUser: User
+        if tweetAuthorId == appUser.mid {
+            requestUser = appUser
+        } else {
+            guard let author = try await fetchUser(tweetAuthorId) else {
+                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Cannot fetch tweet author", comment: "Author fetch error")])
+            }
+            requestUser = author
+        }
+
+        let entry = "update_tweet"
+        let params: [String: Any] = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "appuserid": tweetAuthorId,
+            "tweetid": tweetId,
+            "content": content
+        ]
+        // Mutation path should use writable client, same as other write APIs.
+        _ = try await requestUser.resolveWritableUrl()
+        guard let client = requestUser.writableClient else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Writable client not available", comment: "Writable client error")])
+        }
+        let originalTimeout = client.timeout
+        client.timeout = 30.0
+        defer { client.timeout = originalTimeout }
+
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        print("[updateTweetContent] Updating as author \(requestUser.mid), raw response: \(String(describing: rawResponse))")
+        _ = try Self.unwrapV2Response(rawResponse)
     }
     
     func addComment(_ comment: Tweet, to tweet: Tweet) async throws -> Tweet? {
@@ -7791,9 +7859,9 @@ final class HproseInstance: ObservableObject {
     }
     
     /// Reports a tweet for inappropriate content and deletes it from backend
-    func reportTweet(tweetId: String, category: String, comments: String) async throws {
+    func reportTweet(tweetId: String, tweetAuthorId: String, category: String, comments: String) async throws {
         // First, delete the tweet from backend
-        if let deletedTweetId = try await deleteTweet(tweetId) {
+        if let deletedTweetId = try await deleteTweet(tweetId, tweetAuthorId: tweetAuthorId) {
             print("[reportTweet] Successfully deleted tweet from backend: \(deletedTweetId)")
         } else {
             print("[reportTweet] Failed to delete tweet from backend: \(tweetId)")

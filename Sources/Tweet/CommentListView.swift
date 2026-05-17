@@ -119,9 +119,8 @@ struct CommentListView<RowView: View>: View {
                 }
             }
             .task {
-                if comments.isEmpty {
-                    await refreshComments()
-                }
+                // Always reload on appear so initialLoadComplete is set and pagination works
+                await refreshComments()
             }
             // Listen to all notifications
             .onReceive(NotificationCenter.default.publisher(for: .newCommentAdded)) { notif in
@@ -331,22 +330,24 @@ struct CommentListContentView<RowView: View>: View {
                     }
                 }
                 
-                // Sentinel view for infinite scroll
-                if hasMoreComments {
+                // Spinner — shown while loading more, matches TweetListView footer pattern
+                if isLoadingMore {
                     ProgressView()
+                        .frame(maxWidth: .infinity)
                         .frame(height: 40)
+                }
+
+                // Sentinel — invisible scroll trigger, fires immediately with no debounce
+                if hasMoreComments {
+                    Color.clear
+                        .frame(height: 1)
                         .onAppear {
-                            if initialLoadComplete && !isLoadingMore {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                    if initialLoadComplete && !isLoadingMore {
-                                        loadMoreComments()
-                                    }
-                                }
-                            }
+                            guard initialLoadComplete && !isLoadingMore else { return }
+                            loadMoreComments()
                         }
                 }
 
-                // "No more comments" message (only after load-more, not initial load)
+                // "No more comments" label — shown briefly after the last page loads
                 if showNoMoreComments {
                     Text(NSLocalizedString("No more comments", comment: "Message shown when there are no more comments to load"))
                         .font(.system(size: 15, weight: .medium))
