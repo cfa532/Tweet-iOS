@@ -43,6 +43,7 @@ struct CommentListView<RowView: View>: View {
     @State private var initialLoadComplete = false
     @State private var loadingStartTime: Date? = nil
     @State private var showNoMoreComments = false
+    @State private var hasTriggeredInitialTaskLoad = false
     
     // Minimum duration to show the loading spinner (in seconds)
     private let minimumLoadingDuration: TimeInterval = 0.5
@@ -126,7 +127,8 @@ struct CommentListView<RowView: View>: View {
                 }
             }
             .task {
-                // Always reload on appear so initialLoadComplete is set and pagination works
+                guard !hasTriggeredInitialTaskLoad else { return }
+                hasTriggeredInitialTaskLoad = true
                 await refreshComments()
             }
             // Listen to all notifications
@@ -162,7 +164,6 @@ struct CommentListView<RowView: View>: View {
         isLoading = true
         initialLoadComplete = false
         currentPage = 0
-        comments = []
         
         do {
             let newComments = try await commentFetcher(0, pageSize)
@@ -324,7 +325,7 @@ struct CommentListContentView<RowView: View>: View {
             Color.clear.frame(height: 0)
 
             // Show loading state
-            if isLoading {
+            if isLoading && comments.isEmpty {
                 VStack(spacing: 16) {
                     ProgressView()
                         .scaleEffect(1.2)

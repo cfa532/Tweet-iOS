@@ -2,6 +2,22 @@ import SwiftUI
 import AVKit
 import UIKit
 
+@MainActor
+private final class TweetDetailCommentsCache {
+    static let shared = TweetDetailCommentsCache()
+    private var commentsByParentTweetId: [String: [Tweet]] = [:]
+
+    private init() {}
+
+    func comments(for parentTweetId: String) -> [Tweet]? {
+        commentsByParentTweetId[parentTweetId]
+    }
+
+    func setComments(_ comments: [Tweet], for parentTweetId: String) {
+        commentsByParentTweetId[parentTweetId] = comments
+    }
+}
+
 // MARK: - Bottom bar scroll tracker
 // Observes scroll view and updates SwiftUI state for bottom bar visibility
 private class BottomBarScrollObserver: NSObject {
@@ -651,6 +667,8 @@ struct TweetDetailView: View {
     @State private var menuShareItems: ShareSheetData?
     @State private var cachedDisplayTweet: Tweet?
     @State private var hasLoadedOriginalTweet = false
+    @State private var hasServedCachedCommentsForCurrentParentTweet = false
+    @State private var currentCommentsParentTweetId = ""
 
     // Bottom navigation bar scroll tracking
     @State private var isNavigationBarVisible = true
@@ -835,6 +853,7 @@ struct TweetDetailView: View {
                !comments.contains(where: { $0.mid == comment.mid }) {
                 comments.append(comment)
                 comments.sort { $0.timestamp > $1.timestamp }
+                TweetDetailCommentsCache.shared.setComments(comments, for: displayTweet.mid)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
@@ -922,6 +941,10 @@ struct TweetDetailView: View {
         .onChange(of: comments.count) { _, _ in
             // Rebuild video list for fullscreen navigation when comments change
             commentsVideoCoordinator.buildVideoList(from: comments)
+            TweetDetailCommentsCache.shared.setComments(comments, for: displayTweet.mid)
+        }
+        .onChange(of: displayTweet.mid) { _, _ in
+            configureCommentCacheContextIfNeeded()
         }
             .onDisappear {
             print("DEBUG: [TweetDetailView] ===== VIEW DISAPPEARED =====")
@@ -1145,11 +1168,33 @@ struct TweetDetailView: View {
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
+                let parentTweet = await MainActor.run { displayTweet }
+
+                if page == 0 {
+                    let cachedComments: [Tweet]? = await MainActor.run {
+                        guard !hasServedCachedCommentsForCurrentParentTweet else { return nil }
+                        guard let cached = TweetDetailCommentsCache.shared.comments(for: parentTweet.mid),
+                              !cached.isEmpty else { return nil }
+                        hasServedCachedCommentsForCurrentParentTweet = true
+                        comments = cached
+                        return cached
+                    }
+                    if let cachedComments {
+                        return cachedComments.map { Optional($0) }
+                    }
+                }
+
                 let (fetched, failed) = try await hproseInstance.fetchComments(
-                    displayTweet,
+                    parentTweet,
                     pageNumber: page,
                     pageSize: size
                 )
+                if page == 0 {
+                    await MainActor.run {
+                        hasServedCachedCommentsForCurrentParentTweet = true
+                        TweetDetailCommentsCache.shared.setComments(fetched.compactMap { $0 }, for: parentTweet.mid)
+                    }
+                }
                 if !failed.isEmpty {
                     await MainActor.run { failedCommentIds.formUnion(failed) }
                 }
@@ -1203,6 +1248,8 @@ struct TweetDetailView: View {
     }
     
     private func setupInitialData() {
+        configureCommentCacheContextIfNeeded()
+
         // READ tweet on appear (comments handled by CommentListView.task)
         Task { await doReadTweet() }
 
@@ -1315,7 +1362,10 @@ struct TweetDetailView: View {
             }
 
             await MainActor.run {
-                if !allNewComments.isEmpty { comments.insert(contentsOf: allNewComments, at: 0) }
+                if !allNewComments.isEmpty {
+                    comments.insert(contentsOf: allNewComments, at: 0)
+                    TweetDetailCommentsCache.shared.setComments(comments, for: displayTweet.mid)
+                }
             }
         } catch {}
     }
@@ -1335,6 +1385,23 @@ struct TweetDetailView: View {
                     )
                 }
             }
+        }
+    }
+
+    private func configureCommentCacheContextIfNeeded() {
+        let parentTweetId = displayTweet.mid
+        if currentCommentsParentTweetId == parentTweetId {
+            return
+        }
+
+        currentCommentsParentTweetId = parentTweetId
+        hasServedCachedCommentsForCurrentParentTweet = false
+
+        if let cachedComments = TweetDetailCommentsCache.shared.comments(for: parentTweetId) {
+            comments = cachedComments
+            hasServedCachedCommentsForCurrentParentTweet = true
+        } else {
+            comments = []
         }
     }
     
