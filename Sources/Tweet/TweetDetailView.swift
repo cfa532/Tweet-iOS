@@ -1185,10 +1185,10 @@ struct TweetDetailView: View {
     }
     
     private func setupInitialData() {
-        // Refresh immediately in background - the Task inside refreshTweet() makes it non-blocking
-        // View will display with current data, then update when refresh completes
+        // Refresh tweet immediately in background (non-blocking)
+        // Comments are owned by CommentListView — it refreshes on appear via .task
         refreshTweet()
-        
+
         // Set up periodic refresh timer (every 5 minutes)
         // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in onDisappear
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
