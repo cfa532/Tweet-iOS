@@ -740,12 +740,8 @@ struct TweetDetailView: View {
                 }
             } else {
                 VStack(spacing: 0) {
-                    ZStack(alignment: .top) {
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            // Fixed spacer for floating nav bar
-                            Color.clear.frame(height: 44)
-                            
                             // Main tweet section with deeper background
                             VStack(spacing: 0) {
                                 mediaSection
@@ -768,17 +764,21 @@ struct TweetDetailView: View {
                     .refreshable {
                         await refreshTweetAndComments()
                     }
-
-                    // Floating navigation bar — pure UIKit, driven directly by KVO
-                    NavBarOverlay(onBack: { dismiss() })
-                        .frame(height: 44)
-                    
-                    // Bottom bar scroll tracker — placed outside ScrollView to properly find it
-                    BottomBarScrollTracker { offset, delta, isAtBottom in
-                        handleScrollOffsetChange(offset, delta: delta, isAtBottom: isAtBottom)
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        // Floating navigation bar — pure UIKit, driven directly by KVO.
+                        // Using safeAreaInset (instead of a ZStack overlay) so the
+                        // ScrollView's pull-to-refresh spinner appears below the nav bar
+                        // rather than being hidden behind it.
+                        NavBarOverlay(onBack: { dismiss() })
+                            .frame(height: 44)
                     }
-                    .frame(width: 0, height: 0)
-                    } // ZStack
+                    .overlay(alignment: .top) {
+                        // Bottom bar scroll tracker — placed outside ScrollView to properly find it
+                        BottomBarScrollTracker { offset, delta, isAtBottom in
+                            handleScrollOffsetChange(offset, delta: delta, isAtBottom: isAtBottom)
+                        }
+                        .frame(width: 0, height: 0)
+                    }
 
             // ReplyEditor as a component at the bottom
             if showReplyEditor {
