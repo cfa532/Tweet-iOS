@@ -673,7 +673,7 @@ final class HproseInstance: ObservableObject {
         _ parentTweet: Tweet,
         pageNumber: UInt = 0,
         pageSize: UInt = 20
-    ) async throws -> [Tweet?] {
+    ) async throws -> ([Tweet?], failedIds: [String]) {
         let entry = "get_comments"
         let params = [
             "aid": appId,
@@ -729,6 +729,7 @@ final class HproseInstance: ObservableObject {
         
         // Process each item in the response array, preserving nil positions
         var commentsWithAuthors: [Tweet?] = []
+        var failedIds: [String] = []
         for item in response {
             if let dict = item {
                 do {
@@ -762,54 +763,59 @@ final class HproseInstance: ObservableObject {
                     commentsWithAuthors.append(comment)
                 } catch {
                     print("Error processing comment: \(error)")
-                    if let commentId = dict["mid"] as? String,
-                       let authorHostId = author.hostIds?.first {
-                        // Comment data missing on this node — sync from author's host then retry
-                        let updateParams: [String: Any] = [
-                            "aid": appId,
-                            "ver": "last",
-                            "version": "v2",
-                            "hostid": authorHostId,
-                            "userid": parentTweet.authorId,
-                            "mid": commentId
-                        ]
-                        _ = client.invoke("runMApp", withArgs: ["node_update_mid_by_score", updateParams])
-
-                        let retryParams: [String: Any] = [
-                            "aid": appId,
-                            "ver": "last",
-                            "version": "v2",
-                            "tweetid": commentId,
-                            "appuserid": appUser.mid
-                        ]
-                        let rawComment = client.invoke("runMApp", withArgs: ["get_tweet", retryParams])
-                        if let unwrapped = try? Self.unwrapV2Response(rawComment),
-                           let commentDict = unwrapped as? [String: Any],
-                           let refetched = try? await MainActor.run(body: { try Tweet.from(dict: commentDict) }) {
-                            let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: refetched.authorId)
-                            if cachedAuthor.username != nil && cachedAuthor.baseUrl != nil {
-                                await MainActor.run { refetched.author = cachedAuthor }
-                            } else if let commentAuthor = try? await fetchUser(refetched.authorId) {
-                                await MainActor.run { refetched.author = commentAuthor }
-                            } else {
-                                await MainActor.run { refetched.author = User.getInstance(mid: refetched.authorId) }
-                            }
-                            commentsWithAuthors.append(refetched)
-                        } else {
-                            blackList.recordFailure(commentId)
-                            commentsWithAuthors.append(nil)
-                        }
-                    } else {
-                        commentsWithAuthors.append(nil)
+                    if let commentId = dict["mid"] as? String {
+                        failedIds.append(commentId)
                     }
+                    commentsWithAuthors.append(nil)
                 }
             } else {
                 commentsWithAuthors.append(nil)
             }
         }
-        return commentsWithAuthors
+        return (commentsWithAuthors, failedIds)
     }
-    
+
+    /// Sync a single comment from the author's home node to the current read node, then retry fetching it.
+    func syncComment(commentId: String, parentTweet: Tweet) async -> Tweet? {
+        let author: User
+        if let existingAuthor = parentTweet.author {
+            author = existingAuthor
+        } else {
+            guard let fetched = try? await fetchUser(parentTweet.authorId) else { return nil }
+            author = fetched
+        }
+        guard let client = author.hproseClient,
+              let authorHostId = author.hostIds?.first else { return nil }
+
+        let updateParams: [String: Any] = [
+            "aid": appId, "ver": "last", "version": "v2",
+            "hostid": authorHostId, "userid": parentTweet.authorId, "mid": commentId
+        ]
+        _ = client.invoke("runMApp", withArgs: ["node_update_mid_by_score", updateParams])
+
+        let retryParams: [String: Any] = [
+            "aid": appId, "ver": "last", "version": "v2",
+            "tweetid": commentId, "appuserid": appUser.mid
+        ]
+        guard let raw = client.invoke("runMApp", withArgs: ["get_tweet", retryParams]),
+              let unwrapped = try? Self.unwrapV2Response(raw),
+              let dict = unwrapped as? [String: Any],
+              let comment = try? await MainActor.run(body: { try Tweet.from(dict: dict) }) else {
+            blackList.recordFailure(commentId)
+            return nil
+        }
+
+        let cachedAuthor = await TweetCacheManager.shared.fetchUser(mid: comment.authorId)
+        if cachedAuthor.username != nil && cachedAuthor.baseUrl != nil {
+            await MainActor.run { comment.author = cachedAuthor }
+        } else if let commentAuthor = try? await fetchUser(comment.authorId) {
+            await MainActor.run { comment.author = commentAuthor }
+        } else {
+            await MainActor.run { comment.author = User.getInstance(mid: comment.authorId) }
+        }
+        return comment
+    }
+
     // MARK: - Tweet Operations
     /// Fetches a page of tweets for the user's timeline/feed.
     /// - Parameters:
@@ -1089,17 +1095,18 @@ final class HproseInstance: ObservableObject {
     func getTweet(
         tweetId: String,
         authorId: String,
-        nodeUrl: String? = nil
+        nodeUrl: String? = nil,
+        bypassCache: Bool = false
     ) async throws -> Tweet? {
         // Check if tweet is blacklisted before attempting fetch
         if blackList.isBlacklisted(tweetId) {
             print("DEBUG: [getTweet] tweetId \(tweetId) is blacklisted, returning cached tweet only")
             return await TweetCacheManager.shared.fetchTweet(mid: tweetId)
         }
-        
+
         // Check cache first using TweetCacheManager
         let author = try await fetchUser(authorId)
-        if let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
+        if !bypassCache, let cachedTweet = await TweetCacheManager.shared.fetchTweet(mid: tweetId) {
             // Set author if not already set
             if cachedTweet.author == nil {
                 await MainActor.run {
@@ -1172,10 +1179,10 @@ final class HproseInstance: ObservableObject {
         tweetId: String,
         authorId: String,
     ) async throws -> Tweet? {
-        guard let client = appUser.hproseClient else {
+        let author = try await fetchUser(authorId)
+        guard let client = author?.hproseClient ?? appUser.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
-        let author = try await fetchUser(authorId)
         let entry = "refresh_tweet"
         let params = [
             "aid": appId,

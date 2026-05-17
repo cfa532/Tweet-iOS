@@ -286,11 +286,12 @@ struct CommentDetailView: View {
             title: "Replies",
             comments: $replies,
             commentFetcher: { page, size in
-                try await hproseInstance.fetchComments(
+                let (fetched, _) = try await hproseInstance.fetchComments(
                     comment,
                     pageNumber: page,
                     pageSize: size
                 )
+                return fetched
             },
             showTitle: false,
             notifications: [

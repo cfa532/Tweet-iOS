@@ -35,8 +35,10 @@ extension Notification.Name {
     /// Posted when a tweet's privacy status is successfully updated (for toast notification)
     static let tweetPrivacyUpdated = Notification.Name("TweetPrivacyUpdated")
 
-    /// Posted when a new comment is added
+    /// Posted when a new comment is added by the current user
     static let newCommentAdded = Notification.Name("newCommentAdded")
+    /// Posted when a missing comment is synced from a remote node and becomes available
+    static let commentSynced = Notification.Name("commentSynced")
     static let commentDeleted = Notification.Name("commentDeleted")
     /// Posted when a comment deletion fails and needs to be restored
     static let commentRestored = Notification.Name("commentRestored")

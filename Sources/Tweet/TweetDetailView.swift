@@ -641,6 +641,7 @@ struct TweetDetailView: View {
     @State private var originalTweet: Tweet?
     @State private var refreshTimer: Timer?
     @State private var comments: [Tweet] = []
+    @State private var failedCommentIds: Set<String> = []
     @State private var showReplyEditor = true
     @State private var shouldShowExpandedReply = false
     @State private var menuShareItems: ShareSheetData?
@@ -821,6 +822,15 @@ struct TweetDetailView: View {
                 .padding(.top, 60)
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .animation(.easeInOut(duration: 0.3), value: showToast)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .commentSynced)) { notification in
+            if let comment = notification.userInfo?["comment"] as? Tweet,
+               let parentTweetId = notification.userInfo?["parentTweetId"] as? String,
+               parentTweetId == displayTweet.mid,
+               !comments.contains(where: { $0.mid == comment.mid }) {
+                comments.append(comment)
+                comments.sort { $0.timestamp > $1.timestamp }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .tweetDeleted)) { notification in
@@ -1131,12 +1141,15 @@ struct TweetDetailView: View {
             title: "Comments",
             comments: $comments,
             commentFetcher: { page, size in
-                let fetchedComments = try await hproseInstance.fetchComments(
+                let (fetched, failed) = try await hproseInstance.fetchComments(
                     displayTweet,
                     pageNumber: page,
                     pageSize: size
                 )
-                return fetchedComments
+                if !failed.isEmpty {
+                    await MainActor.run { failedCommentIds.formUnion(failed) }
+                }
+                return fetched
             },
             showTitle: false,
             notifications: [
@@ -1185,106 +1198,137 @@ struct TweetDetailView: View {
     }
     
     private func setupInitialData() {
-        // Refresh tweet immediately in background (non-blocking)
-        // Comments are owned by CommentListView — it refreshes on appear via .task
-        refreshTweet()
+        // READ tweet on appear (comments handled by CommentListView.task)
+        Task { await doReadTweet() }
 
-        // Set up periodic refresh timer (every 5 minutes)
-        // NOTE: Can't use [weak self] for structs (SwiftUI Views), but timer is invalidated in onDisappear
+        // SYNC: if nodes differ, resync tweet + any already-known failed comments
+        let hostIds = displayTweet.author?.hostIds ?? []
+        if hostIds.count >= 2 && hostIds[0] != hostIds[1] {
+            Task { await doResyncTweet() }
+            Task { await syncMissingComments() }
+        }
+
+        // 5-min tick: resync if nodes differ
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { _ in
             Task { @MainActor in
-                refreshTweet()
-                refreshComments()
+                let ids = displayTweet.author?.hostIds ?? []
+                guard ids.count >= 2, ids[0] != ids[1] else { return }
+                Task { await doResyncTweet() }
+                await syncMissingComments()
             }
         }
     }
-    
-    private func refreshTweet() {
-        Task {
-            if let refreshedTweet = try await hproseInstance.refreshTweet(
-                tweetId: tweet.mid,
-                authorId: tweet.authorId
-            ) {
-                try await MainActor.run {
-                    try tweet.update(from: refreshedTweet)
+
+    // READ: get_tweet on hostIds[1] (author's read node), bypasses cache
+    private func doReadTweet() async {
+        if let originalTweetId = tweet.originalTweetId,
+           let originalAuthorId = tweet.originalAuthorId {
+            let isPureRetweet = (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)
+            if isPureRetweet {
+                if let refreshed = try? await hproseInstance.getTweet(
+                    tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true
+                ) {
+                    await MainActor.run { originalTweet = refreshed }
                 }
+            } else {
+                async let tweetResult = hproseInstance.getTweet(tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true)
+                async let originalResult = hproseInstance.getTweet(tweetId: originalTweetId, authorId: originalAuthorId, bypassCache: true)
+                if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
+                if let refreshedOriginal = try? await originalResult { await MainActor.run { originalTweet = refreshedOriginal } }
+            }
+        } else {
+            if let refreshed = try? await hproseInstance.getTweet(
+                tweetId: tweet.mid, authorId: tweet.authorId, bypassCache: true
+            ) {
+                await MainActor.run { try? tweet.update(from: refreshed) }
             }
         }
     }
-    
+
+    // SYNC: refresh_tweet on hostIds[1], which pulls from hostIds[0] if they differ
+    private func doResyncTweet() async {
+        if let originalTweetId = tweet.originalTweetId,
+           let originalAuthorId = tweet.originalAuthorId {
+            let isPureRetweet = (tweet.content?.isEmpty ?? true) && (tweet.attachments?.isEmpty ?? true)
+            if isPureRetweet {
+                if let refreshed = try? await hproseInstance.refreshTweet(
+                    tweetId: originalTweetId, authorId: originalAuthorId
+                ) {
+                    await MainActor.run { originalTweet = refreshed }
+                }
+            } else {
+                async let tweetResult = hproseInstance.refreshTweet(tweetId: tweet.mid, authorId: tweet.authorId)
+                async let originalResult = hproseInstance.refreshTweet(tweetId: originalTweetId, authorId: originalAuthorId)
+                if let refreshed = try? await tweetResult { await MainActor.run { try? tweet.update(from: refreshed) } }
+                if let refreshedOriginal = try? await originalResult { await MainActor.run { originalTweet = refreshedOriginal } }
+            }
+        } else {
+            if let refreshed = try? await hproseInstance.refreshTweet(
+                tweetId: tweet.mid, authorId: tweet.authorId
+            ) {
+                await MainActor.run { try? tweet.update(from: refreshed) }
+            }
+        }
+    }
+
+    // Pull-to-refresh: READ tweet + comments on hostIds[1], then fire background sync for failed comments
     private func refreshTweetAndComments() async {
-        // Refresh both tweet and comments when pull-to-refresh is triggered
-        async let tweetRefresh: Void = {
-            if let refreshedTweet = try? await hproseInstance.refreshTweet(
-                tweetId: tweet.mid,
-                authorId: tweet.authorId
-            ) {
-                await MainActor.run {
-                    try? tweet.update(from: refreshedTweet)
-                }
-            }
-        }()
-        
-        async let commentsRefresh: Void = {
-            await refreshComments()
-        }()
-        
-        // Wait for both to complete
-        await tweetRefresh
-        await commentsRefresh
+        async let tweetRead: Void = doReadTweet()
+        async let commentsRead: Void = refreshComments()
+        await tweetRead
+        await commentsRead
+
+        let hostIds = displayTweet.author?.hostIds ?? []
+        if hostIds.count >= 2 && hostIds[0] != hostIds[1] && !failedCommentIds.isEmpty {
+            Task { await syncMissingComments() }
+        }
     }
-    
-    private func refreshComments() {
-        Task {
-            do {
-                var allNewComments: [Tweet] = []
-                var currentPage: UInt = 0
-                let pageSize: UInt = 20
-                var hasOverlap = false
-                
-                // Load pages until we find overlap with existing comments
-                while !hasOverlap {
-                    let freshComments = try await hproseInstance.fetchComments(
-                        displayTweet,
-                        pageNumber: currentPage,
-                        pageSize: pageSize
-                    )
-                    let validComments = freshComments.compactMap { $0 }
-                    
-                    if validComments.isEmpty {
-                        break
-                    }
-                    
-                    // Check for overlap with existing comments
-                    let existingIds = Set(comments.map { $0.mid })
-                    let newCommentsOnThisPage = validComments.filter { !existingIds.contains($0.mid) }
-                    
-                    if newCommentsOnThisPage.count < validComments.count {
-                        // Found overlap - some comments on this page already exist
-                        hasOverlap = true
-                    } else {
-                        // No overlap - all comments on this page are new
-                    }
-                    
-                    // Add new comments from this page
-                    allNewComments.append(contentsOf: newCommentsOnThisPage)
-                    
-                    // If we got fewer comments than pageSize, we've reached the end
-                    if freshComments.count < pageSize {
-                        break
-                    }
-                    
-                    currentPage += 1
-                }
-                
+
+    // READ comments page-by-page on hostIds[1] until overlap or end; collects failedIds
+    private func refreshComments() async {
+        do {
+            var allNewComments: [Tweet] = []
+            var currentPage: UInt = 0
+            let pageSize: UInt = 20
+            var hasOverlap = false
+
+            while !hasOverlap {
+                let (freshComments, failed) = try await hproseInstance.fetchComments(
+                    displayTweet, pageNumber: currentPage, pageSize: pageSize
+                )
+                await MainActor.run { failedCommentIds.formUnion(failed) }
+
+                let validComments = freshComments.compactMap { $0 }
+                if validComments.isEmpty { break }
+
+                let existingIds = Set(comments.map { $0.mid })
+                let newOnThisPage = validComments.filter { !existingIds.contains($0.mid) }
+                if newOnThisPage.count < validComments.count { hasOverlap = true }
+                allNewComments.append(contentsOf: newOnThisPage)
+                if freshComments.count < pageSize { break }
+                currentPage += 1
+            }
+
+            await MainActor.run {
+                if !allNewComments.isEmpty { comments.insert(contentsOf: allNewComments, at: 0) }
+            }
+        } catch {}
+    }
+
+    // SYNC: for each failed comment not blacklisted, call node_update_mid_by_score then retry
+    private func syncMissingComments() async {
+        let pending = Array(failedCommentIds).filter { !BlackList.shared.isBlacklisted($0) }
+        for commentId in pending {
+            if let comment = await hproseInstance.syncComment(commentId: commentId, parentTweet: displayTweet) {
                 await MainActor.run {
-                    if !allNewComments.isEmpty {
-                        // Insert all new comments at the beginning (most recent first)
-                        comments.insert(contentsOf: allNewComments, at: 0)
-                    }
+                    failedCommentIds.remove(commentId)
+                    guard !comments.contains(where: { $0.mid == comment.mid }) else { return }
+                    NotificationCenter.default.post(
+                        name: .commentSynced,
+                        object: nil,
+                        userInfo: ["comment": comment, "parentTweetId": displayTweet.mid]
+                    )
                 }
-            } catch {
-                // Error refreshing comments
             }
         }
     }

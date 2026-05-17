@@ -28,7 +28,7 @@ class CommentsViewModel: ObservableObject {
     func loadInitial() async {
         await MainActor.run { isLoading = true; currentPage = 0 }
         do {
-            let newComments = try await hproseInstance.fetchComments(
+            let (newComments, _) = try await hproseInstance.fetchComments(
                 parentTweet,
                 pageNumber: 0,
                 pageSize: pageSize
@@ -52,7 +52,7 @@ class CommentsViewModel: ObservableObject {
         await MainActor.run { isLoading = true }
         let nextPage = currentPage + 1
         do {
-            let moreComments = try await hproseInstance.fetchComments(
+            let (moreComments, _) = try await hproseInstance.fetchComments(
                 parentTweet,
                 pageNumber: nextPage,
                 pageSize: pageSize
