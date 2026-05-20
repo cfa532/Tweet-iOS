@@ -1793,15 +1793,10 @@ final class HproseInstance: ObservableObject {
                             
                             print("DEBUG: [_getProviderIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
-                            let client = self.clientPool.getClientByIP(for: ip)
-                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 5.0)
-                            self.clientPool.releaseClient(client, for: ip)
-                            
-                            // Check for cancellation after health check
-                            if Task.isCancelled {
-                                return nil
-                            }
-                            
+                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0)
+
+                            if Task.isCancelled { return nil }
+
                             if isHealthy {
                                 print("DEBUG: [_getProviderIP] ✅ IP test PASSED: \(ip)")
                             } else {
@@ -1909,120 +1904,37 @@ final class HproseInstance: ObservableObject {
     /// Checks if a server is healthy using HTTP HEAD request to base URL
     /// - Parameter hproseClient: The client to check (uses its uri property)
     /// - Returns: true if server responds to HEAD request, false otherwise
-    private func isServerHealthy(_ hproseClient: HproseClient) async -> Bool {
-        // Extract IP from client URI
-        guard let uriString = hproseClient.uri else {
-            print("DEBUG: [isServerHealthy] No URI found in client")
-            return false
-        }
-        
-        // Extract base URL (without /webapi/ path) for server health check
-        // URI format is "http://IP/webapi/" -> we want "http://IP/"
-        guard let fullURL = URL(string: uriString),
-              let scheme = fullURL.scheme,
-              let host = fullURL.host else {
-            print("DEBUG: [isServerHealthy] Invalid URI: \(uriString)")
-            return false
-        }
-        
-        // Construct base URL for testing the server itself
-        // Handle IPv6 addresses which need brackets: [2001:...]:port
-        var baseURLString = "\(scheme)://"
-        
-        // Check if this is an IPv6 address (contains colons but not wrapped in brackets yet)
-        if host.contains(":") && !host.hasPrefix("[") {
-            baseURLString += "[\(host)]"
-        } else {
-            baseURLString += host
-        }
-        
-        if let port = fullURL.port {
-            baseURLString += ":\(port)"
-        }
-        baseURLString += "/"
-        
-        // Check cache first (cache by IP only, not full URL)
-        // For IPv6, use the raw host without brackets for caching
-        let cacheKey = host + (fullURL.port.map { ":\($0)" } ?? "")
-        if getCachedIP(cacheKey) {
-            return true
-        }
-        
-        guard let baseURL = URL(string: baseURLString) else {
-            print("DEBUG: [isServerHealthy] Failed to construct base URL from: \(uriString)")
-            return false
-        }
-        
-        // Perform HTTP HEAD request to base URL (test server, not service endpoint)
-        var request = URLRequest(url: baseURL, timeoutInterval: 5.0)
+    /// HEAD probe — takes a raw IP:port string, mirrors TweetWeb isServerHealthy.
+    /// Any HTTP response means the server is reachable; only a network-level error
+    /// (refused, timeout, cancelled) means it is not.
+    /// The timeout is passed directly to URLRequest so there is no extra Task layer.
+    private func isServerHealthy(_ ip: String, timeout: TimeInterval = 5.0) async -> Bool {
+        if getCachedIP(ip) { return true }
+
+        guard let url = URL(string: "http://\(ip)/") else { return false }
+
+        var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = "HEAD"
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        
+
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse {
-                let isHealthy = (200...299).contains(httpResponse.statusCode)
-                
-                if isHealthy {
-                    print("DEBUG: [isServerHealthy] ✅ HEAD request succeeded: \(baseURLString) (status: \(httpResponse.statusCode))")
-                    
-                    // Cache the validated IP
-                    cacheIP(cacheKey)
-                    return true
-                } else {
-                    print("DEBUG: [isServerHealthy] ❌ HEAD request failed: \(baseURLString) (status: \(httpResponse.statusCode))")
-                }
-            }
+            _ = try await URLSession.shared.data(for: request)
+            // Any response (any status code) means the server is reachable.
+            cacheIP(ip)
+            print("DEBUG: [isServerHealthy] ✅ \(ip) reachable")
+            return true
         } catch {
-            // Check if this is a cancellation (normal when faster IP found)
             let nsError = error as NSError
-            let isCancellation = nsError.code == NSURLErrorCancelled
-            
-            if isCancellation {
-                print("DEBUG: [isServerHealthy] ⏭️  HEAD request cancelled for \(baseURLString) (faster IP found)")
-            } else {
-                print("DEBUG: [isServerHealthy] ❌ HEAD request error for \(baseURLString): domain=\(nsError.domain), code=\(nsError.code)")
+            if nsError.code != NSURLErrorCancelled {
+                print("DEBUG: [isServerHealthy] ❌ \(ip): \(nsError.domain) \(nsError.code)")
             }
-        }
-        
-        return false
-    }
-    
-    /// Checks if a server is healthy with a timeout
-    /// - Parameters:
-    ///   - hproseClient: The client to check
-    ///   - timeout: Timeout in seconds (default: 5)
-    /// - Returns: true if healthy within timeout, false otherwise
-    private func isServerHealthyWithTimeout(_ hproseClient: HproseClient, timeout: TimeInterval = 5.0) async -> Bool {
-        // Check if already cancelled before starting
-        if Task.isCancelled {
             return false
         }
-        
-        // Periodically clean up expired cache entries
+    }
+
+    private func isServerHealthyWithTimeout(_ ip: String, timeout: TimeInterval = 5.0) async -> Bool {
         cleanupExpiredCache()
-        
-        return await withTaskGroup(of: Bool.self) { group in
-            // Task 1: Perform health check (HEAD request)
-            group.addTask {
-                if Task.isCancelled {
-                    return false
-                }
-                return await self.isServerHealthy(hproseClient)
-            }
-            
-            // Task 2: Timeout task
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                return false  // Return false on timeout
-            }
-            
-            // Return first result (either health check or timeout)
-            let result = await group.next() ?? false
-            group.cancelAll()  // Cancel the other task
-            return result
-        }
+        return await isServerHealthy(ip, timeout: timeout)
     }
     
 
@@ -5318,10 +5230,11 @@ final class HproseInstance: ObservableObject {
                         throw error
                     }
                     
-                    // On first failure, clear cached writableUrl to force fresh resolution
+                    // Invalidate cached writableUrl so the retry re-resolves a fresh IP.
                     await MainActor.run {
-                        print("DEBUG: [uploadRegularFile] Clearing cached writableUrl to force fresh IP resolution on retry")
+                        print("DEBUG: [uploadRegularFile] Invalidating cached writableUrl to force fresh IP resolution on retry")
                         appUser.writableUrl = nil
+                        appUser.writableUrlResolvedAt = nil
                     }
                     
                     // Small delay before retry
@@ -7135,9 +7048,7 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [getHostIP] 🎯 Found pooled IP for node \(nodeId): \(pooledIP), testing health...")
             
             // Test if pooled IP is still healthy
-            let client = clientPool.getClientByIP(for: pooledIP)
-            let isHealthy = await isServerHealthyWithTimeout(client, timeout: 5.0)
-            clientPool.releaseClient(client, for: pooledIP)
+            let isHealthy = await isServerHealthyWithTimeout(pooledIP, timeout: 5.0)
             
             if isHealthy {
                 print("DEBUG: [getHostIP] ✅ Pooled IP \(pooledIP) is healthy, using it")
@@ -7160,12 +7071,12 @@ final class HproseInstance: ObservableObject {
         print("DEBUG: [getHostIP] Attempt 1 failed, checking appUser health...")
         
         // First attempt failed - check if appUser is healthy
-        guard let appUserClient = appUser.hproseClient else {
-            print("DEBUG: [getHostIP] No appUser client available, cannot retry")
+        guard let baseUrl = appUser.baseUrl, let host = baseUrl.host else {
+            print("DEBUG: [getHostIP] No appUser base URL, cannot retry")
             return nil
         }
-        
-        let isAppUserHealthy = await isServerHealthyWithTimeout(appUserClient, timeout: 5.0)
+        let appUserIP = baseUrl.port.map { "\(host):\($0)" } ?? host
+        let isAppUserHealthy = await isServerHealthyWithTimeout(appUserIP, timeout: 5.0)
         
         if isAppUserHealthy {
             // AppUser is healthy but still couldn't get IPs - node might not exist
@@ -7275,15 +7186,10 @@ final class HproseInstance: ObservableObject {
                             
                             print("DEBUG: [_getHostIP] Testing IP \(absoluteIndex)/\(ipAddresses.count): \(ip)")
                             
-                            let client = self.clientPool.getClientByIP(for: ip)
-                            let isHealthy = await self.isServerHealthyWithTimeout(client, timeout: 5.0)
-                            self.clientPool.releaseClient(client, for: ip)
-                            
-                            // Check for cancellation after health check
-                            if Task.isCancelled {
-                                return nil
-                            }
-                            
+                            let isHealthy = await self.isServerHealthyWithTimeout(ip, timeout: 5.0)
+
+                            if Task.isCancelled { return nil }
+
                             if isHealthy {
                                 print("DEBUG: [_getHostIP] ✅ IP test PASSED: \(ip)")
                             } else {
