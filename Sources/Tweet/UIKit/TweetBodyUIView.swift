@@ -345,11 +345,11 @@ class TweetBodyUIView: UIView {
 
             // Adjust spacing based on whether there's text above media
             if contentLabel.isHidden {
-                // No text: reduce spacing before media (media starts at 2pt from top)
-                contentStack.setCustomSpacing(0, after: contentLabel)
-            } else {
-                // Text present: 4pt gap
+                // No text: 4pt top padding before media
                 contentStack.setCustomSpacing(4, after: contentLabel)
+            } else {
+                // Text present: 8pt gap
+                contentStack.setCustomSpacing(8, after: contentLabel)
             }
         } else {
             mediaContainerView.isHidden = true
