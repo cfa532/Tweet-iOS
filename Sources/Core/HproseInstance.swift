@@ -2610,109 +2610,99 @@ final class HproseInstance: ObservableObject {
      Return an updated tweet object after toggling favorite status of the tweet by appUser.
      */
     func toggleFavorite(_ tweet: Tweet) async throws -> (Tweet?, User?) {
-        return try await withRetry {
-            // Resolve author's IP each attempt (may change between retries)
-            _ = try? await fetchUser(tweet.authorId)
-            let entry = "toggle_favorite"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "appuserid": appUser.mid,
-                "tweetid": tweet.mid,
-                "authorid": tweet.authorId,
-                "userhostid": appUser.hostIds?.first as Any
-            ]
-            // Use author's node directly to avoid extra hop (user→author→user becomes author→user)
-            let client = tweet.author?.hproseClient ?? appUser.hproseClient
-            guard let client else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            let originalTimeout = client.timeout
-            client.timeout = 30.0
-            defer { client.timeout = originalTimeout }
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            // Hprose syncInvoke returns the error object (not throws) on failure
-            if let error = rawResponse as? NSError {
-                throw error
-            }
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            guard let response = unwrappedResponse as? [String: Any] else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-
-            // unwrapV2Response already threw for success=false
-            var updatedUser: User?
-            var updatedTweet: Tweet?
-
-            // Parse updated user
-            if let userDict = response["user"] as? [String: Any] {
-                updatedUser = try User.from(dict: userDict)
-            }
-
-            // Parse updated tweet
-            if let tweetDict = response["tweet"] as? [String: Any] {
-                updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                // Cache the updated tweet under its authorId, not appUser.mid
-                // This ensures original tweets are cached under their author, not the current user
-                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
-            }
-
-            return (updatedTweet, updatedUser)
+        // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
+        try? await tweet.author?.resolveWritableUrl()
+        let client = tweet.author?.writableClient ?? appUser.writableClient
+        guard let client else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
+        let entry = "toggle_favorite"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "appuserid": appUser.mid,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId,
+            "userhostid": appUser.hostIds?.first as Any
+        ]
+        let originalTimeout = client.timeout
+        client.timeout = 30.0
+        defer { client.timeout = originalTimeout }
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        // Hprose syncInvoke returns the error object (not throws) on failure
+        if let error = rawResponse as? NSError {
+            throw error
+        }
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = unwrappedResponse as? [String: Any] else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        }
+
+        // unwrapV2Response already threw for success=false
+        var updatedUser: User?
+        var updatedTweet: Tweet?
+
+        // Parse updated user
+        if let userDict = response["user"] as? [String: Any] {
+            updatedUser = try User.from(dict: userDict)
+        }
+
+        // Parse updated tweet
+        if let tweetDict = response["tweet"] as? [String: Any] {
+            updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+            TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
+        }
+
+        return (updatedTweet, updatedUser)
     }
     
-    func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?)  {
-        return try await withRetry {
-            // Resolve author's IP each attempt (may change between retries)
-            _ = try? await fetchUser(tweet.authorId)
-            let entry = "toggle_bookmark"
-            let params = [
-                "aid": appId,
-                "ver": "last",
-                "version": "v2",
-                "userid": appUser.mid,
-                "tweetid": tweet.mid,
-                "authorid": tweet.authorId,
-                "userhostid": appUser.hostIds?.first as Any
-            ]
-            // Use author's node directly to avoid extra hop (user→author→user becomes author→user)
-            let client = tweet.author?.hproseClient ?? appUser.hproseClient
-            guard let client else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
-            }
-            let originalTimeout = client.timeout
-            client.timeout = 30.0
-            defer { client.timeout = originalTimeout }
-            let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
-            // Hprose syncInvoke returns the error object (not throws) on failure
-            if let error = rawResponse as? NSError {
-                throw error
-            }
-            let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
-            guard let response = unwrappedResponse as? [String: Any] else {
-                throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
-            }
-
-            // unwrapV2Response already threw for success=false
-            var updatedUser: User?
-            var updatedTweet: Tweet?
-            
-            // Parse updated user
-            if let userDict = response["user"] as? [String: Any] {
-                updatedUser = try User.from(dict: userDict)
-            }
-            
-            // Parse updated tweet
-            if let tweetDict = response["tweet"] as? [String: Any] {
-                updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
-                // Cache the updated tweet under its authorId, not appUser.mid
-                // This ensures original tweets are cached under their author, not the current user
-                TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
-            }
-            
-            return (updatedTweet, updatedUser)
+    func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?) {
+        // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
+        try? await tweet.author?.resolveWritableUrl()
+        let client = tweet.author?.writableClient ?? appUser.writableClient
+        guard let client else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
+        let entry = "toggle_bookmark"
+        let params = [
+            "aid": appId,
+            "ver": "last",
+            "version": "v2",
+            "userid": appUser.mid,
+            "tweetid": tweet.mid,
+            "authorid": tweet.authorId,
+            "userhostid": appUser.hostIds?.first as Any
+        ]
+        let originalTimeout = client.timeout
+        client.timeout = 30.0
+        defer { client.timeout = originalTimeout }
+        let rawResponse = client.invoke("runMApp", withArgs: [entry, params])
+        // Hprose syncInvoke returns the error object (not throws) on failure
+        if let error = rawResponse as? NSError {
+            throw error
+        }
+        let unwrappedResponse = try Self.unwrapV2Response(rawResponse)
+        guard let response = unwrappedResponse as? [String: Any] else {
+            throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Invalid response format from server", comment: "Server response error")])
+        }
+
+        // unwrapV2Response already threw for success=false
+        var updatedUser: User?
+        var updatedTweet: Tweet?
+
+        // Parse updated user
+        if let userDict = response["user"] as? [String: Any] {
+            updatedUser = try User.from(dict: userDict)
+        }
+
+        // Parse updated tweet
+        if let tweetDict = response["tweet"] as? [String: Any] {
+            updatedTweet = try await MainActor.run { return try Tweet.from(dict: tweetDict) }
+            TweetCacheManager.shared.saveTweet(updatedTweet!, userId: updatedTweet!.authorId)
+        }
+
+        return (updatedTweet, updatedUser)
     }
     
     func retweet(_ tweet: Tweet) async throws -> Tweet? {
