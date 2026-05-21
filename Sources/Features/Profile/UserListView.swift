@@ -147,8 +147,11 @@ struct UserListView: View {
             do {
                 let allIds = try await userFetcher(0, Int.max)
                 let uniqueUserIds = Array(Set(allIds))
+                let sociallyBlockedUserIds = await MainActor.run {
+                    Set(hproseInstance.appUser.userBlackList ?? [])
+                }
                 let filteredUserIds = uniqueUserIds.filter { userId in
-                    !BlackList.shared.isBlacklisted(userId)
+                    !sociallyBlockedUserIds.contains(userId)
                 }
                 guard !Task.isCancelled else { return }
                 await MainActor.run {

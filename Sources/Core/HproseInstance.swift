@@ -159,6 +159,29 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - BlackList Management
     private let blackList = BlackList.shared
+    private var blacklistProcessingTask: Task<Void, Never>?
+
+    /// Reliability blacklist check (network/resource failure quarantine).
+    /// Use this for transport-level retries and resource fetch suppression.
+    func isReliabilityBlacklisted(_ mimeiId: MimeiId) -> Bool {
+        blackList.isBlacklisted(mimeiId)
+    }
+
+    /// Record reliability failure for a resource/tweet/user fetch.
+    func recordReliabilityFailure(_ mimeiId: MimeiId) {
+        blackList.recordFailure(mimeiId)
+    }
+
+    /// Record reliability success for a resource/tweet/user fetch.
+    func recordReliabilitySuccess(_ mimeiId: MimeiId) {
+        blackList.recordSuccess(mimeiId)
+    }
+
+    /// Social block check (app user's explicit blocked-user list).
+    /// Do NOT use reliability blacklist for user-facing social filtering.
+    func isUserSociallyBlockedByAppUser(_ userId: MimeiId) -> Bool {
+        appUser.userBlackList?.contains(userId) ?? false
+    }
     
     // MARK: - Client Pool Management
     lazy var clientPool: HproseClientPool = {
@@ -2611,7 +2634,7 @@ final class HproseInstance: ObservableObject {
      */
     func toggleFavorite(_ tweet: Tweet) async throws -> (Tweet?, User?) {
         // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
-        try? await tweet.author?.resolveWritableUrl()
+        let _ = try? await tweet.author?.resolveWritableUrl()
         let client = tweet.author?.writableClient ?? appUser.writableClient
         guard let client else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
@@ -2659,7 +2682,7 @@ final class HproseInstance: ObservableObject {
     
     func toggleBookmark(_ tweet: Tweet) async throws -> (Tweet?, User?) {
         // Route to author's writable node (hostIds[0]). hostIds[0] is stable so no user fetch needed.
-        try? await tweet.author?.resolveWritableUrl()
+        let _ = try? await tweet.author?.resolveWritableUrl()
         let client = tweet.author?.writableClient ?? appUser.writableClient
         guard let client else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
@@ -5794,14 +5817,18 @@ final class HproseInstance: ObservableObject {
     /// Start periodic processing of blacklist candidates
     /// Checks every hour if candidates should be moved to blacklist (14+ failures over 1+ week)
     func startPeriodicBlackListProcessing() {
-        Task.detached(priority: .background) { [weak self] in
+        guard blacklistProcessingTask == nil else {
+            return
+        }
+        blacklistProcessingTask = Task.detached(priority: .background) { [weak self] in
             guard let self = self else { return }
             
             print("DEBUG: [HproseInstance] Started periodic blacklist candidate processing (every hour)")
             
-            while true {
+            while !Task.isCancelled {
                 // Wait 1 hour
                 try? await Task.sleep(nanoseconds: 60 * 60 * 1_000_000_000)
+                if Task.isCancelled { break }
                 
                 // Process candidates - move eligible ones to blacklist
                 self.blackList.processCandidates()
