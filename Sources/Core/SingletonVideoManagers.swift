@@ -318,6 +318,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Clear the current item so the player truly stops: no decoding, no buffers, no resource use.
         // Re-opening fullscreen will reattach an item (from cache when possible).
         singletonPlayer?.replaceCurrentItem(with: nil)
+        LocalHTTPServer.shared.clearPrimaryRestriction()
 
         print("🎬 [FullScreenVideoManager] Deactivated - observers cancelled, player item cleared")
     }
@@ -531,6 +532,10 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     /// Load and play a video in the singleton player
     func loadVideo(url: URL, mid: String, tweetId: String, cellTweetId: String, videoIndex: Int, mediaType: MediaType) {
+        // Fullscreen is the user's active media target. Clear any stale cancellation
+        // from feed scroll cleanup and let the local proxy prioritize this video.
+        LocalHTTPServer.shared.clearCancelledState(for: mid)
+        LocalHTTPServer.shared.setPrimaryMediaID(mid)
 
         // If we already have the correct item loaded (e.g. re-entering fullscreen after dismiss
         // without clearSingletonPlayer()), resume playback without thrashing observers/state.
@@ -550,6 +555,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             } else {
                 // Item exists but not yet ready — mark intent; itemStatusObserver will play when ready.
                 isPlaying = true
+                singletonPlayer?.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                singletonPlayer?.play()
             }
             return
         }
@@ -584,7 +591,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         hasRestoredPosition = false // Reset restoration flag when loading new video
         isSeekingToRestoredPosition = false // Reset seeking flag
         isItemReady = false // Will be set true when playerItem.status becomes .readyToPlay
-        
+
         // Remove old observer if exists
         if let observer = videoCompletionObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -771,6 +778,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let isBufferEmpty = item.isPlaybackBufferEmpty
             let isLikelyToKeepUp = item.isPlaybackLikelyToKeepUp
             let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            let isActivelyRendering = player.timeControlStatus == .playing || player.rate > 0
             let wasPlaying = player.rate > 0 || self.isPlaying
             let hasBufferedData = !item.loadedTimeRanges.isEmpty
             let itemStatus = item.status
@@ -788,7 +796,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // IMPORTANT: Don't trust isPlaybackBufferEmpty alone - it can be stuck at true after backgrounding
             // even when we have plenty of buffered data. Only show spinner if buffer is truly insufficient.
             let hasSignificantBuffer = hasBufferedData && bufferedDuration >= 1.0
-            let shouldShowSpinner = (isBufferEmpty && !hasSignificantBuffer) || isWaiting || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
+            let shouldShowSpinner = !isActivelyRendering && (
+                (isBufferEmpty && !hasSignificantBuffer)
+                    || isWaiting
+                    || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
+            )
             
             if shouldShowSpinner {
                 // Video is waiting for data - track if it was playing
@@ -1143,6 +1155,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard playerItem.status == .readyToPlay else {
             // Item not ready — observe status and retry when ready
             self.isPlaying = true // Mark as "should be playing"
+            playerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            self.singletonPlayer?.play()
             self.itemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
                 guard let self = self else { return }
                 DispatchQueue.main.async {
@@ -1299,6 +1313,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Keep the pre-created player alive — just remove the current item
         singletonPlayer?.pause()
         singletonPlayer?.replaceCurrentItem(with: nil)
+        LocalHTTPServer.shared.clearPrimaryRestriction()
 
         isItemReady = false
         currentVideoMid = nil

@@ -10,6 +10,8 @@ enum Constants {
     static let GUEST_ID = "000000000000000000000000000"
     static let MAX_TWEET_SIZE = 28000
     static let MIMEI_ID_LENGTH = 27
+    static let USER_BATCH_SIZE = 20
+    static let USER_VISIBLE_BATCH_SIZE = 6
     
     // Localhost Configuration
     static let LOCAL_HOST = "http://127.0.0.1"

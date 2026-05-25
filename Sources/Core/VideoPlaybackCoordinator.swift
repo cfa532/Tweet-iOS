@@ -1266,6 +1266,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     private func clearPreloadedTracking() {
         activePreloadMids.removeAll()
         activeNearbyMids.removeAll()
+        SharedAssetCache.shared.updateProtectedPreloadMids([])
         scrollCancelTimer?.invalidate()
         scrollCancelTimer = nil
     }
@@ -1318,7 +1319,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // 4. Update tracking
         activePreloadMids = newPreloadMids
         activeNearbyMids = newNearbyMids
-        SharedAssetCache.shared.updatePreloadedPlayerMids(newPreloadMids)
+        SharedAssetCache.shared.updateProtectedPreloadMids(newPreloadMids.union(newNearbyMids))
 
         // 5. Start new preloads — preload players first (get download slots), then nearby assets
         for video in nextVideos where SharedAssetCache.shared.getCachedPlayer(for: video.videoMid) == nil {

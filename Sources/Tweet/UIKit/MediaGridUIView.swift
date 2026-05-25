@@ -43,10 +43,7 @@ class MediaGridUIView: UIView {
             } else {
                 handleBecameInvisible()
             }
-            // NOTE: Removed automatic forwarding to cells - each cell now detects
-            // its own visibility via didMoveToWindow() and layoutSubviews()
-            // This prevents all cells from being marked visible simultaneously,
-            // which was causing async task cancellation for non-primary videos.
+            cellViews.forEach { $0.setVisible(isGridVisible) }
         }
     }
 
@@ -111,6 +108,7 @@ class MediaGridUIView: UIView {
 
             addSubview(cellView)
             cellViews.append(cellView)
+            cellView.setVisible(isGridVisible)
         }
 
         if attachments.count > 4 {
@@ -410,7 +408,11 @@ class MediaGridUIView: UIView {
     }
 
     private func handleBecameInvisible() {
-        // Managed by VideoPlaybackCoordinator and individual cell visibility.
+        guard let parentTweet else { return }
+        let hasVideos = attachments.contains { $0.type == .video || $0.type == .hls_video }
+        if hasVideos {
+            SharedAssetCache.shared.cancelLoadingForOutOfSightTweet(parentTweet.mid)
+        }
     }
 
     // MARK: - Cleanup

@@ -291,12 +291,12 @@ struct UserListDestinationView: View {
             title: userListTitle(for: destination),
             userId: destination.userId,
             userFetcher: { page, size in
-                // Only fetch all IDs once when page is 0
-                if page == 0 {
-                    let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
-                    let targetUser = User.getInstance(mid: destination.userId)
+                let entry: UserContentType = destination.listType == .FOLLOWER ? .FOLLOWER : .FOLLOWING
+                let targetUser = User.getInstance(mid: destination.userId)
+                let cachedIds = destination.listType == .FOLLOWER ? targetUser.fansList : targetUser.followingList
+
+                if page == 0 || cachedIds == nil {
                     let ids = try await hproseInstance.getListByType(user: targetUser, entry: entry)
-                    // Update user properties on main thread
                     await MainActor.run {
                         if destination.listType == .FOLLOWER {
                             targetUser.fansList = ids
@@ -304,15 +304,18 @@ struct UserListDestinationView: View {
                             targetUser.followingList = ids
                         }
                     }
-                    return ids
-                } else {
-                    let targetUser = User.getInstance(mid: destination.userId)
-                    return if destination.listType == .FOLLOWER {
-                        targetUser.fansList ?? []
-                    } else {
-                        targetUser.followingList ?? []
-                    }
                 }
+
+                let ids: [String]
+                if destination.listType == .FOLLOWER {
+                    ids = targetUser.fansList ?? []
+                } else {
+                    ids = targetUser.followingList ?? []
+                }
+                let startIndex = page * size
+                guard startIndex < ids.count else { return [] }
+                let endIndex = min(startIndex + size, ids.count)
+                return Array(ids[startIndex..<endIndex])
             },
             navigationPath: $navigationPath,
             onFollowToggle: { user in

@@ -245,18 +245,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        // Automatically detect visibility based on window presence and frame size
-        // This replaces relying on MediaGridUIView's isGridVisible
-        if window != nil && bounds.width > 0 {
-            // Cell is in window with valid layout → visible
-            if !isVisible {
-                setVisible(true)
-            }
-        } else {
-            // Cell removed from window or no layout yet → hidden
-            if isVisible {
-                setVisible(false)
-            }
+        if window == nil && isVisible {
+            setVisible(false)
         }
     }
 
@@ -267,10 +257,6 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoPlayerView.frame = b
         loadingSpinner.center = CGPoint(x: b.midX, y: b.midY)
 
-        // After layout, check visibility (frame might have just become valid)
-        if window != nil && b.width > 0 && !isVisible {
-            setVisible(true)
-        }
         retryButton.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
         retryButton.center = CGPoint(x: b.midX, y: b.midY)
         fullscreenOverlay.frame = b
@@ -483,15 +469,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         imageView.addGestureRecognizer(tap)
         imageView.isUserInteractionEnabled = true
 
-        loadImage(attachment: attachment, url: url)
+        if isVisible {
+            loadImage(attachment: attachment, url: url)
+        } else if let cached = imageCache.getCompressedImageFromMemory(for: attachment) {
+            imageView.image = cached
+        }
     }
 
     private func loadImage(attachment: MimeiFileType, url: URL) {
+        guard isVisible else { return }
+
         // 1. Memory cache (synchronous)
         if let cached = imageCache.getCompressedImageFromMemory(for: attachment) {
             imageView.image = cached
             return
         }
+
+        imageLoadTask?.cancel()
 
         // 2. Disk cache (background) → network (default gray color for light image background)
         loadingSpinner.color = nil  // reset to system default (gray, visible on .systemGray6)
@@ -501,15 +495,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         imageLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
+            guard !Task.isCancelled else { return }
             let cachedImage = self.imageCache.getCompressedImage(for: attachmentCopy)
+            guard !Task.isCancelled else { return }
 
             await MainActor.run {
                 // Guard: cell may have been reused for a different attachment
-                guard self.attachment?.mid == attachmentCopy.mid else { return }
+                guard !Task.isCancelled,
+                      self.attachment?.mid == attachmentCopy.mid,
+                      self.isVisible else { return }
 
                 if let cachedImage {
                     self.imageView.image = cachedImage
                     self.loadingSpinner.stopAnimating()
+                    self.imageLoadTask = nil
                 } else {
                     // Use critical priority for ALL visible images (single or grid)
                     GlobalImageLoadManager.shared.loadImageCriticalPriority(
@@ -519,16 +518,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                         baseUrl: baseUrlCopy
                     ) { [weak self] loadedImage in
                         // Guard: cell may have been reused while network load was in flight
-                        guard self?.attachment?.mid == attachmentCopy.mid else { return }
+                        guard let self,
+                              self.attachment?.mid == attachmentCopy.mid,
+                              self.isVisible else { return }
+                        self.imageLoadTask = nil
                         if let loadedImage = loadedImage {
-                            self?.imageView.image = loadedImage
-                            self?.loadingSpinner.stopAnimating()
-                            self?.retryButton.isHidden = true
+                            self.imageView.image = loadedImage
+                            self.loadingSpinner.stopAnimating()
+                            self.retryButton.isHidden = true
                         } else {
                             // Image failed/cancelled - show retry button if not cancelled
-                            self?.loadingSpinner.stopAnimating()
+                            self.loadingSpinner.stopAnimating()
                             if !Task.isCancelled {
-                                self?.retryButton.isHidden = false
+                                self.retryButton.isHidden = false
                             }
                         }
                     }
@@ -638,23 +640,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             .store(in: &cancellables)
 
-        // Debounce player acquisition: wait 0.3s before acquiring to skip fast-scrolled cells.
-        // If the cell leaves the screen before the delay fires, cleanupVideoPlayer cancels
-        // playerAcquireDebounceTask and no player is ever created.
-        playerAcquireDebounceTask?.cancel()
-        playerAcquireDebounceTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
-            guard !Task.isCancelled, let self, self.isVisible,
-                  let att = self.attachment,
-                  let url = att.getUrl(self.effectiveBaseUrl),
-                  let parentTweet = self.parentTweet else { return }
-            // Skip if a player is already configured (coordinator may have acquired one
-            // during the 0.3s window). Without this guard, the debounce reconfigures
-            // an already-playing player — causing a playing→playerLoading state reset.
-            guard self.player == nil, self.setupPlayerTask == nil else { return }
-            self.playerAcquireDebounceTask = nil
-            self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
-        }
+        schedulePlayerAcquireIfNeeded()
 
         // Mute button for single video (timer shown when playback starts)
         if isSingleMedia {
@@ -664,7 +650,36 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     // MARK: - Player Acquisition
 
+    private func schedulePlayerAcquireIfNeeded() {
+        guard isVisible,
+              isVideoAttachment,
+              player == nil,
+              setupPlayerTask == nil,
+              playerAcquireDebounceTask == nil else { return }
+
+        playerAcquireDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
+            guard !Task.isCancelled,
+                  let self else { return }
+            defer { self.playerAcquireDebounceTask = nil }
+
+            guard self.isVisible,
+                  let att = self.attachment,
+                  att.type == .video || att.type == .hls_video,
+                  let url = att.getUrl(self.effectiveBaseUrl),
+                  let parentTweet = self.parentTweet else { return }
+
+            // Skip if a player is already configured (coordinator may have acquired one
+            // during the 0.3s window). Without this guard, the debounce reconfigures
+            // an already-playing player — causing a playing→playerLoading state reset.
+            guard self.player == nil, self.setupPlayerTask == nil else { return }
+            self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+        }
+    }
+
     private func acquirePlayer(attachment: MimeiFileType, url: URL, parentTweet: Tweet) {
+        guard isVisible else { return }
+
         let mid = attachment.mid
 
         // TIER 1: Synchronous cache hit (VideoStateCache)
@@ -726,7 +741,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                     // Staleness check: if the cell was reused for a different attachment
                     // while the player was being created, discard the player to avoid
                     // attaching a QmX player to a QmY cell.
-                    guard self.attachment?.mid == expectedMid else {
+                    guard self.attachment?.mid == expectedMid,
+                          self.isVisible else {
                         print("\(self.logPrefix) ⚠️ Player for \(expectedMid) arrived after cell reuse — discarding")
                         return
                     }
@@ -741,6 +757,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 let isBlacklisted = nsError.domain == "SharedAssetCache" && nsError.code == -2
                 await MainActor.run { [weak self] in
                     guard let self else { return }
+                    guard self.isVisible else {
+                        self.setupPlayerTask = nil
+                        return
+                    }
                     if isCancellation {
                         print("\(self.logPrefix) ⚠️ Player creation cancelled")
                         self.setupPlayerTask = nil
@@ -2092,6 +2112,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
             }
 
+            if isVideoAttachment {
+                schedulePlayerAcquireIfNeeded()
+            }
+
             // Setup foreground observer for images and videos
             setupForegroundObserver()
         } else {
@@ -2107,6 +2131,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
 
             // Cancel image loads
+            imageLoadTask?.cancel()
+            imageLoadTask = nil
             GlobalImageLoadManager.shared.cancelLoad(id: attachment.mid)
 
             // Clean up foreground observer
@@ -2121,6 +2147,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
 
             // Cancel in-flight player acquisition task
+            playerAcquireDebounceTask?.cancel()
+            playerAcquireDebounceTask = nil
             setupPlayerTask?.cancel()
             setupPlayerTask = nil
 
@@ -2484,6 +2512,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playbackLikelyToKeepUpObserver?.invalidate()
         removePlayerTimeObserver()
         timerHideTask?.cancel()
+        playerAcquireDebounceTask?.cancel()
         setupPlayerTask?.cancel()
+        imageLoadTask?.cancel()
     }
 }

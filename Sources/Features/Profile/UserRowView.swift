@@ -7,6 +7,43 @@
 import SwiftUI
 import Combine
 
+actor UserRowLoadGate {
+    static let shared = UserRowLoadGate(limit: Constants.USER_VISIBLE_BATCH_SIZE)
+
+    private let limit: Int
+    private var activeCount = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    func withPermit<T>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
+        await acquire()
+        defer { release() }
+        return try await operation()
+    }
+
+    private func acquire() async {
+        if activeCount < limit {
+            activeCount += 1
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            activeCount = max(0, activeCount - 1)
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 @available(iOS 16.0, *)
 struct UserRowView: View {
     let userId: String
@@ -280,11 +317,27 @@ struct UserRowView: View {
                     print("DEBUG: [UserRowView] Task cancelled before starting for user \(userId)")
                     return
                 }
+
+                let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
+                let cachedUsername = cachedUser.username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !cachedUsername.isEmpty {
+                    await MainActor.run {
+                        guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
+                        self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
+                        self.isLoading = false
+                    }
+                    return
+                }
                 
-                print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
-                // Keep spinner showing while fetchUser is in progress (includes retries)
-                // fetchUser will retry up to 3 times before returning skeleton on failure
-                let fetchedUser = try await hproseInstance.fetchUser(userId)
+                let fetchedUser = try await UserRowLoadGate.shared.withPermit {
+                    guard !Task.isCancelled else {
+                        throw CancellationError()
+                    }
+                    print("DEBUG: [UserRowView] Loading user with ID: \(userId)")
+                    // Keep spinner showing while fetchUser is in progress (includes retries)
+                    // fetchUser will retry up to 3 times before returning skeleton on failure
+                    return try await hproseInstance.fetchUser(userId, refreshExpiredCacheInBackground: false)
+                }
                 
                 // Check if task should be cancelled before processing
                 guard taskCancellationToken == currentCancellationToken else {

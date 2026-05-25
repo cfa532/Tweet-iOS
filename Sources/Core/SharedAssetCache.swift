@@ -32,6 +32,10 @@ class SharedAssetCache: ObservableObject {
     // Track preloaded players (next videos in scroll direction) — protected from LRU eviction
     private var preloadedPlayerMids: Set<String> = []
 
+    // Track media IDs that are intentional off-screen preload targets. These may not
+    // have a cached player yet, but their in-flight loads should survive visibility cleanup.
+    private var protectedPreloadMids: Set<String> = []
+
     // Track app foreground state — when foreground, protect visible + nearby videos from eviction
     private var isAppInForeground: Bool = true
     
@@ -383,7 +387,13 @@ class SharedAssetCache: ObservableObject {
         // Find all mediaIDs associated with this tweet and cancel their loading
         // This cancels active loading tasks even if cached content exists
         let tweetMediaIDs = getMediaIDsForTweet(tweetId)
+        let protected = foregroundProtectedMids
         for mediaID in tweetMediaIDs {
+            if protected.contains(mediaID) {
+                print("🔮 [PLAYER PRELOAD] Keeping protected out-of-sight load for \(shortMID(mediaID))")
+                continue
+            }
+
             // Cancel loading tasks regardless of cache status
             if let loadingTask = loadingTasks[mediaID] {
                 loadingTask.cancel()
@@ -730,6 +740,9 @@ class SharedAssetCache: ObservableObject {
         var protected = visibleVideoMids
         // Protect preloaded players (next videos in scroll direction)
         protected.formUnion(preloadedPlayerMids)
+        // Protect current preload targets before their players are cached.
+        protected.formUnion(protectedPreloadMids)
+        protected.formUnion(preloadTasks.keys)
         // Protect players still being created — evicting mid-flight causes stuck spinner
         protected.formUnion(inFlightPlayerCreations.keys)
         // Also protect media belonging to tweets in the VideoLoadingManager visible window
@@ -743,6 +756,9 @@ class SharedAssetCache: ObservableObject {
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
     /// Called by VideoPlaybackCoordinator when preload/nearby sets change and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
+        protectedPreloadMids.remove(mediaID)
+        preloadedPlayerMids.remove(mediaID)
+
         if let preloadTask = preloadTasks[mediaID] {
             preloadTask.cancel()
             preloadTasks.removeValue(forKey: mediaID)
@@ -1832,16 +1848,25 @@ class SharedAssetCache: ObservableObject {
         }
     }
 
-    /// Update preloaded player set — called when scroll direction changes.
-    /// Used for LRU eviction protection; NodeConnectionPool manages their bandwidth.
-    func updatePreloadedPlayerMids(_ mids: Set<String>) {
+    /// Update off-screen preload protection — called when scroll direction changes.
+    /// Protects both active player preloads and nearby asset preloads from generic
+    /// visibility cleanup. NodeConnectionPool manages their bandwidth.
+    func updateProtectedPreloadMids(_ mids: Set<String>) {
+        let previousProtectedCount = protectedPreloadMids.count
+        protectedPreloadMids = mids
+
         let newSet = mids.intersection(playerCache.keys)
         let previousCount = preloadedPlayerMids.count
         preloadedPlayerMids = newSet
         let newCount = preloadedPlayerMids.count
-        if newCount != previousCount {
-            print("🔮 [PLAYER PRELOAD] Protected players: \(newCount) (was \(previousCount))")
+        if newCount != previousCount || protectedPreloadMids.count != previousProtectedCount {
+            print("🔮 [PLAYER PRELOAD] Protected targets: \(protectedPreloadMids.count), cached players: \(newCount) (was \(previousCount))")
         }
+    }
+
+    /// Backward-compatible wrapper for callers that only track player preloads.
+    func updatePreloadedPlayerMids(_ mids: Set<String>) {
+        updateProtectedPreloadMids(mids)
     }
 
     /// Cancel preload for specific URL
@@ -2033,9 +2058,10 @@ class SharedAssetCache: ObservableObject {
     @MainActor func releaseAllFeedPlayers() {
         // Clear feed visibility state — feed is no longer on screen
         let previousVisible = visibleVideoMids.count
-        let previousPreloaded = preloadedPlayerMids.count
+        let previousPreloaded = max(preloadedPlayerMids.count, protectedPreloadMids.count)
         visibleVideoMids.removeAll()
         preloadedPlayerMids.removeAll()
+        protectedPreloadMids.removeAll()
 
         // 1. Release ALL cached players to free decode sessions
         var releasedCount = 0

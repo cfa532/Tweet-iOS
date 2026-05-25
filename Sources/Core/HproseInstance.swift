@@ -1306,7 +1306,8 @@ final class HproseInstance: ObservableObject {
         maxRetries: Int = 2,
         forceRefresh: Bool = false,
         skipRetryAndBlacklist: Bool = false,
-        v4Only: Bool = false
+        v4Only: Bool = false,
+        refreshExpiredCacheInBackground: Bool = true
     ) async throws -> User? {
         // Guard against fetching the guest user - GUEST_ID should never make network calls
         // as it represents an unauthenticated state
@@ -1342,21 +1343,25 @@ final class HproseInstance: ObservableObject {
                         print("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
                         // Fall through to fetch fresh data with IP resolution below
                     } else {
-                        // For normal fetches, return stale data while refreshing in background for better UX
-                        let shouldStartBackgroundRefresh = userUpdateQueue.sync {
-                            if !ongoingUserUpdates.contains(userId) {
-                                // Mark this user as being updated to prevent duplicate refreshes
-                                ongoingUserUpdates.insert(userId)
-                                return true
+                        if refreshExpiredCacheInBackground {
+                            // For normal fetches, return stale data while refreshing in background for better UX
+                            let shouldStartBackgroundRefresh = userUpdateQueue.sync {
+                                if !ongoingUserUpdates.contains(userId) {
+                                    // Mark this user as being updated to prevent duplicate refreshes
+                                    ongoingUserUpdates.insert(userId)
+                                    return true
+                                }
+                                return false
                             }
-                            return false
-                        }
-                        
-                        // Kick off background refresh if we're the first to notice expiration
-                        if shouldStartBackgroundRefresh {
-                            Task {
-                                await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
+
+                            // Kick off background refresh if we're the first to notice expiration
+                            if shouldStartBackgroundRefresh {
+                                Task {
+                                    await startBackgroundRefresh(userId, cachedUser: cachedUser, maxRetries: maxRetries, skipRetryAndBlacklist: skipRetryAndBlacklist)
+                                }
                             }
+                        } else {
+                            print("DEBUG: [fetchUser] Returning expired cached user without background refresh for userId: \(userId)")
                         }
                         
                         // Return the stale cached user immediately for better UX (non-login flows)
@@ -7886,4 +7891,3 @@ final class HproseInstance: ObservableObject {
 }
 
 // NOTE: Array.chunked extension is now in TweetUploadManager.swift
-

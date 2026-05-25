@@ -21,16 +21,17 @@ struct UserListView: View {
     @State private var isLoadingMore: Bool = false
     /// False until IDs are loaded — avoids a phantom bottom loader firing during push.
     @State private var hasMoreUsers: Bool = false
+    @State private var hasMoreServerPages: Bool = false
     @State private var errorMessage: String? = nil
     @State private var refreshTask: Task<Void, Never>?
     @State private var loadMoreTask: Task<Void, Never>?
-    @State private var currentLoadIndex: Int = 0
+    @State private var nextPageNumber: Int = 0
+    @State private var nextDisplayIndex: Int = 0
     @State private var cancellationToken: UUID = UUID()
 
-    /// Enough rows to cover an iPhone screen (~12 rows).
-    private let initialBatchSize: Int = 12
-    /// Smaller batches after the first screen for pagination.
-    private let pageSize: Int = 10
+    /// Match Android's ID page size, but reveal only the visible row count.
+    private let pageSize: Int = Constants.USER_BATCH_SIZE
+    private let visibleBatchSize: Int = Constants.USER_VISIBLE_BATCH_SIZE
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var hproseInstance: HproseInstance
@@ -82,6 +83,7 @@ struct UserListView: View {
                         onLoadFailed: { failedUserId in
                             displayedUserIds.removeAll { $0 == failedUserId }
                             allUserIds.removeAll { $0 == failedUserId }
+                            nextDisplayIndex = min(nextDisplayIndex, displayedUserIds.count)
                             Task { await loadNextUserToFillGap() }
                         }
                     )
@@ -91,7 +93,7 @@ struct UserListView: View {
                 if isLoading {
                     ProgressView()
                         .padding()
-                } else if hasMoreUsers, !allUserIds.isEmpty {
+                } else if hasMoreUsers {
                     ProgressView()
                         .padding()
                         .onAppear {
@@ -143,26 +145,19 @@ struct UserListView: View {
                 isLoading = true
                 errorMessage = nil
                 hasMoreUsers = false
+                hasMoreServerPages = false
             }
             do {
-                let allIds = try await userFetcher(0, Int.max)
-                let uniqueUserIds = Array(Set(allIds))
-                let sociallyBlockedUserIds = await MainActor.run {
-                    Set(hproseInstance.appUser.userBlackList ?? [])
-                }
-                let filteredUserIds = uniqueUserIds.filter { userId in
-                    !sociallyBlockedUserIds.contains(userId)
-                }
+                let firstPageIds = try await userFetcher(0, pageSize)
+                let filteredUserIds = await filteredUniqueUserIds(from: firstPageIds)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     allUserIds = filteredUserIds
-                    displayedUserIds = []
-                    currentLoadIndex = 0
-                }
-                await loadBatch(count: initialBatchSize)
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    hasMoreUsers = currentLoadIndex < allUserIds.count
+                    displayedUserIds = Array(filteredUserIds.prefix(visibleBatchSize))
+                    nextDisplayIndex = displayedUserIds.count
+                    nextPageNumber = 1
+                    hasMoreServerPages = firstPageIds.count >= pageSize
+                    hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
                     isLoading = false
                 }
             } catch is CancellationError {
@@ -186,50 +181,71 @@ struct UserListView: View {
         loadMoreTask = Task {
             await MainActor.run { isLoadingMore = true }
 
-            let startIndex = currentLoadIndex
-            guard startIndex < allUserIds.count else {
+            let didRevealCachedUsers = revealNextVisibleBatch()
+            if didRevealCachedUsers {
+                await MainActor.run { isLoadingMore = false }
+                return
+            }
+
+            let pageToLoad = nextPageNumber
+            let existingUserIds = Set(allUserIds)
+
+            do {
+                let pageIds = try await userFetcher(pageToLoad, pageSize)
+                let filteredUserIds = await filteredUniqueUserIds(from: pageIds, excluding: existingUserIds)
+                guard !Task.isCancelled else { return }
+
+                await MainActor.run {
+                    allUserIds.append(contentsOf: filteredUserIds)
+                    nextPageNumber = pageToLoad + 1
+                    let revealEndIndex = min(nextDisplayIndex + visibleBatchSize, allUserIds.count)
+                    if nextDisplayIndex < revealEndIndex {
+                        displayedUserIds.append(contentsOf: allUserIds[nextDisplayIndex..<revealEndIndex])
+                        nextDisplayIndex = revealEndIndex
+                    }
+                    hasMoreServerPages = pageIds.count >= pageSize
+                    hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
+                    isLoadingMore = false
+                }
+            } catch {
+                print("Error loading more users: \(error)")
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     hasMoreUsers = false
                     isLoadingMore = false
                 }
-                return
-            }
-
-            let endIndex = min(startIndex + pageSize, allUserIds.count)
-            let nextBatchIds = Array(allUserIds[startIndex..<endIndex])
-            await loadBatch(ids: nextBatchIds)
-
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                hasMoreUsers = currentLoadIndex < allUserIds.count
-                isLoadingMore = false
             }
         }
     }
 
-    /// Append `count` IDs from `allUserIds` starting at `currentLoadIndex`.
-    private func loadBatch(count: Int) async {
-        let start = currentLoadIndex
-        let end = min(start + count, allUserIds.count)
-        guard start < end else { return }
-        let batch = Array(allUserIds[start..<end])
-        await loadBatch(ids: batch)
+    @MainActor
+    private func revealNextVisibleBatch() -> Bool {
+        guard nextDisplayIndex < allUserIds.count else { return false }
+        let endIndex = min(nextDisplayIndex + visibleBatchSize, allUserIds.count)
+        displayedUserIds.append(contentsOf: allUserIds[nextDisplayIndex..<endIndex])
+        nextDisplayIndex = endIndex
+        hasMoreUsers = nextDisplayIndex < allUserIds.count || hasMoreServerPages
+        return true
     }
 
-    private func loadBatch(ids: [String]) async {
-        guard !ids.isEmpty else { return }
-        await MainActor.run {
-            displayedUserIds.append(contentsOf: ids)
-            currentLoadIndex += ids.count
+    private func filteredUniqueUserIds(from userIds: [String], excluding existingUserIds: Set<String> = []) async -> [String] {
+        let sociallyBlockedUserIds = await MainActor.run {
+            Set(hproseInstance.appUser.userBlackList ?? [])
+        }
+        var seenUserIds = existingUserIds
+
+        return userIds.compactMap { userId in
+            guard !userId.isEmpty,
+                  userId != Constants.GUEST_ID,
+                  !sociallyBlockedUserIds.contains(userId),
+                  !seenUserIds.contains(userId) else { return nil }
+            seenUserIds.insert(userId)
+            return userId
         }
     }
 
     private func loadNextUserToFillGap() async {
-        guard currentLoadIndex < allUserIds.count else { return }
-        let nextUserId = allUserIds[currentLoadIndex]
-        await MainActor.run {
-            displayedUserIds.append(nextUserId)
-            currentLoadIndex += 1
-        }
+        guard hasMoreUsers, !isLoadingMore, !isLoading else { return }
+        loadMoreUsers()
     }
 }
