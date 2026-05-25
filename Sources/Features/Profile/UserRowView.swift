@@ -10,36 +10,59 @@ import Combine
 actor UserRowLoadGate {
     static let shared = UserRowLoadGate(limit: Constants.USER_VISIBLE_BATCH_SIZE)
 
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
     private let limit: Int
     private var activeCount = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [Waiter] = []
 
     init(limit: Int) {
         self.limit = max(1, limit)
     }
 
-    func withPermit<T>(_ operation: @Sendable () async throws -> T) async rethrows -> T {
-        await acquire()
+    func withPermit<T>(_ operation: @Sendable () async throws -> T) async throws -> T {
+        try await acquire()
         defer { release() }
+        try Task.checkCancellation()
         return try await operation()
     }
 
-    private func acquire() async {
+    private func acquire() async throws {
+        try Task.checkCancellation()
         if activeCount < limit {
             activeCount += 1
             return
         }
 
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+        let waiterId = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiters.append(Waiter(id: waiterId, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id: waiterId) }
         }
+
+        if Task.isCancelled {
+            release()
+            throw CancellationError()
+        }
+    }
+
+    private func cancelWaiter(id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
     }
 
     private func release() {
         if waiters.isEmpty {
             activeCount = max(0, activeCount - 1)
         } else {
-            waiters.removeFirst().resume()
+            waiters.removeFirst().continuation.resume()
         }
     }
 }
