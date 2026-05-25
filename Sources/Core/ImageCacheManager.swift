@@ -28,6 +28,13 @@ class ImageCacheManager: @unchecked Sendable {
     // Avatar cache key tracking (for memory protection)
     private var avatarCacheKeys: Set<String> = []
     private var memoryCachedKeys: Set<String> = []
+    private var memoryCacheAccessTimes: [String: Date] = [:]
+    private var recentImageCache: [String: UIImage] = [:]
+    private var recentImageCacheCosts: [String: Int] = [:]
+    private var recentImageCacheCost: Int = 0
+    private let recentImageProtectionInterval: TimeInterval = 10 * 60
+    private let maxRecentImageCacheCount = 80
+    private let maxRecentImageCacheCost = 160 * 1024 * 1024
     private let cacheKeysQueue = DispatchQueue(label: "com.tweet.cacheKeys", attributes: .concurrent)
     
     // Request deduplication: Track ongoing requests to prevent duplicate downloads
@@ -94,8 +101,8 @@ class ImageCacheManager: @unchecked Sendable {
         try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
         
         // Set cache limits
-        cache.countLimit = 200 // Maximum number of images in memory
-        cache.totalCostLimit = 100 * 1024 * 1024 // 100MB limit
+        cache.countLimit = 400 // Keep recently viewed feed images warm during scroll-back
+        cache.totalCostLimit = 240 * 1024 * 1024 // Raw decoded image cost limit
         
     }
     
@@ -118,7 +125,7 @@ class ImageCacheManager: @unchecked Sendable {
                 return DispatchQueue.main.sync { UIScreen.main.scale }
             }
         }()
-        let maxPixelSize = max(1, Int(maxDimension * scale))
+        let maxPixelSize = max(1, Int(maxDimension))
         let downsampleOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,
@@ -134,19 +141,64 @@ class ImageCacheManager: @unchecked Sendable {
     }
     
     private func cacheImageInMemory(_ image: UIImage, forKey key: String) {
-        let pixelWidth = Int(image.size.width * image.scale)
-        let pixelHeight = Int(image.size.height * image.scale)
-        let cost = max(1, pixelWidth * pixelHeight * 4)
+        let cost = imageMemoryCost(image)
         cache.setObject(image, forKey: key as NSString, cost: cost)
         
         // Track this key for selective memory cache release
         cacheKeysQueue.async(flags: .barrier) {
             self.memoryCachedKeys.insert(key)
+            self.memoryCacheAccessTimes[key] = Date()
+            self.recentImageCache[key] = image
+            let previousCost = self.recentImageCacheCosts[key] ?? 0
+            self.recentImageCacheCosts[key] = cost
+            self.recentImageCacheCost += cost - previousCost
             
             // Mark as avatar if key contains "avatar_"
             if key.contains("avatar_") {
                 self.avatarCacheKeys.insert(key)
             }
+
+            self.trimRecentImageCacheLocked()
+        }
+    }
+
+    private func markMemoryCacheAccess(forKey key: String) {
+        cacheKeysQueue.async(flags: .barrier) {
+            self.memoryCacheAccessTimes[key] = Date()
+        }
+    }
+
+    private func imageMemoryCost(_ image: UIImage) -> Int {
+        let pixelWidth = Int(image.size.width * image.scale)
+        let pixelHeight = Int(image.size.height * image.scale)
+        return max(1, pixelWidth * pixelHeight * 4)
+    }
+
+    private func recentImageFromMemory(forKey key: String) -> UIImage? {
+        cacheKeysQueue.sync {
+            recentImageCache[key]
+        }
+    }
+
+    private func removeMemoryTrackingLocked(forKey key: String) {
+        memoryCachedKeys.remove(key)
+        memoryCacheAccessTimes.removeValue(forKey: key)
+        avatarCacheKeys.remove(key)
+        recentImageCache.removeValue(forKey: key)
+        recentImageCacheCost -= recentImageCacheCosts.removeValue(forKey: key) ?? 0
+        recentImageCacheCost = max(0, recentImageCacheCost)
+    }
+
+    private func trimRecentImageCacheLocked() {
+        while (recentImageCache.count > maxRecentImageCacheCount || recentImageCacheCost > maxRecentImageCacheCost),
+              recentImageCache.count > 1 {
+            guard let oldestKey = recentImageCache.keys.min(by: {
+                (memoryCacheAccessTimes[$0] ?? .distantPast) < (memoryCacheAccessTimes[$1] ?? .distantPast)
+            }) else { return }
+
+            recentImageCache.removeValue(forKey: oldestKey)
+            recentImageCacheCost -= recentImageCacheCosts.removeValue(forKey: oldestKey) ?? 0
+            recentImageCacheCost = max(0, recentImageCacheCost)
         }
     }
     
@@ -238,6 +290,14 @@ class ImageCacheManager: @unchecked Sendable {
 
         // Clear memory cache
         cache.removeAllObjects()
+        cacheKeysQueue.async(flags: .barrier) {
+            self.memoryCachedKeys.removeAll()
+            self.memoryCacheAccessTimes.removeAll()
+            self.recentImageCache.removeAll()
+            self.recentImageCacheCosts.removeAll()
+            self.recentImageCacheCost = 0
+            self.avatarCacheKeys.removeAll()
+        }
         print("DEBUG: [ImageCacheManager] Cleared memory cache")
 
         // Clear all disk cache files
@@ -259,6 +319,11 @@ class ImageCacheManager: @unchecked Sendable {
     func clearCache(for mediaId: String) {
         // Clear from memory cache
         cache.removeObject(forKey: mediaId as NSString)
+        cache.removeObject(forKey: "\(mediaId)_compressed" as NSString)
+        cacheKeysQueue.async(flags: .barrier) {
+            self.removeMemoryTrackingLocked(forKey: mediaId)
+            self.removeMemoryTrackingLocked(forKey: "\(mediaId)_compressed")
+        }
         
         // Clear from disk cache
         let cachedFile = cacheDirectory.appendingPathComponent(mediaId)
@@ -275,8 +340,7 @@ class ImageCacheManager: @unchecked Sendable {
             let keysToRemove = self.avatarCacheKeys.filter { $0.contains(userId) }
             for key in keysToRemove {
                 self.cache.removeObject(forKey: key as NSString)
-                self.memoryCachedKeys.remove(key)
-                self.avatarCacheKeys.remove(key)
+                self.removeMemoryTrackingLocked(forKey: key)
             }
         }
         
@@ -297,9 +361,9 @@ class ImageCacheManager: @unchecked Sendable {
     func clearAllAvatarCache() {
         // Clear memory cache for all avatars
         cacheKeysQueue.async(flags: .barrier) {
-            for key in self.avatarCacheKeys {
+            for key in Array(self.avatarCacheKeys) {
                 self.cache.removeObject(forKey: key as NSString)
-                self.memoryCachedKeys.remove(key)
+                self.removeMemoryTrackingLocked(forKey: key)
             }
             self.avatarCacheKeys.removeAll()
         }
@@ -323,21 +387,27 @@ class ImageCacheManager: @unchecked Sendable {
         let percentageToRemove = max(1, min(percentage, 90)) // Ensure 1-90% range
         print("DEBUG: [ImageCacheManager] Releasing \(percentageToRemove)% of image cache")
         
-        // Selectively clear memory cache (protect avatars)
-        cacheKeysQueue.sync {
+        // Selectively clear memory cache (protect avatars and recently viewed feed images)
+        cacheKeysQueue.sync(flags: .barrier) {
+            let now = Date()
             let nonAvatarKeys = memoryCachedKeys.subtracting(avatarCacheKeys)
+            let removableKeys = nonAvatarKeys.filter { key in
+                guard let lastAccess = memoryCacheAccessTimes[key] else { return true }
+                return now.timeIntervalSince(lastAccess) > recentImageProtectionInterval
+            }
             let countToRemove = max(0, (nonAvatarKeys.count * percentageToRemove) / 100)
+            let actualCountToRemove = min(countToRemove, removableKeys.count)
             
-            if countToRemove > 0 {
+            if actualCountToRemove > 0 {
                 // Remove percentage of non-avatar images from memory
-                let keysToRemove = Array(nonAvatarKeys.prefix(countToRemove))
+                let keysToRemove = Array(removableKeys.prefix(actualCountToRemove))
                 for key in keysToRemove {
                     cache.removeObject(forKey: key as NSString)
-                    memoryCachedKeys.remove(key)
+                    removeMemoryTrackingLocked(forKey: key)
                 }
-                print("DEBUG: [ImageCacheManager] Released \(keysToRemove.count) images from memory (avatars protected: \(avatarCacheKeys.count))")
+                print("DEBUG: [ImageCacheManager] Released \(keysToRemove.count) images from memory (avatars protected: \(avatarCacheKeys.count), recent protected: \(nonAvatarKeys.count - removableKeys.count))")
             } else {
-                print("DEBUG: [ImageCacheManager] No non-avatar images to release from memory")
+                print("DEBUG: [ImageCacheManager] No old non-avatar images to release from memory")
             }
         }
         
@@ -351,6 +421,10 @@ class ImageCacheManager: @unchecked Sendable {
         cache.removeAllObjects()
         cacheKeysQueue.async(flags: .barrier) {
             self.memoryCachedKeys.removeAll()
+            self.memoryCacheAccessTimes.removeAll()
+            self.recentImageCache.removeAll()
+            self.recentImageCacheCosts.removeAll()
+            self.recentImageCacheCost = 0
             // Keep avatarCacheKeys - they'll be re-added when loaded from disk
         }
         cancelOngoingRequestsForBackground()
@@ -397,8 +471,16 @@ class ImageCacheManager: @unchecked Sendable {
         guard let key = getCacheKey(for: attachment) else { return nil }
         let cacheKey = "\(key)_compressed"
         
+        if let recentImage = recentImageFromMemory(forKey: cacheKey) {
+            markMemoryCacheAccess(forKey: cacheKey)
+            cache.setObject(recentImage, forKey: cacheKey as NSString, cost: imageMemoryCost(recentImage))
+            return recentImage
+        }
+
         // Only check memory cache - no disk I/O to avoid blocking UI
-        return cache.object(forKey: cacheKey as NSString)
+        guard let image = cache.object(forKey: cacheKey as NSString) else { return nil }
+        markMemoryCacheAccess(forKey: cacheKey)
+        return image
     }
     
     /// Get compressed image from memory or disk cache
@@ -409,8 +491,15 @@ class ImageCacheManager: @unchecked Sendable {
         guard let key = getCacheKey(for: attachment) else { return nil }
         let cacheKey = "\(key)_compressed"
         
+        if let recentImage = recentImageFromMemory(forKey: cacheKey) {
+            markMemoryCacheAccess(forKey: cacheKey)
+            cache.setObject(recentImage, forKey: cacheKey as NSString, cost: imageMemoryCost(recentImage))
+            return recentImage
+        }
+
         // Check memory cache first (thread-safe, NSCache handles locking)
         if let cachedImage = cache.object(forKey: cacheKey as NSString) {
+            markMemoryCacheAccess(forKey: cacheKey)
             return cachedImage
         }
         
@@ -433,8 +522,16 @@ class ImageCacheManager: @unchecked Sendable {
         guard !mid.isEmpty else { return nil }
         let cacheKey = "\(mid)_compressed"
         
+        if let recentImage = recentImageFromMemory(forKey: cacheKey) {
+            markMemoryCacheAccess(forKey: cacheKey)
+            cache.setObject(recentImage, forKey: cacheKey as NSString, cost: imageMemoryCost(recentImage))
+            return recentImage
+        }
+
         // Only check memory cache - no disk I/O
-        return cache.object(forKey: cacheKey as NSString)
+        guard let image = cache.object(forKey: cacheKey as NSString) else { return nil }
+        markMemoryCacheAccess(forKey: cacheKey)
+        return image
     }
     
     /// Get cached compressed image by mid alone (for when baseUrl is not yet available)
@@ -444,8 +541,15 @@ class ImageCacheManager: @unchecked Sendable {
         
         let cacheKey = "\(mid)_compressed"
         
+        if let recentImage = recentImageFromMemory(forKey: cacheKey) {
+            markMemoryCacheAccess(forKey: cacheKey)
+            cache.setObject(recentImage, forKey: cacheKey as NSString, cost: imageMemoryCost(recentImage))
+            return recentImage
+        }
+
         // Check memory cache first
         if let cachedImage = cache.object(forKey: cacheKey as NSString) {
+            markMemoryCacheAccess(forKey: cacheKey)
             return cachedImage
         }
         

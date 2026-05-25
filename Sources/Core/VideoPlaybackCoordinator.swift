@@ -163,13 +163,13 @@ class VideoPlaybackCoordinator: ObservableObject {
     private let visibilityRatioThreshold: CGFloat = 0.10
 
     /// Actively tracked preload/nearby video mids — explicitly managed on scroll stop.
-    /// Preload = next 2 videos in scroll direction (full player preload).
+    /// Preload = next video in scroll direction (full player preload).
     /// Nearby = videos in adjacent tweets (asset-only preload).
     private var activePreloadMids: Set<String> = []
     private var activeNearbyMids: Set<String> = []
 
-    /// 2s timer: when scroll starts, gives in-flight preloads a grace period to finish.
-    /// If scroll is still active after 2s, cancel all preload/nearby downloads.
+    /// Timer: when scroll starts, gives in-flight preloads a brief grace period to finish.
+    /// If scroll is still active after the delay, cancel preload/nearby downloads.
     private var scrollCancelTimer: Timer?
 
     /// Track async tasks to prevent leaks
@@ -1279,10 +1279,22 @@ class VideoPlaybackCoordinator: ObservableObject {
     }
 
     /// Called when scroll starts (scrollViewWillBeginDragging).
-    /// NodeConnectionPool manages bandwidth during scroll — no download cancellation needed here.
+    /// Give current preloads a short grace period, then cancel them if the user keeps scrolling.
     func onScrollStarted() {
         scrollCancelTimer?.invalidate()
-        scrollCancelTimer = nil
+        isScrolling = true
+
+        let timer = Timer(timeInterval: 1.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.isScrolling else { return }
+                self.cancelTrackedPreloads(
+                    except: self.currentOnScreenVideoMids(),
+                    reason: "scroll still active"
+                )
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        scrollCancelTimer = timer
     }
     
     /// Called on scroll stop and initial load. Replaces preloadVideosInScrollDirection +
@@ -1290,31 +1302,26 @@ class VideoPlaybackCoordinator: ObservableObject {
     func performPreloadOnScrollStop(nearbyTweetIds: Set<String> = []) {
         scrollCancelTimer?.invalidate()
         scrollCancelTimer = nil
+        onScrollStopped()
 
-        // 1. New preload set: next 2 videos in scroll direction
-        let nextVideos = getNextVideosInScrollDirection(count: 2)
+        // 1. New preload set: next video in scroll direction
+        let nextVideos = getNextVideosInScrollDirection(count: 1)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
-        // 2. New nearby set: videos in adjacent tweets, excluding preload duplicates
+        // 2. New nearby set: at most two videos in adjacent tweets, excluding preload duplicates
         let newNearbyMids: Set<String> = {
             let nearbyVideos = allVideos.filter {
                 nearbyTweetIds.contains($0.cellTweetId)
                     && $0.isInVisibleMediaRange
                     && !newPreloadMids.contains($0.videoMid)
-            }
+            }.prefix(2)
             return Set(nearbyVideos.map { $0.videoMid })
         }()
 
         // 3. Cancel stale preloads (not in new sets, not on-screen)
-        let onScreenMids = Set(allVideos.filter { onScreenMediaCells.contains($0.identifier) }.map { $0.videoMid })
+        let onScreenMids = currentOnScreenVideoMids()
         let newAll = newPreloadMids.union(newNearbyMids).union(onScreenMids)
-        let staleMids = activePreloadMids.union(activeNearbyMids).subtracting(newAll)
-        for mid in staleMids {
-            SharedAssetCache.shared.cancelPreloadTask(for: mid)
-        }
-        if !staleMids.isEmpty {
-            print("🎬 [COORD] Scroll stop: cancelled \(staleMids.count) stale preloads")
-        }
+        cancelTrackedPreloads(except: newAll, reason: "scroll stop")
 
         // 4. Update tracking
         activePreloadMids = newPreloadMids
@@ -1333,6 +1340,23 @@ class VideoPlaybackCoordinator: ObservableObject {
         if !newPreloadMids.isEmpty || !newNearbyMids.isEmpty {
             print("🎬 [COORD] Scroll stop: preloading \(newPreloadMids.count) players + \(newNearbyMids.count) nearby assets")
         }
+    }
+
+    private func currentOnScreenVideoMids() -> Set<String> {
+        Set(allVideos.filter { onScreenMediaCells.contains($0.identifier) }.map { $0.videoMid })
+    }
+
+    private func cancelTrackedPreloads(except keepMids: Set<String>, reason: String) {
+        let staleMids = activePreloadMids.union(activeNearbyMids).subtracting(keepMids)
+        guard !staleMids.isEmpty else { return }
+
+        for mid in staleMids {
+            SharedAssetCache.shared.cancelPreloadTask(for: mid)
+        }
+        activePreloadMids.subtract(staleMids)
+        activeNearbyMids.subtract(staleMids)
+        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids.union(activeNearbyMids))
+        print("🎬 [COORD] \(reason): cancelled \(staleMids.count) stale preloads")
     }
 
     /// Schedule primary video playback after a short debounce (0.3s).

@@ -42,8 +42,8 @@ class MediaGridUIView: UIView {
                 handleBecameVisible()
             } else {
                 handleBecameInvisible()
+                cellViews.forEach { $0.setVisible(false) }
             }
-            cellViews.forEach { $0.setVisible(isGridVisible) }
         }
     }
 
@@ -108,7 +108,6 @@ class MediaGridUIView: UIView {
 
             addSubview(cellView)
             cellViews.append(cellView)
-            cellView.setVisible(isGridVisible)
         }
 
         if attachments.count > 4 {
@@ -428,15 +427,21 @@ class MediaGridUIView: UIView {
         moreLabel = nil
     }
 
-    /// Returns video identifiers for media cells whose frames are at least 50% within the given rect.
+    /// Updates per-media visibility and returns video identifiers whose frames are at least 50% visible.
     func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
         var result: [String] = []
         for cellView in cellViews {
-            guard cellView.isVideoAttachment,
-                  let identifier = cellView.videoIdentifier else { continue }
             let cellFrame = cellView.convert(cellView.bounds, to: coordinateSpace)
             let intersection = cellFrame.intersection(visibleRect)
-            let ratio = cellFrame.height > 0 ? intersection.height / cellFrame.height : 0
+            let cellArea = cellFrame.width * cellFrame.height
+            let visibleArea = max(0, intersection.width) * max(0, intersection.height)
+            let ratio = cellArea > 0 ? visibleArea / cellArea : 0
+
+            // Keep loading tied to actual media-cell geometry, not just table-row visibility.
+            cellView.setVisible(isGridVisible && ratio > 0.05)
+
+            guard cellView.isVideoAttachment,
+                  let identifier = cellView.videoIdentifier else { continue }
             if ratio >= 0.5 {
                 result.append(identifier)
             }

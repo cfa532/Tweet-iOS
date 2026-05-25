@@ -49,9 +49,9 @@ struct ImageLoadManagerDebugView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
             
-            Text("• Max concurrent loads: 8")
-            Text("• Max queue size: 100")
-            Text("• Memory warning threshold: 80%")
+            Text("• Max concurrent loads: 4")
+            Text("• Max queue size: 50")
+            Text("• Memory warning threshold: 45%")
             
             Spacer()
         }

@@ -387,7 +387,7 @@ class SharedAssetCache: ObservableObject {
         // Find all mediaIDs associated with this tweet and cancel their loading
         // This cancels active loading tasks even if cached content exists
         let tweetMediaIDs = getMediaIDsForTweet(tweetId)
-        let protected = foregroundProtectedMids
+        let protected = outOfSightCancellationProtectedMids
         for mediaID in tweetMediaIDs {
             if protected.contains(mediaID) {
                 print("🔮 [PLAYER PRELOAD] Keeping protected out-of-sight load for \(shortMID(mediaID))")
@@ -421,6 +421,7 @@ class SharedAssetCache: ObservableObject {
             // Stop network usage for CachingPlayerItem if it exists
             if let cachingPlayerItem = cachingPlayerItems[mediaID] {
                 cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                cachingPlayerItem.asset.cancelLoading()
             }
 
             // Cancel active LocalHTTPServer downloads (progressive streams + HLS segments)
@@ -753,6 +754,17 @@ class SharedAssetCache: ObservableObject {
         return protected
     }
 
+    /// Media IDs allowed to keep active network work while their cell is out of sight.
+    /// This is intentionally narrower than eviction protection: an in-flight creation or
+    /// queued preload must not protect itself, otherwise stale loads survive scrolling.
+    private var outOfSightCancellationProtectedMids: Set<String> {
+        guard isAppInForeground else { return [] }
+        var protected = visibleVideoMids
+        protected.formUnion(protectedPreloadMids)
+        protected.formUnion(preloadedPlayerMids)
+        return protected
+    }
+
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
     /// Called by VideoPlaybackCoordinator when preload/nearby sets change and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
@@ -766,6 +778,18 @@ class SharedAssetCache: ObservableObject {
         if let loadingTask = loadingTasks[mediaID] {
             loadingTask.cancel()
             loadingTasks.removeValue(forKey: mediaID)
+        }
+        if let inFlightTask = inFlightPlayerCreations[mediaID] {
+            inFlightTask.cancel()
+            inFlightPlayerCreations.removeValue(forKey: mediaID)
+        }
+        if let creationTask = activeCreationTasks[mediaID] {
+            creationTask.cancel()
+            activeCreationTasks.removeValue(forKey: mediaID)
+        }
+        if let cachingPlayerItem = cachingPlayerItems[mediaID] {
+            cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            cachingPlayerItem.asset.cancelLoading()
         }
         // Stop any active HLS segment downloads for this preloaded player.
         // Task cancellation alone doesn't stop already-running AVPlayer segment requests
@@ -1873,8 +1897,7 @@ class SharedAssetCache: ObservableObject {
     func cancelPreload(for url: URL) {
         // Use mediaID as cache key (stable identifier), not URL which can change
         guard let mediaID = extractMediaID(from: url) else { return }
-        preloadTasks[mediaID]?.cancel()
-        preloadTasks.removeValue(forKey: mediaID)
+        cancelPreloadTask(for: mediaID)
     }
     
     /// Preload multiple videos with priority management
