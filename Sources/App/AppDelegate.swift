@@ -22,10 +22,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private var infrastructureRestartTask: Task<Void, Never>?
     private var isRestartingInfrastructure = false
 
-    // Deferred aggressive cleanup: server stop + player item removal delayed 3s
-    // If app returns before it fires, we cancel it for instant video recovery
-    private var deferredCleanupWorkItem: DispatchWorkItem?
-    /// True once the deferred aggressive cleanup has actually executed.
+    private var backgroundCleanupTask: UIBackgroundTaskIdentifier = .invalid
+    /// True once background memory release has actually run.
     /// When false on foreground return, players and server are still intact → fast path.
     private(set) static var didPerformAggressiveCleanup = false
     
@@ -348,43 +346,44 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Store timestamp when app went to background
         UserDefaults.standard.set(Date(), forKey: "lastBackgroundTimestamp")
 
-        // Perform immediate background message check when entering background
-        print("[AppDelegate] 🚀 Performing IMMEDIATE background message check on app background")
-        performImmediateBackgroundCheck()
-
         // Note: TweetTableViewController's background handler shows cached thumbnails
         // on visible video cells before this runs, preventing black player layers.
-
-        // Phase 1 (immediate): Lightweight cleanup — pause players, clear caches
-        // Players keep their items so health checks pass on quick foreground return
-        print("💾 [AppDelegate] Phase 1: Lightweight cleanup (pausing players, clearing caches)")
-        SharedAssetCache.shared.pauseAllPlayers()
-        VideoStateCache.shared.clearAllCache()
-        ImageCacheManager.shared.clearMemoryCache()
-
         AppDelegate.didPerformAggressiveCleanup = false
+        AppDelegate.isVideoInfrastructureReady = false
 
-        // Phase 2 (deferred 3s): Aggressive cleanup — release player items + stop server
-        // If app returns before this fires, we cancel it for instant video recovery
-        deferredCleanupWorkItem?.cancel()
-        let cleanupItem = DispatchWorkItem { [weak self] in
-            guard self != nil else { return }
-            print("🔥 [AppDelegate] Phase 2: Deferred aggressive cleanup")
-
-            SharedAssetCache.shared.releaseVideoMemoryButKeepPlayers()
-
-            LocalHTTPServer.shared.resetAllConnectionsImmediately()
-
-            print("🔌 [AppDelegate] Stopping LocalHTTPServer")
-            LocalHTTPServer.shared.stop()
-
-            AppDelegate.didPerformAggressiveCleanup = true
-            print("✅ [AppDelegate] Deferred aggressive cleanup complete")
+        if backgroundCleanupTask == .invalid {
+            backgroundCleanupTask = UIApplication.shared.beginBackgroundTask(withName: "BackgroundMemoryRelease") { [weak self] in
+                print("⚠️ [AppDelegate] Background memory release time expired")
+                self?.endBackgroundCleanupTask()
+            }
         }
-        deferredCleanupWorkItem = cleanupItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: cleanupItem)
 
-        print("✅ [AppDelegate] Phase 1 complete — Phase 2 deferred 3s")
+        // Run on the next main turn so view controllers can prepare the app-switcher snapshot first.
+        DispatchQueue.main.async { [weak self] in
+            guard UIApplication.shared.applicationState == .background else {
+                print("⚡ [AppDelegate] Background memory release skipped; app returned before cleanup")
+                AppDelegate.isVideoInfrastructureReady = true
+                self?.endBackgroundCleanupTask()
+                return
+            }
+
+            print("🔥 [AppDelegate] Performing immediate background memory release")
+            MemoryCapManager.shared.performBackgroundMemoryRelease()
+            AppDelegate.didPerformAggressiveCleanup = true
+
+            print("[AppDelegate] 🚀 Performing IMMEDIATE background message check after cleanup")
+            self?.performImmediateBackgroundCheck()
+
+            self?.endBackgroundCleanupTask()
+            print("✅ [AppDelegate] Background memory release complete")
+        }
+    }
+
+    private func endBackgroundCleanupTask() {
+        if backgroundCleanupTask != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundCleanupTask)
+            backgroundCleanupTask = .invalid
+        }
     }
     
     /// Handle app returning to foreground from background state
@@ -424,12 +423,10 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             return
         }
 
-        // Cancel deferred aggressive cleanup if it hasn't fired yet
-        deferredCleanupWorkItem?.cancel()
-        deferredCleanupWorkItem = nil
+        endBackgroundCleanupTask()
 
-        // FAST PATH: Deferred cleanup didn't run — server & players are intact
-        // Safety: if process was suspended before deferred cleanup could fire AND we were
+        // FAST PATH: background memory release didn't run — server & players are intact
+        // Safety: if process was suspended before cleanup could fire AND we were
         // gone >5 minutes, the NWListener is likely dead. Fall through to slow path.
         if !AppDelegate.didPerformAggressiveCleanup {
             let timeInBackground: Int
@@ -461,8 +458,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 }
                 return
             } else {
-                // Process was frozen before deferred cleanup ran, but >5min elapsed
-                // NWListener likely dead — force aggressive cleanup flag and fall through
+                // Process was frozen before background release ran, but >5min elapsed.
+                // NWListener likely dead; force the slow recovery path.
                 print("⚠️ [AppDelegate] Long suspension (\(timeInBackground)s) without cleanup — forcing slow path")
                 AppDelegate.didPerformAggressiveCleanup = true
             }
@@ -523,7 +520,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                     await self.refreshAppUserIP()
                     print("[AppDelegate] ✅ AppUser IP refresh complete")
 
-                    // Server was stopped by deferred cleanup - restart it
+                    // Server was stopped by background memory release - restart it
                     let wasServerRunning = LocalHTTPServer.shared.isRunning
                     let oldPort = LocalHTTPServer.shared.currentPort
 

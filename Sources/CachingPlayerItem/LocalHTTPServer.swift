@@ -479,7 +479,9 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     @objc private func handleDidEnterBackground() {
         didEnterBackground = true
-        // Keep background task active - we need the server for quick app returns
+        // Once the app is truly backgrounded, AppDelegate performs a deterministic
+        // media cleanup and stops the server. Do not keep our own background task alive.
+        endBackgroundTask()
     }
     
     @objc private func handleDidBecomeActive() {
@@ -689,18 +691,17 @@ public class LocalHTTPServer: @unchecked Sendable {
     
     /// Internal stop that runs on the caller's context (must be called from `queue` or restart)
     private func stopInternal() {
-        if self.listener != nil {
-            self.isStopping = true
-            self.listener?.cancel()
-            self.listener = nil
-            self.isRunning = false
-            self.isStarting = false
-            // Clear media registration so we don't retain metadata when server is stopped
-            mediaLock.lock()
-            mediaCache.removeAll()
-            mediaRealURLs.removeAll()
-            mediaLock.unlock()
-        }
+        self.isStopping = true
+        self.listener?.cancel()
+        self.listener = nil
+        self.isRunning = false
+        self.isStarting = false
+
+        // Clear media registration so we don't retain metadata when server is stopped.
+        mediaLock.lock()
+        mediaCache.removeAll()
+        mediaRealURLs.removeAll()
+        mediaLock.unlock()
     }
 
     public func stop() {
@@ -715,6 +716,14 @@ public class LocalHTTPServer: @unchecked Sendable {
                 self.isStopping = false
             }
         }
+    }
+
+    /// Stop the server during app backgrounding without leaving cleanup queued behind
+    /// suspended media work. Use this only from lifecycle cleanup, not normal playback paths.
+    public func stopImmediatelyForBackground() {
+        stopInternal()
+        NodePoolRegistry.shared.resetAllPools()
+        isStopping = false
     }
     
     /// Reset the connection pool to recover from background suspension

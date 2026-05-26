@@ -2192,7 +2192,7 @@ class SharedAssetCache: ObservableObject {
         // BALANCED THRESHOLDS: Prevent memory growth without being too aggressive
         // - Only trigger cleanup at genuinely high usage levels
         // - Allow normal scrolling without constant cleanup interruptions
-        if memoryUsageMB > 1000 {  // Reasonable threshold - only cleanup when truly needed
+        if memoryUsageMB > 1500 {  // Foreground can use more memory; background releases aggressively
             // Check cooldown to prevent repeated cleanups
             if let lastWarning = lastMemoryWarningTime,
                Date().timeIntervalSince(lastWarning) < memoryWarningCooldown {
@@ -2202,7 +2202,7 @@ class SharedAssetCache: ObservableObject {
 
             lastMemoryWarningTime = Date()
             handleMemoryWarning()
-        } else if memoryUsageMB > 800 {
+        } else if memoryUsageMB > 1200 {
             // Only log when approaching concerning levels, don't trigger cleanup yet
         } else {
             // Log current memory state periodically for visibility
@@ -2230,8 +2230,8 @@ class SharedAssetCache: ObservableObject {
         let memoryUsageMB = memoryUsage / (1024 * 1024)
 
         // iOS sends memory warnings even at very low usage (other apps need memory).
-        // Nothing to reclaim below 500MB — skip entirely to avoid unnecessary work.
-        guard memoryUsageMB > 500 else { return }
+        // Nothing meaningful to reclaim below 900MB; foreground media caches can stay useful.
+        guard memoryUsageMB > 900 else { return }
 
         let cacheSize = playerCache.count
         print("🚨 [SYSTEM MEMORY WARNING] iOS triggered - memory: \(memoryUsageMB)MB, cache: \(cacheSize) players")
@@ -2241,8 +2241,8 @@ class SharedAssetCache: ObservableObject {
             return
         }
 
-        // Only perform aggressive cleanup if memory usage exceeds 1.2GB
-        if memoryUsageMB > 1200 {
+        // Only perform aggressive cleanup if memory usage exceeds 1.5GB
+        if memoryUsageMB > 1500 {
             print("🧹 [SYSTEM MEMORY WARNING] High usage detected, performing aggressive cleanup")
             cancelAllLoadingTasks()
             releasePartialCache(percentage: 60)
@@ -2273,7 +2273,7 @@ class SharedAssetCache: ObservableObject {
         // Logs showed: releasing ALL players (10 total) didn't reduce memory (752MB -> 886MB!)
         // Real culprits: images, video segments, LocalHTTPServer cache
 
-        if memoryUsageMB > 1200 {
+        if memoryUsageMB > 1500 {
             print("🗑️ [MEMORY WARNING] High usage - performing moderate cleanup")
             // Cancel active downloads first (prevents memory growth)
             cancelAllLoadingTasks()
@@ -2417,6 +2417,69 @@ class SharedAssetCache: ObservableObject {
         resourceLoaderDelegates.removeAll()
 
         // Keep playerCache, cacheTimestamps for fast recovery
+    }
+
+    /// Release foreground media memory when the app enters background.
+    /// Disk caches stay intact, but decoded players/assets and active network work are dropped
+    /// so iOS has much less reason to terminate the suspended app.
+    @MainActor func releaseForBackground() {
+        let playerCount = playerCache.count
+        let assetCount = assetCache.count
+
+        var mediaIDsToCancel = Set<String>()
+        mediaIDsToCancel.formUnion(playerCache.keys)
+        mediaIDsToCancel.formUnion(assetCache.keys)
+        mediaIDsToCancel.formUnion(cachingPlayerItems.keys)
+        mediaIDsToCancel.formUnion(loadingTasks.keys)
+        mediaIDsToCancel.formUnion(preloadTasks.keys)
+        mediaIDsToCancel.formUnion(inFlightPlayerCreations.keys)
+        mediaIDsToCancel.formUnion(activeCreationTasks.keys)
+        mediaIDsToCancel.formUnion(visibleVideoMids)
+        mediaIDsToCancel.formUnion(preloadedPlayerMids)
+        mediaIDsToCancel.formUnion(protectedPreloadMids)
+        for ids in tweetUrlMapping.values {
+            mediaIDsToCancel.formUnion(ids)
+        }
+
+        cancelAllLoadingTasks()
+
+        for task in inFlightPlayerCreations.values {
+            task.cancel()
+        }
+        inFlightPlayerCreations.removeAll()
+
+        for task in activeCreationTasks.values {
+            task.cancel()
+        }
+        activeCreationTasks.removeAll()
+
+        for item in cachingPlayerItems.values {
+            item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+            item.asset.cancelLoading()
+        }
+
+        for mediaID in mediaIDsToCancel {
+            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        }
+
+        for player in playerCache.values {
+            releasePlayer(player)
+        }
+
+        playerCache.removeAll()
+        assetCache.removeAll()
+        cacheTimestamps.removeAll()
+        cachingPlayerDelegates.removeAll()
+        cachingPlayerItems.removeAll()
+        resourceLoaderDelegates.removeAll()
+        tweetUrlMapping.removeAll()
+        diskCacheStatus.removeAll()
+
+        visibleVideoMids.removeAll()
+        preloadedPlayerMids.removeAll()
+        protectedPreloadMids.removeAll()
+
+        print("🌙 [SharedAssetCache] Background release: \(playerCount) players, \(assetCount) assets, \(mediaIDsToCancel.count) media downloads")
     }
 
     func clearVideoPlayersForBackgroundRecovery() {

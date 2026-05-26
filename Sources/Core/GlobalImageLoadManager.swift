@@ -60,7 +60,7 @@ class GlobalImageLoadManager: ObservableObject {
     private let maxConcurrentLoads = 4   // Keep image fanout small so visible media gets bandwidth faster
     private let reservedHighPrioritySlots = 2  // Slots reserved for critical/high priority requests
     private let maxQueueSize = 50
-    private let memoryWarningThreshold = 0.45 // 45% of available memory
+    private let memoryWarningThreshold = 0.75 // Foreground cache can use more memory; background clears it
     
     // MARK: - State Management
     private var activeLoads: [String: Task<Void, Never>] = [:]
@@ -92,6 +92,29 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     // MARK: - Public Interface
+
+    /// Release transient image loading state when the app backgrounds.
+    /// Disk cache is preserved; visible images reload from disk/network on foreground as needed.
+    func prepareForBackground() {
+        for task in activeLoads.values {
+            task.cancel()
+        }
+        activeLoads.removeAll()
+
+        pendingRequests.removeAll()
+
+        for workItem in scheduledRetries.values {
+            workItem.cancel()
+        }
+        scheduledRetries.removeAll()
+
+        completedRequests.removeAll()
+        retryCounts.removeAll()
+        permanentlyFailedRequests.removeAll()
+
+        updateStatistics()
+        print("🧹 [GlobalImageLoadManager] Released image loading state for background")
+    }
     
     /// Load an image with priority and concurrency control
     func loadImage(request: ImageLoadRequest) {
@@ -873,8 +896,7 @@ class GlobalImageLoadManager: ObservableObject {
             let availableMemory = ProcessInfo.processInfo.physicalMemory
             let memoryUsageRatio = Double(currentMemoryUsage) / Double(availableMemory)
             let memoryUsageMB = Double(currentMemoryUsage) / (1024.0 * 1024.0)
-            // Reduced from 600MB to 450MB for more aggressive memory management
-            let isHigh = memoryUsageRatio > memoryWarningThreshold || memoryUsageMB > 450.0
+            let isHigh = memoryUsageRatio > memoryWarningThreshold || memoryUsageMB > 1400.0
             
             if isHigh {
                 let percentageString = String(format: "%.1f", memoryUsageRatio * 100)
@@ -1011,13 +1033,13 @@ class GlobalImageLoadManager: ObservableObject {
         let memoryUsage = getCurrentMemoryUsage()
         let memoryUsageMB = memoryUsage / (1024 * 1024)
 
-        // Skip entirely below 500MB — iOS false alarm from other apps
-        guard memoryUsageMB > 500 else { return }
+        // Skip entirely below 900MB; foreground caches are allowed to be useful.
+        guard memoryUsageMB > 900 else { return }
 
         print("🚨 [GlobalImageLoadManager] Memory warning - current usage: \(memoryUsageMB)MB")
 
-        // Only perform aggressive cleanup if memory usage exceeds 1.2GB
-        guard memoryUsageMB > 1200 else { return }
+        // Only perform aggressive cleanup if memory usage exceeds 1.5GB.
+        guard memoryUsageMB > 1500 else { return }
         
         // AGGRESSIVE cleanup on memory warning when usage is high
         print("🧹 [GlobalImageLoadManager] Performing aggressive cleanup")
@@ -1065,7 +1087,7 @@ class GlobalImageLoadManager: ObservableObject {
         // Force garbage collection
         updateStatistics()
         
-        // Aggressively trim cached images on memory warning (was 70%, reduced to 40%)
+        // Trim cached images on high memory pressure, but keep enough warm cache for scrolling.
         ImageCacheManager.shared.releasePartialCache(percentage: 40)
         
         print("✅ [GlobalImageLoadManager] Cleanup complete")

@@ -13,11 +13,11 @@ class MemoryCapManager {
     
     // MARK: - Configuration
     private let maxMemoryLimit: UInt64 = 2 * 1024 * 1024 * 1024 // 2GB in bytes - HARD CAP
-    private let warningThreshold: Double = 0.70 // 70% of limit (start cleanup earlier)
-    private let criticalThreshold: Double = 0.85 // 85% of limit (aggressive cleanup)
-    private let emergencyThreshold: Double = 0.95 // 95% of limit (emergency cleanup)
+    private let warningThreshold: Double = 0.85 // Foreground cleanup starts near 1.7GB
+    private let criticalThreshold: Double = 0.93 // Aggressive cleanup near 1.86GB
+    private let emergencyThreshold: Double = 0.98 // Emergency cleanup just below hard cap
     private let monitoringInterval: TimeInterval = 3.0 // Check every 3 seconds (more frequent)
-    private let duplicateBlockThreshold: Double = 0.60 // 60% of limit - block duplicate fetches
+    private let duplicateBlockThreshold: Double = 0.80 // Foreground can use more memory before throttling
     
     // MARK: - State
     private var monitoringTimer: Timer?
@@ -47,7 +47,7 @@ class MemoryCapManager {
         return memoryUsagePercentage >= duplicateBlockThreshold
     }
     
-    /// Duplicate-request block threshold percentage (e.g., 0.60)
+    /// Duplicate-request block threshold percentage (e.g., 0.80)
     var duplicateBlockThresholdPercentage: Double {
         return duplicateBlockThreshold
     }
@@ -94,14 +94,6 @@ class MemoryCapManager {
             object: nil
         )
         
-        // Listen for app lifecycle events
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleAppDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
-        
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAppWillEnterForeground),
@@ -112,9 +104,9 @@ class MemoryCapManager {
     
     @MainActor
     @objc private func handleMemoryWarning() {
-        // Skip entirely below 500MB — iOS false alarm from other apps
+        // Skip entirely below 900MB — iOS false alarm from other apps
         let memoryUsageMB = currentMemoryUsage / (1024 * 1024)
-        guard memoryUsageMB > 500 else { return }
+        guard memoryUsageMB > 900 else { return }
 
         logger.warning("System memory warning received - \(memoryUsageMB)MB")
 
@@ -124,17 +116,11 @@ class MemoryCapManager {
             return
         }
 
-        // Only cleanup if usage exceeds 1.4GB
-        if memoryUsageMB > 1400 {
-            logger.warning("Memory usage exceeds 1.4GB, performing cleanup")
+        // Foreground cleanup is intentionally late; background releases aggressively.
+        if memoryUsageMB > 1700 {
+            logger.warning("Memory usage exceeds 1.7GB, performing cleanup")
             forceMemoryCleanup()
         }
-    }
-    
-    @MainActor
-    @objc private func handleAppDidEnterBackground() {
-        logger.info("App entered background - performing cleanup")
-        performBackgroundCleanup()
     }
     
     @objc private func handleAppWillEnterForeground() {
@@ -293,33 +279,25 @@ class MemoryCapManager {
     }
     
     @MainActor
-    private func performBackgroundCleanup() {
-        logger.info("Performing background cleanup")
-        
-        // Check current memory usage
-        let percentage = memoryUsagePercentage
-        logger.info("Memory usage at background: \(percentage * 100, privacy: .public)%")
-        
-        // Only perform aggressive cleanup if memory usage is high
-        if percentage >= warningThreshold {
-            logger.info("Memory above warning threshold, performing cleanup")
-            
-            // Clean up video caches
-            SharedAssetCache.shared.releasePartialCache(percentage: 30)
-            
-            // Clean up image caches
-            ImageCacheManager.shared.cleanupOldCache()
-            
-            // Clear tweet cache
-            TweetCacheManager.shared.clearMemoryCache()
-            
-            // Clear chat cache
-            ChatCacheManager.shared.clearMemoryCache()
-        } else {
-            logger.info("Memory usage normal, skipping background cleanup to preserve caches")
-        }
+    func performBackgroundMemoryRelease() {
+        updateMemoryUsage()
+        let beforeMB = currentMemoryUsage / (1024 * 1024)
+        logger.info("Performing background memory release at \(beforeMB, privacy: .public)MB")
+
+        GlobalImageLoadManager.shared.prepareForBackground()
+        SharedAssetCache.shared.releaseForBackground()
+        ImageCacheManager.shared.clearMemoryCache()
+        TweetCacheManager.shared.clearMemoryCache()
+        ChatCacheManager.shared.clearMemoryCache()
+        VideoStateCache.shared.clearAllCache()
+        LocalHTTPServer.shared.resetAllConnectionsImmediately()
+        LocalHTTPServer.shared.stopImmediatelyForBackground()
+
+        updateMemoryUsage()
+        let afterMB = currentMemoryUsage / (1024 * 1024)
+        logger.info("Background memory release requested: \(beforeMB, privacy: .public)MB -> \(afterMB, privacy: .public)MB")
     }
-    
+
     private func formatBytes(_ bytes: UInt64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useGB, .useMB, .useKB]
@@ -376,4 +354,3 @@ extension MemoryCapManager {
         return "\(formatBytes(stats.currentUsage)) / \(formatBytes(stats.limit)) (\(Int(stats.percentage * 100))%)"
     }
 }
-

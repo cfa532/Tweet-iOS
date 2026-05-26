@@ -51,7 +51,7 @@ struct ImageLoadManagerDebugView: View {
             
             Text("• Max concurrent loads: 4")
             Text("• Max queue size: 50")
-            Text("• Memory warning threshold: 45%")
+            Text("• Memory warning threshold: 75% or 1.4GB")
             
             Spacer()
         }
