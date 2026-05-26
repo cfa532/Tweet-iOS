@@ -329,6 +329,8 @@ struct MediaBrowserView: View {
                         
                         // Clean up non-visible images to free memory
                         cleanupNonVisibleImages(attachments: attachments, currentIndex: newIndex, imageStates: $imageStates, baseUrl: baseUrl)
+
+                        loadSelectedVideoIfNeeded(reason: "indexChanged")
                     }
                     
                     // Close button + tweet actions overlay
@@ -389,6 +391,9 @@ struct MediaBrowserView: View {
                 // This allows other videos to continue playing
                 
                 previousIndex = currentIndex
+                DispatchQueue.main.async {
+                    loadSelectedVideoIfNeeded(reason: "contentAppear")
+                }
             }
             .onDisappear {
                 isVisible = false
@@ -417,6 +422,30 @@ struct MediaBrowserView: View {
         
         private func isPDFAttachment(_ attachment: MimeiFileType) -> Bool {
             attachment.type == .pdf
+        }
+
+        private func loadSelectedVideoIfNeeded(reason _: String) {
+            guard isVisible else { return }
+            guard attachments.indices.contains(currentIndex) else { return }
+
+            let attachment = attachments[currentIndex]
+            guard isVideoAttachment(attachment),
+                  let url = attachment.getUrl(baseUrl) else {
+                return
+            }
+
+            // TabView page lifecycle is not deterministic: the selected page's onAppear
+            // can be skipped or delayed when fullscreen is presented over an active feed
+            // player. The container owns the current selection, so it makes the selected
+            // video load explicit; duplicate calls are ignored by FullScreenVideoManager.
+            FullScreenVideoManager.shared.loadVideo(
+                url: url,
+                mid: attachment.mid,
+                tweetId: currentTweet.mid,
+                cellTweetId: currentCellTweetId,
+                videoIndex: currentIndex,
+                mediaType: attachment.type
+            )
         }
         
         private func imageView(for attachment: MimeiFileType, url: URL, index: Int) -> some View {
