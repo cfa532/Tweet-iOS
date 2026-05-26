@@ -64,6 +64,7 @@ class GlobalImageLoadManager: ObservableObject {
     
     // MARK: - State Management
     private var activeLoads: [String: Task<Void, Never>] = [:]
+    private var activeLoadPriorities: [String: ImageLoadingPriority] = [:]
     private var pendingRequests: [ImageLoadRequest] = []
     private var completedRequests: Set<String> = []
     private var retryCounts: [String: Int] = [:] // Track retry attempts per request
@@ -100,6 +101,7 @@ class GlobalImageLoadManager: ObservableObject {
             task.cancel()
         }
         activeLoads.removeAll()
+        activeLoadPriorities.removeAll()
 
         pendingRequests.removeAll()
 
@@ -232,6 +234,7 @@ class GlobalImageLoadManager: ObservableObject {
         // Cancel active load
         activeLoads[id]?.cancel()
         activeLoads.removeValue(forKey: id)
+        activeLoadPriorities.removeValue(forKey: id)
 
         // Cancel any scheduled retry
         if scheduledRetries[id] != nil {
@@ -311,15 +314,14 @@ class GlobalImageLoadManager: ObservableObject {
     
     /// Cancel all loads for a specific priority or lower
     func cancelLoads(priority: ImageLoadingPriority) {
-        let requestsToCancel = activeLoads.filter { request in
-            // Find the request in pending queue to check priority
-            if let pendingRequest = pendingRequests.first(where: { $0.id == request.key }) {
-                return pendingRequest.priority.rawValue <= priority.rawValue
-            }
-            return false
-        }
-        
-        for (id, _) in requestsToCancel {
+        let activeIdsToCancel = activeLoadPriorities
+            .filter { $0.value.rawValue <= priority.rawValue }
+            .map(\.key)
+        let pendingIdsToCancel = pendingRequests
+            .filter { $0.priority.rawValue <= priority.rawValue }
+            .map(\.id)
+
+        for id in Set(activeIdsToCancel + pendingIdsToCancel) {
             cancelLoad(id: id)
         }
     }
@@ -350,6 +352,7 @@ class GlobalImageLoadManager: ObservableObject {
         // Cancel all active loads
         activeLoads.values.forEach { $0.cancel() }
         activeLoads.removeAll()
+        activeLoadPriorities.removeAll()
         print("DEBUG: [GlobalImageLoadManager] Cancelled \(activeLoads.count) active loads")
 
         // Clear all pending requests
@@ -367,6 +370,14 @@ class GlobalImageLoadManager: ObservableObject {
     /// Get current loading statistics
     func getStatistics() -> (active: Int, pending: Int, completed: Int, retries: Int) {
         return (activeLoads.count, pendingRequests.count, completedRequests.count, retryCounts.values.reduce(0, +))
+    }
+
+    /// True when an image is already active, queued, or waiting for retry in the global loader.
+    /// Directional prewarm uses this to avoid starting a second request for visible-cell work.
+    func hasLoad(id: String) -> Bool {
+        activeLoads[id] != nil
+            || pendingRequests.contains { $0.id == id }
+            || scheduledRetries[id] != nil
     }
     
     /// Get current memory usage information
@@ -473,6 +484,7 @@ class GlobalImageLoadManager: ObservableObject {
                     request.completion(cachedImage)
                     self.completedRequests.insert(request.id)
                     self.activeLoads.removeValue(forKey: request.id)
+                    self.activeLoadPriorities.removeValue(forKey: request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
                 }
@@ -508,12 +520,14 @@ class GlobalImageLoadManager: ObservableObject {
                     request.completion(nil)
                 }
                 self.activeLoads.removeValue(forKey: request.id)
+                self.activeLoadPriorities.removeValue(forKey: request.id)
                 self.updateStatistics()
                 self.processNextPendingRequest()
             }
         }
         
         activeLoads[request.id] = task
+        activeLoadPriorities[request.id] = request.priority
         updateStatistics()
     }
     
@@ -626,10 +640,16 @@ class GlobalImageLoadManager: ObservableObject {
                 if let cachedImage = ImageCacheManager.shared.getCompressedImage(for: request.attachment) {
                     await MainActor.run {
                         // Check cancellation again before completing
-                        guard !Task.isCancelled else { return }
+                        guard !Task.isCancelled else {
+                            self.activeLoads.removeValue(forKey: request.id)
+                            self.activeLoadPriorities.removeValue(forKey: request.id)
+                            self.updateStatistics()
+                            return
+                        }
                         request.completion(cachedImage)
                         self.completedRequests.insert(request.id)
                         self.activeLoads.removeValue(forKey: request.id)
+                        self.activeLoadPriorities.removeValue(forKey: request.id)
                         self.updateStatistics()
                         self.processNextPendingRequest()
                     }
@@ -647,6 +667,7 @@ class GlobalImageLoadManager: ObservableObject {
                     guard !Task.isCancelled else {
                         // Clean up if cancelled
                         self.activeLoads.removeValue(forKey: request.id)
+                        self.activeLoadPriorities.removeValue(forKey: request.id)
                         self.updateStatistics()
                         return
                     }
@@ -661,6 +682,7 @@ class GlobalImageLoadManager: ObservableObject {
                         self.handleLoadFailure(request)
                     }
                     self.activeLoads.removeValue(forKey: request.id)
+                    self.activeLoadPriorities.removeValue(forKey: request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
                 }
@@ -670,6 +692,7 @@ class GlobalImageLoadManager: ObservableObject {
                     await MainActor.run {
                         // Clean up cancelled task
                         self.activeLoads.removeValue(forKey: request.id)
+                        self.activeLoadPriorities.removeValue(forKey: request.id)
                         self.updateStatistics()
                     }
                     return
@@ -680,6 +703,7 @@ class GlobalImageLoadManager: ObservableObject {
                     // Only handle failure if not cancelled
                     guard !Task.isCancelled else {
                         self.activeLoads.removeValue(forKey: request.id)
+                        self.activeLoadPriorities.removeValue(forKey: request.id)
                         self.updateStatistics()
                         return
                     }
@@ -697,6 +721,7 @@ class GlobalImageLoadManager: ObservableObject {
 
                     self.handleLoadFailure(request)
                     self.activeLoads.removeValue(forKey: request.id)
+                    self.activeLoadPriorities.removeValue(forKey: request.id)
                     self.updateStatistics()
                     self.processNextPendingRequest()
                 }
@@ -704,6 +729,7 @@ class GlobalImageLoadManager: ObservableObject {
         }
         
         activeLoads[request.id] = task
+        activeLoadPriorities[request.id] = request.priority
         updateStatistics()
     }
     
@@ -927,6 +953,7 @@ class GlobalImageLoadManager: ObservableObject {
             task.cancel()
         }
         activeLoads.removeAll()
+        activeLoadPriorities.removeAll()
 
         // Cancel all scheduled retries
         for workItem in scheduledRetries.values {
@@ -1094,17 +1121,9 @@ class GlobalImageLoadManager: ObservableObject {
     }
     
     private func handleAppBackgrounded() {
-        // Cancel all non-critical requests when app goes to background
-        cancelLoads(priority: .normal)
-        
-        // Cancel all scheduled retries when app goes to background to save memory
-        if !scheduledRetries.isEmpty {
-            print("DEBUG: [GlobalImageLoadManager] App backgrounded, cancelling \(scheduledRetries.count) scheduled retries")
-            for workItem in scheduledRetries.values {
-                workItem.cancel()
-            }
-            scheduledRetries.removeAll()
-        }
+        // Background cleanup should be absolute. Visible cells will reload from
+        // memory/disk/network on foreground; no image request should keep the app alive.
+        prepareForBackground()
     }
     
     private func handleAppForegrounded() {

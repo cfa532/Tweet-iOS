@@ -127,6 +127,11 @@ class TweetTableViewController: UITableViewController {
     
     // Track scroll direction for height caching strategy
     private var isScrollingBackward: Bool = false
+    private var lastDirectionalImagePreloadTime: CFTimeInterval = 0
+    private let directionalImagePreloadThrottleInterval: CFTimeInterval = 0.25
+    private let directionalPreloadRowCount = 4
+    private let maxDirectionalImagePreloadsInFlight = 4
+    private var activeDirectionalImagePreloadTasks: [String: Task<Void, Never>] = [:]
 
     // Scroll state tracking to prevent direction detection jitter during deceleration
     private var isUserDragging: Bool = false
@@ -194,6 +199,7 @@ class TweetTableViewController: UITableViewController {
         noMoreTweetsMessageTimer?.invalidate()
         loadingTimeoutTimer?.invalidate()
         embeddedTweetPrefetchInFlight.removeAll()
+        cancelDirectionalImagePreloads()
 
         // NOTE: Removed .shouldStopAllVideos notification from deinit
         // This was causing issues when navigating back from profile - it would stop
@@ -332,12 +338,18 @@ class TweetTableViewController: UITableViewController {
             // Save the current scroll position before backgrounding
             self.scrollPositionBeforeBackground = self.tableView.contentOffset.y
 
+            // Directional image preloads are useful only while actively scrolling the feed.
+            // AppDelegate/MemoryCapManager clears global media caches on background; cancel
+            // these direct warmup tasks here so they do not keep network work alive.
+            self.cancelDirectionalImagePreloads()
+
             // Show cached thumbnails on visible video cells before AppDelegate releases video memory.
             // This prevents black AVPlayerLayer in the app switcher snapshot.
-            guard !self.isTableViewUpdating else { return }
-            for cell in self.tableView.visibleCells {
-                guard let tweetCell = cell as? TweetTableViewCell else { continue }
-                tweetCell.tweetContentView.showVideoThumbnailsForBackground()
+            if !self.isTableViewUpdating {
+                for cell in self.tableView.visibleCells {
+                    guard let tweetCell = cell as? TweetTableViewCell else { continue }
+                    tweetCell.tweetContentView.showVideoThumbnailsForBackground()
+                }
             }
 
             // End background task after a short delay to allow cleanup to complete
@@ -574,6 +586,7 @@ class TweetTableViewController: UITableViewController {
         // PlayerRemoteXPC -12860 errors that prevent the destination video from playing.
         // Playback is restored by the .feedViewDidAppear handler when the feed becomes visible again.
         videoCoordinator.stopAllVideos()
+        cancelDirectionalImagePreloads()
 
         // Save current scroll position when view disappears (backup to scroll delegate methods)
         saveScrollPositionIfNeeded()
@@ -1669,6 +1682,10 @@ class TweetTableViewController: UITableViewController {
             updateVisibleTweetsForVideoPlayback()
         }
 
+        if isUserDragging || isDecelerating {
+            triggerDirectionalImagePreloadIfNeeded(now: now)
+        }
+
         // Auto-load next page when scrolling near the bottom
         let contentHeight = scrollView.contentSize.height
         let scrollViewHeight = scrollView.frame.size.height
@@ -1790,7 +1807,7 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    /// Compute nearby tweet IDs and trigger preload on scroll stop.
+    /// Warm images in the scroll direction, then keep the existing video preload strategy.
     private func triggerPreloadOnScrollStop() {
         guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
               let firstVisible = visibleIndexPaths.first,
@@ -1799,25 +1816,220 @@ class TweetTableViewController: UITableViewController {
             return
         }
 
+        let preloadRows = directionalPreloadRows(
+            firstVisibleRow: firstVisible.row,
+            lastVisibleRow: lastVisible.row
+        )
+        preloadImagesForRows(preloadRows)
+
+        let nearbyTweetIds = nearbyTweetIdsForVideoPreload(
+            firstVisibleRow: firstVisible.row,
+            lastVisibleRow: lastVisible.row
+        )
+        videoCoordinator.performPreloadOnScrollStop(nearbyTweetIds: nearbyTweetIds)
+    }
+
+    private func triggerDirectionalImagePreloadIfNeeded(now: CFTimeInterval = CACurrentMediaTime()) {
+        guard now - lastDirectionalImagePreloadTime >= directionalImagePreloadThrottleInterval else {
+            return
+        }
+        lastDirectionalImagePreloadTime = now
+
+        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
+              let firstVisible = visibleIndexPaths.first,
+              let lastVisible = visibleIndexPaths.last else { return }
+
+        let preloadRows = directionalPreloadRows(
+            firstVisibleRow: firstVisible.row,
+            lastVisibleRow: lastVisible.row
+        )
+        guard !preloadRows.isEmpty else { return }
+
+        preloadImagesForRows(preloadRows)
+    }
+
+    private func directionalPreloadRows(firstVisibleRow: Int, lastVisibleRow: Int) -> [Int] {
         let totalRows = pinnedTweets.count + tweets.count
+        guard totalRows > 0 else { return [] }
+
+        if isScrollingBackward {
+            let nearestRowAbove = firstVisibleRow - 1
+            guard nearestRowAbove >= 0 else { return [] }
+            let farthestRowAbove = max(0, nearestRowAbove - directionalPreloadRowCount + 1)
+            return Array(stride(from: nearestRowAbove, through: farthestRowAbove, by: -1))
+        } else {
+            let nearestRowBelow = lastVisibleRow + 1
+            guard nearestRowBelow < totalRows else { return [] }
+            let farthestRowBelow = min(totalRows - 1, nearestRowBelow + directionalPreloadRowCount - 1)
+            return Array(nearestRowBelow...farthestRowBelow)
+        }
+    }
+
+    private func nearbyTweetIdsForVideoPreload(firstVisibleRow: Int, lastVisibleRow: Int) -> Set<String> {
+        let totalRows = pinnedTweets.count + tweets.count
+        guard totalRows > 0 else { return [] }
+
         let preloadBuffer = 5
-        let preloadMin = max(0, firstVisible.row - preloadBuffer)
-        let preloadMax = min(totalRows - 1, lastVisible.row + preloadBuffer)
+        let preloadMin = max(0, firstVisibleRow - preloadBuffer)
+        let preloadMax = min(totalRows - 1, lastVisibleRow + preloadBuffer)
 
         var nearbyTweetIds = Set<String>()
         for row in preloadMin...preloadMax {
-            if row >= firstVisible.row && row <= lastVisible.row { continue }
-            if row < pinnedTweets.count {
-                nearbyTweetIds.insert(pinnedTweets[row].mid)
-            } else {
-                let regularIndex = row - pinnedTweets.count
-                if regularIndex < tweets.count {
-                    nearbyTweetIds.insert(tweets[regularIndex].mid)
+            if row >= firstVisibleRow && row <= lastVisibleRow { continue }
+            if let tweet = tweetForRow(row) {
+                nearbyTweetIds.insert(tweet.mid)
+            }
+        }
+        return nearbyTweetIds
+    }
+
+    private func preloadImagesForRows(_ rows: [Int]) {
+        var targetImageIds = Set<String>()
+        var cachedTargetImageIds = Set<String>()
+        var candidates: [(attachment: MimeiFileType, url: URL)] = []
+        var candidateIds = Set<String>()
+        let visibleImageIds = visibleImageAttachmentIds()
+
+        for row in rows {
+            guard let tweet = tweetForRow(row) else { continue }
+            for source in mediaPreloadSources(for: tweet) {
+                let mediaAttachments = source.attachments?
+                    .filter { TweetBodyUIView.isMediaType($0.type) }
+                    .prefix(4) ?? []
+
+                for attachment in mediaAttachments where attachment.type == .image {
+                    targetImageIds.insert(attachment.mid)
+
+                    if ImageCacheManager.shared.getCompressedImageFromMemory(for: attachment) != nil {
+                        cachedTargetImageIds.insert(attachment.mid)
+                        continue
+                    }
+
+                    guard !candidateIds.contains(attachment.mid),
+                          !visibleImageIds.contains(attachment.mid),
+                          !GlobalImageLoadManager.shared.hasLoad(id: attachment.mid),
+                          !BlackList.shared.isBlacklisted(MimeiId(attachment.mid)),
+                          let baseUrl = resolvedMediaBaseUrl(for: source),
+                          let url = attachment.getUrl(baseUrl) else {
+                        continue
+                    }
+
+                    candidateIds.insert(attachment.mid)
+                    candidates.append((attachment, url))
                 }
             }
         }
 
-        videoCoordinator.performPreloadOnScrollStop(nearbyTweetIds: nearbyTweetIds)
+        let activeImageIds = Set(activeDirectionalImagePreloadTasks.keys)
+        let staleImageIds = activeImageIds
+            .subtracting(targetImageIds)
+            .union(activeImageIds.intersection(visibleImageIds))
+            .union(activeImageIds.intersection(cachedTargetImageIds))
+        for imageId in staleImageIds {
+            activeDirectionalImagePreloadTasks[imageId]?.cancel()
+            activeDirectionalImagePreloadTasks.removeValue(forKey: imageId)
+        }
+
+        var availableSlots = max(0, maxDirectionalImagePreloadsInFlight - activeDirectionalImagePreloadTasks.count)
+        guard availableSlots > 0 else { return }
+
+        for candidate in candidates {
+            guard availableSlots > 0 else { break }
+            guard activeDirectionalImagePreloadTasks[candidate.attachment.mid] == nil,
+                  !GlobalImageLoadManager.shared.hasLoad(id: candidate.attachment.mid),
+                  !MemoryCapManager.shared.isAboveDuplicateBlockThreshold else {
+                continue
+            }
+
+            availableSlots -= 1
+            startDirectionalImagePreload(attachment: candidate.attachment, url: candidate.url)
+        }
+    }
+
+    private func startDirectionalImagePreload(attachment: MimeiFileType, url: URL) {
+        let attachmentCopy = attachment
+        let imageId = attachment.mid
+
+        activeDirectionalImagePreloadTasks[imageId] = Task.detached(priority: .utility) { [weak self] in
+            defer {
+                Task { @MainActor [weak self] in
+                    self?.activeDirectionalImagePreloadTasks.removeValue(forKey: imageId)
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+
+            do {
+                try Task.checkCancellation()
+                var request = URLRequest(url: url)
+                request.timeoutInterval = Constants.IMAGE_LOAD_TIMEOUT
+                request.cachePolicy = .returnCacheDataElseLoad
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                try Task.checkCancellation()
+
+                guard !data.isEmpty,
+                      let httpResponse = response as? HTTPURLResponse,
+                      (200...299).contains(httpResponse.statusCode) else {
+                    return
+                }
+
+                _ = ImageCacheManager.shared.cacheImageData(data, for: attachmentCopy)
+            } catch {
+                // Directional preload is opportunistic; visible cells perform their own retry.
+            }
+        }
+    }
+
+    private func cancelDirectionalImagePreloads() {
+        for task in activeDirectionalImagePreloadTasks.values {
+            task.cancel()
+        }
+        activeDirectionalImagePreloadTasks.removeAll()
+    }
+
+    private func visibleImageAttachmentIds() -> Set<String> {
+        guard let visibleIndexPaths = tableView.indexPathsForVisibleRows else { return [] }
+
+        var ids = Set<String>()
+        for indexPath in visibleIndexPaths {
+            guard let tweet = tweetForRow(indexPath.row) else { continue }
+            for source in mediaPreloadSources(for: tweet) {
+                let mediaAttachments = source.attachments?
+                    .filter { TweetBodyUIView.isMediaType($0.type) }
+                    .prefix(4) ?? []
+                for attachment in mediaAttachments where attachment.type == .image {
+                    ids.insert(attachment.mid)
+                }
+            }
+        }
+        return ids
+    }
+
+    private func mediaPreloadSources(for tweet: Tweet) -> [Tweet] {
+        let hasContentText = tweet.content != nil && !(tweet.content?.isEmpty ?? true)
+        let hasAttachments = tweet.attachments != nil && !(tweet.attachments?.isEmpty ?? true)
+        let hasOwnContent = hasContentText || hasAttachments
+
+        if let originalTweetId = tweet.originalTweetId {
+            prefetchEmbeddedTweetIfNeeded(originalTweetId: originalTweetId)
+
+            if !hasOwnContent {
+                return Tweet.getInstance(for: originalTweetId).map { [$0] } ?? []
+            }
+
+            if let embeddedTweet = Tweet.getInstance(for: originalTweetId) {
+                return [tweet, embeddedTweet]
+            }
+        }
+
+        return [tweet]
+    }
+
+    private func resolvedMediaBaseUrl(for tweet: Tweet) -> URL? {
+        tweet.author?.baseUrl
+            ?? HproseInstance.shared.appUser.baseUrl
+            ?? HproseInstance.baseUrl
     }
 
     // MARK: - Scroll Position Persistence
