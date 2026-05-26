@@ -1817,6 +1817,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     @Published var currentVideoMid: String?
     @Published var isPlaying = false
     @Published var isBuffering = false
+    @Published private(set) var isPlaybackRendering = false
 
     // MARK: - Attachment Video Tracking (coordinator-driven autoplay)
     /// Mids of the main tweet's video attachments — coordinator play/pause notifications are
@@ -1842,7 +1843,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     }
 
     private var loadGeneration: Int = 0
-    private var isItemReady = false
+    @Published private(set) var isItemReady = false
     private var itemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
     private var pendingFeedResumeTime: CMTime?
@@ -1929,6 +1930,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         let generation = loadGeneration
         isItemReady = false
         isBuffering = false
+        isPlaybackRendering = false
 
         // Clean up old observers
         itemStatusObserver?.invalidate()
@@ -2037,6 +2039,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     func pause() {
         currentPlayer?.pause()
         isPlaying = false
+        isPlaybackRendering = false
     }
 
     private func startDetailPlayback(playerItem: AVPlayerItem, mid: String) {
@@ -2179,12 +2182,16 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private func setupDetailTimeControlObserver() {
         timeControlStatusObserver?.invalidate()
         guard let player = currentPlayer else { return }
+        isPlaybackRendering = player.timeControlStatus == .playing || player.rate > 0
+        isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && (player.currentItem?.loadedTimeRanges.isEmpty ?? true)
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 let hasBuffer = !(player.currentItem?.loadedTimeRanges.isEmpty ?? true)
                 self.isBuffering = isWaiting && !hasBuffer
+                self.isPlaybackRendering = player.timeControlStatus == .playing || player.rate > 0
             }
         }
     }
@@ -2309,6 +2316,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         timeControlStatusObserver = nil
         isItemReady = false
         isBuffering = false
+        isPlaybackRendering = false
         pendingFeedResumeTime = nil
 
         // Remove legacy KVO observer before clearing (only if it was added)
@@ -2349,6 +2357,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
         currentVideoMid = nil
         isPlaying = false
         isPlayerLoaned = false
+        isPlaybackRendering = false
     }
     
     /// Setup video completion observer

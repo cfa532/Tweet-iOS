@@ -579,6 +579,10 @@ private struct DetailSingletonVideoPlayerView: View {
         manager.currentVideoMid == mid && manager.currentPlayer?.currentItem != nil
     }
 
+    private var isThisVideoRendering: Bool {
+        manager.currentVideoMid == mid && manager.isPlaybackRendering
+    }
+
     /// True when loadVideo has been called for this mid but the item isn't ready yet
     private var isThisVideoLoading: Bool {
         manager.currentVideoMid == mid && manager.currentPlayer?.currentItem == nil
@@ -593,16 +597,16 @@ private struct DetailSingletonVideoPlayerView: View {
                     player: manager.currentPlayer!
                 )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            }
+
+            if !isThisVideoRendering {
                 thumbnailOrBlack
-                if isThisVideoLoading || (manager.isBuffering && manager.currentVideoMid == mid) {
-                    // Loading / buffering — show spinner
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
-                } else {
-                    Color.clear
-                }
+            }
+
+            if isThisVideoLoading || (manager.isBuffering && manager.currentVideoMid == mid) {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(1.5)
             }
         }
     }
@@ -1647,4 +1651,3 @@ struct CommentVideoTrackingWrapper: View {
         }
     }
 }
-

@@ -31,6 +31,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     /// Currently playing video identifier
     @Published private(set) var currentlyPlayingVideoId: String?
+    private var currentlyPlayingVideoInfo: CommentVideoInfo?
 
     // MARK: - Video List for Fullscreen Navigation
 
@@ -47,8 +48,11 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     private var visibilityDebounceTimer: Timer?
     private let debounceInterval: TimeInterval = 0.15
 
-    /// Minimum visibility ratio required to play a video (50%)
-    private let minimumVisibilityRatio: CGFloat = 0.50
+    /// New videos need to be comfortably visible before they take over playback.
+    private let startVisibilityRatio: CGFloat = 0.65
+    /// Keep the current video playing until it is mostly out of view.
+    /// This hysteresis prevents rapid player swaps while the scroll view is settling.
+    private let continueVisibilityRatio: CGFloat = 0.35
 
     /// Track if coordinator is active
     private var isActive: Bool = false
@@ -85,6 +89,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
         // Don't send pause notification - comment videos will naturally stop when their views disappear
         // This avoids any potential interference with feed videos when returning to the tweet list
         currentlyPlayingVideoId = nil
+        currentlyPlayingVideoInfo = nil
         visibleCommentVideos.removeAll()
         allVideos.removeAll()
         isMainTweetVideoVisible = false
@@ -210,10 +215,17 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     private func processVisibilityUpdate() {
         guard isActive else { return }
 
-        // Find the topmost visible video with sufficient visibility
-        // Attachment videos and comment videos compete on equal footing — topmost visible wins
+        if let currentInfo = currentlyPlayingVideoInfo,
+           let currentEntry = visibleCommentVideos[currentInfo.commentId],
+           currentEntry.info == currentInfo,
+           currentEntry.ratio >= continueVisibilityRatio {
+            return
+        }
+
+        // Find the topmost stable video. Attachment videos and comment videos compete
+        // on equal footing, but a new video must be more visible than a continuing one.
         let eligibleVideos = visibleCommentVideos.values
-            .filter { $0.ratio >= minimumVisibilityRatio }
+            .filter { $0.ratio >= startVisibilityRatio }
             .sorted { $0.yPosition < $1.yPosition } // Sort by Y position (topmost first)
 
         guard let topVideo = eligibleVideos.first else {
@@ -236,6 +248,7 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
 
     private func startVideo(_ videoInfo: CommentVideoInfo) {
         currentlyPlayingVideoId = videoInfo.identifier
+        currentlyPlayingVideoInfo = videoInfo
 
         print("▶️ [CommentsVideoCoordinator] Playing video: \(videoInfo.videoMid) in comment \(videoInfo.commentId)")
 
@@ -253,13 +266,8 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     }
 
     private func stopCurrentVideo() {
-        guard let currentVideoId = currentlyPlayingVideoId else { return }
-
-        // Extract videoMid from the identifier
-        let components = currentVideoId.split(separator: "_")
-        guard components.count >= 2 else { return }
-
-        let videoMid = String(components[1])
+        guard let currentVideoInfo = currentlyPlayingVideoInfo else { return }
+        let videoMid = currentVideoInfo.videoMid
 
         print("⏹️ [CommentsVideoCoordinator] Stopping video: \(videoMid)")
 
@@ -270,11 +278,13 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
             object: nil,
             userInfo: [
                 "videoMid": videoMid,
+                "videoId": currentVideoInfo.identifier,
                 "source": "commentsCoordinator"
             ]
         )
 
         currentlyPlayingVideoId = nil
+        currentlyPlayingVideoInfo = nil
     }
 }
 
