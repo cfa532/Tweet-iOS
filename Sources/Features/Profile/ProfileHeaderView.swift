@@ -2,7 +2,7 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct ProfileHeaderView: View {
-    let user: User
+    @ObservedObject var user: User
     let isCurrentUser: Bool
     let isFollowing: Bool
     let onEditTap: () -> Void

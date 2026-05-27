@@ -110,110 +110,120 @@ struct UserRowView: View {
         formatter.dateFormat = "MMMM yyyy"
         return "Since \(formatter.string(from: date))"
     }
+
+    private var hasRenderableUser: Bool {
+        user.name?.realUserLabel != nil ||
+        user.username?.realUserLabel != nil
+    }
+
+    private var displayName: String {
+        user.name?.realUserLabel ??
+        user.username?.realUserLabel ??
+        userId
+    }
+
+    private var usernameText: String? {
+        guard let username = user.username?.realUserLabel else {
+            return nil
+        }
+        return "@\(username)"
+    }
     
     var body: some View {
         VStack(spacing: 0) {
-            if loadFailed {
-                // Don't display anything when load fails
-                EmptyView()
-            } else if isLoading {
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text(NSLocalizedString("Loading user...", comment: "Loading user message"))
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            } else {
-                HStack(alignment: .top, spacing: 4) {
-                    Avatar(user: user, size: 48)
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(user.name ?? "User Name")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                            Text("@\(user.username ?? NSLocalizedString("Noone", comment: "Default username"))")
-                                .font(.subheadline)
+            if !loadFailed {
+                if isLoading && !hasRenderableUser {
+                    loadingPlaceholderRow
+                } else {
+                    HStack(alignment: .top, spacing: 4) {
+                        Avatar(user: user, size: 48)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(displayName)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                if let usernameText {
+                                    Text(usernameText)
+                                        .font(.subheadline)
+                                        .foregroundColor(.gray)
+                                }
+                            }
+                            Text(formatRegistrationDate(user.timestamp))
+                                .font(.caption)
                                 .foregroundColor(.gray)
-                        }
-                        Text(formatRegistrationDate(user.timestamp))
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        if let profile = user.profile, !profile.isEmpty {
-                            Group {
-                                if showFullProfile {
-                                    Text(profile)
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                        .lineLimit(nil)
-                                    Button(NSLocalizedString("Show less", comment: "Show less button")) {
-                                        showFullProfile = false
-                                    }
-                                    .font(.caption)
-                                    .foregroundColor(.themeAccent)
-                                    .buttonStyle(.plain)
-                                } else {
-                                    Text(profile)
-                                        .font(.body)
-                                        .foregroundColor(.primary)
-                                        .lineLimit(3)
-                                        .truncationMode(.tail)
-                                    if profile.count > 200 {
-                                        Button(NSLocalizedString("...", comment: "More options button")) {
-                                            showFullProfile = true
+                            if let profile = user.profile, !profile.isEmpty {
+                                Group {
+                                    if showFullProfile {
+                                        Text(profile)
+                                            .font(.body)
+                                            .foregroundColor(.primary)
+                                            .lineLimit(nil)
+                                        Button(NSLocalizedString("Show less", comment: "Show less button")) {
+                                            showFullProfile = false
                                         }
                                         .font(.caption)
                                         .foregroundColor(.themeAccent)
                                         .buttonStyle(.plain)
+                                    } else {
+                                        Text(profile)
+                                            .font(.body)
+                                            .foregroundColor(.primary)
+                                            .lineLimit(3)
+                                            .truncationMode(.tail)
+                                        if profile.count > 200 {
+                                            Button(NSLocalizedString("...", comment: "More options button")) {
+                                                showFullProfile = true
+                                            }
+                                            .font(.caption)
+                                            .foregroundColor(.themeAccent)
+                                            .buttonStyle(.plain)
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    Spacer()
-                    // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
-                    if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest, userId != hproseInstance.appUser.mid {
-                        DebounceButton(
-                            cooldownDuration: 0.5,
-                            enableHaptic: false
-                        ) {
-                            guard !isToggling else { return }
-                            isToggling = true
-                            isFollowing.toggle()
-                            Task {
-                                await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
-                                await MainActor.run { isToggling = false }
+                        Spacer()
+                        // Only show follow/unfollow button if app user is not a guest and onFollowToggle is provided
+                        if let onFollowToggle = onFollowToggle, !hproseInstance.appUser.isGuest, userId != hproseInstance.appUser.mid {
+                            DebounceButton(
+                                cooldownDuration: 0.5,
+                                enableHaptic: false
+                            ) {
+                                guard !isToggling else { return }
+                                isToggling = true
+                                isFollowing.toggle()
+                                Task {
+                                    await handleToggleFollowing(for: user, onFollowToggle: onFollowToggle)
+                                    await MainActor.run { isToggling = false }
+                                }
+                            } label: {
+                                Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 20)
+                                            .stroke(isFollowing ? Color.red : Color.blue, lineWidth: 1)
+                                    )
+                                    .foregroundColor(isFollowing ? .red : .blue)
                             }
-                        } label: {
-                            Text(isFollowing ? NSLocalizedString("Unfollow", comment: "Unfollow button") : NSLocalizedString("Follow", comment: "Follow button"))
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 20)
-                                        .stroke(isFollowing ? Color.red : Color.blue, lineWidth: 1)
-                                )
-                                .foregroundColor(isFollowing ? .red : .blue)
+                            .disabled(isToggling)
+                            .opacity(isToggling ? 0.6 : 1.0)
                         }
-                        .disabled(isToggling)
-                        .opacity(isToggling ? 0.6 : 1.0)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onTap?(user)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    onTap?(user)
-                }
+
+                Divider()
+                    .padding(.horizontal, 8)
             }
-            
-            Divider()
-                .padding(.horizontal, 8)
         }
         .overlay(
             VStack {
@@ -342,8 +352,7 @@ struct UserRowView: View {
                 }
 
                 let cachedUser = await TweetCacheManager.shared.fetchUser(mid: userId)
-                let cachedUsername = cachedUser.username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if !cachedUsername.isEmpty {
+                if hasRenderableIdentity(cachedUser) {
                     await MainActor.run {
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
                         self.isFollowing = (hproseInstance.appUser.followingList)?.contains(userId) ?? false
@@ -370,13 +379,11 @@ struct UserRowView: View {
                 
                 // The user singleton will be automatically updated by fetchUser's background task
                 // @ObservedObject will cause view to refresh when singleton's @Published properties change
-                let sanitizedUsername = fetchedUser?.username?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                
-                // Only remove user row if fetchUser failed after retries (returns skeleton with no username)
-                // Otherwise keep showing spinner until valid user is loaded
-                if let fetchedUser = fetchedUser, !sanitizedUsername.isEmpty {
+                // Only remove the row when fetchUser gives us no usable user object.
+                // A successful load must include a real name or username.
+                if let fetchedUser = fetchedUser, hasRenderableIdentity(fetchedUser) {
                     // Valid user loaded - hide spinner and show user
-                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid), username: \(sanitizedUsername)")
+                    print("DEBUG: [UserRowView] Fetched user: \(fetchedUser.mid)")
                     await MainActor.run {
                         // Check if task was cancelled before updating UI
                         guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
@@ -384,31 +391,75 @@ struct UserRowView: View {
                         self.isLoading = false
                     }
                 } else {
-                    // fetchUser returned skeleton (no username) after all retries failed
-                    // Remove the user row to indicate failure
-                    print("⚠️ [UserRowView] fetchUser failed after retries for ID: \(userId) - removing row")
-                    await MainActor.run {
-                        guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                        self.loadFailed = true
-                        self.isLoading = false
-                        self.onLoadFailed?(userId)
-                    }
+                    await hideAndBlacklistUser(
+                        taskCancellationToken: taskCancellationToken,
+                        reason: "fetchUser returned no usable user object"
+                    )
                 }
             } catch is CancellationError {
                 print("DEBUG: [UserRowView] Loading cancelled for user \(userId)")
             } catch {
-                // fetchUser threw error after all retries failed
-                // Remove the user row to indicate failure
                 print("DEBUG: [UserRowView] Error loading user \(userId) after retries: \(error)")
-                await MainActor.run {
-                    // Check if task was cancelled before updating UI
-                    guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
-                    self.loadFailed = true
-                    self.isLoading = false
-                    // Notify parent that this user failed to load after retries
-                    self.onLoadFailed?(userId)
-                }
+                await hideAndBlacklistUser(
+                    taskCancellationToken: taskCancellationToken,
+                    reason: "fetchUser threw after retries"
+                )
             }
         }
+    }
+
+    private func hasRenderableIdentity(_ candidate: User?) -> Bool {
+        guard let candidate else { return false }
+        return candidate.name?.realUserLabel != nil ||
+        candidate.username?.realUserLabel != nil
+    }
+
+    private func hideAndBlacklistUser(taskCancellationToken: UUID, reason: String) async {
+        print("⚠️ [UserRowView] \(reason) for ID: \(userId) - blacklisting candidate and hiding row")
+        BlackList.shared.recordFailure(userId)
+
+        await MainActor.run {
+            guard !Task.isCancelled && taskCancellationToken == currentCancellationToken else { return }
+            self.loadFailed = true
+            self.isLoading = false
+            self.onLoadFailed?(userId)
+        }
+    }
+
+    private var loadingPlaceholderRow: some View {
+        HStack(alignment: .top, spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(Color.gray.opacity(0.18))
+                ProgressView()
+                    .scaleEffect(0.7)
+            }
+            .frame(width: 48, height: 48)
+
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.gray.opacity(0.18))
+                    .frame(width: 132, height: 14)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.gray.opacity(0.12))
+                    .frame(width: 88, height: 12)
+            }
+            .padding(.top, 3)
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+}
+
+private extension String {
+    var realUserLabel: String? {
+        let label = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty,
+              label.range(of: "loading", options: [.caseInsensitive, .anchored]) == nil else {
+            return nil
+        }
+        return label
     }
 }

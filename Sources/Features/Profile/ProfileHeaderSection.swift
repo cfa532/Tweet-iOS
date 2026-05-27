@@ -2,7 +2,7 @@ import SwiftUI
 
 @available(iOS 16.0, *)
 struct ProfileHeaderSection: View {
-    let user: User
+    @ObservedObject var user: User
     let isCurrentUser: Bool
     let isFollowing: Bool
     let onEditTap: () -> Void
@@ -20,4 +20,4 @@ struct ProfileHeaderSection: View {
         )
         .transition(.move(edge: .top).combined(with: .opacity))
     }
-} 
+}

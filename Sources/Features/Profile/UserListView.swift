@@ -238,6 +238,7 @@ struct UserListView: View {
             guard !userId.isEmpty,
                   userId != Constants.GUEST_ID,
                   !sociallyBlockedUserIds.contains(userId),
+                  !BlackList.shared.isBlacklisted(userId),
                   !seenUserIds.contains(userId) else { return nil }
             seenUserIds.insert(userId)
             return userId

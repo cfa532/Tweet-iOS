@@ -107,6 +107,17 @@ struct Avatar: View {
             loadFailed = false
             loadAvatar(from: avatarUrl)
         }
+        .onChange(of: user.avatarUrl) { _, avatarUrl in
+            guard let avatarUrl else { return }
+            // Profile headers may first render with a placeholder/no route. Once
+            // fetchUser fills avatar/baseUrl, restart the avatar load for that URL.
+            loadTask?.cancel()
+            loadTask = nil
+            cachedImage = nil
+            isLoading = false
+            loadFailed = false
+            loadAvatar(from: avatarUrl)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .appUserReady)) { _ in
             // When app user is ready (baseUrl resolved), reload avatar if it wasn't loaded before
             guard user.mid == HproseInstance.shared.appUser.mid,
@@ -121,12 +132,16 @@ struct Avatar: View {
         .onReceive(NotificationCenter.default.publisher(for: .imageCached)) { notification in
             // When an image is cached, check if it's this avatar and reload from memory cache
             guard let avatarId = notification.userInfo?["avatarId"] as? String,
-                  avatarId == user.avatar,
-                  cachedImage == nil,
-                  !isLoading else { return }
+                  let avatar = user.avatar,
+                  avatarId == "avatar_\(avatar)" || avatarId == avatar,
+                  cachedImage == nil else { return }
+
+            loadTask?.cancel()
+            loadTask = nil
+            isLoading = false
 
             // Image is now cached, try loading from memory (should be instant)
-            let avatarAttachment = MimeiFileType(mid: "avatar_\(user.avatar ?? "")", mediaType: .image)
+            let avatarAttachment = MimeiFileType(mid: "avatar_\(avatar)", mediaType: .image)
 
             if let cached = ImageCacheManager.shared.getCompressedImageFromMemory(for: avatarAttachment) {
                 cachedImage = cached
