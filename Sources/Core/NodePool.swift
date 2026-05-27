@@ -36,7 +36,10 @@ class NodePool {
         /// Get the preferred IP (prefer IPv4 over IPv6)
         func getPreferredIP() -> String? {
             // Prefer IPv4 over IPv6 for better compatibility
-            return ips.first(where: { !$0.contains("[") && !$0.contains(":") }) ?? ips.first
+            return ips.first { ip in
+                let normalized = Self.normalizeIP(ip)
+                return !normalized.hasPrefix("[") && normalized.filter { $0 == ":" }.count <= 1
+            } ?? ips.first
         }
         
         /// Normalize IP by removing http:// prefix and trailing slashes
@@ -250,4 +253,3 @@ class NodePool {
         }
     }
 }
-

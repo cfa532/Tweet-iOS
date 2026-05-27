@@ -11,6 +11,7 @@ import ffmpegkit
 // MARK: - IP Cache Entry
 private struct IPCacheEntry {
     let ip: String
+    let isHealthy: Bool
     let timestamp: Date
     
     var isExpired: Bool {
@@ -26,7 +27,7 @@ final class HproseInstance: ObservableObject {
     static var baseUrl: URL = URL(string: AppConfig.baseUrl)!
     private var _domainToShare: String = AppConfig.baseUrl
     
-    // IP Cache: Stores validated IPs with 30-second expiry
+    // IP Cache: Stores short-lived HEAD health results with 30-second expiry
     private var ipCache: [String: IPCacheEntry] = [:]
     private let ipCacheLock = NSLock()
     
@@ -1709,7 +1710,8 @@ final class HproseInstance: ObservableObject {
                     "aid": appId,
                     "ver": "last",
                     "version": "v3",
-                    "userid": user.mid
+                    "userid": user.mid,
+                    "v4only": v4Only ? "true" : "false"
                 ]
                 
                 guard let hproseClient = user.hproseClient else {
@@ -2002,8 +2004,8 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [_getProviderIP][RAW] mid=\(mid), filteredPublicIPs=\(providerIPDebugDescription(ipAddresses))")
             print("DEBUG: [_getProviderIP] Retrieved \(ipAddresses.count) IP address(es) from get_provider_ips API")
             
-            // Test IPs in batches of 4 for faster discovery during high load
-            let batchSize = 4
+            // Test IPs two at a time to match Android and avoid stampeding weak nodes.
+            let batchSize = 2
             for batchStart in stride(from: 0, to: ipAddresses.count, by: batchSize) {
                 let batchEnd = min(batchStart + batchSize, ipAddresses.count)
                 let batch = Array(ipAddresses[batchStart..<batchEnd])
@@ -2078,32 +2080,34 @@ final class HproseInstance: ObservableObject {
     
     // MARK: - IP Cache Methods
     
-    /// Check if an IP is in the cache and still valid
-    private func getCachedIP(_ ip: String) -> Bool {
+    /// Check if an IP health result is in the cache and still valid.
+    private func getCachedIPHealth(_ ip: String) -> Bool? {
         ipCacheLock.lock()
         defer { ipCacheLock.unlock() }
         let key = normalizeHostPort(ip)
         
         if let entry = ipCache[key] {
             if !entry.isExpired {
-                print("DEBUG: [IPCache] Cache HIT for IP: \(key) (age: \(Int(Date().timeIntervalSince(entry.timestamp)))s)")
-                return true
+                let state = entry.isHealthy ? "healthy" : "unhealthy"
+                print("DEBUG: [IPCache] Cache HIT for IP: \(key) = \(state) (age: \(Int(Date().timeIntervalSince(entry.timestamp)))s)")
+                return entry.isHealthy
             } else {
                 print("DEBUG: [IPCache] Cache EXPIRED for IP: \(key)")
                 ipCache.removeValue(forKey: key)
             }
         }
-        return false
+        return nil
     }
     
-    /// Cache a validated IP
-    private func cacheIP(_ ip: String) {
+    /// Cache a HEAD health result.
+    private func cacheIP(_ ip: String, isHealthy: Bool) {
         ipCacheLock.lock()
         defer { ipCacheLock.unlock() }
         let key = normalizeHostPort(ip)
         
-        ipCache[key] = IPCacheEntry(ip: key, timestamp: Date())
-        print("DEBUG: [IPCache] Cached IP: \(key)")
+        ipCache[key] = IPCacheEntry(ip: key, isHealthy: isHealthy, timestamp: Date())
+        let state = isHealthy ? "healthy" : "unhealthy"
+        print("DEBUG: [IPCache] Cached IP: \(key) = \(state)")
     }
     
     /// Clear expired entries from cache
@@ -2150,9 +2154,14 @@ final class HproseInstance: ObservableObject {
     /// (refused, timeout, cancelled) means it is not.
     /// The timeout is passed directly to URLRequest so there is no extra Task layer.
     private func isServerHealthy(_ ip: String, timeout: TimeInterval = 5.0, useCache: Bool = true) async -> Bool {
-        if useCache && getCachedIP(ip) { return true }
+        if useCache, let cachedHealth = getCachedIPHealth(ip) {
+            return cachedHealth
+        }
 
-        guard let url = URL(string: "http://\(ip)/") else { return false }
+        guard let url = URL(string: "http://\(ip)/") else {
+            cacheIP(ip, isHealthy: false)
+            return false
+        }
 
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = "HEAD"
@@ -2161,13 +2170,14 @@ final class HproseInstance: ObservableObject {
         do {
             _ = try await URLSession.shared.data(for: request)
             // Any response (any status code) means the server is reachable.
-            cacheIP(ip)
+            cacheIP(ip, isHealthy: true)
             print("DEBUG: [isServerHealthy] ✅ \(ip) reachable")
             return true
         } catch {
             let nsError = error as NSError
             if nsError.code != NSURLErrorCancelled {
                 print("DEBUG: [isServerHealthy] ❌ \(ip): \(nsError.domain) \(nsError.code)")
+                cacheIP(ip, isHealthy: false)
             }
             return false
         }
