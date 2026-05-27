@@ -173,6 +173,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Last time AVPlayer confirmed playing (timeControlStatus == .playing).
     /// Used by stall-check to distinguish HLS buffer gaps from genuine stalls.
     private var lastActualPlaybackDate: Date = .distantPast
+    /// True after the current AVPlayerLayer has rendered a frame for this player.
+    /// This lets visible non-primary videos stop their spinner once they have
+    /// something real to show, even if frame capture did not produce a poster.
+    private var hasRenderedFrameForCurrentPlayer: Bool = false
     /// Last time this cell asked AVPlayer to play. This is intent only; it is
     /// intentionally separate from lastActualPlaybackDate.
     private var lastPlaybackRequestDate: Date = .distantPast
@@ -347,13 +351,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             videoPlayerView.isHidden = hasThumbnail
             // Primary videos always show loading chrome. Visible non-primary videos
             // also show it until their cover frame arrives; off-screen preloads stay quiet.
-            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: hasThumbnail) {
+            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner() {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
             }
         case .playerReady:
             let hasThumbnail = imageView.image != nil
+            let hasDisplayableCover = hasVideoCoverForSpinner
             // Always keep thumbnail visible as cover — prevents black flash during buffering.
             // Thumbnail is hidden only when smooth playback begins (timeControlStatus KVO).
             imageView.isHidden = !hasThumbnail
@@ -367,7 +372,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // With streaming, the first frame can render before playback can continue.
             // Keep primary feedback on, and keep visible non-primary feedback on until
             // a cover frame exists. Off-screen preloads should not show spinner chrome.
-            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: hasThumbnail) {
+            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: hasDisplayableCover) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -409,8 +414,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
-    private func shouldShowVisibleVideoCoverSpinner(hasCover: Bool) -> Bool {
-        isVisible && isVideoAttachment && shouldLoadVideo && !hasCover
+    private var hasVideoCoverForSpinner: Bool {
+        imageView.image != nil || hasRenderedFrameForCurrentPlayer
+    }
+
+    private func shouldShowVisibleVideoCoverSpinner(hasCover: Bool? = nil) -> Bool {
+        isVisible && isVideoAttachment && shouldLoadVideo && !(hasCover ?? hasVideoCoverForSpinner)
     }
 
     // MARK: - Configure
@@ -693,7 +702,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         switch videoCellState {
         case .noContent:
             transitionTo(.thumbnail)
-        case .playerLoading, .playerReady:
+        case .thumbnail, .playerLoading, .playerReady, .paused:
             // Re-evaluate visibility now that the poster exists. For non-primary
             // preload cells this hides the black layer and stops the spinner.
             transitionTo(videoCellState)
@@ -872,6 +881,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if isVisible {
             newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         }
+        hasRenderedFrameForCurrentPlayer = false
         removePlayerObservers()
         self.player = newPlayer
         // Notify other feed cells that may hold the same player (tweet + retweet case)
@@ -896,6 +906,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func registerFirstFrameCallback(_ newPlayer: AVPlayer) {
         videoPlayerView.onReadyForDisplay = { [weak self] in
             guard let self else { return }
+            self.hasRenderedFrameForCurrentPlayer = true
             // Defer capture by one run-loop cycle: isReadyForDisplay fires before
             // the GPU composites the frame into the layer's backing store.
             if self.imageView.image == nil {
@@ -1304,19 +1315,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 saveCurrentPosition(player: player, wasPlaying: true)
             }
             captureLastFrameIfPossible(reason: "coordinatorPause")
-            if videoCellState == .playing && !isHandlingFinishEvent {
-                transitionTo(.paused)
-            } else if videoCellState == .playerReady || videoCellState == .playerLoading {
-                // Re-evaluate spinner: coordinatorWantsToPlay is now false,
-                // so transitionTo will stop the spinner for non-primary cells.
-                transitionTo(videoCellState)
-            }
+            refreshVisualStateAfterCoordinatorStopped()
             // Volume fade-out then pause
             UIView.animate(withDuration: 0.2, animations: {
                 player.volume = 0
             }, completion: { _ in
                 player.pause()
             })
+        } else {
+            refreshVisualStateAfterCoordinatorStopped()
         }
         VideoStateCache.shared.markAsStoppedByCoordinator(mid)
     }
@@ -1362,8 +1369,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 transitionTo(.playerReady)
                 player.pause()
             } else {
+                refreshVisualStateAfterCoordinatorStopped()
                 player.pause()
             }
+        } else {
+            refreshVisualStateAfterCoordinatorStopped()
         }
         VideoStateCache.shared.markAsStoppedByCoordinator(mid)
     }
@@ -1384,6 +1394,22 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
             player.pause()
             player.isMuted = MuteState.shared.isMuted
+        }
+    }
+
+    /// Re-evaluate chrome after this cell is no longer the autoplay primary.
+    /// Visible non-primary videos may keep loading to produce a cover, but once
+    /// a poster/frame exists their spinner must stop even if playback is paused.
+    private func refreshVisualStateAfterCoordinatorStopped() {
+        switch videoCellState {
+        case .playing:
+            if !isHandlingFinishEvent {
+                transitionTo(.paused)
+            }
+        case .noContent, .thumbnail, .playerLoading, .playerReady, .paused:
+            transitionTo(videoCellState)
+        case .failed:
+            break
         }
     }
 
@@ -1781,6 +1807,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                             // Set fresh callback for thumbnail capture (original may have been consumed).
                             self.videoPlayerView.onReadyForDisplay = { [weak self] in
                                 guard let self, self.imageView.image == nil else { return }
+                                self.hasRenderedFrameForCurrentPlayer = true
                                 self.preserveFrameToCache()
                                 if self.videoCellState == .playerReady || self.videoCellState == .playerLoading {
                                     self.transitionTo(self.videoCellState)
@@ -2512,6 +2539,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // This ensures the thumbnail stays as cover until the layer actually
         // renders a frame after foreground return.
         videoPlayerView.setPlayer(nil)
+        hasRenderedFrameForCurrentPlayer = false
         transitionTo(.thumbnail)
     }
 
@@ -2535,6 +2563,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Transition to playerReady when the layer renders its first frame
         videoPlayerView.onReadyForDisplay = { [weak self] in
             guard let self else { return }
+            self.hasRenderedFrameForCurrentPlayer = true
             if self.videoCellState == .playerLoading {
                 self.transitionTo(.playerReady)
             }
@@ -2542,6 +2571,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // Re-attach player to force layer re-initialization
         videoPlayerView.setPlayer(nil)
+        hasRenderedFrameForCurrentPlayer = false
         videoPlayerView.setPlayer(player)
         let t = player.currentTime()
         let target = (t.isValid && !t.seconds.isNaN) ? t : .zero
@@ -2664,6 +2694,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         removePlayerTimeObserver()
 
         videoPlayerView.setPlayer(nil)
+        hasRenderedFrameForCurrentPlayer = false
         videoPlayerView.isHidden = true
         videoPlayerView.gestureRecognizers?.forEach { videoPlayerView.removeGestureRecognizer($0) }
         imageView.gestureRecognizers?.forEach { imageView.removeGestureRecognizer($0) }
@@ -2678,6 +2709,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
         lastActualPlaybackDate = .distantPast
+        hasRenderedFrameForCurrentPlayer = false
         lastPlaybackRequestDate = .distantPast
         lastPlaybackNudgeDate = .distantPast
         lastLoggedTimeControlStatus = nil
