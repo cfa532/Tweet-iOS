@@ -643,7 +643,7 @@ final class HproseInstance: ObservableObject {
 
             do {
                 // Try fetching user data with cached baseUrl (don't force re-resolution)
-                let user = try await fetchUser(appUser.mid, baseUrl: cachedHost)
+                let user = try await fetchUser(appUser.mid, baseUrl: cachedBaseUrl.absoluteString)
                 if let user = user {
                     print("✅ [INIT] Cached baseUrl is valid - skipping findEntryIP()")
                     fetchedUser = user  // Save for later use
@@ -1403,14 +1403,15 @@ final class HproseInstance: ObservableObject {
     /// Fetches user data with caching, blacklist checking, and concurrent update management
     /// - Parameters:
     ///   - userId: The user ID to fetch
-    ///   - baseUrl: Initial baseUrl (use "" to force IP resolution and bypass cache)
+    ///   - baseUrl: Explicit route for this user. Pass nil to use this user's
+    ///     cached route/NodePool/provider lookup, or "" to force provider lookup.
     ///   - maxRetries: Maximum number of retry attempts (default: 2)
     ///   - forceRefresh: If true, bypasses cache and fetches fresh data
     ///   - skipRetryAndBlacklist: If true, skips retry logic and blacklist management (for internal use)
     /// - Returns: User object, or nil for non-network terminal states such as guest/blacklisted users
     func fetchUser(
         _ userId: String,
-        baseUrl: String = shared.appUser.baseUrl?.absoluteString ?? "",
+        baseUrl: String? = nil,
         maxRetries: Int = 2,
         forceRefresh: Bool = false,
         skipRetryAndBlacklist: Bool = false,
@@ -1424,7 +1425,8 @@ final class HproseInstance: ObservableObject {
             return nil
         }
         
-        var forceFreshIPResolution = baseUrl.isEmpty
+        let explicitBaseUrl = baseUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var forceFreshIPResolution = explicitBaseUrl == ""
 
         // Check if this user has been blacklisted due to repeated failures
         // Skip this check if we're in internal retry logic to prevent double-checking
@@ -1442,14 +1444,15 @@ final class HproseInstance: ObservableObject {
             if cachedUser.username != nil && cachedUser.baseUrl != nil {
                 let hasExpired = await cachedUser.hasExpired()
                 
-                // Return cached user if it's still valid and we have a baseUrl
-                if !hasExpired && !baseUrl.isEmpty {
+                // Return cached user if it's still valid and the caller did
+                // not explicitly ask us to re-resolve the provider route.
+                if !hasExpired && !forceFreshIPResolution {
                     return cachedUser
                 } else if hasExpired {
                     // User data has expired
                     // If baseUrl is empty (forcing fresh IP resolution), don't return stale data
                     // This is critical during login to ensure we get a healthy IP
-                    if baseUrl.isEmpty {
+                    if forceFreshIPResolution {
                         print("DEBUG: [fetchUser] Cache expired and baseUrl empty (forcing IP resolution), fetching fresh data")
                         forceFreshIPResolution = true
                         // Fall through to fetch fresh data with IP resolution below
@@ -1504,7 +1507,7 @@ final class HproseInstance: ObservableObject {
         // If another fetch is in progress, wait for its result instead of
         // launching a duplicate request.
         if !shouldProceed {
-            return try await waitForConcurrentUpdate(userId, baseUrl: baseUrl, forceRefresh: forceRefresh)
+            return try await waitForConcurrentUpdate(userId, baseUrl: explicitBaseUrl, forceRefresh: forceRefresh)
         }
         
         // Ensure we always remove this user from the ongoing updates set when we're done
@@ -1519,12 +1522,14 @@ final class HproseInstance: ObservableObject {
             // Get or create a User instance for this userId
             let user = User.getInstance(mid: userId)
             
-            // Apply the provided baseUrl to the user object if not empty
-            // If baseUrl is empty, performUserUpdate will handle IP resolution via resolveAndUpdateBaseUrl
-            if !baseUrl.isEmpty {
-                if let url = URL(string: baseUrl) {
-                    await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser initial setup")
+            // Only apply an explicitly supplied route. A missing baseUrl must
+            // never fall back to appUser.baseUrl because users may live on
+            // different nodes in the distributed network.
+            if let explicitBaseUrl, !explicitBaseUrl.isEmpty {
+                guard let url = URL(string: ensureHttpPrefix(explicitBaseUrl)) else {
+                    throw HproseError.userNotFound(userId: userId, reason: "Invalid explicit baseUrl: \(explicitBaseUrl)")
                 }
+                await applyBaseUrlIfNeeded(user, url: url, reason: "fetchUser explicit route")
             }
             
             // Perform the actual user data fetch with retry logic and error handling
@@ -1560,11 +1565,11 @@ final class HproseInstance: ObservableObject {
     
     /// Waits for a concurrent update to complete. If it appears stuck, surface
     /// an error instead of returning stale cached data.
-    private func waitForConcurrentUpdate(_ userId: String, baseUrl: String, forceRefresh: Bool) async throws -> User? {
+    private func waitForConcurrentUpdate(_ userId: String, baseUrl: String?, forceRefresh: Bool) async throws -> User? {
         // A provider lookup can spend the full health-check timeout on a bad IP.
         // Give the owner task enough room to finish so waiters do not start
         // reporting false failures while the lookup is still legitimately running.
-        let timeoutNs: UInt64 = (forceRefresh || baseUrl.isEmpty) ? 15_000_000_000 : 6_000_000_000
+        let timeoutNs: UInt64 = (forceRefresh || baseUrl == "") ? 15_000_000_000 : 6_000_000_000
         let pollIntervalNs: UInt64 = 200_000_000
         var waitedNs: UInt64 = 0
 

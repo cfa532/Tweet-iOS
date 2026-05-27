@@ -49,6 +49,7 @@ class TweetTableViewController: UITableViewController {
     private let minimumSpinnerDisplayTime: TimeInterval = 0.5  // 500ms minimum
     private var loadingTimeoutTimer: Timer?
     private let maximumLoadingTime: TimeInterval = 10.0  // 10 second timeout
+    private var needsFooterUpdate = false
     
     // No more tweets message state
     private var isShowingNoMoreTweetsMessage: Bool = false
@@ -305,7 +306,7 @@ class TweetTableViewController: UITableViewController {
             NotificationCenter.default.post(name: .shouldStopAllVideos, object: nil)
 
             // Force reload visible cells to reclaim memory
-            if let self, let visibleIndexPaths = self.tableView.indexPathsForVisibleRows {
+            if let self, self.tableView.window != nil, let visibleIndexPaths = self.tableView.indexPathsForVisibleRows {
                 self.isTableViewUpdating = true
                 self.tableView.reloadRows(at: visibleIndexPaths, with: .none)
                 self.isTableViewUpdating = false
@@ -558,6 +559,11 @@ class TweetTableViewController: UITableViewController {
 
         // NOTE: Video playback restart is handled by .feedViewDidAppear notification
         // (see setupFeedViewDidAppearObserver) which re-evaluates visibility to resume playback
+
+        if needsFooterUpdate {
+            needsFooterUpdate = false
+            updateLoadingState(isLoadingMore: isLoadingMore, hasMoreTweets: hasMoreTweets)
+        }
 
         // Ensure video visibility is evaluated after initial layout completes.
         // registerDelegate kicks playback but onScreenMediaCells may be empty if
@@ -1052,6 +1058,17 @@ class TweetTableViewController: UITableViewController {
         if stateChanged {
         }
 
+        guard tableView.window != nil else {
+            // SwiftUI can deliver loading state before the UIKit table is attached.
+            // Mutating tableFooterView while detached forces UIKit to lay out
+            // visible rows outside the view hierarchy and emits a noisy warning.
+            needsFooterUpdate = true
+            loadingTimeoutTimer?.invalidate()
+            loadingTimeoutTimer = nil
+            return
+        }
+        needsFooterUpdate = false
+
         // Show/hide loading spinner with animations
         if isLoadingMore {
             // Don't show spinner if we just showed/have no-more-tweets message
@@ -1128,6 +1145,12 @@ class TweetTableViewController: UITableViewController {
         // Cancel timeout timer since loading completed normally
         loadingTimeoutTimer?.invalidate()
         loadingTimeoutTimer = nil
+
+        guard tableView.window != nil else {
+            needsFooterUpdate = true
+            loadingSpinnerStartTime = nil
+            return
+        }
 
         // Don't hide spinner if we're showing the "no more tweets" message
         if isShowingNoMoreTweetsMessage {
@@ -2053,6 +2076,7 @@ class TweetTableViewController: UITableViewController {
     // MARK: - Video Playback Coordination
     
     private func updateVisibleTweetsForVideoPlayback() {
+        guard tableView.window != nil else { return }
         guard !isTableViewUpdating else { return }
         guard !tweets.isEmpty || !pinnedTweets.isEmpty else { return }
 
@@ -2218,6 +2242,10 @@ class TweetTableViewController: UITableViewController {
     
     private func showNoMoreTweetsMessage() {
         guard !isShowingNoMoreTweetsMessage else { return }
+        guard tableView.window != nil else {
+            needsFooterUpdate = true
+            return
+        }
 
         isShowingNoMoreTweetsMessage = true
         lastNoMoreTweetsShownTime = Date()
