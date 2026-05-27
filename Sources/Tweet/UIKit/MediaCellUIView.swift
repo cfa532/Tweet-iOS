@@ -157,6 +157,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Fallback task: if item.status stays .unknown after deferring to statusKVO,
     /// enable network and kick playback after a delay (same as deadlock fix).
     private var statusUnknownFallbackTask: Task<Void, Never>?
+    /// Defers the primary spinner for cached/covered videos so instant starts do
+    /// not flash loading chrome over an already-present frame.
+    private var delayedPrimarySpinnerTask: Task<Void, Never>?
     /// Recovery for ready players that were promoted from preload but remain
     /// stuck at the first buffer gap after play() was requested.
     private var playbackStartupRecoveryTask: Task<Void, Never>?
@@ -372,7 +375,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // With streaming, the first frame can render before playback can continue.
             // Keep primary feedback on, and keep visible non-primary feedback on until
             // a cover frame exists. Off-screen preloads should not show spinner chrome.
-            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: hasDisplayableCover) {
+            if coordinatorWantsToPlay && !shouldDelayPrimarySpinner(for: player) {
+                loadingSpinner.startAnimating()
+            } else if shouldShowVisibleVideoCoverSpinner(hasCover: hasDisplayableCover) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -1014,10 +1019,53 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             && !isVideoAtEnd(player)
             && !isVisibleVideoFrameReady(player)
         if shouldShowSpinner {
+            if delayedPrimarySpinnerTask != nil {
+                return
+            }
             loadingSpinner.startAnimating()
         } else {
+            cancelDelayedPrimarySpinner()
             loadingSpinner.stopAnimating()
         }
+    }
+
+    private func shouldDelayPrimarySpinner(for player: AVPlayer?) -> Bool {
+        guard coordinatorWantsToPlay,
+              let player,
+              isActuallyPlayerReady(player),
+              !isVideoAtEnd(player) else { return false }
+        return hasVideoCoverForSpinner || videoPlayerView.isLayerReadyForDisplay
+    }
+
+    private func showPrimarySpinnerWithOptionalDelay(for player: AVPlayer) {
+        cancelDelayedPrimarySpinner()
+
+        guard shouldDelayPrimarySpinner(for: player) else {
+            loadingSpinner.startAnimating()
+            return
+        }
+
+        loadingSpinner.stopAnimating()
+        delayedPrimarySpinnerTask = Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self,
+                  let player,
+                  self.player === player,
+                  self.coordinatorWantsToPlay,
+                  self.videoCellState == .playing,
+                  !self.isVideoAtEnd(player),
+                  !self.isVisibleVideoFrameReady(player) else {
+                self?.delayedPrimarySpinnerTask = nil
+                return
+            }
+            self.delayedPrimarySpinnerTask = nil
+            self.loadingSpinner.startAnimating()
+        }
+    }
+
+    private func cancelDelayedPrimarySpinner() {
+        delayedPrimarySpinnerTask?.cancel()
+        delayedPrimarySpinnerTask = nil
     }
 
     private func bufferedTimeAhead(for player: AVPlayer) -> Double {
@@ -1401,6 +1449,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Visible non-primary videos may keep loading to produce a cover, but once
     /// a poster/frame exists their spinner must stop even if playback is paused.
     private func refreshVisualStateAfterCoordinatorStopped() {
+        cancelDelayedPrimarySpinner()
         switch videoCellState {
         case .playing:
             if !isHandlingFinishEvent {
@@ -1544,12 +1593,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoCellState = .playing
         retryButton.isHidden = true
 
-        // Show spinner immediately — the player may need to buffer before the first frame
-        // even though the item status is .readyToPlay. KVO will stop it when
-        // timeControlStatus transitions to .playing (smooth playback confirmed).
-        // This covers the gap between coordinator selection and first KVO fire,
-        // which is invisible without the spinner on preloaded .playerReady players.
-        loadingSpinner.startAnimating()
+        // Show loading feedback only if playback does not start quickly. Cached
+        // videos already have a poster/frame, so a 0.5s grace period avoids a
+        // distracting spinner flash on instant starts.
+        showPrimarySpinnerWithOptionalDelay(for: player)
 
         // Primary playback must own network recovery. Preloaded players may be
         // paused with background-friendly settings, so restore AVPlayer's normal
@@ -2130,14 +2177,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         print("\(logPrefix) 🔄 Manual video retry")
         retryButton.isHidden = true
-        coordinatorWantsToPlay = true
-        // Set as primary so retry gets bandwidth priority in NodeConnectionPool
-        LocalHTTPServer.shared.setPrimaryMediaID(att.mid)
+        coordinatorWantsToPlay = false
         if let player = player, isActuallyPlayerReady(player) {
-            // Player still exists (buffering failure) — just resume playback.
-            // AVPlayer will re-request the failed segments from LocalHTTPServer.
-            transitionTo(.playing)
-            player.play()
+            // Reload button restores the preview only. If this cell later becomes
+            // primary, handleCoordinatorPlayCommand(.failed/playerReady) will
+            // promote/reload it with playback priority.
+            transitionTo(.playerReady)
+            player.pause()
         } else {
             // Player was cleared (initial load failure / item.status == .failed).
             // acquirePlayer creates a fresh player that reuses preserved disk cache.
@@ -2157,6 +2203,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Nil player, stop spinner, clear loading flags after a failure.
     private func cleanupFailedPlayerState() {
+        cancelDelayedPrimarySpinner()
         loadingSpinner.stopAnimating()
         player = nil
         setupPlayerTask = nil
@@ -2190,18 +2237,23 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         preserveFrameToCache()
         cleanupFailedPlayerState()
 
-        // Not visible or coordinator stopped — go idle without retry button
-        guard isVisible, coordinatorWantsToPlay else {
+        // Visible media failures should be actionable even when the cell is not
+        // the autoplay primary; otherwise a timed-out preview can collapse into
+        // a black square with no recovery affordance.
+        let shouldShowRetry = isVisible && (coordinatorWantsToPlay || shouldLoadVideo)
+        let wasPrimary = coordinatorWantsToPlay
+
+        guard shouldShowRetry else {
             print("\(logPrefix) ❌ \(reason) - going idle")
             transitionToIdleAfterFailure()
             return
         }
 
-        // Visible + coordinator wants play → show retry button over current frame
+        // Visible failure → show retry button over current frame/black backdrop.
         print("\(logPrefix) ❌ \(reason) - showing retry button")
         coordinatorWantsToPlay = false
         transitionTo(.failed)
-        if let id = videoIdentifier {
+        if wasPrimary, let id = videoIdentifier {
             (videoCoordinator ?? .shared).notifyPrimaryVideoFailed(identifier: id)
         }
     }
@@ -2659,6 +2711,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         setupPlayerTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
+        cancelDelayedPrimarySpinner()
         playbackStartupRecoveryTask?.cancel()
         playbackStartupRecoveryTask = nil
         playbackStartupRecoveryRequestDate = nil
@@ -2707,6 +2760,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         isHandlingFinishEvent = false
         playerWasLoaned = false
         videoCellState = .noContent
+        cancelDelayedPrimarySpinner()
         lastFrameCaptureAt = .distantPast
         lastActualPlaybackDate = .distantPast
         hasRenderedFrameForCurrentPlayer = false
