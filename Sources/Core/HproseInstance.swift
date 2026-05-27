@@ -1073,7 +1073,44 @@ final class HproseInstance: ObservableObject {
             let cachedTweets = await TweetCacheManager.shared.fetchCachedTweets(for: user.mid, page: pageNumber, pageSize: pageSize, currentUserId: appUser.mid)
             return cachedTweets
         }
-        
+
+        do {
+            return try await fetchUserTweetsFromCurrentRoute(
+                user: user,
+                pageNumber: pageNumber,
+                pageSize: pageSize,
+                entry: entry
+            )
+        } catch {
+            guard !Task.isCancelled else { throw error }
+            print("DEBUG: [fetchUserTweets] Failed via \(user.baseUrl?.absoluteString ?? "nil"); refreshing route and retrying once for \(user.mid): \(error)")
+            let refreshedUser = try await freshReadUser(for: user, reason: "tweet load retry")
+            return try await fetchUserTweetsFromCurrentRoute(
+                user: refreshedUser,
+                pageNumber: pageNumber,
+                pageSize: pageSize,
+                entry: entry
+            )
+        }
+    }
+
+    private func freshReadUser(for user: User, reason: String) async throws -> User {
+        guard let refreshedUser = try await fetchUser(
+            user.mid,
+            baseUrl: "",
+            refreshExpiredCacheInBackground: false
+        ) else {
+            throw HproseError.userNotFound(userId: user.mid, reason: "Unable to refresh provider IP for \(reason)")
+        }
+        return refreshedUser
+    }
+
+    private func fetchUserTweetsFromCurrentRoute(
+        user: User,
+        pageNumber: UInt,
+        pageSize: UInt,
+        entry: String
+    ) async throws -> [Tweet?] {
         guard let client = user.hproseClient else {
             throw NSError(domain: "HproseClient", code: -1, userInfo: [NSLocalizedDescriptionKey: NSLocalizedString("Client not initialized", comment: "Client initialization error")])
         }
@@ -1843,8 +1880,14 @@ final class HproseInstance: ObservableObject {
             print("DEBUG: [resolveAndUpdateBaseUrl] Ignoring invalid NodePool IP for userId: \(user.mid): \(poolIP)")
         }
 
-        // getProviderIP is the source of truth after the one allowed NodePool
-        // fast-path attempt, or when the pool has no usable address.
+        if attempt == 1, !forceFreshIP, let originalBaseUrl, !originalBaseUrl.isEmpty {
+            print("DEBUG: [resolveAndUpdateBaseUrl] ATTEMPT \(attempt)/\(maxRetries) - Using cached baseUrl once: \(originalBaseUrl) for userId: \(user.mid)")
+            return
+        }
+
+        // getProviderIP is the source of truth after the one allowed cached
+        // route attempt. A failed cached route is cleared by performUserUpdate,
+        // so retries come here immediately instead of reusing the stale URL.
         let reason: String
         if attempt > 1 {
             reason = "retry after failure"

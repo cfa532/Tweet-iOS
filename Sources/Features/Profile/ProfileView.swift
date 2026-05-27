@@ -30,6 +30,8 @@ struct ProfileView: View {
     @State private var previousScrollOffset: CGFloat = 0
     @State private var isLoading = false
     @State private var didLoad = false
+    /// Bumped when stale-IP recovery changes this profile's read route so tweets reload without clearing cached content.
+    @State private var profileTweetsRefreshToken = 0
     
     /// Pinned tweets state
     @State private var pinnedTweets: [Tweet] = []
@@ -264,6 +266,7 @@ struct ProfileView: View {
                     },
                     onShowLogin: onShowLogin,
                     onShowToast: onShowToast,
+                    routeRefreshToken: profileTweetsRefreshToken,
                     header: {
                         VStack(spacing: 0) {
                             ProfileHeaderSection(
@@ -685,9 +688,22 @@ struct ProfileView: View {
 
         // Fetch fresh user data from server
         do {
-            let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
+            let cachedRoute = user.baseUrl?.absoluteString ?? ""
+            let refreshedUser = try await hproseInstance.fetchUser(
+                user.mid,
+                baseUrl: cachedRoute,
+                forceRefresh: true,
+                refreshExpiredCacheInBackground: false
+            )
             if let userData = refreshedUser {
                 didFetchUser = true
+                let refreshedRoute = userData.baseUrl?.absoluteString ?? ""
+                if refreshedRoute != cachedRoute {
+                    await MainActor.run {
+                        profileTweetsRefreshToken += 1
+                    }
+                    print("DEBUG: [ProfileView] User route changed from \(cachedRoute.isEmpty ? "nil" : cachedRoute) to \(refreshedRoute.isEmpty ? "nil" : refreshedRoute); reloading profile tweets")
+                }
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 if let jsonData = try? encoder.encode(userData),

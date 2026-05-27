@@ -144,6 +144,7 @@ struct ProfileTweetsSection<Header: View>: View {
     let onScroll: (CGFloat, CGFloat) -> Void  // (offset, delta)
     let onShowLogin: (() -> Void)?
     let onShowToast: ((String, Bool) -> Void)?
+    let routeRefreshToken: Int
     @StateObject private var viewModel: ProfileTweetsViewModel
     let header: () -> Header
 
@@ -159,6 +160,7 @@ struct ProfileTweetsSection<Header: View>: View {
         onScroll: @escaping (CGFloat, CGFloat) -> Void,  // (offset, delta)
         onShowLogin: (() -> Void)? = nil,
         onShowToast: ((String, Bool) -> Void)? = nil,
+        routeRefreshToken: Int = 0,
         @ViewBuilder header: @escaping () -> Header = { EmptyView() }
     ) {
         self.pinnedTweets = pinnedTweets
@@ -172,6 +174,7 @@ struct ProfileTweetsSection<Header: View>: View {
         self.onScroll = onScroll
         self.onShowLogin = onShowLogin
         self.onShowToast = onShowToast
+        self.routeRefreshToken = routeRefreshToken
         self.header = header
         self._viewModel = StateObject(wrappedValue: ProfileTweetsViewModel(
             hproseInstance: hproseInstance,
@@ -219,6 +222,7 @@ struct ProfileTweetsSection<Header: View>: View {
             trailingPadding: 7,
             pinnedTweets: pinnedTweets,
             feedIdentifier: "profile_\(user.mid)",
+            externalRefreshToken: routeRefreshToken,
             header: {
                 AnyView(
                     VStack(spacing: 0) {

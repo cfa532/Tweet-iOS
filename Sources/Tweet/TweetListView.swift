@@ -36,6 +36,8 @@ struct TweetListView: View {
     let feedIdentifier: String  // Unique identifier for persistent scroll position
     let preserveOrder: Bool  // If true, preserve server order instead of sorting by timestamp (for bookmarks/favorites)
     let allowDeleteAll: Bool  // If true, appUser can delete any tweet (main feed); otherwise only own tweets
+    /// External signal used by profile route recovery to reload page 0 while preserving currently visible tweets.
+    let externalRefreshToken: Int
     private let pageSize: UInt = 10  // Manual load-more only
 
     // Navigation callbacks (passed through to UIKit cells)
@@ -164,6 +166,7 @@ struct TweetListView: View {
         feedIdentifier: String = "mainFeed",
         preserveOrder: Bool = false,
         allowDeleteAll: Bool = false,
+        externalRefreshToken: Int = 0,
         header: (() -> AnyView)? = nil,
         onRefreshExtra: (() async -> Void)? = nil,
         onAvatarTap: ((User) -> Void)? = nil,
@@ -182,6 +185,7 @@ struct TweetListView: View {
         self.feedIdentifier = feedIdentifier
         self.preserveOrder = preserveOrder
         self.allowDeleteAll = allowDeleteAll
+        self.externalRefreshToken = externalRefreshToken
         self.header = header
         self.onRefreshExtra = onRefreshExtra
         self.onAvatarTap = onAvatarTap
@@ -245,7 +249,7 @@ struct TweetListView: View {
                 ProgressView()
                     .scaleEffect(2.0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(UIColor.systemBackground))
+                    .background(header == nil ? Color(UIColor.systemBackground) : Color.clear)
             }
 
             if showToast {
@@ -272,6 +276,11 @@ struct TweetListView: View {
         .onReceive(NotificationCenter.default.publisher(for: .userDidLogin)) { _ in
             Task {
                 await refreshTweets()
+            }
+        }
+        .onChange(of: externalRefreshToken) { _, _ in
+            Task {
+                await reloadFromServerAfterRouteChange()
             }
         }
         .navigationTitle(title)
@@ -638,10 +647,13 @@ struct TweetListView: View {
                     hasMoreTweets = freshTweets.count >= pageSize
 
                     if freshTweets.count < pageSize {
-                        // Partial page: server confirmed empty feed (no error = not a network failure).
-                        // Replace any stale cached content so the user sees the correct empty state.
-                        tweets = []
-                        updateVideoLoadingManager()
+                        // Keep existing content visible on refresh. Empty responses can
+                        // happen during route recovery; a successful non-empty page will
+                        // merge below on the next refresh/load.
+                        if tweets.isEmpty {
+                            tweets = []
+                            updateVideoLoadingManager()
+                        }
                     }
                     // Full page of nils: server still has entries, keep cached content and let
                     // auto-load continue to the next page.
@@ -798,6 +810,16 @@ struct TweetListView: View {
             }
         }
         completion(true)
+    }
+
+    private func reloadFromServerAfterRouteChange() async {
+        await MainActor.run {
+            if tweets.isEmpty {
+                isLoading = true
+                initialLoadComplete = false
+            }
+        }
+        await loadFromServer(page: 0, pageSize: pageSize) { _ in }
     }
     
     // Helper function to update tweets with server data
