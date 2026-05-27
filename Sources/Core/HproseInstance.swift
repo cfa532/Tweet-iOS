@@ -1049,6 +1049,7 @@ final class HproseInstance: ObservableObject {
         }
 
         print("[fetchTweetFeed] Returning \(tweets.count) tweets")
+        NodePool.shared.updateFromUser(user)
         return tweets
     }
     
@@ -2519,6 +2520,7 @@ final class HproseInstance: ObservableObject {
                 let rval = (rhs["value"] as? Int) ?? 0
                 return lval > rval
             }
+            NodePool.shared.updateFromUser(user)
             return sorted.compactMap { $0["field"] as? String }
         } catch {
             print("DEBUG: [HproseInstance] getFollowings error: \(error)")
@@ -2609,6 +2611,7 @@ final class HproseInstance: ObservableObject {
                 let rval = (rhs["value"] as? Int) ?? 0
                 return lval > rval
             }
+            NodePool.shared.updateFromUser(user)
             return sorted.compactMap { $0["field"] as? String }
         } catch {
             print("DEBUG: [HproseInstance] getFans error: \(error)")
