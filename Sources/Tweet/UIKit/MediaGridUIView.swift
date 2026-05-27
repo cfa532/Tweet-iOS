@@ -427,9 +427,12 @@ class MediaGridUIView: UIView {
         moreLabel = nil
     }
 
-    /// Updates per-media visibility and returns video identifiers whose frames are at least 50% visible.
-    func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
-        var result: [String] = []
+    /// Updates per-media visibility.
+    /// `loadVisible` uses a low threshold so any on-screen media starts loading.
+    /// `playable` keeps the 50% threshold used by the video coordinator for autoplay.
+    func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], playable: [String]) {
+        var loadVisible: [String] = []
+        var playable: [String] = []
         for cellView in cellViews {
             let cellFrame = cellView.convert(cellView.bounds, to: coordinateSpace)
             let intersection = cellFrame.intersection(visibleRect)
@@ -438,15 +441,24 @@ class MediaGridUIView: UIView {
             let ratio = cellArea > 0 ? visibleArea / cellArea : 0
 
             // Keep loading tied to actual media-cell geometry, not just table-row visibility.
-            cellView.setVisible(isGridVisible && ratio > 0.05)
+            let isLoadVisible = isGridVisible && ratio > 0.05
+            cellView.setVisible(isLoadVisible)
 
             guard cellView.isVideoAttachment,
                   let identifier = cellView.videoIdentifier else { continue }
+            if isLoadVisible {
+                loadVisible.append(identifier)
+            }
             if ratio >= 0.5 {
-                result.append(identifier)
+                playable.append(identifier)
             }
         }
-        return result
+        return (loadVisible, playable)
+    }
+
+    /// Updates per-media visibility and returns video identifiers whose frames are at least 50% visible.
+    func onScreenVideoIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> [String] {
+        mediaVisibilityIdentifiers(visibleRect: visibleRect, coordinateSpace: coordinateSpace).playable
     }
 
     func refreshVideoLayersAfterForeground() {

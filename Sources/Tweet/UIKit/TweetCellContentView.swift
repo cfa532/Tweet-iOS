@@ -865,6 +865,25 @@ class TweetCellContentView: UIView {
         return result
     }
 
+    func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], playable: [String]) {
+        let bodyResult = bodyView.mediaGridView.mediaVisibilityIdentifiers(
+            visibleRect: visibleRect, coordinateSpace: coordinateSpace
+        )
+        var loadVisible = bodyResult.loadVisible
+        var playable = bodyResult.playable
+
+        if !embeddedTweetWrapper.isHidden {
+            let embeddedResult = embeddedTweetView.mediaVisibilityIdentifiers(
+                visibleRect: visibleRect,
+                coordinateSpace: coordinateSpace
+            )
+            loadVisible += embeddedResult.loadVisible
+            playable += embeddedResult.playable
+        }
+
+        return (loadVisible, playable)
+    }
+
     func refreshVideoLayersAfterForeground() {
         bodyView.mediaGridView.refreshVideoLayersAfterForeground()
         if !embeddedTweetWrapper.isHidden {

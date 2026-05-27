@@ -1526,7 +1526,7 @@ struct TweetActionButtonsView: View {
     /// Get an IPv4-preferred baseUrl for sharing from detail view
     /// If the current baseUrl is IPv6, resolves IPv4 via getProviderIP and updates user's baseUrl
     /// - Parameter tweet: The tweet being shared
-    /// - Returns: IPv4 baseUrl string if available, otherwise falls back to current baseUrl
+    /// - Returns: IPv4 baseUrl string if available; otherwise keeps the current, still-valid baseUrl
     private func getIPv4PreferredBaseUrl(for tweet: Tweet) async -> String {
         guard let author = tweet.author else {
             return AppConfig.baseUrl
@@ -1559,11 +1559,11 @@ struct TweetActionButtonsView: View {
                 
                 return ipv4BaseUrl
             } else {
-                print("DEBUG: [SHARE IPv4] ⚠️ getProviderIP returned nil, falling back to original baseUrl")
+                print("DEBUG: [SHARE IPv4] ⚠️ getProviderIP returned nil, keeping existing baseUrl")
                 return currentBaseUrl
             }
         } catch {
-            print("DEBUG: [SHARE IPv4] ⚠️ getProviderIP failed with error: \(error), falling back to original baseUrl")
+            print("DEBUG: [SHARE IPv4] ⚠️ getProviderIP failed with error: \(error), keeping existing baseUrl")
             return currentBaseUrl
         }
     }

@@ -123,6 +123,9 @@ extension Notification.Name {
     static let videoLayerRefresh = Notification.Name("VideoLayerRefresh")
     /// Posted to reload only visible videos after foreground recovery (not all videos)
     static let reloadVisibleVideosOnly = Notification.Name("ReloadVisibleVideosOnly")
+    /// Posted when a cached video thumbnail/first frame becomes available.
+    /// userInfo: ["mediaID": String]
+    static let videoThumbnailCached = Notification.Name("VideoThumbnailCached")
     
     // MARK: - Error Handling
     /// Posted when an error occurs that should be displayed as a toast

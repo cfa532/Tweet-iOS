@@ -778,7 +778,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let isBufferEmpty = item.isPlaybackBufferEmpty
             let isLikelyToKeepUp = item.isPlaybackLikelyToKeepUp
             let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            let isActivelyRendering = player.timeControlStatus == .playing || player.rate > 0
+            let isActivelyRendering = player.timeControlStatus == .playing
             let wasPlaying = player.rate > 0 || self.isPlaying
             let hasBufferedData = !item.loadedTimeRanges.isEmpty
             let itemStatus = item.status
@@ -797,8 +797,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             // even when we have plenty of buffered data. Only show spinner if buffer is truly insufficient.
             let hasSignificantBuffer = hasBufferedData && bufferedDuration >= 1.0
             let shouldShowSpinner = !isActivelyRendering && (
-                (isBufferEmpty && !hasSignificantBuffer)
-                    || isWaiting
+                isWaiting
+                    || (isBufferEmpty && !hasSignificantBuffer)
                     || (itemStatus == .readyToPlay && (!hasBufferedData || (bufferedDuration < 0.5 && !isLikelyToKeepUp)))
             )
             
@@ -822,6 +822,9 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: task)
                 }
             } else {
+                if isActivelyRendering && !player.automaticallyWaitsToMinimizeStalling {
+                    player.automaticallyWaitsToMinimizeStalling = true
+                }
                 // Player has enough data - hide spinner immediately (no debounce for hiding)
                 // Cancel any pending show task
                 self.bufferingDebounceTask?.cancel()
@@ -852,8 +855,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                     Task { @MainActor in
                                         self.hasRestoredPosition = true
                                         self.isSeekingToRestoredPosition = false
-                                        player.play()
-                                        self.isPlaying = true
+                                        self.startFullscreenPlayback(player: player, item: item, log: "after feed-finished rewind")
                                         self.wasPlayingBeforeWaiting = false
                                     }
                                 }
@@ -870,8 +872,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                             PersistentVideoStateManager.shared.clearState(videoMid: videoMid, context: .fullScreen)
                             self.hasRestoredPosition = true
                             self.isSeekingToRestoredPosition = false
-                            player.play()
-                            self.isPlaying = true
+                            self.startFullscreenPlayback(player: player, item: item, log: "after invalid saved state")
                             self.wasPlayingBeforeWaiting = false
                             return
                         }
@@ -888,8 +889,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                 self.isSeekingToRestoredPosition = false
                                 
                                 // CRITICAL: Fullscreen should always auto-play, regardless of wasPlaying state
-                                player.play()
-                                self.isPlaying = true
+                                self.startFullscreenPlayback(player: player, item: item, log: "after saved-position seek")
                                 self.wasPlayingBeforeWaiting = false
                             }
                         }
@@ -915,8 +915,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 // to play; redundant play() calls disrupt AVPlayer's buffering state machine
                 // and cause timeControlStatus oscillation (play button flickering).
                 if wantsToPlay && isReadyToPlay && hasEnoughBuffer && isNotPlaying && !isAlreadyWaiting {
-                    player.play()
-                    self.isPlaying = true
+                    self.startFullscreenPlayback(player: player, item: item, log: "buffer recovered")
                     self.wasPlayingBeforeWaiting = false
                 } else if player.timeControlStatus == .playing || player.rate > 0 || isAlreadyWaiting {
                     // Already playing or buffering — just reset flag
@@ -1209,16 +1208,48 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             self.singletonPlayer?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
                 guard finished, let self = self else { return }
                 DispatchQueue.main.async {
-                    self.singletonPlayer?.play()
-                    self.isPlaying = true
+                    self.startFullscreenPlayback(player: self.singletonPlayer, item: playerItem, log: "after seek to \(target.seconds)s")
                     print("▶️ [FullScreenVideoManager] Playing after seek to \(target.seconds)s")
                 }
             }
         } else {
-            self.singletonPlayer?.play()
-            self.isPlaying = true
+            startFullscreenPlayback(player: singletonPlayer, item: playerItem, log: "immediate")
             print("▶️ [FullScreenVideoManager] Playing immediately (no seek needed)")
         }
+    }
+
+    private func startFullscreenPlayback(player: AVPlayer?, item: AVPlayerItem, log: String) {
+        guard let player else { return }
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let keepUp = item.isPlaybackLikelyToKeepUp
+        if bufferedAhead > 0 && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp)) {
+            player.automaticallyWaitsToMinimizeStalling = false
+        } else {
+            player.automaticallyWaitsToMinimizeStalling = true
+        }
+        player.play()
+        isPlaying = true
+        isBuffering = player.timeControlStatus != .playing
+    }
+
+    private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+        let currentSeconds = CMTimeGetSeconds(player.currentTime())
+        guard currentSeconds.isFinite else { return 0 }
+        var bestBufferAhead: Double = 0
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = CMTimeGetSeconds(range.start)
+            let duration = CMTimeGetSeconds(range.duration)
+            guard start.isFinite, duration.isFinite else { continue }
+            let end = start + duration
+            if currentSeconds >= start && currentSeconds <= end {
+                return max(0, end - currentSeconds)
+            } else if end > currentSeconds {
+                bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+            }
+        }
+        return max(0, bestBufferAhead)
     }
 
     /// Check if video is at the end and rewind if needed before playing
@@ -1891,12 +1922,17 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             if isItemReady {
                 isPlaying = true
                 // Rewind if at end, then play
-                if let item = currentPlayer?.currentItem,
-                   item.duration.isValid && item.duration.seconds > 0,
-                   (item.duration.seconds - item.currentTime().seconds) < 0.5 {
-                    let player = currentPlayer
-                    currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                        player?.play()
+                if let item = currentPlayer?.currentItem {
+                    if item.duration.isValid && item.duration.seconds > 0,
+                       (item.duration.seconds - item.currentTime().seconds) < 0.5 {
+                        let player = currentPlayer
+                        currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                            Task { @MainActor [weak self] in
+                                self?.startDetailPlayback(player: player, item: item, log: "same-video rewind")
+                            }
+                        }
+                    } else {
+                        startDetailPlayback(player: currentPlayer, item: item, log: "same-video")
                     }
                 } else {
                     currentPlayer?.play()
@@ -2097,7 +2133,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                         Task { @MainActor [weak self] in
                             self?.applyStartupAudioMuteIfNeeded()
-                            player?.play()
+                            self?.startDetailPlayback(player: player, item: playerItem, log: "continued from feed at end")
                             print("▶️ [DetailVideoManager] Continued from feed at end - rewound")
                         }
                     }
@@ -2108,7 +2144,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     guard finished else { return }
                     Task { @MainActor [weak self] in
                         self?.applyStartupAudioMuteIfNeeded()
-                        player?.play()
+                        self?.startDetailPlayback(player: player, item: playerItem, log: "continued from feed")
                         print("▶️ [DetailVideoManager] Continued from feed position \(savedSec)s")
                     }
                 }
@@ -2127,7 +2163,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                         Task { @MainActor [weak self] in
                             self?.applyStartupAudioMuteIfNeeded()
-                            player?.play()
+                            self?.startDetailPlayback(player: player, item: playerItem, log: "saved position at end")
                             print("▶️ [DetailVideoManager] Playing from beginning (was at end)")
                         }
                     }
@@ -2138,7 +2174,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                     guard finished else { return }
                     Task { @MainActor [weak self] in
                         self?.applyStartupAudioMuteIfNeeded()
-                        player?.play()
+                        self?.startDetailPlayback(player: player, item: playerItem, log: "saved position")
                         print("▶️ [DetailVideoManager] Playing from saved position \(savedSec)s")
                     }
                 }
@@ -2153,7 +2189,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
                 currentPlayer?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     Task { @MainActor [weak self] in
                         self?.applyStartupAudioMuteIfNeeded()
-                        player?.play()
+                        self?.startDetailPlayback(player: player, item: playerItem, log: "rewind")
                         print("▶️ [DetailVideoManager] Playing from beginning (rewind)")
                     }
                 }
@@ -2161,7 +2197,7 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
             }
         }
         applyStartupAudioMuteIfNeeded()
-        currentPlayer?.play()
+        startDetailPlayback(player: currentPlayer, item: playerItem, log: "immediate")
         print("▶️ [DetailVideoManager] Playing immediately")
     }
 
@@ -2182,18 +2218,62 @@ class DetailVideoManager: NSObject, ObservableObject, VideoPlayerLifecycleManage
     private func setupDetailTimeControlObserver() {
         timeControlStatusObserver?.invalidate()
         guard let player = currentPlayer else { return }
-        isPlaybackRendering = player.timeControlStatus == .playing || player.rate > 0
+        isPlaybackRendering = player.timeControlStatus == .playing
         isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-            && (player.currentItem?.loadedTimeRanges.isEmpty ?? true)
+            && !isVideoAtEnd(player)
         timeControlStatusObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 let isWaiting = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                let hasBuffer = !(player.currentItem?.loadedTimeRanges.isEmpty ?? true)
-                self.isBuffering = isWaiting && !hasBuffer
-                self.isPlaybackRendering = player.timeControlStatus == .playing || player.rate > 0
+                self.isBuffering = isWaiting && !self.isVideoAtEnd(player)
+                self.isPlaybackRendering = player.timeControlStatus == .playing
+                if player.timeControlStatus == .playing && !player.automaticallyWaitsToMinimizeStalling {
+                    player.automaticallyWaitsToMinimizeStalling = true
+                }
             }
         }
+    }
+
+    private func startDetailPlayback(player: AVPlayer?, item: AVPlayerItem, log: String) {
+        guard let player else { return }
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        let bufferedAhead = bufferedTimeAhead(for: item, player: player)
+        let keepUp = item.isPlaybackLikelyToKeepUp
+        if bufferedAhead > 0 && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp)) {
+            player.automaticallyWaitsToMinimizeStalling = false
+        } else {
+            player.automaticallyWaitsToMinimizeStalling = true
+        }
+        player.play()
+        isPlaying = true
+        isBuffering = player.timeControlStatus != .playing && !isVideoAtEnd(player)
+    }
+
+    private func bufferedTimeAhead(for item: AVPlayerItem, player: AVPlayer) -> Double {
+        let currentSeconds = CMTimeGetSeconds(player.currentTime())
+        guard currentSeconds.isFinite else { return 0 }
+        var bestBufferAhead: Double = 0
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = CMTimeGetSeconds(range.start)
+            let duration = CMTimeGetSeconds(range.duration)
+            guard start.isFinite, duration.isFinite else { continue }
+            let end = start + duration
+            if currentSeconds >= start && currentSeconds <= end {
+                return max(0, end - currentSeconds)
+            } else if end > currentSeconds {
+                bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+            }
+        }
+        return max(0, bestBufferAhead)
+    }
+
+    private func isVideoAtEnd(_ player: AVPlayer) -> Bool {
+        guard let item = player.currentItem else { return false }
+        let duration = CMTimeGetSeconds(item.duration)
+        let current = CMTimeGetSeconds(player.currentTime())
+        guard duration.isFinite, duration > 0, current.isFinite else { return false }
+        return duration - current <= 0.5
     }
 
     /// Set current video for detail view (LEGACY — used by SimpleVideoPlayer tweetDetail mode)

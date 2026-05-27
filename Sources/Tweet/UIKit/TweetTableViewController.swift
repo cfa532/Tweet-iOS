@@ -94,6 +94,7 @@ class TweetTableViewController: UITableViewController {
     private var lastVideoVisibilityUpdate: CFTimeInterval = 0
     private let videoVisibilityThrottleInterval: TimeInterval = 0.15 // 150ms during active drag
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
+    private var lastLoadVisibleVideoIds: Set<String> = [] // Cache media that is physically on screen and should load
     private var lastOnScreenVideoIds: Set<String> = [] // Cache per-cell on-screen video identifiers
     
     // Cached main content rect to avoid recalculating on every visibility check
@@ -129,7 +130,8 @@ class TweetTableViewController: UITableViewController {
     private var isScrollingBackward: Bool = false
     private var lastDirectionalImagePreloadTime: CFTimeInterval = 0
     private let directionalImagePreloadThrottleInterval: CFTimeInterval = 0.25
-    private let directionalPreloadRowCount = 4
+    private let directionalPreloadRowCount = 2
+    private let oppositeStopPreloadRowCount = 1
     private let maxDirectionalImagePreloadsInFlight = 4
     private var activeDirectionalImagePreloadTasks: [String: Task<Void, Never>] = [:]
 
@@ -263,6 +265,8 @@ class TweetTableViewController: UITableViewController {
                         // No primary playing — full re-evaluation needed (e.g. returning from tab switch
                         // where viewWillDisappear called stopAllVideos).
                         self.lastVisibleTweetIds = []
+                        self.lastLoadVisibleVideoIds = []
+                        self.lastOnScreenVideoIds = []
                         self.updateVisibleTweetsForVideoPlayback()
                         self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
                     }
@@ -444,26 +448,13 @@ class TweetTableViewController: UITableViewController {
         // This proactively cleans up players that were invalidated during backgrounding
         videoCoordinator.validatePlayersAfterBackground()
 
-        // Step 2: Get currently visible tweet IDs
-        let visibleIndexPaths = tableView.indexPathsForVisibleRows ?? []
-        let visibleTweetIds = Set(visibleIndexPaths.compactMap { indexPath -> String? in
-            let totalRows = pinnedTweets.count + tweets.count
-            guard indexPath.row < totalRows else { return nil }
-
-            if indexPath.row < pinnedTweets.count {
-                return pinnedTweets[indexPath.row].mid
-            } else {
-                let regularIndex = indexPath.row - pinnedTweets.count
-                guard regularIndex < tweets.count else { return nil }
-                return tweets[regularIndex].mid
-            }
-        })
-
-        print("☀️ [VIDEO RESTORE] Updating visibility for \(visibleTweetIds.count) visible tweets")
-
-        // Step 3: Update visible tweets to trigger playback
-        // Any players that were removed in step 1 will be automatically recreated when needed
-        videoCoordinator.updateVisibleTweets(visibleTweetIds)
+        // Step 2: Recompute full viewport media geometry, not just tweet rows.
+        // Autoplay is driven by media-cell visibility; using tweet IDs alone can
+        // leave visibleVideos stale after foreground/detail transitions.
+        lastVisibleTweetIds = []
+        lastLoadVisibleVideoIds = []
+        lastOnScreenVideoIds = []
+        updateVisibleTweetsForVideoPlayback()
 
         print("✅ [VIDEO RESTORE] Video restoration complete - healthy players retained, broken ones will be recreated")
     }
@@ -519,6 +510,8 @@ class TweetTableViewController: UITableViewController {
                     self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
                 } else {
                     self.lastVisibleTweetIds = []
+                    self.lastLoadVisibleVideoIds = []
+                    self.lastOnScreenVideoIds = []
                     self.updateVisibleTweetsForVideoPlayback()
                     self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
                 }
@@ -1807,7 +1800,8 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    /// Warm images in the scroll direction, then keep the existing video preload strategy.
+    /// Warm images in the scroll direction, plus the existing reverse row once scrolling settles.
+    /// Videos stay directional and are handled by the coordinator's video index.
     private func triggerPreloadOnScrollStop() {
         guard let visibleIndexPaths = tableView.indexPathsForVisibleRows,
               let firstVisible = visibleIndexPaths.first,
@@ -1820,13 +1814,13 @@ class TweetTableViewController: UITableViewController {
             firstVisibleRow: firstVisible.row,
             lastVisibleRow: lastVisible.row
         )
-        preloadImagesForRows(preloadRows)
-
-        let nearbyTweetIds = nearbyTweetIdsForVideoPreload(
+        let oppositeRows = oppositeStopPreloadRows(
             firstVisibleRow: firstVisible.row,
             lastVisibleRow: lastVisible.row
         )
-        videoCoordinator.performPreloadOnScrollStop(nearbyTweetIds: nearbyTweetIds)
+        preloadImagesForRows(preloadRows + oppositeRows)
+
+        videoCoordinator.performPreloadOnScrollStop()
     }
 
     private func triggerDirectionalImagePreloadIfNeeded(now: CFTimeInterval = CACurrentMediaTime()) {
@@ -1865,22 +1859,21 @@ class TweetTableViewController: UITableViewController {
         }
     }
 
-    private func nearbyTweetIdsForVideoPreload(firstVisibleRow: Int, lastVisibleRow: Int) -> Set<String> {
+    private func oppositeStopPreloadRows(firstVisibleRow: Int, lastVisibleRow: Int) -> [Int] {
         let totalRows = pinnedTweets.count + tweets.count
         guard totalRows > 0 else { return [] }
 
-        let preloadBuffer = 5
-        let preloadMin = max(0, firstVisibleRow - preloadBuffer)
-        let preloadMax = min(totalRows - 1, lastVisibleRow + preloadBuffer)
-
-        var nearbyTweetIds = Set<String>()
-        for row in preloadMin...preloadMax {
-            if row >= firstVisibleRow && row <= lastVisibleRow { continue }
-            if let tweet = tweetForRow(row) {
-                nearbyTweetIds.insert(tweet.mid)
-            }
+        if isScrollingBackward {
+            let nearestRowBelow = lastVisibleRow + 1
+            guard nearestRowBelow < totalRows else { return [] }
+            let farthestRowBelow = min(totalRows - 1, nearestRowBelow + oppositeStopPreloadRowCount - 1)
+            return Array(nearestRowBelow...farthestRowBelow)
+        } else {
+            let nearestRowAbove = firstVisibleRow - 1
+            guard nearestRowAbove >= 0 else { return [] }
+            let farthestRowAbove = max(0, nearestRowAbove - oppositeStopPreloadRowCount + 1)
+            return Array(stride(from: nearestRowAbove, through: farthestRowAbove, by: -1))
         }
-        return nearbyTweetIds
     }
 
     private func preloadImagesForRows(_ rows: [Int]) {
@@ -2073,8 +2066,9 @@ class TweetTableViewController: UITableViewController {
         let visibleRect = CGRect(x: 0, y: visibleTop, width: tableView.bounds.width, height: max(0, visibleBottom - visibleTop))
 
         // Single pass over visible cells: compute tweet visibility, toggle media visibility,
-        // and gather on-screen video IDs together so scrolling does less repeated work.
+        // and gather load-visible/playable video IDs together so scrolling does less repeated work.
         var visibleTweetIds = Set<String>()
+        var loadVisibleVideoIds = Set<String>()
         var onScreenVideoIds = Set<String>()
         for indexPath in visibleIndexPaths {
             guard let tweetCell = tableView.cellForRow(at: indexPath) as? TweetTableViewCell else { continue }
@@ -2082,32 +2076,32 @@ class TweetTableViewController: UITableViewController {
             let cellRect = tableView.rectForRow(at: indexPath)
             let intersection = cellRect.intersection(visibleRect)
             let ratio = cellRect.height > 0 ? intersection.height / cellRect.height : 0
-            let isVisible = ratio >= 0.5
+            let isRowOnScreen = intersection.height > 0
+            let isTweetVisible = ratio >= 0.5
 
-            tweetCell.tweetContentView.setMediaVisible(isVisible)
-
-            guard isVisible, let tweet = tweetForRow(indexPath.row) else { continue }
-            visibleTweetIds.insert(tweet.mid)
-            onScreenVideoIds.formUnion(
-                tweetCell.tweetContentView.onScreenVideoIdentifiers(
-                    visibleRect: visibleRect,
-                    coordinateSpace: tableView
-                )
+            // Any media that is physically on screen should load. Autoplay still
+            // uses the stricter 50% media-cell threshold returned as `playable`.
+            tweetCell.tweetContentView.setMediaVisible(isRowOnScreen)
+            let mediaVisibility = tweetCell.tweetContentView.mediaVisibilityIdentifiers(
+                visibleRect: visibleRect,
+                coordinateSpace: tableView
             )
-        }
-        if onScreenVideoIds != lastOnScreenVideoIds {
-            lastOnScreenVideoIds = onScreenVideoIds
-            videoCoordinator.updateOnScreenMediaCells(onScreenVideoIds)
-        }
+            loadVisibleVideoIds.formUnion(mediaVisibility.loadVisible)
+            onScreenVideoIds.formUnion(mediaVisibility.playable)
 
-        // Only update coordinator if visible tweets actually changed
-        // This prevents unnecessary video coordinator work during smooth scrolling
-        if visibleTweetIds != lastVisibleTweetIds {
-            lastVisibleTweetIds = visibleTweetIds
-            videoCoordinator.updateVisibleTweets(visibleTweetIds)
+            guard isTweetVisible, let tweet = tweetForRow(indexPath.row) else { continue }
+            visibleTweetIds.insert(tweet.mid)
         }
+        lastLoadVisibleVideoIds = loadVisibleVideoIds
+        lastOnScreenVideoIds = onScreenVideoIds
+        lastVisibleTweetIds = visibleTweetIds
+        videoCoordinator.updateViewportVisibility(
+            loadVisibleIdentifiers: loadVisibleVideoIds,
+            playableIdentifiers: onScreenVideoIds,
+            visibleTweetIds: visibleTweetIds
+        )
 
-        // Nearby preload is handled by triggerPreloadOnScrollStop() — not during scroll.
+        // Directional image preload is handled separately so video coordination stays light during scroll.
     }
     
     /// Calculate the visible main content area (excluding header and footer)

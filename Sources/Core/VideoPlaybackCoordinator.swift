@@ -152,6 +152,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// More granular than visibleTweetIds — tracks individual cells within multi-video tweets.
     private var onScreenMediaCells: Set<String> = []
 
+    /// Media cells with any visible pixels. These must load, but are not necessarily
+    /// eligible for autoplay until they reach the stricter onScreenMediaCells threshold.
+    private var loadVisibleMediaCells: Set<String> = []
+
     /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
 
@@ -162,14 +166,11 @@ class VideoPlaybackCoordinator: ObservableObject {
     private var cachedVisibilityRatios: [String: CGFloat] = [:]
     private let visibilityRatioThreshold: CGFloat = 0.10
 
-    /// Actively tracked preload/nearby video mids — explicitly managed on scroll stop.
-    /// Preload = next video in scroll direction (full player preload).
-    /// Nearby = videos in adjacent tweets (asset-only preload).
+    /// Actively tracked directional video preloads — explicitly managed on scroll stop.
     private var activePreloadMids: Set<String> = []
-    private var activeNearbyMids: Set<String> = []
 
     /// Timer: when scroll starts, gives in-flight preloads a brief grace period to finish.
-    /// If scroll is still active after the delay, cancel preload/nearby downloads.
+    /// If scroll is still active after the delay, cancel off-screen directional preloads.
     private var scrollCancelTimer: Timer?
 
     /// Track async tasks to prevent leaks
@@ -644,7 +645,7 @@ class VideoPlaybackCoordinator: ObservableObject {
 
                 // NOTE: Preloading is NOT triggered here because visibleTweetIds
                 // hasn't been set yet. performPreloadOnScrollStop() is called from
-                // updateVisibleTweets() on the first visibility update (initialPreloadDone).
+                // updateViewportVisibility() on the first visibility update (initialPreloadDone).
             }
         }
     }
@@ -788,64 +789,51 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Using full identifiers (not bare videoMids) ensures the same video in a tweet
     /// and its retweet are tracked independently.
     private var previousVisibleIdentifiers: Set<String> = []
+
+    /// Update media cells that are physically visible and therefore should load.
+    /// This is intentionally broader than updateOnScreenMediaCells(_:), which is
+    /// the autoplay set and requires a media cell to be at least 50% visible.
+    func updateLoadVisibleMediaCells(_ identifiers: Set<String>) {
+        guard loadVisibleMediaCells != identifiers else { return }
+        loadVisibleMediaCells = identifiers
+    }
+
+    /// Atomic viewport update from the table view. Keeps scroll direction, visible
+    /// loading cells, autoplay candidates, and tweet visibility in sync so playback
+    /// is reconciled exactly once per geometry pass.
+    func updateViewportVisibility(
+        loadVisibleIdentifiers: Set<String>,
+        playableIdentifiers: Set<String>,
+        visibleTweetIds tweetIds: Set<String>
+    ) {
+        OverlayVisibilityCoordinator.shared.verifyConsistency(source: "VideoPlaybackCoordinator.updateViewportVisibility")
+        updateScrollDirectionFromTableView()
+
+        loadVisibleMediaCells = loadVisibleIdentifiers
+        updateFeedVisibleTweets(tweetIds)
+        updatePlayableMediaCells(playableIdentifiers)
+
+        reconcilePlaybackForCurrentVisibility()
+    }
     
     /// Update which specific media cells are on-screen within the viewport.
     /// Called by TweetTableViewController alongside updateVisibleTweets, with per-cell granularity.
     /// Triggers primary video switch if the current primary went off-screen.
     func updateOnScreenMediaCells(_ identifiers: Set<String>) {
-        guard onScreenMediaCells != identifiers else { return }
-        onScreenMediaCells = identifiers
-        invalidateVisibleVideoCache()
-
-        // If primary video went off-screen at the media-cell level, force switch
-        if phase == .primaryPlaying,
-           let primaryId = primaryVideoId,
-           !identifiers.contains(primaryId) {
-            // During overlay dismiss settling, layout transients can temporarily
-            // report the primary as off-screen. Don't switch — let the overlay
-            // timer handle it with stable layout.
-            if overlayUncoverPlaybackTimer != nil { return }
-
-            if identifiers.isEmpty {
-                // All media cells left the screen — stop the primary so audio doesn't leak.
-                if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
-                    if let delegate = mediaCellDelegates[primary.identifier] {
-                        delegate.shouldStopVideo(withMid: primary.videoMid)
-                    } else {
-                        SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
-                    }
-                }
-                print("🎬 [COORD] onScreenUpdate: 0 cells on-screen, going idle")
-                phase = .idle
-                currentlyPlayingVideoIds.removeAll()
-                primaryVideoId = nil
-                scheduleStartPrimary()
-                return
-            }
-
-            print("🎬 [COORD] onScreenUpdate: primary \(shortIdent(primaryId)) left screen (\(identifiers.count) cells on-screen), switching")
-
-            // Stop current primary (immediate pause, no fade)
-            if let primary = allVideos.first(where: { $0.identifier == primaryId }) {
-                if let delegate = mediaCellDelegates[primary.identifier] {
-                    delegate.shouldStopVideo(withMid: primary.videoMid)
-                } else {
-                    // Cell may have been reused — delegate unregistered; stop cached player so it doesn't keep playing
-                    SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
-                }
-            }
-            // Reset and schedule new primary after debounce (avoids rapid switching during fast scroll)
-            phase = .idle
-            currentlyPlayingVideoIds.removeAll()
-            primaryVideoId = nil
-            scheduleStartPrimary()
-        }
+        updateScrollDirectionFromTableView()
+        updatePlayableMediaCells(identifiers)
+        reconcilePlaybackForCurrentVisibility()
     }
 
     /// Update visible tweets (called during scrolling)
     func updateVisibleTweets(_ tweetIds: Set<String>) {
         OverlayVisibilityCoordinator.shared.verifyConsistency(source: "VideoPlaybackCoordinator.updateVisibleTweets")
+        updateScrollDirectionFromTableView()
+        updateFeedVisibleTweets(tweetIds)
+        reconcilePlaybackForCurrentVisibility()
+    }
 
+    private func updateScrollDirectionFromTableView() {
         // Track scroll direction based on content offset (no preloading during scroll)
         if let tableView = tableView, tableView.window != nil {
             let currentOffset = tableView.contentOffset.y
@@ -854,7 +842,9 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
             previousContentOffset = currentOffset
         }
+    }
 
+    private func updateFeedVisibleTweets(_ tweetIds: Set<String>) {
         // Only consider feed-visible video entries (MediaGrid only shows first 4 attachments)
         let tweetsWithFeedVideos = Set(allVideos.filter { $0.isInVisibleMediaRange }.map { $0.cellTweetId })
         let filteredTweetIds = tweetIds.intersection(tweetsWithFeedVideos)
@@ -867,10 +857,36 @@ class VideoPlaybackCoordinator: ObservableObject {
             initialPreloadDone = true
             performPreloadOnScrollStop()
         }
+    }
 
+    private func updatePlayableMediaCells(_ identifiers: Set<String>) {
+        // During fullscreen/detail dismissal, UIKit can briefly report no visible
+        // cells while the presenting table view is reattaching. Keep the last
+        // known playable set through the overlay settling timer so the resume
+        // path still has a primary candidate.
+        if overlayUncoverPlaybackTimer != nil,
+           identifiers.isEmpty,
+           !onScreenMediaCells.isEmpty {
+            return
+        }
+
+        guard onScreenMediaCells != identifiers else { return }
+        onScreenMediaCells = identifiers
+        invalidateVisibleVideoCache()
+    }
+
+    private func reconcilePlaybackForCurrentVisibility() {
         // Video visibility depends on video (media cell) only — use onScreenMediaCells as source of truth
         let currentVisibleIdentifiers = onScreenMediaCells
         let visibilityChanged = previousVisibleIdentifiers != currentVisibleIdentifiers
+
+        // The overlay dismiss timer owns playback restart while layout settles.
+        // Do not stop/switch/schedule here, or a transient viewport sample can
+        // cancel the timer via stopAllVideos() and leave the feed blank.
+        if overlayUncoverPlaybackTimer != nil {
+            previousVisibleIdentifiers = currentVisibleIdentifiers
+            return
+        }
 
         // Stop all videos if none are visible
         if currentVisibleIdentifiers.isEmpty {
@@ -887,7 +903,6 @@ class VideoPlaybackCoordinator: ObservableObject {
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil
                 previousVisibleIdentifiers.removeAll()
-                scheduleStartPrimary()
                 return
             }
             previousVisibleIdentifiers.removeAll()
@@ -990,7 +1005,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         // Do NOT clear onScreenMediaCells here: the overlay-dismiss 0.15s timer reads
         // visibleVideos (filtered by onScreenMediaCells) to decide whether to resume.
         // Clearing it would leave visibleVideos empty and break the resume path.
-        // onScreenMediaCells is managed exclusively by updateOnScreenMediaCells().
+        // onScreenMediaCells is managed exclusively by viewport/media visibility updates.
         previousVisibleIdentifiers.removeAll()
 
         // Direct delegate calls to stop all registered cells in this coordinator
@@ -1057,7 +1072,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         if delegate.isActuallyPlaying { return }  // Primary is healthy — nothing to do
         // Primary has been commanded to play but AVPlayerItem is still loading (status=.unknown).
         // This is not a stall — it's normal IPFS/HLS latency. Let it load; once the item
-        // reaches readyToPlay and play() is called, the 15s buffering timeout in
+        // reaches readyToPlay and play() is called, the buffering timeout in
         // isActuallyPlaying will handle genuine stuck-buffering failures.
         if delegate.isLoadingForCoordinator { return }
         // Grace period after recent playback: give the primary time to recover from a brief
@@ -1213,12 +1228,18 @@ class VideoPlaybackCoordinator: ObservableObject {
         SharedAssetCache.shared.preloadPlayer(for: resolved.url, tweetId: resolved.tweetId, mediaType: resolved.mediaType)
     }
 
-    /// Get the next `count` videos in scroll direction that are not currently on-screen.
+    /// Get up to `count` preloadable videos in the scroll direction that are not currently visible.
     private func getNextVideosInScrollDirection(count: Int) -> [VideoPlaybackInfo] {
-        // Use media-cell level visibility (onScreenMediaCells) instead of tweet-level.
-        // Fall back to tweet-level at app start before onScreenMediaCells is populated.
+        // Use the low-threshold load-visible set so any media already on screen is
+        // treated as foreground work. Preload starts after the farthest visible media,
+        // so the target may be beyond the adjacent tweet if that tweet is still visible.
         let visibleIndices: [Int]
-        if !onScreenMediaCells.isEmpty {
+        if !loadVisibleMediaCells.isEmpty {
+            visibleIndices = allVideos.enumerated()
+                .filter { loadVisibleMediaCells.contains($0.element.identifier) && $0.element.isInVisibleMediaRange }
+                .map { $0.offset }
+                .sorted()
+        } else if !onScreenMediaCells.isEmpty {
             visibleIndices = allVideos.enumerated()
                 .filter { onScreenMediaCells.contains($0.element.identifier) && $0.element.isInVisibleMediaRange }
                 .map { $0.offset }
@@ -1234,38 +1255,37 @@ class VideoPlaybackCoordinator: ObservableObject {
         guard !visibleIndices.isEmpty else { return [] }
 
         var result: [VideoPlaybackInfo] = []
+        var seenMids = Set<String>()
+
+        func appendIfPreloadable(_ video: VideoPlaybackInfo) {
+            guard video.isInVisibleMediaRange,
+                  !loadVisibleMediaCells.contains(video.identifier),
+                  !onScreenMediaCells.contains(video.identifier),
+                  !seenMids.contains(video.videoMid) else { return }
+            result.append(video)
+            seenMids.insert(video.videoMid)
+        }
 
         if scrollDirection {
-            let lastVisibleIndex = visibleIndices.max() ?? 0
-            for i in 1...count {
-                let nextIndex = lastVisibleIndex + i
-                if nextIndex < allVideos.count {
-                    let video = allVideos[nextIndex]
-                    if video.isInVisibleMediaRange { result.append(video) }
-                }
+            var nextIndex = (visibleIndices.max() ?? 0) + 1
+            while nextIndex < allVideos.count && result.count < count {
+                appendIfPreloadable(allVideos[nextIndex])
+                nextIndex += 1
             }
         } else {
-            let firstVisibleIndex = visibleIndices.min() ?? 0
-            for i in 1...count {
-                let prevIndex = firstVisibleIndex - i
-                if prevIndex >= 0 {
-                    let video = allVideos[prevIndex]
-                    if video.isInVisibleMediaRange { result.append(video) }
-                }
+            var prevIndex = (visibleIndices.min() ?? 0) - 1
+            while prevIndex >= 0 && result.count < count {
+                appendIfPreloadable(allVideos[prevIndex])
+                prevIndex -= 1
             }
         }
 
         return result
     }
 
-    /// Preload videos for nearby (but not yet visible) tweets.
-    /// Called by the table view controller with spatially adjacent tweet IDs
-    /// that are just outside the visible area, providing better preloading than
-    /// index-based adjacency in the allVideos array.
     /// Clear preloaded video tracking (called when video list is rebuilt)
     private func clearPreloadedTracking() {
         activePreloadMids.removeAll()
-        activeNearbyMids.removeAll()
         SharedAssetCache.shared.updateProtectedPreloadMids([])
         scrollCancelTimer?.invalidate()
         scrollCancelTimer = nil
@@ -1297,65 +1317,47 @@ class VideoPlaybackCoordinator: ObservableObject {
         scrollCancelTimer = timer
     }
     
-    /// Called on scroll stop and initial load. Replaces preloadVideosInScrollDirection +
-    /// updateNearbyTweetsForPreloading with explicit set management and stale cleanup.
-    func performPreloadOnScrollStop(nearbyTweetIds: Set<String> = []) {
+    /// Called on scroll stop and initial load.
+    /// Tracks only the next videos in the scroll direction so stale preloads are easy to cancel.
+    func performPreloadOnScrollStop() {
         scrollCancelTimer?.invalidate()
         scrollCancelTimer = nil
         onScrollStopped()
 
-        // 1. New preload set: next video in scroll direction
-        let nextVideos = getNextVideosInScrollDirection(count: 1)
+        let nextVideos = getNextVideosInScrollDirection(count: 2)
         let newPreloadMids = Set(nextVideos.map { $0.videoMid })
 
-        // 2. New nearby set: at most two videos in adjacent tweets, excluding preload duplicates
-        let newNearbyMids: Set<String> = {
-            let nearbyVideos = allVideos.filter {
-                nearbyTweetIds.contains($0.cellTweetId)
-                    && $0.isInVisibleMediaRange
-                    && !newPreloadMids.contains($0.videoMid)
-            }.prefix(2)
-            return Set(nearbyVideos.map { $0.videoMid })
-        }()
-
-        // 3. Cancel stale preloads (not in new sets, not on-screen)
+        // Keep on-screen work alive, then cancel any older directional preloads.
         let onScreenMids = currentOnScreenVideoMids()
-        let newAll = newPreloadMids.union(newNearbyMids).union(onScreenMids)
+        let newAll = newPreloadMids.union(onScreenMids)
         cancelTrackedPreloads(except: newAll, reason: "scroll stop")
 
-        // 4. Update tracking
         activePreloadMids = newPreloadMids
-        activeNearbyMids = newNearbyMids
-        SharedAssetCache.shared.updateProtectedPreloadMids(newPreloadMids.union(newNearbyMids))
+        SharedAssetCache.shared.updateProtectedPreloadMids(newPreloadMids)
 
-        // 5. Start new preloads — preload players first (get download slots), then nearby assets
         for video in nextVideos where SharedAssetCache.shared.getCachedPlayer(for: video.videoMid) == nil {
             preloadVideoPlayer(video)
         }
-        let nearbyVideos = allVideos.filter { newNearbyMids.contains($0.videoMid) }
-        for video in nearbyVideos where SharedAssetCache.shared.getCachedPlayer(for: video.videoMid) == nil {
-            preloadVideoAsset(video)
-        }
 
-        if !newPreloadMids.isEmpty || !newNearbyMids.isEmpty {
-            print("🎬 [COORD] Scroll stop: preloading \(newPreloadMids.count) players + \(newNearbyMids.count) nearby assets")
+        if !newPreloadMids.isEmpty {
+            print("🎬 [COORD] Scroll stop: preloading \(newPreloadMids.count) directional players")
         }
     }
 
     private func currentOnScreenVideoMids() -> Set<String> {
-        Set(allVideos.filter { onScreenMediaCells.contains($0.identifier) }.map { $0.videoMid })
+        let visibleIdentifiers = loadVisibleMediaCells.isEmpty ? onScreenMediaCells : loadVisibleMediaCells
+        return Set(allVideos.filter { visibleIdentifiers.contains($0.identifier) }.map { $0.videoMid })
     }
 
     private func cancelTrackedPreloads(except keepMids: Set<String>, reason: String) {
-        let staleMids = activePreloadMids.union(activeNearbyMids).subtracting(keepMids)
+        let staleMids = activePreloadMids.subtracting(keepMids)
         guard !staleMids.isEmpty else { return }
 
         for mid in staleMids {
             SharedAssetCache.shared.cancelPreloadTask(for: mid)
         }
         activePreloadMids.subtract(staleMids)
-        activeNearbyMids.subtract(staleMids)
-        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids.union(activeNearbyMids))
+        SharedAssetCache.shared.updateProtectedPreloadMids(activePreloadMids)
         print("🎬 [COORD] \(reason): cancelled \(staleMids.count) stale preloads")
     }
 

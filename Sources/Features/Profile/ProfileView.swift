@@ -681,10 +681,13 @@ struct ProfileView: View {
             }
         }
         
+        var didFetchUser = false
+
         // Fetch fresh user data from server
         do {
             let refreshedUser = try await hproseInstance.fetchUser(user.mid, baseUrl: "")
             if let userData = refreshedUser {
+                didFetchUser = true
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 if let jsonData = try? encoder.encode(userData),
@@ -693,16 +696,18 @@ struct ProfileView: View {
                 } else {
                     print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - \(userData)")
                 }
-            } else {
-                print("DEBUG: [ProfileView] Successfully fetched user \(user.mid) from server - returned nil")
-            }
-            
-            if let refreshedUser = refreshedUser {
-                TweetCacheManager.shared.saveUser(refreshedUser)
+                TweetCacheManager.shared.saveUser(userData)
                 print("DEBUG: [ProfileView] Saved fetched user to cache")
+            } else {
+                print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): server returned nil")
             }
         } catch {
             print("DEBUG: [ProfileView] Failed to fetch user \(user.mid): \(error)")
+        }
+
+        guard didFetchUser else {
+            print("DEBUG: [ProfileView] Skipping pinned tweet refresh/resync because user fetch failed for \(user.mid)")
+            return
         }
         
         await refreshPinnedTweets()

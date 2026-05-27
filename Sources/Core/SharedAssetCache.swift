@@ -36,7 +36,7 @@ class SharedAssetCache: ObservableObject {
     // have a cached player yet, but their in-flight loads should survive visibility cleanup.
     private var protectedPreloadMids: Set<String> = []
 
-    // Track app foreground state — when foreground, protect visible + nearby videos from eviction
+    // Track app foreground state — when foreground, protect visible + directional preloads from eviction
     private var isAppInForeground: Bool = true
     
     // MARK: - CachingPlayerItem Delegate
@@ -704,19 +704,9 @@ class SharedAssetCache: ObservableObject {
                 return nil
             }
 
-            // Player is healthy - check if it needs buffer reload
-            let playerItem = player.currentItem!
-            let hasBufferedData = !playerItem.loadedTimeRanges.isEmpty
-
-            // If no buffered data, force preroll to reload from disk cache
-            if !hasBufferedData && playerItem.status == .readyToPlay {
-                player.preroll(atRate: 1.0) { success in
-                    if !success {
-                        print("⚠️ [PLAYER HEALTH] Preroll failed for \(mediaID.prefix(8))")
-                    }
-                }
-            }
-
+            // Cache lookup must stay side-effect free. Playback/preload callers
+            // decide when to enable network and play; doing preroll here can fight
+            // coordinator decisions and can crash if AVPlayer.status is not ready.
             cacheTimestamps[mediaID] = Date() // Update access time
             return player
         }
@@ -735,7 +725,7 @@ class SharedAssetCache: ObservableObject {
     }
 
     /// Media IDs that must not be evicted while app is in foreground.
-    /// Includes visible videos plus videos belonging to nearby tweets (preload window).
+    /// Includes visible videos plus current scroll-direction preload targets.
     private var foregroundProtectedMids: Set<String> {
         guard isAppInForeground else { return [] }
         var protected = visibleVideoMids
@@ -766,7 +756,7 @@ class SharedAssetCache: ObservableObject {
     }
 
     /// Cancel in-flight preload/loading tasks for a specific mediaID without releasing the cached player.
-    /// Called by VideoPlaybackCoordinator when preload/nearby sets change and old downloads should stop.
+    /// Called by VideoPlaybackCoordinator when the directional preload set changes and old downloads should stop.
     @MainActor func cancelPreloadTask(for mediaID: String) {
         protectedPreloadMids.remove(mediaID)
         preloadedPlayerMids.remove(mediaID)
@@ -1125,22 +1115,21 @@ class SharedAssetCache: ObservableObject {
                 print("🔄 [PROGRESSIVE VIDEO RETRY] Attempt #1 for: \(mediaID) - refreshing author baseUrl...")
                 
                 // CRITICAL: Refresh author's baseUrl before retry
-                let refreshed = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: tweetId)
-                
-                if refreshed {
-                    print("✅ [PROGRESSIVE VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
-                } else {
-                    print("⚠️ [PROGRESSIVE VIDEO RETRY] Could not refresh author baseUrl, retrying anyway")
+                guard let refreshedURL = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: tweetId) else {
+                    videoRetryCount.removeValue(forKey: mediaID)
+                    print("❌ [PROGRESSIVE VIDEO RETRY] Could not refresh author baseUrl; failing instead of retrying stale URL")
+                    throw originalError
                 }
+                print("✅ [PROGRESSIVE VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
                 
                 // Check if cancelled
                 if Task.isCancelled {
                     throw CancellationError()
                 }
                 
-                // Retry ONCE with (potentially) refreshed baseUrl
+                // Retry ONCE with the refreshed baseUrl. Never retry the failed URL.
                 do {
-                    return try await createProgressivePlayer(for: url, mediaID: mediaID)
+                    return try await createProgressivePlayer(for: refreshedURL, mediaID: mediaID)
                 } catch {
                     // Reset retry count for next time
                     _ = await MainActor.run {
@@ -1184,10 +1173,11 @@ class SharedAssetCache: ObservableObject {
 
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
-        // Play immediately when play() is called; let AVPlayer's normal stall recovery
-        // handle buffer-empty pauses rather than refusing to start (keepUp heuristic
-        // is unreliable with bursty IPFS delivery and causes indefinite spinners).
-        player.automaticallyWaitsToMinimizeStalling = false
+        // Let AVPlayer bridge short IPFS/proxy gaps by waiting for more data and
+        // resuming on its own. Disabling this made primary videos pause for a long
+        // time after a buffer drain because our manual keepUp callback could miss
+        // waitingToPlayAtSpecifiedRate transitions.
+        player.automaticallyWaitsToMinimizeStalling = true
 
         // Cache the player
         await MainActor.run {
@@ -1216,22 +1206,21 @@ class SharedAssetCache: ObservableObject {
                 print("🔄 [HLS VIDEO RETRY] Attempt #1 for: \(mediaID) - refreshing author baseUrl...")
                 
                 // CRITICAL: Refresh author's baseUrl before retry
-                let refreshed = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: tweetId)
-                
-                if refreshed {
-                    print("✅ [HLS VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
-                } else {
-                    print("⚠️ [HLS VIDEO RETRY] Could not refresh author baseUrl, retrying anyway")
+                guard let refreshedURL = await refreshAuthorBaseUrlForVideo(mediaID: mediaID, originalUrl: url, tweetId: tweetId) else {
+                    videoRetryCount.removeValue(forKey: mediaID)
+                    print("❌ [HLS VIDEO RETRY] Could not refresh author baseUrl; failing instead of retrying stale URL")
+                    throw originalError
                 }
+                print("✅ [HLS VIDEO RETRY] Author baseUrl refreshed successfully, retrying with new URL")
                 
                 // Check if cancelled
                 if Task.isCancelled {
                     throw CancellationError()
                 }
                 
-                // Retry ONCE with (potentially) refreshed baseUrl
+                // Retry ONCE with the refreshed baseUrl. Never retry the failed URL.
                 do {
-                    return try await createCachingPlayer(for: url, tweetId: tweetId)
+                    return try await createCachingPlayer(for: refreshedURL, tweetId: tweetId)
                 } catch {
                     print("❌ [HLS VIDEO] Failed after 1 retry with baseUrl refresh: \(mediaID)")
                     // Reset retry count for next time
@@ -1252,13 +1241,13 @@ class SharedAssetCache: ObservableObject {
         }
     }
     
-    /// Attempt to refresh the author's baseUrl for a video
-    /// Returns true if baseUrl was successfully refreshed
-    private func refreshAuthorBaseUrlForVideo(mediaID: String, originalUrl: URL, tweetId: String?) async -> Bool {
+    /// Attempt to refresh the author's baseUrl for a video.
+    /// Returns a URL rebased onto the fresh baseUrl, or nil if refresh failed.
+    private func refreshAuthorBaseUrlForVideo(mediaID: String, originalUrl: URL, tweetId: String?) async -> URL? {
         // Try to find the author ID from the tweet or attachment
         guard let authorId = await findAuthorIdForVideo(mediaID: mediaID, tweetId: tweetId) else {
             print("⚠️ [BASEURL REFRESH] Cannot find author ID for video: \(mediaID)")
-            return false
+            return nil
         }
         
         print("🔍 [BASEURL REFRESH] Found author ID: \(authorId) for video: \(mediaID)")
@@ -1270,6 +1259,7 @@ class SharedAssetCache: ObservableObject {
             
             if let newBaseUrl = refreshedUser?.baseUrl {
                 print("✅ [BASEURL REFRESH] Successfully refreshed baseUrl for author \(authorId): \(newBaseUrl.absoluteString)")
+                let refreshedURL = rebaseMediaURL(originalUrl, onto: newBaseUrl, mediaID: mediaID)
                 
                 // Update any cached Tweet instances with the new author info
                 await MainActor.run {
@@ -1279,15 +1269,34 @@ class SharedAssetCache: ObservableObject {
                     }
                 }
                 
-                return true
+                return refreshedURL
             } else {
                 print("⚠️ [BASEURL REFRESH] Fetched user but no baseUrl available for author: \(authorId)")
-                return false
+                return nil
             }
         } catch {
             print("❌ [BASEURL REFRESH] Failed to fetch user \(authorId): \(error.localizedDescription)")
-            return false
+            return nil
         }
+    }
+
+    private func rebaseMediaURL(_ originalURL: URL, onto baseURL: URL, mediaID: String) -> URL {
+        if var originalComponents = URLComponents(url: originalURL, resolvingAgainstBaseURL: false),
+           let baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+           let scheme = baseComponents.scheme,
+           let host = baseComponents.host {
+            originalComponents.scheme = scheme
+            originalComponents.host = host
+            originalComponents.port = baseComponents.port
+            originalComponents.user = baseComponents.user
+            originalComponents.password = baseComponents.password
+            if let rebasedURL = originalComponents.url {
+                return rebasedURL
+            }
+        }
+
+        let path = mediaID.count > Constants.MIMEI_ID_LENGTH ? "ipfs/\(mediaID)" : "mm/\(mediaID)"
+        return baseURL.appendingPathComponent(path)
     }
     
     /// Find the author ID for a video by searching tweets and attachments
@@ -1391,10 +1400,11 @@ class SharedAssetCache: ObservableObject {
 
         // CRITICAL: Mute player at creation - will be unmuted by mode if needed
         player.isMuted = true
-        // Play immediately when play() is called; let AVPlayer's normal stall recovery
-        // handle buffer-empty pauses rather than refusing to start (keepUp heuristic
-        // is unreliable with bursty IPFS delivery and causes indefinite spinners).
-        player.automaticallyWaitsToMinimizeStalling = false
+        // Let AVPlayer bridge short IPFS/proxy gaps by waiting for more data and
+        // resuming on its own. Disabling this made primary videos pause for a long
+        // time after a buffer drain because our manual keepUp callback could miss
+        // waitingToPlayAtSpecifiedRate transitions.
+        player.automaticallyWaitsToMinimizeStalling = true
 
         
         cachingPlayerItem.canUseNetworkResourcesForLiveStreamingWhilePaused = false
@@ -1784,12 +1794,28 @@ class SharedAssetCache: ObservableObject {
         guard let mediaID = extractMediaID(from: url) else { return }
 
         // Skip if player already cached
-        if playerCache[mediaID] != nil {
+        if let player = playerCache[mediaID] {
             preloadedPlayerMids.insert(mediaID)
+            if !visibleVideoMids.contains(mediaID), player.rate == 0 {
+                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+            }
+
             // Still generate thumbnail if missing
-            if cachedThumbnail(for: mediaID) == nil,
-               let asset = assetCache[mediaID] {
-                generateThumbnail(from: asset, for: mediaID)
+            if cachedThumbnail(for: mediaID) == nil {
+                if let item = player.currentItem, item.status == .readyToPlay {
+                    generateThumbnail(from: item.asset, for: mediaID)
+                } else if let asset = assetCache[mediaID] {
+                    generateThumbnail(from: asset, for: mediaID)
+                } else if preloadTasks[mediaID] == nil {
+                    let task = Task {
+                        defer { preloadTasks.removeValue(forKey: mediaID) }
+                        if let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID),
+                           cachedThumbnail(for: mediaID) == nil {
+                            generateThumbnail(from: readyAsset, for: mediaID)
+                        }
+                    }
+                    preloadTasks[mediaID] = task
+                }
             }
             return
         }
@@ -1807,9 +1833,18 @@ class SharedAssetCache: ObservableObject {
                 // Pause immediately — this is a preloaded player, not for playback yet.
                 // NodeConnectionPool limits its bandwidth at the HTTP layer.
                 await MainActor.run {
-                    player.pause()
+                    if !self.visibleVideoMids.contains(mediaID), player.rate == 0 {
+                        player.pause()
+                        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+                    }
                     self.preloadedPlayerMids.insert(mediaID)
                 }
+
+                if let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID),
+                   cachedThumbnail(for: mediaID) == nil {
+                    generateThumbnail(from: readyAsset, for: mediaID)
+                }
+
                 // Generate first-frame thumbnail so the cell isn't black before playback
                 if cachedThumbnail(for: mediaID) == nil,
                    let item = player.currentItem {
@@ -1823,6 +1858,27 @@ class SharedAssetCache: ObservableObject {
         preloadTasks[mediaID] = task
     }
 
+    /// Wait briefly for a preloaded player to decode enough metadata for a poster frame.
+    /// The task is cancellable, so stale scroll-direction preloads still stop promptly.
+    private func waitForPreloadReadyAsset(_ player: AVPlayer, mediaID: String) async -> AVAsset? {
+        for _ in 0..<80 {
+            if Task.isCancelled { return nil }
+
+            let state = await MainActor.run { () -> (asset: AVAsset?, failed: Bool) in
+                guard let item = player.currentItem else { return (nil, true) }
+                if item.status == .readyToPlay { return (item.asset, false) }
+                if item.status == .failed { return (nil, true) }
+                return (nil, false)
+            }
+
+            if let asset = state.asset { return asset }
+            if state.failed { return nil }
+
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return nil
+    }
+
     /// Generate and cache a first-frame thumbnail from a video asset.
     private func generateThumbnail(from asset: AVAsset, for mediaID: String) {
         let generator = AVAssetImageGenerator(asset: asset)
@@ -1832,9 +1888,8 @@ class SharedAssetCache: ObservableObject {
         generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
             guard result == .succeeded, let cgImage else { return }
             let image = UIImage(cgImage: cgImage)
-            DispatchQueue.main.async {
-                VideoLastFrameCache.shared.set(image, for: mediaID)
-                print("🖼️ [PLAYER PRELOAD] Generated thumbnail for \(mediaID)")
+            Task { @MainActor in
+                self.storeCachedThumbnail(image, for: mediaID, source: "preload")
             }
         }
     }
@@ -1848,8 +1903,7 @@ class SharedAssetCache: ObservableObject {
     /// Update cached thumbnail from a runtime-captured frame (pause/stop/scroll-out).
     /// Keeps the poster in sync with the last meaningful frame so re-entry resumes visually.
     func updateCachedThumbnail(_ image: UIImage, for mediaID: String) {
-        guard !VideoFrameExtractor.isMostlyBlack(image) else { return }
-        VideoLastFrameCache.shared.set(image, for: mediaID)
+        storeCachedThumbnail(image, for: mediaID, source: "runtime")
     }
 
     /// Generate a thumbnail from a cached asset if no thumbnail exists yet.
@@ -1865,16 +1919,29 @@ class SharedAssetCache: ObservableObject {
         generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { _, cgImage, _, result, _ in
             guard result == .succeeded, let cgImage else { return }
             let image = UIImage(cgImage: cgImage)
-            DispatchQueue.main.async {
-                VideoLastFrameCache.shared.set(image, for: mediaID)
+            Task { @MainActor in
+                self.storeCachedThumbnail(image, for: mediaID, source: "cached-asset")
                 completion(image)
             }
         }
     }
 
+    private func storeCachedThumbnail(_ image: UIImage, for mediaID: String, source: String) {
+        guard !VideoFrameExtractor.isMostlyBlack(image) else { return }
+        VideoLastFrameCache.shared.set(image, for: mediaID)
+        NotificationCenter.default.post(
+            name: .videoThumbnailCached,
+            object: self,
+            userInfo: ["mediaID": mediaID]
+        )
+        if source == "preload" {
+            print("🖼️ [PLAYER PRELOAD] Generated thumbnail for \(mediaID)")
+        }
+    }
+
     /// Update off-screen preload protection — called when scroll direction changes.
-    /// Protects both active player preloads and nearby asset preloads from generic
-    /// visibility cleanup. NodeConnectionPool manages their bandwidth.
+    /// Protects active directional player preloads from generic visibility cleanup.
+    /// NodeConnectionPool manages their bandwidth.
     func updateProtectedPreloadMids(_ mids: Set<String>) {
         let previousProtectedCount = protectedPreloadMids.count
         protectedPreloadMids = mids
@@ -2580,14 +2647,11 @@ class SharedAssetCache: ObservableObject {
                 continue
             }
             
-            // Force a seek to refresh the video layer and ensure buffering
+            // Force a seek to refresh the video layer. Do not preroll here; these
+            // players may be paused background/preload instances, and playback
+            // ownership belongs to the active cell/coordinator.
             let currentTime = player.currentTime()
-            player.seek(to: currentTime) { finished in
-                if finished {
-                    // Trigger preroll to ensure video is ready to play
-                    player.preroll(atRate: 1.0) { _ in }
-                }
-            }
+            player.seek(to: currentTime)
         }
         
         // Clean up invalid players after iteration

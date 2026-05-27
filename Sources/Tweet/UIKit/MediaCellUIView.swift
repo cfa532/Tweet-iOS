@@ -132,9 +132,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// KVO observers
     private var playerItemStatusObserver: NSKeyValueObservation?
     private var timeControlStatusObserver: NSKeyValueObservation?
-    /// Buffer-recovery observer. With automaticallyWaitsToMinimizeStalling=false the player
-    /// goes to .paused on buffer drain and won't auto-resume — we re-issue play() when this
-    /// flag flips back to true.
+    /// Buffer-recovery observer. AVPlayer normally resumes from short buffer drains,
+    /// but HLS/proxy delivery can still leave it waiting; keep this as a backup so
+    /// the selected video gets another play command when data catches up.
     private var playbackLikelyToKeepUpObserver: NSKeyValueObservation?
 
     /// Notification observers
@@ -142,6 +142,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var stopAllObserver: NSObjectProtocol?
     private var playerLoanedObserver: NSObjectProtocol?
     private var playerClaimedObserver: NSObjectProtocol?
+    private var videoThumbnailObserver: NSObjectProtocol?
     private var shouldPlayObserver: NSObjectProtocol?
     private var shouldPauseObserver: NSObjectProtocol?
     private var shouldStopObserver: NSObjectProtocol?
@@ -156,6 +157,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Fallback task: if item.status stays .unknown after deferring to statusKVO,
     /// enable network and kick playback after a delay (same as deadlock fix).
     private var statusUnknownFallbackTask: Task<Void, Never>?
+    /// Recovery for ready players that were promoted from preload but remain
+    /// stuck at the first buffer gap after play() was requested.
+    private var playbackStartupRecoveryTask: Task<Void, Never>?
+    private var playbackStartupRecoveryRequestDate: Date?
 
     /// Periodic time observer token for the video timer label
     private var timeObserverToken: Any?
@@ -168,6 +173,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Last time AVPlayer confirmed playing (timeControlStatus == .playing).
     /// Used by stall-check to distinguish HLS buffer gaps from genuine stalls.
     private var lastActualPlaybackDate: Date = .distantPast
+    /// Last time this cell asked AVPlayer to play. This is intent only; it is
+    /// intentionally separate from lastActualPlaybackDate.
+    private var lastPlaybackRequestDate: Date = .distantPast
+    private var lastPlaybackNudgeDate: Date = .distantPast
+    private var lastLoggedTimeControlStatus: AVPlayer.TimeControlStatus?
+    private var lastLoggedTimeControlBucket: Int = -1
+    private var lastLoggedTimeControlDate: Date = .distantPast
 
 
     /// Prevent duplicate finish handling
@@ -310,11 +322,21 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         case .noContent:
             imageView.isHidden = true
             videoPlayerView.isHidden = false  // black backdrop for spinner
-            loadingSpinner.startAnimating()
+            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: false) {
+                loadingSpinner.startAnimating()
+            } else {
+                loadingSpinner.stopAnimating()
+            }
         case .thumbnail:
             imageView.isHidden = false  // caller must set imageView.image before this
             videoPlayerView.isHidden = true
-            loadingSpinner.stopAnimating()
+            // If this is the selected video, a newly captured cover frame should not
+            // briefly dismiss loading feedback before AVPlayer is actually playing.
+            if coordinatorWantsToPlay {
+                loadingSpinner.startAnimating()
+            } else {
+                loadingSpinner.stopAnimating()
+            }
         case .playerLoading:
             let hasThumbnail = imageView.image != nil
             imageView.isHidden = !hasThumbnail
@@ -323,12 +345,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // still decodes in the background; onReadyForDisplay → .playerReady will
             // show it once the first frame is available.
             videoPlayerView.isHidden = hasThumbnail
-            // Show spinner when coordinator wants to play (primary video) even if
-            // a thumbnail is already visible — the thumbnail is just a cover while
-            // the player initialises, and the user needs feedback that loading is
-            // in progress.  For non-primary videos preloading in the background,
-            // keep the spinner off to avoid distracting chrome.
-            if coordinatorWantsToPlay || !hasThumbnail {
+            // Primary videos always show loading chrome. Visible non-primary videos
+            // also show it until their cover frame arrives; off-screen preloads stay quiet.
+            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: hasThumbnail) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -345,10 +364,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 // Primary video or no thumbnail: show player layer (decodes underneath thumbnail)
                 videoPlayerView.isHidden = false
             }
-            // With streaming, the first frame can render before the player has buffered
-            // enough data to start continuous playback.  Keep the spinner on if the
-            // coordinator has already sent a play command so the user knows it's still loading.
-            if coordinatorWantsToPlay {
+            // With streaming, the first frame can render before playback can continue.
+            // Keep primary feedback on, and keep visible non-primary feedback on until
+            // a cover frame exists. Off-screen preloads should not show spinner chrome.
+            if coordinatorWantsToPlay || shouldShowVisibleVideoCoverSpinner(hasCover: hasThumbnail) {
                 loadingSpinner.startAnimating()
             } else {
                 loadingSpinner.stopAnimating()
@@ -388,6 +407,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             loadingSpinner.stopAnimating()
             retryButton.isHidden = false
         }
+    }
+
+    private func shouldShowVisibleVideoCoverSpinner(hasCover: Bool) -> Bool {
+        isVisible && isVideoAttachment && shouldLoadVideo && !hasCover
     }
 
     // MARK: - Configure
@@ -558,17 +581,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // Try to generate thumbnail from cached asset
             SharedAssetCache.shared.generateThumbnailIfNeeded(for: attachment.mid) { [weak self] image in
                 guard let self, self.attachment?.mid == attachment.mid else { return }
-                self.imageView.image = image
-                switch self.videoCellState {
-                case .noContent:
-                    self.transitionTo(.thumbnail)
-                case .playerLoading:
-                    self.transitionTo(.playerLoading)  // re-evaluate: shows thumbnail, stops spinner
-                default:
-                    break  // player already rendering
-                }
+                self.applyCachedVideoThumbnail(image)
             }
         }
+        observeCachedVideoThumbnail(for: attachment.mid)
 
         // Tap gesture for fullscreen — on both videoPlayerView and imageView so that
         // any visible video is tappable (thumbnail state or non-primary use imageView).
@@ -645,6 +661,44 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // Mute button for single video (timer shown when playback starts)
         if isSingleMedia {
             setupMuteButton()
+        }
+    }
+
+    private func observeCachedVideoThumbnail(for mediaID: String) {
+        if let observer = videoThumbnailObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoThumbnailObserver = nil
+        }
+
+        videoThumbnailObserver = NotificationCenter.default.addObserver(
+            forName: .videoThumbnailCached,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let notifiedMediaID = notification.userInfo?["mediaID"] as? String
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.attachment?.mid == mediaID,
+                      notifiedMediaID == mediaID,
+                      let thumbnail = SharedAssetCache.shared.cachedThumbnail(for: mediaID) else {
+                    return
+                }
+                self.applyCachedVideoThumbnail(thumbnail)
+            }
+        }
+    }
+
+    private func applyCachedVideoThumbnail(_ image: UIImage) {
+        imageView.image = image
+        switch videoCellState {
+        case .noContent:
+            transitionTo(.thumbnail)
+        case .playerLoading, .playerReady:
+            // Re-evaluate visibility now that the poster exists. For non-primary
+            // preload cells this hides the black layer and stops the spinner.
+            transitionTo(videoCellState)
+        default:
+            break
         }
     }
 
@@ -815,6 +869,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func preparePlayerForConfiguration(_ newPlayer: AVPlayer) {
         if newPlayer.rate > 0 { newPlayer.pause() }
         newPlayer.isMuted = MuteState.shared.isMuted
+        if isVisible {
+            newPlayer.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        }
         removePlayerObservers()
         self.player = newPlayer
         // Notify other feed cells that may hold the same player (tweet + retweet case)
@@ -952,6 +1009,135 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
     }
 
+    private func bufferedTimeAhead(for player: AVPlayer) -> Double {
+        guard let item = player.currentItem else { return 0 }
+        let currentSeconds = seconds(from: player.currentTime())
+        guard currentSeconds.isFinite else { return 0 }
+
+        var bestBufferAhead: Double = 0
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = seconds(from: range.start)
+            let duration = seconds(from: range.duration)
+            let end = start + duration
+            if currentSeconds >= start && currentSeconds <= end {
+                return max(0, end - currentSeconds)
+            } else if end > currentSeconds {
+                bestBufferAhead = max(bestBufferAhead, end - currentSeconds)
+            }
+        }
+        return max(0, bestBufferAhead)
+    }
+
+    private func seconds(from time: CMTime) -> Double {
+        let value = CMTimeGetSeconds(time)
+        return value.isFinite ? value : 0
+    }
+
+    private func timeControlLogBucket(for seconds: Double) -> Int {
+        guard seconds.isFinite else { return 0 }
+        let bucket = (seconds * 10).rounded()
+        guard bucket.isFinite else { return 0 }
+        if bucket > Double(Int.max) { return Int.max }
+        if bucket < Double(Int.min) { return Int.min }
+        return Int(bucket)
+    }
+
+    /// AVPlayer can report rate > 0 while still waiting on a tiny startup
+    /// buffer. Keep loading, keep the spinner visible, and briefly let it start
+    /// without AVPlayer's stall-minimizing wait so the first frames can render.
+    private func nudgePlaybackIfWaiting(_ player: AVPlayer, reason: String) {
+        guard coordinatorWantsToPlay,
+              player.currentItem?.status == .readyToPlay,
+              player.timeControlStatus != .playing,
+              !isVideoAtEnd(player) else { return }
+
+        let bufferedAhead = bufferedTimeAhead(for: player)
+        let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
+        let shouldBypassStartupWait = bufferedAhead > 0
+            && ((bufferedAhead < 1.5 && !keepUp) || (bufferedAhead >= 2.0 && keepUp))
+        let now = Date()
+        let nudgeCooldown: TimeInterval = shouldBypassStartupWait ? 0.8 : 2.0
+
+        if now.timeIntervalSince(lastPlaybackNudgeDate) < nudgeCooldown {
+            scheduleStartupRecovery(for: player, reason: reason)
+            return
+        }
+
+        if shouldBypassStartupWait {
+            player.automaticallyWaitsToMinimizeStalling = false
+        }
+        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        if lastPlaybackRequestDate == .distantPast {
+            lastPlaybackRequestDate = Date()
+        }
+        player.play()
+        updateLoadingSpinnerForPlayback(player)
+
+        lastPlaybackNudgeDate = now
+        print("\(logPrefix) 🔄 playback nudge (\(reason)): timeControl=\(player.timeControlStatus.rawValue), buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp), bypassWait=\(shouldBypassStartupWait)")
+
+        scheduleStartupRecovery(for: player, reason: reason)
+    }
+
+    private func scheduleStartupRecovery(for player: AVPlayer, reason: String) {
+        let requestDate = lastPlaybackRequestDate
+        if playbackStartupRecoveryTask != nil,
+           playbackStartupRecoveryRequestDate == requestDate {
+            return
+        }
+
+        playbackStartupRecoveryTask?.cancel()
+        playbackStartupRecoveryRequestDate = requestDate
+
+        playbackStartupRecoveryTask = Task { @MainActor [weak self, weak player] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard let self else { return }
+            defer {
+                if self.playbackStartupRecoveryRequestDate == requestDate {
+                    self.playbackStartupRecoveryTask = nil
+                    self.playbackStartupRecoveryRequestDate = nil
+                }
+            }
+            guard !Task.isCancelled,
+                  let player,
+                  self.player === player,
+                  self.coordinatorWantsToPlay,
+                  self.videoCellState == .playing,
+                  self.lastPlaybackRequestDate == requestDate,
+                  player.timeControlStatus != .playing,
+                  !self.isVideoAtEnd(player),
+                  let mid = self.attachment?.mid else { return }
+
+            let bufferedAhead = self.bufferedTimeAhead(for: player)
+            let keepUp = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
+            if bufferedAhead >= 1.0 && keepUp {
+                if player.automaticallyWaitsToMinimizeStalling {
+                    player.automaticallyWaitsToMinimizeStalling = false
+                }
+                player.play()
+                self.updateLoadingSpinnerForPlayback(player)
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled,
+                      self.player === player,
+                      self.coordinatorWantsToPlay,
+                      player.timeControlStatus != .playing,
+                      !self.isVideoAtEnd(player) else { return }
+            }
+
+            print("\(self.logPrefix) 🔄 startup recovery (\(reason)): rebuilding stuck player, buffered=\(String(format: "%.1f", bufferedAhead))s, keepUp=\(keepUp)")
+            SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
+            self.cleanupVideoPlayer(reason: "startupRecovery.stuckWaiting")
+            self.coordinatorWantsToPlay = true
+            if let att = self.attachment,
+               let url = att.getUrl(self.effectiveBaseUrl),
+               let parentTweet = self.parentTweet {
+                self.transitionTo(self.imageView.image != nil ? .thumbnail : .playerLoading)
+                self.acquirePlayer(attachment: att, url: url, parentTweet: parentTweet)
+            }
+        }
+    }
+
     /// Queue extra work for the next first-frame event without discarding an existing callback.
     private func addReadyForDisplayAction(_ action: @escaping () -> Void) {
         let existingAction = videoPlayerView.onReadyForDisplay
@@ -994,7 +1180,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         // If already in playing state, resume if stalled (rate==0) and return.
         if let player = player, videoCellState == .playing {
-            if player.rate == 0 { player.play() }
+            if player.timeControlStatus == .playing {
+                return
+            }
+            nudgePlaybackIfWaiting(player, reason: "coordinatorPlay-alreadyPlayingState")
             return
         }
 
@@ -1145,7 +1334,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             if !isActuallyPlayerReady(player) && videoCellState == .playerLoading {
                 if !isVisible {
                     // Cell is off-screen — release player to free network resources
-                    // instead of waiting for the 15s stuck timer.
+                    // instead of waiting for the coordinator's stall timer.
                     removePlayerObservers()
                     SharedAssetCache.shared.clearPlayerForMediaID(mid, deleteDiskCache: false)
                     self.player = nil
@@ -1290,11 +1479,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             // == .waitingToPlayAtSpecifiedRate) with no frames to show.
             updateLoadingSpinnerForPlayback(player)
             retryButton.isHidden = true
+            player.automaticallyWaitsToMinimizeStalling = true
+            player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
             player.isMuted = MuteState.shared.isMuted
             player.volume = 1.0
             if isSingleMedia, let mid = attachment?.mid {
                 setupVideoTimer(videoMid: mid)
                 startPlayerTimeObserver()
+            }
+            if player.timeControlStatus != .playing {
+                nudgePlaybackIfWaiting(player, reason: "\(reason)-rateAlreadyPositive")
             }
             return
         }
@@ -1331,9 +1525,15 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         // which is invisible without the spinner on preloaded .playerReady players.
         loadingSpinner.startAnimating()
 
+        // Primary playback must own network recovery. Preloaded players may be
+        // paused with background-friendly settings, so restore AVPlayer's normal
+        // stall handling before issuing play().
+        player.automaticallyWaitsToMinimizeStalling = true
+        player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         player.isMuted = MuteState.shared.isMuted
-        lastActualPlaybackDate = Date()
+        lastPlaybackRequestDate = Date()
         player.play()
+        scheduleStartupRecovery(for: player, reason: "actuallyStartPlayback")
 
         // Show timer when playback starts
         if isSingleMedia {
@@ -1629,9 +1829,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 case .waitingToPlayAtSpecifiedRate: statusName = "waiting"
                 @unknown default: statusName = "unknown(\(player.timeControlStatus.rawValue))"
                 }
-                let pos = player.currentTime().seconds
-                let dur = player.currentItem?.duration.seconds ?? 0
+                let pos = self.seconds(from: player.currentTime())
+                let dur = self.seconds(from: player.currentItem?.duration ?? .zero)
                 let atEnd = self.isVideoAtEnd(player)
+                let positionBucket = self.timeControlLogBucket(for: pos)
+                let isDuplicateStatus = self.lastLoggedTimeControlStatus == player.timeControlStatus
+                    && self.lastLoggedTimeControlBucket == positionBucket
+                    && Date().timeIntervalSince(self.lastLoggedTimeControlDate) < 1.0
+                if isDuplicateStatus {
+                    return
+                }
+                self.lastLoggedTimeControlStatus = player.timeControlStatus
+                self.lastLoggedTimeControlBucket = positionBucket
+                self.lastLoggedTimeControlDate = Date()
+
                 var logMsg = "\(self.logPrefix) ⏱️ timeControl: \(statusName), pos=\(String(format: "%.1f", pos))/\(String(format: "%.1f", dur)), atEnd=\(atEnd), state=\(self.videoCellState)"
                 if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
                     let reason = player.reasonForWaitingToPlay?.rawValue ?? "nil"
@@ -1647,6 +1858,12 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
                 if player.timeControlStatus == .playing {
                     self.lastActualPlaybackDate = Date()
+                    self.playbackStartupRecoveryTask?.cancel()
+                    self.playbackStartupRecoveryTask = nil
+                    self.playbackStartupRecoveryRequestDate = nil
+                    if !player.automaticallyWaitsToMinimizeStalling {
+                        player.automaticallyWaitsToMinimizeStalling = true
+                    }
                     self.updateLoadingSpinnerForPlayback(player)
                     // Smooth playback confirmed — hide thumbnail cover to reveal actual video
                     if self.isActuallyPlayerReady(player) && (self.videoCellState == .playing || self.videoCellState == .playerReady) {
@@ -1664,18 +1881,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                           self.videoCellState == .playing || self.videoCellState == .playerReady {
                     guard !self.isVideoAtEnd(player) else { return }
                     self.updateLoadingSpinnerForPlayback(player)
+                    self.nudgePlaybackIfWaiting(player, reason: "timeControl-waiting")
                 } else if player.timeControlStatus == .paused
                             && self.coordinatorWantsToPlay
                             && self.videoCellState == .playing
                             && !self.isVideoAtEnd(player) {
                     self.updateLoadingSpinnerForPlayback(player)
+                    self.nudgePlaybackIfWaiting(player, reason: "timeControl-paused")
                 }
             }
         }
 
-        // KVO: isPlaybackLikelyToKeepUp — resume playback after a buffer-drain stall.
-        // automaticallyWaitsToMinimizeStalling=false means the player won't auto-resume
-        // when data arrives, so we re-issue play() when the buffer can keep up again.
+        // KVO: isPlaybackLikelyToKeepUp — backup resume after a buffer-drain stall.
+        // AVPlayer should auto-resume, but if it remains paused or waiting while the
+        // coordinator still wants this primary, nudge it once data is available.
         playbackLikelyToKeepUpObserver = playerItem.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self,
@@ -1683,11 +1902,14 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                       let player = self.player,
                       self.coordinatorWantsToPlay,
                       self.videoCellState == .playing,
-                      player.timeControlStatus == .paused,
-                      player.rate == 0,
+                      player.timeControlStatus != .playing,
                       !self.isVideoAtEnd(player) else { return }
                 print("\(self.logPrefix) 🔄 buffer recovered — resuming at \(String(format: "%.1f", player.currentTime().seconds))s")
+                player.automaticallyWaitsToMinimizeStalling = true
+                player.currentItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
                 player.play()
+                self.lastPlaybackRequestDate = Date()
+                self.updateLoadingSpinnerForPlayback(player)
             }
         }
     }
@@ -1828,9 +2050,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private func updateTimerLabel(currentTime: CMTime) {
         guard let item = player?.currentItem else { return }
         let duration = item.duration
-        guard duration.isValid, !duration.isIndefinite, duration.seconds > 0 else { return }
+        let durationSeconds = seconds(from: duration)
+        guard duration.isValid, !duration.isIndefinite, durationSeconds > 0 else { return }
 
-        let remaining = max(0, duration.seconds - currentTime.seconds)
+        let remaining = max(0, durationSeconds - seconds(from: currentTime))
         let minutes = Int(remaining) / 60
         let seconds = Int(remaining) % 60
         timerLabel.text = "\(minutes):\(String(format: "%02d", seconds))"
@@ -2089,6 +2312,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Mark video as visible for cache preservation
             if isVideoAttachment {
+                // Visibility is foreground demand: every on-screen video should
+                // load a cover/player even when it is not the autoplay primary.
+                shouldLoadVideo = true
                 if attachment.getUrl(effectiveBaseUrl) != nil {
                     SharedAssetCache.shared.markAsVisible(attachment.mid)
                     VideoStateCache.shared.markAsVisible(attachment.mid)
@@ -2180,12 +2406,26 @@ class MediaCellUIView: UIView, MediaCellDelegate {
               player.currentItem != nil else { return false }
         // timeControlStatus == .playing means frames are actually rendering
         if player.timeControlStatus == .playing { return true }
+        guard let item = player.currentItem else { return false }
+        let isCoordinatorOwnedReadyItem = coordinatorWantsToPlay
+            && videoCellState == .playing
+            && item.status == .readyToPlay
+
         // rate > 0 + waitingToPlayAtSpecifiedRate = play() was called but buffering.
-        // Only count as "playing" for up to 15s — beyond that, the player is stuck
-        // buffering (IPFS unreachable, segments can't be fetched) and the stall
-        // detector should restart with a different video.
-        if player.rate > 0 || (coordinatorWantsToPlay && player.timeControlStatus == .waitingToPlayAtSpecifiedRate) {
-            return Date().timeIntervalSince(lastActualPlaybackDate) < 15.0
+        // AVPlayer can also report a proxy/HLS buffer gap as paused while keeping a
+        // healthy ready item, so keep coordinator ownership during the same grace.
+        // Count this as active for a longer grace window so slow IPFS/proxy segments
+        // can recover through AVPlayer's own stall handling instead of fighting the
+        // coordinator restart loop while data is already arriving.
+        if player.rate > 0
+            || (coordinatorWantsToPlay && player.timeControlStatus == .waitingToPlayAtSpecifiedRate)
+            || isCoordinatorOwnedReadyItem {
+            let bufferedAhead = bufferedTimeAhead(for: player)
+            let keepUp = item.isPlaybackLikelyToKeepUp
+            let requestGrace: TimeInterval = (bufferedAhead < 1.0 && !keepUp) ? 6.0 : 15.0
+            let actualGrace: TimeInterval = 30.0
+            return Date().timeIntervalSince(lastPlaybackRequestDate) < requestGrace
+                || Date().timeIntervalSince(lastActualPlaybackDate) < actualGrace
         }
         return false
     }
@@ -2194,7 +2434,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     /// Prevents false stall detection: IPFS/HLS can take >3s before play() is even callable.
     /// Returns false once item fails (.failed) or becomes ready (.readyToPlay), so genuine stalls
     /// (item never transitions out of .unknown) are eventually caught by the stall detector's
-    /// 15s buffering timeout in isActuallyPlaying.
+    /// buffering timeout in isActuallyPlaying.
     var isLoadingForCoordinator: Bool {
         guard coordinatorWantsToPlay,
               let item = player?.currentItem else { return false }
@@ -2357,6 +2597,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
         let hasWork =
             setupPlayerTask != nil ||
+            playbackStartupRecoveryTask != nil ||
             videoOutput != nil ||
             videoOutputAttachedItem != nil ||
             timeObserverToken != nil ||
@@ -2368,6 +2609,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             stopAllObserver != nil ||
             playerLoanedObserver != nil ||
             playerClaimedObserver != nil ||
+            videoThumbnailObserver != nil ||
             shouldPlayObserver != nil ||
             shouldPauseObserver != nil ||
             shouldStopObserver != nil ||
@@ -2387,6 +2629,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         setupPlayerTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
+        playbackStartupRecoveryTask?.cancel()
+        playbackStartupRecoveryTask = nil
+        playbackStartupRecoveryRequestDate = nil
 
         videoPlayerView.onReadyForDisplay = nil
 
@@ -2398,6 +2643,8 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         playerLoanedObserver = nil
         if let o = playerClaimedObserver { NotificationCenter.default.removeObserver(o) }
         playerClaimedObserver = nil
+        if let o = videoThumbnailObserver { NotificationCenter.default.removeObserver(o) }
+        videoThumbnailObserver = nil
         if let o = shouldPlayObserver { NotificationCenter.default.removeObserver(o) }
         shouldPlayObserver = nil
         if let o = shouldPauseObserver { NotificationCenter.default.removeObserver(o) }
@@ -2431,6 +2678,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         videoCellState = .noContent
         lastFrameCaptureAt = .distantPast
         lastActualPlaybackDate = .distantPast
+        lastPlaybackRequestDate = .distantPast
+        lastPlaybackNudgeDate = .distantPast
+        lastLoggedTimeControlStatus = nil
+        lastLoggedTimeControlBucket = -1
+        lastLoggedTimeControlDate = .distantPast
     }
 
     private func removeAudioHosting() {
@@ -2450,6 +2702,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         timerHideTask = nil
         statusUnknownFallbackTask?.cancel()
         statusUnknownFallbackTask = nil
+        playbackStartupRecoveryTask?.cancel()
+        playbackStartupRecoveryTask = nil
+        playbackStartupRecoveryRequestDate = nil
         cancellables.removeAll()
 
         if let att = attachment {
@@ -2462,6 +2717,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         if let observer = foregroundObserver {
             NotificationCenter.default.removeObserver(observer)
             foregroundObserver = nil
+        }
+        if let observer = videoThumbnailObserver {
+            NotificationCenter.default.removeObserver(observer)
+            videoThumbnailObserver = nil
         }
 
         // Clean up video BEFORE clearing imageView — preserveFrameToCache can use
@@ -2496,6 +2755,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             NotificationCenter.default.removeObserver(o)
         }
         if let o = videoCompletionObserver {
+            NotificationCenter.default.removeObserver(o)
+        }
+        if let o = videoThumbnailObserver {
             NotificationCenter.default.removeObserver(o)
         }
         if let o = shouldPlayObserver {
