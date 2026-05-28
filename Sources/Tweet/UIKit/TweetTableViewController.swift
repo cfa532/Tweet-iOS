@@ -96,6 +96,7 @@ class TweetTableViewController: UITableViewController {
     private let videoVisibilityThrottleInterval: TimeInterval = 0.15 // 150ms during active drag
     private var lastVisibleTweetIds: Set<String> = [] // Cache last visible tweet IDs
     private var lastLoadVisibleVideoIds: Set<String> = [] // Cache media that is physically on screen and should load
+    private var lastContinuePlaybackVideoIds: Set<String> = [] // Cache media visible enough to keep current playback
     private var lastOnScreenVideoIds: Set<String> = [] // Cache per-cell on-screen video identifiers
     
     // Cached main content rect to avoid recalculating on every visibility check
@@ -268,6 +269,7 @@ class TweetTableViewController: UITableViewController {
                         // where viewWillDisappear called stopAllVideos).
                         self.lastVisibleTweetIds = []
                         self.lastLoadVisibleVideoIds = []
+                        self.lastContinuePlaybackVideoIds = []
                         self.lastOnScreenVideoIds = []
                         self.updateVisibleTweetsForVideoPlayback()
                         self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
@@ -455,6 +457,7 @@ class TweetTableViewController: UITableViewController {
         // leave visibleVideos stale after foreground/detail transitions.
         lastVisibleTweetIds = []
         lastLoadVisibleVideoIds = []
+        lastContinuePlaybackVideoIds = []
         lastOnScreenVideoIds = []
         updateVisibleTweetsForVideoPlayback()
 
@@ -513,6 +516,7 @@ class TweetTableViewController: UITableViewController {
                 } else {
                     self.lastVisibleTweetIds = []
                     self.lastLoadVisibleVideoIds = []
+                    self.lastContinuePlaybackVideoIds = []
                     self.lastOnScreenVideoIds = []
                     self.updateVisibleTweetsForVideoPlayback()
                     self.videoCoordinator.requestResumePrimaryPlaybackIfVisible()
@@ -2104,6 +2108,7 @@ class TweetTableViewController: UITableViewController {
         // and gather load-visible/playable video IDs together so scrolling does less repeated work.
         var visibleTweetIds = Set<String>()
         var loadVisibleVideoIds = Set<String>()
+        var continuePlaybackVideoIds = Set<String>()
         var onScreenVideoIds = Set<String>()
         for indexPath in visibleIndexPaths {
             guard let tweetCell = tableView.cellForRow(at: indexPath) as? TweetTableViewCell else { continue }
@@ -2122,22 +2127,26 @@ class TweetTableViewController: UITableViewController {
                 coordinateSpace: tableView
             )
             loadVisibleVideoIds.formUnion(mediaVisibility.loadVisible)
+            continuePlaybackVideoIds.formUnion(mediaVisibility.continuePlayback)
             onScreenVideoIds.formUnion(mediaVisibility.playable)
 
             guard isTweetVisible, let tweet = tweetForRow(indexPath.row) else { continue }
             visibleTweetIds.insert(tweet.mid)
         }
         guard loadVisibleVideoIds != lastLoadVisibleVideoIds ||
+              continuePlaybackVideoIds != lastContinuePlaybackVideoIds ||
               onScreenVideoIds != lastOnScreenVideoIds ||
               visibleTweetIds != lastVisibleTweetIds else {
             return
         }
 
         lastLoadVisibleVideoIds = loadVisibleVideoIds
+        lastContinuePlaybackVideoIds = continuePlaybackVideoIds
         lastOnScreenVideoIds = onScreenVideoIds
         lastVisibleTweetIds = visibleTweetIds
         videoCoordinator.updateViewportVisibility(
             loadVisibleIdentifiers: loadVisibleVideoIds,
+            continuePlaybackIdentifiers: continuePlaybackVideoIds,
             playableIdentifiers: onScreenVideoIds,
             visibleTweetIds: visibleTweetIds
         )

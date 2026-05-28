@@ -3,7 +3,7 @@
 //  Tweet
 //
 //  Coordinates video playback across the app
-//  Behavior: Play topmost video on screen, switch to next when current video is 50% out of view (next video must be 50% on screen)
+//  Behavior: Start a video once it is 50% visible; stop the current video once it drops below 70% visible.
 //
 import Foundation
 import SwiftUI
@@ -100,7 +100,7 @@ struct VideoPlaybackInfo: Equatable {
 /// Behavior:
 /// 1. Play topmost video on screen immediately (no survey phase)
 /// 2. Monitor scroll position during playback
-/// 3. When current video is 50% out of view, switch to next video (next video must be 50% on screen)
+/// 3. When current video drops below 70% visible, switch to the next 50% visible video if available
 /// 4. When video finishes, move to next visible video
 /// 5. Debounce timer: 0.2s
 @MainActor
@@ -155,6 +155,14 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Media cells with any visible pixels. These must load, but are not necessarily
     /// eligible for autoplay until they reach the stricter onScreenMediaCells threshold.
     private var loadVisibleMediaCells: Set<String> = []
+
+    /// Media cells visible enough for the current primary video to keep playing.
+    /// New primary candidates still use onScreenMediaCells, which is the 50% start threshold.
+    private var continuePlaybackMediaCells: Set<String> = []
+
+    /// Current primary excluded after it drops below the continue threshold.
+    /// Prevents the 50% start threshold from immediately reselecting the same outgoing video.
+    private var primaryBelowContinueIdentifier: String?
 
     /// All videos in the app (ordered by feed, then attachmentIndex).
     private var allVideos: [VideoPlaybackInfo] = []
@@ -630,6 +638,7 @@ class VideoPlaybackCoordinator: ObservableObject {
                 self.invalidateVisibleVideoCache()
                 self.clearPreloadedTracking()
                 self.initialPreloadDone = false
+                self.primaryBelowContinueIdentifier = nil
 
                 // Store tweet list for embedded tweet lookup
                 self.currentTweets = pinnedTweets + tweets
@@ -803,6 +812,7 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// is reconciled exactly once per geometry pass.
     func updateViewportVisibility(
         loadVisibleIdentifiers: Set<String>,
+        continuePlaybackIdentifiers: Set<String>,
         playableIdentifiers: Set<String>,
         visibleTweetIds tweetIds: Set<String>
     ) {
@@ -811,7 +821,10 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         loadVisibleMediaCells = loadVisibleIdentifiers
         updateFeedVisibleTweets(tweetIds)
-        updatePlayableMediaCells(playableIdentifiers)
+        updatePlayableMediaCells(
+            playableIdentifiers,
+            continuePlaybackIdentifiers: continuePlaybackIdentifiers
+        )
 
         reconcilePlaybackForCurrentVisibility()
     }
@@ -821,7 +834,10 @@ class VideoPlaybackCoordinator: ObservableObject {
     /// Triggers primary video switch if the current primary went off-screen.
     func updateOnScreenMediaCells(_ identifiers: Set<String>) {
         updateScrollDirectionFromTableView()
-        updatePlayableMediaCells(identifiers)
+        updatePlayableMediaCells(
+            identifiers,
+            continuePlaybackIdentifiers: continuePlaybackMediaCells.intersection(identifiers)
+        )
         reconcilePlaybackForCurrentVisibility()
     }
 
@@ -859,7 +875,10 @@ class VideoPlaybackCoordinator: ObservableObject {
         }
     }
 
-    private func updatePlayableMediaCells(_ identifiers: Set<String>) {
+    private func updatePlayableMediaCells(
+        _ identifiers: Set<String>,
+        continuePlaybackIdentifiers: Set<String>
+    ) {
         // During fullscreen/detail dismissal, UIKit can briefly report no visible
         // cells while the presenting table view is reattaching. Keep the last
         // known playable set through the overlay settling timer so the resume
@@ -870,15 +889,30 @@ class VideoPlaybackCoordinator: ObservableObject {
             return
         }
 
-        guard onScreenMediaCells != identifiers else { return }
+        guard onScreenMediaCells != identifiers ||
+              continuePlaybackMediaCells != continuePlaybackIdentifiers else { return }
         onScreenMediaCells = identifiers
+        continuePlaybackMediaCells = continuePlaybackIdentifiers
+        if let excluded = primaryBelowContinueIdentifier,
+           continuePlaybackIdentifiers.contains(excluded) || !identifiers.contains(excluded) {
+            primaryBelowContinueIdentifier = nil
+        }
         invalidateVisibleVideoCache()
     }
 
     private func reconcilePlaybackForCurrentVisibility() {
         // Video visibility depends on video (media cell) only — use onScreenMediaCells as source of truth
         let currentVisibleIdentifiers = onScreenMediaCells
-        let visibilityChanged = previousVisibleIdentifiers != currentVisibleIdentifiers
+        let primaryDroppedBelowContinueThreshold: Bool = {
+            guard phase == .primaryPlaying,
+                  let primaryId = primaryVideoId,
+                  currentVisibleIdentifiers.contains(primaryId) else {
+                return false
+            }
+            return !continuePlaybackMediaCells.contains(primaryId)
+        }()
+        let visibilityChanged = previousVisibleIdentifiers != currentVisibleIdentifiers ||
+            primaryDroppedBelowContinueThreshold
 
         // The overlay dismiss timer owns playback restart while layout settles.
         // Do not stop/switch/schedule here, or a transient viewport sample can
@@ -947,12 +981,12 @@ class VideoPlaybackCoordinator: ObservableObject {
             }
         }
 
-        // Primary selection: keep current primary as long as it's visible.
-        // Only select new primary when current one leaves screen or phase is idle.
+        // Primary selection: new videos can start at 50%, but the active primary
+        // must remain 70% visible to keep playing.
         if visibilityChanged && !currentVisibleIdentifiers.isEmpty {
             if phase == .primaryPlaying,
                let primaryId = primaryVideoId,
-               currentVisibleIdentifiers.contains(primaryId) {
+               continuePlaybackMediaCells.contains(primaryId) {
                 // Primary still visible — health check delegate only, no switching
                 if mediaCellDelegates[primaryId] == nil {
                     phase = .idle
@@ -963,7 +997,15 @@ class VideoPlaybackCoordinator: ObservableObject {
                 // else: primary still healthy and visible — do nothing
                 previousVisibleIdentifiers = currentVisibleIdentifiers
             } else {
-                // Primary's cell gone or phase is idle — select new primary
+                if phase == .primaryPlaying,
+                   let primaryId = primaryVideoId {
+                    stopPrimaryVideo(identifier: primaryId)
+                    if currentVisibleIdentifiers.contains(primaryId),
+                       !continuePlaybackMediaCells.contains(primaryId) {
+                        primaryBelowContinueIdentifier = primaryId
+                    }
+                }
+                // Primary's cell dropped below continuation threshold, disappeared, or phase is idle.
                 phase = .idle
                 currentlyPlayingVideoIds.removeAll()
                 primaryVideoId = nil
@@ -979,6 +1021,15 @@ class VideoPlaybackCoordinator: ObservableObject {
 
         // Clear preserve flag when user explicitly scrolls
         shouldPreserveStateOnForeground = false
+    }
+
+    private func stopPrimaryVideo(identifier: String) {
+        guard let primary = allVideos.first(where: { $0.identifier == identifier }) else { return }
+        if let delegate = mediaCellDelegates[primary.identifier] {
+            delegate.shouldStopVideo(withMid: primary.videoMid)
+        } else {
+            SharedAssetCache.shared.getCachedPlayer(for: primary.videoMid)?.pause()
+        }
     }
 
     /// Stop all videos and reset state
@@ -999,6 +1050,7 @@ class VideoPlaybackCoordinator: ObservableObject {
         currentlyPlayingVideoIds.removeAll()
         primaryVideoId = nil
         finishedPrimaryIdentifier = nil
+        primaryBelowContinueIdentifier = nil
         phase = .idle
         LocalHTTPServer.shared.clearPrimaryRestriction()
         // Clear previous visible identifiers so next updateVisibleTweets sees a change.
@@ -1505,6 +1557,7 @@ class VideoPlaybackCoordinator: ObservableObject {
             guard mediaCellDelegates[video.identifier] != nil else { continue }
             if video.identifier == failedPrimaryIdentifier { continue }
             if video.identifier == finishedPrimaryIdentifier { continue }
+            if video.identifier == primaryBelowContinueIdentifier { continue }
             return video
         }
 

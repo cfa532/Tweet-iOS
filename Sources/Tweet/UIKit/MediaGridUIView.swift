@@ -36,6 +36,7 @@ class MediaGridUIView: UIView {
     private var needsFrameRecalculation: Bool = false
     private var lastLayoutWidth: CGFloat = 0
     private let playerAcquireVisibilityThreshold: CGFloat = 0.35
+    private let playbackContinueVisibilityThreshold: CGFloat = 0.70
 
     var isGridVisible: Bool = false {
         didSet {
@@ -439,9 +440,11 @@ class MediaGridUIView: UIView {
 
     /// Updates per-media visibility.
     /// `loadVisible` uses a low threshold so any on-screen media starts loading.
-    /// `playable` keeps the 50% threshold used by the video coordinator for autoplay.
-    func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], playable: [String]) {
+    /// `continuePlayback` is stricter than `playable`: the current feed video stops once it drops below this threshold.
+    /// `playable` keeps the 50% threshold used by the video coordinator for new autoplay candidates.
+    func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         var loadVisible: [String] = []
+        var continuePlayback: [String] = []
         var playable: [String] = []
         for cellView in cellViews {
             let cellFrame = cellView.convert(cellView.bounds, to: coordinateSpace)
@@ -460,11 +463,14 @@ class MediaGridUIView: UIView {
             if isLoadVisible {
                 loadVisible.append(identifier)
             }
+            if ratio >= playbackContinueVisibilityThreshold {
+                continuePlayback.append(identifier)
+            }
             if ratio >= 0.5 {
                 playable.append(identifier)
             }
         }
-        return (loadVisible, playable)
+        return (loadVisible, continuePlayback, playable)
     }
 
     /// Updates per-media visibility and returns video identifiers whose frames are at least 50% visible.

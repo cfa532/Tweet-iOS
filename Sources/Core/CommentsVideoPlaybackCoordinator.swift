@@ -48,11 +48,10 @@ class CommentsVideoPlaybackCoordinator: ObservableObject {
     private var visibilityDebounceTimer: Timer?
     private let debounceInterval: TimeInterval = 0.15
 
-    /// New videos need to be comfortably visible before they take over playback.
-    private let startVisibilityRatio: CGFloat = 0.65
-    /// Keep the current video playing until it is mostly out of view.
-    /// This hysteresis prevents rapid player swaps while the scroll view is settling.
-    private let continueVisibilityRatio: CGFloat = 0.35
+    /// New videos can start once half of the media is visible.
+    private let startVisibilityRatio: CGFloat = 0.50
+    /// Stop the current video early as the user scrolls it away, matching feed behavior.
+    private let continueVisibilityRatio: CGFloat = 0.70
 
     /// Track if coordinator is active
     private var isActive: Bool = false

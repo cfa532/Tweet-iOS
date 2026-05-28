@@ -873,11 +873,12 @@ class TweetCellContentView: UIView {
         return result
     }
 
-    func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], playable: [String]) {
+    func mediaVisibilityIdentifiers(visibleRect: CGRect, coordinateSpace: UIView) -> (loadVisible: [String], continuePlayback: [String], playable: [String]) {
         let bodyResult = bodyView.mediaGridView.mediaVisibilityIdentifiers(
             visibleRect: visibleRect, coordinateSpace: coordinateSpace
         )
         var loadVisible = bodyResult.loadVisible
+        var continuePlayback = bodyResult.continuePlayback
         var playable = bodyResult.playable
 
         if !embeddedTweetWrapper.isHidden {
@@ -886,10 +887,11 @@ class TweetCellContentView: UIView {
                 coordinateSpace: coordinateSpace
             )
             loadVisible += embeddedResult.loadVisible
+            continuePlayback += embeddedResult.continuePlayback
             playable += embeddedResult.playable
         }
 
-        return (loadVisible, playable)
+        return (loadVisible, continuePlayback, playable)
     }
 
     func refreshVideoLayersAfterForeground() {
