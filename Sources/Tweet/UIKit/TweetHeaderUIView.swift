@@ -10,39 +10,12 @@ import Combine
 
 class TweetHeaderUIView: UIView {
 
-    private let nameLabel: UILabel = {
+    private let headerLabel: UILabel = {
         let label = UILabel()
-        label.font = .preferredFont(forTextStyle: .headline)
-        label.textColor = UIColor(named: "ThemeText") ?? .label
-        label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        label.numberOfLines = 2
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return label
-    }()
-
-    private let usernameLabel: UILabel = {
-        let label = UILabel()
-        label.font = .preferredFont(forTextStyle: .subheadline)
-        label.textColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
-        label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return label
-    }()
-
-    private let dotLabel: UILabel = {
-        let label = UILabel()
-        label.font = .preferredFont(forTextStyle: .subheadline)
-        label.textColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
-        label.text = "·"
-        label.setContentHuggingPriority(.required, for: .horizontal)
-        return label
-    }()
-
-    private let timestampLabel: UILabel = {
-        let label = UILabel()
-        label.font = .preferredFont(forTextStyle: .subheadline)
-        label.textColor = UIColor(named: "ThemeSecondaryText") ?? .secondaryLabel
-        label.setContentHuggingPriority(.required, for: .horizontal)
-        label.setContentCompressionResistancePriority(.required, for: .horizontal)
         return label
     }()
 
@@ -55,18 +28,11 @@ class TweetHeaderUIView: UIView {
         return button
     }()
 
-    private let stackView: UIStackView = {
-        let sv = UIStackView()
-        sv.axis = .horizontal
-        sv.alignment = .top
-        sv.spacing = 2
-        return sv
-    }()
-
     private var tweetCancellables = Set<AnyCancellable>()
     private var userCancellables = Set<AnyCancellable>()
     private var currentTweetId: String?
     private var currentAuthorId: String?
+    private var currentTimestampText = ""
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -78,26 +44,19 @@ class TweetHeaderUIView: UIView {
     }
 
     private func setupViews() {
-        addSubview(stackView)
+        addSubview(headerLabel)
         addSubview(menuButton)
 
-        stackView.addArrangedSubview(nameLabel)
-        stackView.addArrangedSubview(usernameLabel)
-        stackView.addArrangedSubview(dotLabel)
-        stackView.addArrangedSubview(timestampLabel)
-
-        // Default stackView.spacing = 2 matches old SwiftUI HStack(spacing:8) with .padding(.leading, -6)
-
-        stackView.translatesAutoresizingMaskIntoConstraints = false
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
         menuButton.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
-            stackView.topAnchor.constraint(equalTo: topAnchor),
-            stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stackView.trailingAnchor.constraint(lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
+            headerLabel.topAnchor.constraint(equalTo: topAnchor),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: menuButton.leadingAnchor, constant: -4),
 
-            menuButton.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
+            menuButton.topAnchor.constraint(equalTo: topAnchor, constant: -10),
             menuButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             menuButton.widthAnchor.constraint(equalToConstant: 44),
             menuButton.heightAnchor.constraint(equalToConstant: 44),
@@ -129,7 +88,7 @@ class TweetHeaderUIView: UIView {
         currentAuthorId = nil
 
         // Set timestamp (static - doesn't change)
-        timestampLabel.text = Self.timeDifference(from: tweet.timestamp)
+        currentTimestampText = Self.timeDifference(from: tweet.timestamp)
 
         // Set author info
         updateAuthorLabels(user: tweet.author)
@@ -149,34 +108,60 @@ class TweetHeaderUIView: UIView {
         userCancellables.removeAll()
         currentAuthorId = user.mid
 
-        user.$name
+        Publishers.CombineLatest(user.$name, user.$username)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] name in
-                self?.nameLabel.text = name ?? "No one"
-            }
-            .store(in: &userCancellables)
-
-        user.$username
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] username in
-                self?.usernameLabel.text = "@\(username ?? NSLocalizedString("username", comment: "Default username"))"
+            .sink { [weak self] name, username in
+                self?.setHeaderText(name: name, username: username)
             }
             .store(in: &userCancellables)
     }
 
     private func updateAuthorLabels(user: User?) {
         if let user = user {
-            nameLabel.text = user.name ?? "No one"
-            usernameLabel.text = "@\(user.username ?? NSLocalizedString("username", comment: "Default username"))"
+            setHeaderText(name: user.name, username: user.username)
             if currentAuthorId != user.mid {
                 subscribeToUserChanges(user)
             }
         } else {
             userCancellables.removeAll()
             currentAuthorId = nil
-            nameLabel.text = "No one"
-            usernameLabel.text = "@\(NSLocalizedString("username", comment: "Default username"))"
+            setHeaderText(name: nil, username: nil)
         }
+    }
+
+    private func setHeaderText(name: String?, username: String?) {
+        let displayName = name?.isEmpty == false ? name! : "No one"
+        let usernameText = username?.isEmpty == false
+            ? username!
+            : NSLocalizedString("username", comment: "Default username")
+
+        headerLabel.attributedText = Self.makeHeaderText(
+            name: displayName,
+            username: usernameText,
+            timestamp: currentTimestampText
+        )
+    }
+
+    private static func makeHeaderText(name: String, username: String, timestamp: String) -> NSAttributedString {
+        let text = NSMutableAttributedString(
+            string: name,
+            attributes: [
+                .font: UIFont.preferredFont(forTextStyle: .headline),
+                .foregroundColor: UIColor(named: "ThemeText") ?? UIColor.label
+            ]
+        )
+
+        text.append(
+            NSAttributedString(
+                string: " @\(username) · \(timestamp)",
+                attributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .subheadline),
+                    .foregroundColor: UIColor(named: "ThemeSecondaryText") ?? UIColor.secondaryLabel
+                ]
+            )
+        )
+
+        return text
     }
 
     func prepareForReuse() {
@@ -185,9 +170,8 @@ class TweetHeaderUIView: UIView {
         currentTweetId = nil
         currentAuthorId = nil
         currentTweet = nil
-        nameLabel.text = nil
-        usernameLabel.text = nil
-        timestampLabel.text = nil
+        currentTimestampText = ""
+        headerLabel.attributedText = nil
         menuButton.menu = nil
     }
 

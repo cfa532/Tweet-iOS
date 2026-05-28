@@ -91,20 +91,12 @@ struct TweetItemHeaderView: View {
     @ObservedObject var tweet: Tweet
     
     var body: some View {
-        HStack {
-            HStack(alignment: .top) {
-                AuthorNameView(author: tweet.author)
-                Text("•")
-                    .font(.subheadline)
-                    .foregroundColor(.themeSecondaryText)
-                    .padding(.leading, -6)
-                Text(timeDifference)
-                    .font(.subheadline)
-                    .foregroundColor(.themeSecondaryText)
-                    .padding(.leading, -6)
-            }
-            Spacer()
-        }
+        AuthorNameView(author: tweet.author, timeDifference: timeDifference)
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
     
     private var timeDifference: String {
@@ -442,35 +434,43 @@ struct TweetMenu: View {
 /// Separate view to observe User singleton changes
 private struct AuthorNameView: View {
     let author: User?
+    let timeDifference: String
     
     var body: some View {
         Group {
             if let user = author {
-                ObservedAuthorNameView(user: user)
+                ObservedAuthorNameView(user: user, timeDifference: timeDifference)
             } else {
-                Text("No one")
-                    .font(.headline)
-                    .foregroundColor(.themeText)
-                Text("@\(NSLocalizedString("username", comment: "Default username"))")
-                    .font(.subheadline)
-                    .foregroundColor(.themeSecondaryText)
-                    .padding(.leading, -6)
+                headerText(
+                    name: "No one",
+                    username: NSLocalizedString("username", comment: "Default username"),
+                    timeDifference: timeDifference
+                )
             }
         }
+    }
+
+    private func headerText(name: String, username: String, timeDifference: String) -> Text {
+        Text(name)
+            .font(.headline)
+            .foregroundColor(.themeText)
+        + Text(" @\(username) • \(timeDifference)")
+            .font(.subheadline)
+            .foregroundColor(.themeSecondaryText)
     }
 }
 
 /// Observes the User singleton to refresh when username/name updates
 private struct ObservedAuthorNameView: View {
     @ObservedObject var user: User
+    let timeDifference: String
     
     var body: some View {
         Text(user.name ?? "No one")
             .font(.headline)
             .foregroundColor(.themeText)
-        Text("@\(user.username ?? NSLocalizedString("username", comment: "Default username"))")
+        + Text(" @\(user.username ?? NSLocalizedString("username", comment: "Default username")) • \(timeDifference)")
             .font(.subheadline)
             .foregroundColor(.themeSecondaryText)
-            .padding(.leading, -6)
     }
 }
