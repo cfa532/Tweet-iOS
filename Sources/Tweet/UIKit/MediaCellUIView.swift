@@ -1739,6 +1739,16 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             }
         }
 
+        // Async callers are on scroll/playback-sensitive paths. Avoid falling
+        // through to layer.render, which is synchronous and can block scrolling.
+        if async {
+            if let cached = SharedAssetCache.shared.cachedThumbnail(for: mid) {
+                imageView.image = cached
+                return true
+            }
+            return false
+        }
+
         // Priority 3: Layer snapshot — captures whatever the player layer is currently showing.
         // Works even before readyToPlay (onReadyForDisplay fires before status transitions).
         if videoPlayerView.isLayerReadyForDisplay, !videoPlayerView.isHidden,
@@ -1765,7 +1775,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     /// Sync frame capture for event handlers (pause, stop, scroll-out).
     /// Captures from video output (skips stale imageView) and updates imageView immediately.
-    private func captureLastFrameIfPossible(reason: String) {
+    private func captureLastFrameIfPossible(reason: String, async: Bool = false) {
         guard isVideoAttachment else { return }
         guard player != nil, player?.currentItem != nil else { return }
         guard (attachment?.mid) != nil else { return }
@@ -1775,7 +1785,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard now.timeIntervalSince(lastFrameCaptureAt) >= 0.75 else { return }
         lastFrameCaptureAt = now
 
-        preserveFrameToCache(skipImageView: true)
+        preserveFrameToCache(async: async, skipImageView: true)
     }
 
     // MARK: - Player Observers
@@ -2467,7 +2477,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
                 // Capture frame, save position, pause, stop buffering
                 if let player = player {
-                    captureLastFrameIfPossible(reason: "becameInvisible")
+                    captureLastFrameIfPossible(reason: "becameInvisible", async: true)
                     if player.rate > 0 || coordinatorWantsToPlay {
                         saveCurrentPosition(player: player, wasPlaying: player.rate > 0)
                     }

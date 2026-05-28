@@ -18,6 +18,13 @@ class TweetTableViewCell: UITableViewCell {
     /// Last desired height we asked the table to grow to. Prevents firing
     /// onHeightChanged repeatedly for the same overflow before the table reacts.
     private var lastReportedDesiredHeight: CGFloat = 0
+    /// Throttle the expensive Auto Layout fitting pass. Video cells can relayout
+    /// several times while attaching layers/spinners; fitting the whole tweet
+    /// hierarchy on every pass causes scroll hitches.
+    private var lastHeightOverflowCheckTime: CFTimeInterval = 0
+    private var lastHeightOverflowCheckWidth: CGFloat = 0
+    private var pendingHeightOverflowCheck: DispatchWorkItem?
+    private let heightOverflowCheckInterval: CFTimeInterval = 0.25
     /// Fired when the cell's content needs more height than the table allotted.
     /// Parameter is the Auto Layout fitting height the cell wants — the controller
     /// should cache this and re-layout the table.
@@ -52,18 +59,49 @@ class TweetTableViewCell: UITableViewCell {
             lastReportedDesiredHeight = 0
         }
 
-        // 2. Detect content overflow: cell wants more height than the table
-        //    allotted. Happens when async content (embedded tweet, image
-        //    attachment metadata) finishes loading after the initial render.
-        //    bounds.height is fixed by heightForRowAt, so we can't see the
-        //    growth via bounds; we have to ask Auto Layout for the fitting size.
+        guard shouldCheckForHeightOverflow else { return }
+
+        let now = CACurrentMediaTime()
+        let widthChanged = abs(bounds.width - lastHeightOverflowCheckWidth) > 1
+        if widthChanged || now - lastHeightOverflowCheckTime >= heightOverflowCheckInterval {
+            runHeightOverflowCheck(now: now)
+        } else if pendingHeightOverflowCheck == nil {
+            let delay = heightOverflowCheckInterval - (now - lastHeightOverflowCheckTime)
+            let scheduledTweetId = currentTweetId
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.pendingHeightOverflowCheck = nil
+                guard self?.currentTweetId == scheduledTweetId else { return }
+                self?.runHeightOverflowCheck(now: CACurrentMediaTime())
+            }
+            pendingHeightOverflowCheck = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        }
+    }
+
+    private var shouldCheckForHeightOverflow: Bool {
+        window != nil &&
+        currentTweetId != nil &&
+        onHeightChanged != nil &&
+        bounds.width > 0 &&
+        bounds.height > 0
+    }
+
+    private func runHeightOverflowCheck(now: CFTimeInterval) {
+        guard shouldCheckForHeightOverflow else { return }
+
+        lastHeightOverflowCheckTime = now
+        lastHeightOverflowCheckWidth = bounds.width
+
+        // Detect content overflow: the cell wants more height than the table
+        // allotted. This can happen when async content finishes loading after
+        // initial render, but it is too expensive to run on every video relayout.
         let desired = ceil(tweetContentView.systemLayoutSizeFitting(
             CGSize(width: bounds.width, height: 0),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel
         ).height)
 
-        if desired > currentHeight + 1 && abs(desired - lastReportedDesiredHeight) > 1 {
+        if desired > bounds.height + 1 && abs(desired - lastReportedDesiredHeight) > 1 {
             lastReportedDesiredHeight = desired
             onHeightChanged?(desired)
         }
@@ -145,6 +183,10 @@ class TweetTableViewCell: UITableViewCell {
         super.prepareForReuse()
         lastNotifiedHeight = 0
         lastReportedDesiredHeight = 0
+        lastHeightOverflowCheckTime = 0
+        lastHeightOverflowCheckWidth = 0
+        pendingHeightOverflowCheck?.cancel()
+        pendingHeightOverflowCheck = nil
         onHeightChanged = nil
         onContentExpanded = nil
         currentTweetId = nil
