@@ -230,6 +230,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     // MARK: - Lifecycle Management
     private var lifecycleObservers: [NSObjectProtocol] = []
     private var isActive: Bool = false
+    var isFullscreenActive: Bool { isActive }
     
     /// Activate manager when fullscreen view appears
     func activateForFullscreen() {
@@ -429,8 +430,17 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             NotificationCenter.default.removeObserver(observer)
             videoCompletionObserver = nil
         }
+        loadGeneration += 1
+        loadingMid = nil
+        retryWorkItem?.cancel()
+        retryWorkItem = nil
+        bufferObserver?.invalidate()
+        bufferObserver = nil
+        cleanupObservers()
         singletonPlayer?.pause()
-        // Don't nil out the player - keep it for reuse
+        singletonPlayer?.replaceCurrentItem(with: nil)
+        isItemReady = false
+        isBuffering = false
         isPlaying = false
     }
     
@@ -521,12 +531,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         initializePlayerEarly()
 
         prewarmTask?.cancel()
-        prewarmTask = Task.detached(priority: .utility) {
-            // Just accessing the item warms up the asset cache
-            // The item will be cached and ready for quick loading later
-            await MainActor.run {
-                // Don't attach to player - just warm up the cache
-            }
+        prewarmTask = Task { @MainActor in
+            SharedAssetCache.shared.preloadAsset(for: url, tweetId: nil, mediaType: mediaType)
         }
     }
     
@@ -1010,7 +1016,13 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                 self.isPlaying = false
                 
                 // Trigger auto-advance after delay
+                guard self.isActive else { return }
+                let finishedItem = item
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                guard self.isActive,
+                      self.singletonPlayer?.currentItem === finishedItem else {
+                    return
+                }
                 self.handleVideoFinished()
             }
         }
@@ -1039,6 +1051,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Don't retry if fullscreen is no longer active — player was intentionally paused.
         guard isActive else { return }
         guard let player = singletonPlayer, let playerItem = player.currentItem else { return }
+        guard isPlaying || wasPlayingBeforeWaiting else { return }
         
         // If player is stuck (not playing and rate is 0), force a seek to trigger reload
         if player.rate == 0 && player.timeControlStatus != .playing {
@@ -1074,6 +1087,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                                 // KVO callback may already be enqueued on the main actor — this
                                 // guard prevents the stale play() call from re-starting audio.
                                 guard self.isActive else { return }
+                                guard self.isPlaying || self.wasPlayingBeforeWaiting else { return }
 
                                 // Clean up observer
                                 self.bufferObserver?.invalidate()
