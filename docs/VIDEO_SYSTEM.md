@@ -475,15 +475,16 @@ func handleSegmentRequest(fullRealURL: URL, mediaID: String, connection: NWConne
 }
 ```
 
-**Slow Network Optimization:**
+**Slow IPFS Network Optimization:**
 
-On very slow networks (~90 KB/s), waiting for downloads to complete would cause AVPlayer connection timeouts (30s). The strategy was adjusted:
-- **First request:** Downloads segment normally
-- **Subsequent requests:** Check if file exists in cache
-  - If cached: Serve immediately
-  - If not cached: Start **independent download** instead of waiting
-  
-This accepts duplicate downloads to prevent connection timeouts, prioritizing continuous playback over bandwidth optimization.
+On very slow IPFS networks, buffering and long segment downloads are expected behavior. The playback system should not assume a fast connection or restart downloads just because a segment is slow.
+
+- **Primary/fullscreen segment duplicates:** Monitor the existing producer. If bytes continue arriving, wait and serve the completed disk cache. If the producer is idle for about 3 seconds, or fullscreen has waited about 6 seconds, let the primary request take over the segment stream.
+- **Feed/preload segment duplicates:** Prefer waiting for disk cache rather than starting duplicate network work.
+- **Fullscreen entry:** Suspend feed/preload work so background videos do not compete with the active fullscreen video.
+- **Recovery rule:** Recover only after lack of progress, not merely after elapsed time. Track downloaded bytes, buffered ranges, or player position before rebuilding players or restarting segment requests.
+
+This prioritizes continuous playback while preserving bandwidth on weak IPFS links.
 
 **Memory Management:**
 

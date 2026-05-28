@@ -810,6 +810,65 @@ class SharedAssetCache: ObservableObject {
         // Don't release cached player — LRU handles eviction
     }
 
+    /// Fullscreen owns the user's active video. Drop feed/preload players and in-flight
+    /// network work so the fullscreen primary segment is not stuck behind background fills.
+    @MainActor func suspendFeedActivityForFullscreen(protecting protectedMediaID: String) {
+        let protected = Set([protectedMediaID])
+        var mediaIDsToCancel = Set<String>()
+        mediaIDsToCancel.formUnion(playerCache.keys)
+        mediaIDsToCancel.formUnion(assetCache.keys)
+        mediaIDsToCancel.formUnion(cachingPlayerItems.keys)
+        mediaIDsToCancel.formUnion(loadingTasks.keys)
+        mediaIDsToCancel.formUnion(preloadTasks.keys)
+        mediaIDsToCancel.formUnion(inFlightPlayerCreations.keys)
+        mediaIDsToCancel.formUnion(activeCreationTasks.keys)
+        mediaIDsToCancel.formUnion(visibleVideoMids)
+        mediaIDsToCancel.formUnion(preloadedPlayerMids)
+        mediaIDsToCancel.formUnion(protectedPreloadMids)
+        for ids in tweetUrlMapping.values {
+            mediaIDsToCancel.formUnion(ids)
+        }
+        mediaIDsToCancel.subtract(protected)
+
+        guard !mediaIDsToCancel.isEmpty else { return }
+
+        visibleVideoMids = visibleVideoMids.intersection(protected)
+        preloadedPlayerMids.removeAll()
+        protectedPreloadMids.removeAll()
+        preloadedPlayerGraceExpirations.removeAll()
+
+        var releasedPlayers = 0
+        for mediaID in mediaIDsToCancel {
+            if let task = loadingTasks.removeValue(forKey: mediaID) {
+                task.cancel()
+            }
+            if let task = preloadTasks.removeValue(forKey: mediaID) {
+                task.cancel()
+            }
+            if let task = inFlightPlayerCreations.removeValue(forKey: mediaID) {
+                task.cancel()
+            }
+            if let task = activeCreationTasks.removeValue(forKey: mediaID) {
+                task.cancel()
+            }
+            if let item = cachingPlayerItems.removeValue(forKey: mediaID) {
+                item.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+                item.asset.cancelLoading()
+            }
+            if let player = playerCache.removeValue(forKey: mediaID) {
+                releasePlayer(player)
+                releasedPlayers += 1
+            }
+            assetCache.removeValue(forKey: mediaID)
+            cacheTimestamps.removeValue(forKey: mediaID)
+            resourceLoaderDelegates.removeValue(forKey: mediaID)
+            cleanupTweetMappings(for: mediaID)
+            LocalHTTPServer.shared.cancelDownloads(for: mediaID)
+        }
+
+        print("🎬 [SharedAssetCache] Suspended feed activity for fullscreen \(String(protectedMediaID.prefix(8))): cancelled \(mediaIDsToCancel.count), released \(releasedPlayers) players")
+    }
+
     /// MEMORY FIX: Immediately release player and all video data when video goes out of sight
     /// This is called when MediaCell disappears to free memory immediately (not wait for 30-60s timer)
     @MainActor func releasePlayerImmediately(for mediaID: String) {
@@ -1831,7 +1890,12 @@ class SharedAssetCache: ObservableObject {
             // Still generate thumbnail if missing
             if cachedThumbnail(for: mediaID) == nil {
                 if let item = player.currentItem, item.status == .readyToPlay {
-                    generateThumbnail(from: item.asset, for: mediaID)
+                    Task { @MainActor in
+                        if await self.generateDecodedPreloadFrame(from: player, for: mediaID) == false,
+                           self.cachedThumbnail(for: mediaID) == nil {
+                            self.generateThumbnail(from: item.asset, for: mediaID)
+                        }
+                    }
                 } else if let asset = assetCache[mediaID] {
                     generateThumbnail(from: asset, for: mediaID)
                 } else if preloadTasks[mediaID] == nil {
@@ -1839,7 +1903,10 @@ class SharedAssetCache: ObservableObject {
                         defer { preloadTasks.removeValue(forKey: mediaID) }
                         if let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID),
                            cachedThumbnail(for: mediaID) == nil {
-                            generateThumbnail(from: readyAsset, for: mediaID)
+                            if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
+                               cachedThumbnail(for: mediaID) == nil {
+                                generateThumbnail(from: readyAsset, for: mediaID)
+                            }
                         }
                     }
                     preloadTasks[mediaID] = task
@@ -1876,13 +1943,19 @@ class SharedAssetCache: ObservableObject {
 
                 if let readyAsset = await waitForPreloadReadyAsset(player, mediaID: mediaID),
                    cachedThumbnail(for: mediaID) == nil {
-                    generateThumbnail(from: readyAsset, for: mediaID)
+                    if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
+                       cachedThumbnail(for: mediaID) == nil {
+                        generateThumbnail(from: readyAsset, for: mediaID)
+                    }
                 }
 
                 // Generate first-frame thumbnail so the cell isn't black before playback
                 if cachedThumbnail(for: mediaID) == nil,
                    let item = player.currentItem {
-                    self.generateThumbnail(from: item.asset, for: mediaID)
+                    if await generateDecodedPreloadFrame(from: player, for: mediaID) == false,
+                       cachedThumbnail(for: mediaID) == nil {
+                        self.generateThumbnail(from: item.asset, for: mediaID)
+                    }
                 }
                 print("🔮 [PLAYER PRELOAD] Pre-created player for \(String(mediaID.prefix(8)))")
             } catch {
@@ -1890,6 +1963,94 @@ class SharedAssetCache: ObservableObject {
             }
         }
         preloadTasks[mediaID] = task
+    }
+
+    /// Decode one real frame from a preloaded AVPlayer and cache it as the poster.
+    /// AVAssetImageGenerator is unreliable for some local-HLS/proxy assets until
+    /// playback has decoded media. This path prerolls the muted off-screen player,
+    /// grabs a pixel buffer, then pauses it again so the feed cell can paint a
+    /// non-black frame the first time it appears.
+    private func generateDecodedPreloadFrame(from player: AVPlayer, for mediaID: String) async -> Bool {
+        guard cachedThumbnail(for: mediaID) == nil,
+              let item = player.currentItem else { return cachedThumbnail(for: mediaID) != nil }
+
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ])
+        item.add(output)
+        defer { item.remove(output) }
+
+        player.isMuted = true
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+
+        if item.status != .readyToPlay {
+            guard await waitForPreloadReadyAsset(player, mediaID: mediaID) != nil else { return false }
+        }
+
+        let currentSeconds = player.currentTime().seconds
+        if !currentSeconds.isFinite || currentSeconds < 0.05 {
+            _ = await seek(player, to: .zero)
+        }
+
+        _ = await preroll(player, atRate: 0.1)
+
+        for _ in 0..<20 {
+            if Task.isCancelled { return false }
+            if let image = copyPreloadFrame(from: output, player: player),
+               !VideoFrameExtractor.isMostlyBlack(image) {
+                storeCachedThumbnail(image, for: mediaID, source: "preload")
+                player.pause()
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        player.pause()
+        return false
+    }
+
+    private func copyPreloadFrame(from output: AVPlayerItemVideoOutput, player: AVPlayer) -> UIImage? {
+        let current = player.currentTime()
+        let hostTime = output.itemTime(forHostTime: CACurrentMediaTime())
+        var candidates: [CMTime] = []
+
+        if current.isValid {
+            candidates.append(current)
+            let offsets: [Double] = [0.05, 0.10, 0.25, 0.5]
+            for offset in offsets {
+                candidates.append(CMTime(seconds: max(0, current.seconds + offset), preferredTimescale: 600))
+            }
+        }
+        if hostTime.isValid {
+            candidates.append(hostTime)
+        }
+
+        var displayTime = CMTime.zero
+        for time in candidates {
+            guard time.isValid,
+                  let pixelBuffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: &displayTime),
+                  let image = VideoFrameExtractor.makeDownscaledUIImage(from: pixelBuffer, maxDimension: 480) else {
+                continue
+            }
+            return image
+        }
+        return nil
+    }
+
+    private func seek(_ player: AVPlayer, to time: CMTime) async -> Bool {
+        await withCheckedContinuation { continuation in
+            player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                continuation.resume(returning: finished)
+            }
+        }
+    }
+
+    private func preroll(_ player: AVPlayer, atRate rate: Float) async -> Bool {
+        await withCheckedContinuation { continuation in
+            player.preroll(atRate: rate) { finished in
+                continuation.resume(returning: finished)
+            }
+        }
     }
 
     /// Wait briefly for a preloaded player to decode enough metadata for a poster frame.

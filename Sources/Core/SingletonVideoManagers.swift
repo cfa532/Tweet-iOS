@@ -483,6 +483,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
     
     // Debouncing for buffering state to prevent rapid spinner blinking during seeks
     private var bufferingDebounceTask: DispatchWorkItem?
+    private var nearEndAdvanceTask: DispatchWorkItem?
     private var startupAudioMuteUntil: Date = .distantPast
     private var startupAudioUnmuteTask: Task<Void, Never>?
 
@@ -542,6 +543,7 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // from feed scroll cleanup and let the local proxy prioritize this video.
         LocalHTTPServer.shared.clearCancelledState(for: mid)
         LocalHTTPServer.shared.setPrimaryMediaID(mid)
+        SharedAssetCache.shared.suspendFeedActivityForFullscreen(protecting: mid)
 
         // If we already have the correct item loaded (e.g. re-entering fullscreen after dismiss
         // without clearSingletonPlayer()), resume playback without thrashing observers/state.
@@ -765,6 +767,8 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         // Cancel any pending buffering debounce task
         bufferingDebounceTask?.cancel()
         bufferingDebounceTask = nil
+        nearEndAdvanceTask?.cancel()
+        nearEndAdvanceTask = nil
 
     }
     
@@ -788,7 +792,11 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             let wasPlaying = player.rate > 0 || self.isPlaying
             let hasBufferedData = !item.loadedTimeRanges.isEmpty
             let itemStatus = item.status
-            
+            let nearEnd = self.timeRemaining(for: item, player: player).map { $0 <= 1.0 } ?? false
+            if nearEnd && wasPlaying && !isActivelyRendering {
+                self.scheduleNearEndAutoAdvance(for: item)
+            }
+
             // Calculate buffered duration
             var bufferedDuration: Double = 0
             if hasBufferedData {
@@ -1052,7 +1060,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
         guard isActive else { return }
         guard let player = singletonPlayer, let playerItem = player.currentItem else { return }
         guard isPlaying || wasPlayingBeforeWaiting else { return }
-        
+
+        if let remaining = timeRemaining(for: playerItem, player: player),
+           remaining <= 1.0,
+           player.timeControlStatus != .playing {
+            scheduleNearEndAutoAdvance(for: playerItem)
+            return
+        }
+
         // If player is stuck (not playing and rate is 0), force a seek to trigger reload
         if player.rate == 0 && player.timeControlStatus != .playing {
             let currentTime = player.currentTime()
@@ -1079,9 +1094,14 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
                         }
 
                         // Only resume when we have at least 2 seconds of buffer
-                        if hasData && bufferedDuration >= 2.0 {
+                        let remaining = player.flatMap { self?.timeRemaining(for: observedItem, player: $0) }
+                        if let remaining, remaining <= 1.0 {
                             Task { @MainActor in
-                                guard let self = self, let player = player else { return }
+                                self?.scheduleNearEndAutoAdvance(for: observedItem)
+                            }
+                        } else if hasData && bufferedDuration >= 2.0 {
+	                            Task { @MainActor in
+	                                guard let self = self, let player = player else { return }
                                 // Bail if fullscreen was dismissed while waiting for buffer.
                                 // deactivate() sets isActive=false + pauses the player, but the
                                 // KVO callback may already be enqueued on the main actor — this
@@ -1264,6 +1284,38 @@ class FullScreenVideoManager: ObservableObject, VideoPlayerLifecycleManager {
             }
         }
         return max(0, bestBufferAhead)
+    }
+
+    nonisolated private func timeRemaining(for item: AVPlayerItem, player: AVPlayer) -> Double? {
+        let duration = item.duration
+        guard duration.isValid, duration.seconds.isFinite, duration.seconds > 0 else { return nil }
+        let current = player.currentTime()
+        guard current.isValid, current.seconds.isFinite else { return nil }
+        return duration.seconds - current.seconds
+    }
+
+    private func scheduleNearEndAutoAdvance(for item: AVPlayerItem) {
+        guard isActive, nearEndAdvanceTask == nil else { return }
+        let task = DispatchWorkItem { [weak self, weak item] in
+            Task { @MainActor [weak self, weak item] in
+                guard let self,
+                      self.isActive,
+                      let item,
+                      self.singletonPlayer?.currentItem === item,
+                      let player = self.singletonPlayer,
+                      let remaining = self.timeRemaining(for: item, player: player),
+                      remaining <= 1.0,
+                      player.timeControlStatus != .playing else {
+                    self?.nearEndAdvanceTask = nil
+                    return
+                }
+                print("✅ [FullScreenVideoManager] Treating near-end stall as finished - remaining: \(remaining)s")
+                self.nearEndAdvanceTask = nil
+                self.handleVideoFinished()
+            }
+        }
+        nearEndAdvanceTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: task)
     }
 
     /// Check if video is at the end and rewind if needed before playing

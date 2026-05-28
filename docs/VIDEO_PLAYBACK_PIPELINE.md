@@ -92,9 +92,12 @@ AVPlayer request → localhost proxy → check disk cache →
 - This prevents preloads from starving the video the user is actually watching
 
 **Deduplication**: If AVPlayer requests the same segment that's already downloading:
-- **Poll for up to 10 seconds** (primary) or 120 seconds (non-primary) for the download to finish and the file to appear on disk
+- **Primary/fullscreen requests monitor download progress** instead of assuming a fast network. If the existing IPFS download is still receiving bytes, keep waiting and serve from disk when it completes. If it goes idle for about 3 seconds, or the primary has waited about 6 seconds, the primary request takes ownership so fullscreen receives bytes directly.
+- **Non-primary requests poll longer** for the download to finish and the file to appear on disk
 - Once on disk, serve from cache
-- This prevents duplicate IPFS downloads and avoids a cancel-retry storm
+- This prevents duplicate IPFS downloads and avoids a cancel-retry storm without stranding fullscreen behind a stale background cache fill
+
+**IPFS rule of thumb**: treat slow as normal, not broken. Do not rebuild/retry a player or segment just because buffering lasts a few seconds. Only recover when there is no download progress or buffered-position progress for a grace window. When fullscreen is active, suspend feed preloads so the user's active video owns the scarce IPFS bandwidth.
 
 **Segment streaming**: Unlike a normal download-then-serve approach, segments are **streamed in real-time** — each chunk from IPFS is immediately forwarded to AVPlayer. This means the first video frame can render after just ~200KB instead of waiting for the full 5MB segment.
 

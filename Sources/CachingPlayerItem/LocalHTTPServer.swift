@@ -298,6 +298,10 @@ private actor SlotReleaseGuard {
     }
 }
 
+private final class URLSessionTrackingBox {
+    weak var session: URLSession?
+}
+
 public class LocalHTTPServer: @unchecked Sendable {
     public static let shared = LocalHTTPServer()
 
@@ -343,6 +347,7 @@ public class LocalHTTPServer: @unchecked Sendable {
 
     // Streaming download sessions
     private var streamingSessions: [String: URLSession] = [:]
+    private var streamingSessionLastProgress: [String: Date] = [:]
     private let streamingSessionsLock = NSLock()
 
     private let progressiveStreamChunkSize = 256 * 1024  // 256KB chunks
@@ -759,6 +764,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             session.invalidateAndCancel()
         }
         streamingSessions.removeAll()
+        streamingSessionLastProgress.removeAll()
         streamingSessionsLock.unlock()
 
         // 3. Fire-and-forget: cancel tracked active downloads
@@ -787,6 +793,7 @@ public class LocalHTTPServer: @unchecked Sendable {
                 session.invalidateAndCancel()
             }
             self.streamingSessions.removeAll()
+            self.streamingSessionLastProgress.removeAll()
             self.streamingSessionsLock.unlock()
 
             // Reset connection pool
@@ -813,6 +820,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         for key in sessionKeysToRemove {
             streamingSessions[key]?.invalidateAndCancel()
             streamingSessions.removeValue(forKey: key)
+            streamingSessionLastProgress.removeValue(forKey: key)
         }
         streamingSessionsLock.unlock()
 
@@ -1673,6 +1681,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             guard let self = self else { return }
             self.streamingSessionsLock.lock()
             self.streamingSessions.removeValue(forKey: sessionKey)
+            self.streamingSessionLastProgress.removeValue(forKey: sessionKey)
             self.streamingSessionsLock.unlock()
             if shouldCache {
                 self.progressiveCacheWritersLock.lock()
@@ -2224,6 +2233,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         }
         let sessionKey = "\(mediaID)/stream/\(relativePath)"
 
+        let trackedSession = URLSessionTrackingBox()
         let delegate = SegmentStreamDelegate(
             connection: connection,
             cachePath: cachePath,
@@ -2237,7 +2247,16 @@ public class LocalHTTPServer: @unchecked Sendable {
             },
             removeSession: { [weak self] key in
                 self?.streamingSessionsLock.lock()
-                self?.streamingSessions.removeValue(forKey: key)
+                if let session = trackedSession.session,
+                   self?.streamingSessions[key] === session {
+                    self?.streamingSessions.removeValue(forKey: key)
+                    self?.streamingSessionLastProgress.removeValue(forKey: key)
+                }
+                self?.streamingSessionsLock.unlock()
+            },
+            noteProgress: { [weak self] key in
+                self?.streamingSessionsLock.lock()
+                self?.streamingSessionLastProgress[key] = Date()
                 self?.streamingSessionsLock.unlock()
             },
             completion: completion
@@ -2255,6 +2274,7 @@ public class LocalHTTPServer: @unchecked Sendable {
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
 
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        trackedSession.session = session
 
         // Track session so cancelDownloads(for: mediaID) can invalidate it.
         streamingSessionsLock.lock()
@@ -2262,30 +2282,79 @@ public class LocalHTTPServer: @unchecked Sendable {
             if isPrimary {
                 // A fullscreen/primary request can reconnect while the same segment is still
                 // being filled in the disk cache after AVPlayer closed the previous NWConnection.
-                // Do not cancel that producer immediately; repeated takeovers restart the same
-                // large segment and keep the fullscreen player stuck waiting for data.
+                // Let slow IPFS keep going if bytes are still arriving, but do not let
+                // fullscreen sit indefinitely behind a background fill that stopped progressing.
                 streamingSessionsLock.unlock()
-                session.invalidateAndCancel()
                 let shortId = shortMID(mediaID)
-                print("♻️ [HLS SEGMENT \(shortId)] Primary duplicate for \(relativePath), waiting for disk cache")
-                completion()
+                print("♻️ [HLS SEGMENT \(shortId)] Primary duplicate for \(relativePath), monitoring disk cache/progress")
                 Task { [weak self] in
-                    for _ in 0..<20 { // max 10s
+                    let startedWaiting = Date()
+                    var shouldTakeOver = false
+                    for _ in 0..<12 { // max 6s before primary owns the connection
                         try? await Task.sleep(nanoseconds: 500_000_000)
                         switch connection.state {
-                        case .cancelled, .failed: return
+                        case .cancelled, .failed:
+                            session.invalidateAndCancel()
+                            completion()
+                            return
                         default: break
                         }
                         if FileManager.default.fileExists(atPath: cachePath) {
+                            session.invalidateAndCancel()
+                            completion()
                             autoreleasepool { self?.serveFile(path: cachePath, connection: connection, method: "GET") }
                             return
                         }
+
+                        guard let self else { continue }
+                        let (currentSession, lastProgress) = self.streamingSessionsLock.withLock {
+                            (
+                                self.streamingSessions[sessionKey],
+                                self.streamingSessionLastProgress[sessionKey] ?? startedWaiting
+                            )
+                        }
+
+                        guard let currentSession, currentSession === oldSession else {
+                            session.invalidateAndCancel()
+                            completion()
+                            connection.cancel()
+                            return
+                        }
+
+                        let waited = Date().timeIntervalSince(startedWaiting)
+                        let idleFor = Date().timeIntervalSince(lastProgress)
+                        if waited >= 2.0 && idleFor >= 3.0 {
+                            shouldTakeOver = true
+                            break
+                        }
                     }
 
-                    // The original producer really did stall. Let AVPlayer reconnect; the next
-                    // request can claim a fresh download after the stale session times out/cleans up.
-                    oldSession.invalidateAndCancel()
-                    connection.cancel()
+                    guard let self else {
+                        session.invalidateAndCancel()
+                        completion()
+                        connection.cancel()
+                        return
+                    }
+
+                    let didTakeOver = self.streamingSessionsLock.withLock {
+                        if let currentSession = self.streamingSessions[sessionKey], currentSession === oldSession {
+                            self.streamingSessions[sessionKey] = session
+                            self.streamingSessionLastProgress[sessionKey] = Date()
+                            return true
+                        }
+                        return false
+                    }
+
+                    if didTakeOver {
+                        oldSession.invalidateAndCancel()
+                        let takeoverReason = shouldTakeOver ? "stalled" : "slow"
+                        print("🎯 [HLS SEGMENT \(shortId)] Primary taking over \(takeoverReason) download for \(relativePath)")
+                        session.dataTask(with: url).resume()
+                    } else {
+                        session.invalidateAndCancel()
+                        completion()
+                        connection.cancel()
+                    }
                 }
                 return
             } else {
@@ -2314,6 +2383,7 @@ public class LocalHTTPServer: @unchecked Sendable {
             }
         } else {
             streamingSessions[sessionKey] = session
+            streamingSessionLastProgress[sessionKey] = Date()
             streamingSessionsLock.unlock()
         }
 
@@ -2861,6 +2931,8 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
     private let sendFallbackError: (NWConnection) -> Void
     /// Removes this session from `LocalHTTPServer.streamingSessions` on completion.
     private let removeSession: (String) -> Void
+    /// Records that the producer is still receiving bytes from IPFS.
+    private let noteProgress: (String) -> Void
     private let completion: () -> Void
 
     private var diskBuffer = Data()
@@ -2886,6 +2958,7 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
          buildHeaders: @escaping (Int, [String: String]) -> Data,
          sendFallbackError: @escaping (NWConnection) -> Void,
          removeSession: @escaping (String) -> Void,
+         noteProgress: @escaping (String) -> Void,
          completion: @escaping () -> Void) {
         self.connection = connection
         self.cachePath = cachePath
@@ -2894,6 +2967,7 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
         self.buildHeaders = buildHeaders
         self.sendFallbackError = sendFallbackError
         self.removeSession = removeSession
+        self.noteProgress = noteProgress
         self.completion = completion
     }
 
@@ -2945,6 +3019,7 @@ private class SegmentStreamDelegate: NSObject, URLSessionDataDelegate {
                     didReceive data: Data) {
         // Always buffer to disk — the proxy's sole purpose is to persist data locally.
         diskBuffer.append(data)
+        noteProgress(sessionKey)
 
         // Stream to AVPlayer if connection is alive.
         guard !connectionDead else { return }
