@@ -58,6 +58,12 @@ struct MediaGridView: View, Equatable {
         guard let ar = attachment.aspectRatio, ar > 0 else { return false }
         return ar > 1.0
     }
+
+    private func originalAttachmentIndex(_ displayIndex: Int) -> Int {
+        guard attachments.indices.contains(displayIndex) else { return displayIndex }
+        let attachment = attachments[displayIndex]
+        return parentTweet.attachments?.firstIndex(where: { $0.mid == attachment.mid }) ?? displayIndex
+    }
     
     var body: some View {
         // Use cached dimensions to prevent repeated UIScreen.main calls
@@ -72,7 +78,7 @@ struct MediaGridView: View, Equatable {
                 case 1:
                     MediaCell(
                         parentTweet: parentTweet,
-                        attachmentIndex: 0,
+                        attachmentIndex: originalAttachmentIndex(0),
                         aspectRatio: Float(gridAspectRatio),
                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -112,7 +118,7 @@ struct MediaGridView: View, Equatable {
                         HStack(spacing: 2) {
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 0,
+                                attachmentIndex: originalAttachmentIndex(0),
                                 aspectRatio: Float(width0 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -124,7 +130,7 @@ struct MediaGridView: View, Equatable {
                             
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 1,
+                                attachmentIndex: originalAttachmentIndex(1),
                                 aspectRatio: Float(width1 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -154,7 +160,7 @@ struct MediaGridView: View, Equatable {
                         VStack(spacing: 2) {
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 0,
+                                attachmentIndex: originalAttachmentIndex(0),
                                 aspectRatio: Float(actualWidth / height0),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -166,7 +172,7 @@ struct MediaGridView: View, Equatable {
                             
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 1,
+                                attachmentIndex: originalAttachmentIndex(1),
                                 aspectRatio: Float(actualWidth / height1),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -197,7 +203,7 @@ struct MediaGridView: View, Equatable {
                         HStack(spacing: 2) {
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 0,
+                                attachmentIndex: originalAttachmentIndex(0),
                                 aspectRatio: Float(width0 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -209,7 +215,7 @@ struct MediaGridView: View, Equatable {
                             
                             MediaCell(
                                 parentTweet: parentTweet,
-                                attachmentIndex: 1,
+                                attachmentIndex: originalAttachmentIndex(1),
                                 aspectRatio: Float(width1 / gridHeight),
                                 shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -253,7 +259,7 @@ struct MediaGridView: View, Equatable {
                                 // Hero image on left
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: 0,
+                                    attachmentIndex: originalAttachmentIndex(0),
                                     aspectRatio: Float(heroWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -267,7 +273,7 @@ struct MediaGridView: View, Equatable {
                                 VStack(spacing: 2) {
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 1,
+                                        attachmentIndex: originalAttachmentIndex(1),
                                         aspectRatio: Float(sideWidth / height1),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -279,7 +285,7 @@ struct MediaGridView: View, Equatable {
                                     
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 2,
+                                        attachmentIndex: originalAttachmentIndex(2),
                                         aspectRatio: Float(sideWidth / height2),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -309,7 +315,7 @@ struct MediaGridView: View, Equatable {
                                 // Hero image on top
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: 0,
+                                    attachmentIndex: originalAttachmentIndex(0),
                                     aspectRatio: Float(actualWidth / heroHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -323,7 +329,7 @@ struct MediaGridView: View, Equatable {
                                 HStack(spacing: 2) {
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 1,
+                                        attachmentIndex: originalAttachmentIndex(1),
                                         aspectRatio: Float(width1 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -335,7 +341,7 @@ struct MediaGridView: View, Equatable {
                                     
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 2,
+                                        attachmentIndex: originalAttachmentIndex(2),
                                         aspectRatio: Float(width2 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -373,7 +379,7 @@ struct MediaGridView: View, Equatable {
                                 // Hero portrait on left
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: 0,
+                                    attachmentIndex: originalAttachmentIndex(0),
                                     aspectRatio: Float(leftWidth / gridHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -387,7 +393,7 @@ struct MediaGridView: View, Equatable {
                                 VStack(spacing: 2) {
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 1,
+                                        attachmentIndex: originalAttachmentIndex(1),
                                         aspectRatio: Float(rightWidth / height1),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -399,7 +405,7 @@ struct MediaGridView: View, Equatable {
                                     
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 2,
+                                        attachmentIndex: originalAttachmentIndex(2),
                                         aspectRatio: Float(rightWidth / height2),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -437,7 +443,7 @@ struct MediaGridView: View, Equatable {
                                 // Hero landscape on top
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: 0,
+                                    attachmentIndex: originalAttachmentIndex(0),
                                     aspectRatio: Float(actualWidth / topHeight),
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -451,7 +457,7 @@ struct MediaGridView: View, Equatable {
                                 HStack(spacing: 2) {
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 1,
+                                        attachmentIndex: originalAttachmentIndex(1),
                                         aspectRatio: Float(width1 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -463,7 +469,7 @@ struct MediaGridView: View, Equatable {
                                     
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: 2,
+                                        attachmentIndex: originalAttachmentIndex(2),
                                         aspectRatio: Float(width2 / bottomHeight),
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -487,7 +493,7 @@ struct MediaGridView: View, Equatable {
                             ForEach(0..<2) { idx in
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: idx,
+                                    attachmentIndex: originalAttachmentIndex(idx),
                                     aspectRatio: cellAspectRatio,
                                     shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -502,7 +508,7 @@ struct MediaGridView: View, Equatable {
                                 if idx < attachments.count {
                                     MediaCell(
                                         parentTweet: parentTweet,
-                                        attachmentIndex: idx,
+                                        attachmentIndex: originalAttachmentIndex(idx),
                                         aspectRatio: cellAspectRatio,
                                         shouldLoadVideo: shouldLoadVideo,
                         isEmbedded: isEmbedded,
@@ -521,7 +527,7 @@ struct MediaGridView: View, Equatable {
                             ForEach(0..<2) { idx in
                                 MediaCell(
                                     parentTweet: parentTweet,
-                                    attachmentIndex: idx,
+                                    attachmentIndex: originalAttachmentIndex(idx),
                                     aspectRatio: Float((actualWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                     
                                     shouldLoadVideo: shouldLoadVideo,
@@ -538,7 +544,7 @@ struct MediaGridView: View, Equatable {
                                     ZStack {
                                         MediaCell(
                                             parentTweet: parentTweet,
-                                            attachmentIndex: idx,
+                                            attachmentIndex: originalAttachmentIndex(idx),
                                             aspectRatio: Float((actualWidth / 2 - 1) / (gridHeight / 2 - 1)),
                                             
                                     shouldLoadVideo: shouldLoadVideo,

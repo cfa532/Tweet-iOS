@@ -54,6 +54,10 @@ class TweetBodyUIView: UIView {
         return v
     }()
 
+    // Audio playlist hosting
+    private var audioHostingController: UIHostingController<AnyView>?
+    private let audioContainerView = UIView()
+
     // Document attachments hosting (keeps SwiftUI, but reuses one host per cell)
     private var documentHostingController: UIHostingController<AnyView>?
     private let documentContainerView = UIView()
@@ -88,6 +92,11 @@ class TweetBodyUIView: UIView {
     }
 
     deinit {
+        if let hostingController = audioHostingController {
+            hostingController.willMove(toParent: nil)
+            hostingController.view.removeFromSuperview()
+            hostingController.removeFromParent()
+        }
         if let hostingController = documentHostingController {
             hostingController.willMove(toParent: nil)
             hostingController.view.removeFromSuperview()
@@ -110,14 +119,16 @@ class TweetBodyUIView: UIView {
             mediaGridView.bottomAnchor.constraint(equalTo: mediaContainerView.bottomAnchor),
         ])
 
-        // Build content stack: [contentLabel, mediaContainer, captionLabel, documentContainer]
+        // Build content stack: [contentLabel, audioContainer, mediaContainer, captionLabel, documentContainer]
         contentStack.addArrangedSubview(contentLabel)
+        contentStack.addArrangedSubview(audioContainerView)
         contentStack.addArrangedSubview(mediaContainerView)
         contentStack.addArrangedSubview(captionLabel)
         contentStack.addArrangedSubview(documentContainerView)
 
         // Set initial spacing (will be adjusted per tweet)
-        contentStack.setCustomSpacing(4, after: contentLabel)  // text → media gap
+        contentStack.setCustomSpacing(4, after: contentLabel)  // text → attachments gap
+        contentStack.setCustomSpacing(8, after: audioContainerView)  // audio → media gap
         contentStack.setCustomSpacing(2, after: mediaContainerView)  // media → caption gap
         contentStack.setCustomSpacing(0, after: captionLabel)  // caption → documents gap
 
@@ -160,6 +171,10 @@ class TweetBodyUIView: UIView {
         guard isTruncated, !isExpanded else { return false }
         let labelPoint = convert(pointInBodyView, to: contentLabel)
         return isMoreLinkTap(at: labelPoint)
+    }
+
+    func isAudioPlayerPoint(_ pointInBodyView: CGPoint) -> Bool {
+        !audioContainerView.isHidden && audioContainerView.frame.contains(pointInBodyView)
     }
 
     private func isMoreLinkTap(at pointInContentLabel: CGPoint) -> Bool {
@@ -291,6 +306,8 @@ class TweetBodyUIView: UIView {
 
         // Clean up media grid and reset document content for reuse
         mediaGridView.prepareForReuse()
+        audioContainerView.isHidden = true
+        audioHostingController?.rootView = AnyView(EmptyView())
         documentContainerView.isHidden = true
         documentHostingController?.rootView = AnyView(EmptyView())
 
@@ -298,10 +315,32 @@ class TweetBodyUIView: UIView {
         renderTextContent(tweet: tweet, isEmbedded: isEmbedded)
 
         // --- Attachments ---
+        let audioAttachments = tweet.attachments?.filter { $0.type == .audio } ?? []
         let mediaAttachments = tweet.attachments?.filter { Self.isMediaType($0.type) } ?? []
         let documentAttachments = tweet.attachments?.filter { Self.isDocumentType($0.type) } ?? []
+        let hasAudio = !audioAttachments.isEmpty
         let hasMedia = !mediaAttachments.isEmpty
         let hasDocuments = !documentAttachments.isEmpty
+
+        // --- Audio playlist ---
+        if hasAudio {
+            audioContainerView.isHidden = false
+            let audioView = CompactAudioPlaylistPlayer(
+                parentTweet: tweet,
+                attachments: audioAttachments
+            )
+            let hostingController = ensureAudioHostingController(parentViewController: parentViewController)
+            hostingController.rootView = AnyView(audioView)
+            hostingController.view.invalidateIntrinsicContentSize()
+            hostingController.view.setNeedsLayout()
+
+            contentStack.setCustomSpacing(contentLabel.isHidden ? 4 : 8, after: contentLabel)
+            contentStack.setCustomSpacing(hasMedia ? 8 : 0, after: audioContainerView)
+        } else {
+            audioContainerView.isHidden = true
+            audioHostingController?.rootView = AnyView(EmptyView())
+            contentStack.setCustomSpacing(0, after: audioContainerView)
+        }
 
         // --- Media grid ---
         if hasMedia {
@@ -343,8 +382,10 @@ class TweetBodyUIView: UIView {
                 isCaptionVisible = false
             }
 
-            // Adjust spacing based on whether there's text above media
-            if contentLabel.isHidden {
+            // Adjust spacing based on whether there's text/audio above media
+            if hasAudio {
+                contentStack.setCustomSpacing(8, after: audioContainerView)
+            } else if contentLabel.isHidden {
                 // No text: 4pt top padding before media
                 contentStack.setCustomSpacing(4, after: contentLabel)
             } else {
@@ -358,7 +399,9 @@ class TweetBodyUIView: UIView {
             isCaptionVisible = false
 
             // Collapse spacing after content label if no media
-            contentStack.setCustomSpacing(0, after: contentLabel)
+            if !hasAudio {
+                contentStack.setCustomSpacing(0, after: contentLabel)
+            }
         }
 
         // --- Documents ---
@@ -377,8 +420,12 @@ class TweetBodyUIView: UIView {
             hostingController.view.setNeedsLayout()
 
             // Add spacing before documents if there's media or text
-            if hasMedia || !contentLabel.isHidden {
+            if hasMedia {
                 contentStack.setCustomSpacing(8, after: captionLabel.isHidden ? mediaContainerView : captionLabel)
+            } else if hasAudio {
+                contentStack.setCustomSpacing(8, after: audioContainerView)
+            } else if !contentLabel.isHidden {
+                contentStack.setCustomSpacing(8, after: contentLabel)
             }
         } else {
             documentContainerView.isHidden = true
@@ -400,13 +447,57 @@ class TweetBodyUIView: UIView {
         onTweetBodyTap = nil
         onContentExpanded = nil
         mediaGridView.prepareForReuse()
+        audioContainerView.isHidden = true
+        audioHostingController?.rootView = AnyView(EmptyView())
         documentContainerView.isHidden = true
         documentHostingController?.rootView = AnyView(EmptyView())
 
         // Reset spacing to defaults
         contentStack.setCustomSpacing(4, after: contentLabel)
+        contentStack.setCustomSpacing(8, after: audioContainerView)
         contentStack.setCustomSpacing(2, after: mediaContainerView)
         contentStack.setCustomSpacing(0, after: captionLabel)
+    }
+
+    private func ensureAudioHostingController(parentViewController: UIViewController) -> UIHostingController<AnyView> {
+        if let hostingController = audioHostingController {
+            if hostingController.parent !== parentViewController {
+                hostingController.willMove(toParent: nil)
+                hostingController.view.removeFromSuperview()
+                hostingController.removeFromParent()
+                parentViewController.addChild(hostingController)
+                audioContainerView.addSubview(hostingController.view)
+                hostingController.didMove(toParent: parentViewController)
+                hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    hostingController.view.topAnchor.constraint(equalTo: audioContainerView.topAnchor),
+                    hostingController.view.leadingAnchor.constraint(equalTo: audioContainerView.leadingAnchor),
+                    hostingController.view.trailingAnchor.constraint(equalTo: audioContainerView.trailingAnchor, constant: -2),
+                    hostingController.view.bottomAnchor.constraint(equalTo: audioContainerView.bottomAnchor),
+                ])
+            }
+            return hostingController
+        }
+
+        let hostingController = UIHostingController(rootView: AnyView(EmptyView()))
+        hostingController.view.backgroundColor = .clear
+        hostingController.view.insetsLayoutMarginsFromSafeArea = false
+        hostingController.sizingOptions = [.intrinsicContentSize]
+
+        parentViewController.addChild(hostingController)
+        audioContainerView.addSubview(hostingController.view)
+        hostingController.didMove(toParent: parentViewController)
+
+        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hostingController.view.topAnchor.constraint(equalTo: audioContainerView.topAnchor),
+            hostingController.view.leadingAnchor.constraint(equalTo: audioContainerView.leadingAnchor),
+            hostingController.view.trailingAnchor.constraint(equalTo: audioContainerView.trailingAnchor, constant: -2),
+            hostingController.view.bottomAnchor.constraint(equalTo: audioContainerView.bottomAnchor),
+        ])
+
+        audioHostingController = hostingController
+        return hostingController
     }
 
     private func ensureDocumentHostingController(parentViewController: UIViewController) -> UIHostingController<AnyView> {
@@ -478,7 +569,7 @@ class TweetBodyUIView: UIView {
 
     static func isMediaType(_ type: MediaType) -> Bool {
         switch type {
-        case .image, .video, .hls_video, .audio:
+        case .image, .video, .hls_video:
             return true
         default:
             return false

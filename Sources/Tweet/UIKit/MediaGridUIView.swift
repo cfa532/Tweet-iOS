@@ -20,6 +20,7 @@ class MediaGridUIView: UIView {
     private var currentTweetId: String?
     private weak var parentTweet: Tweet?
     private var attachments: [MimeiFileType] = []
+    private var originalAttachmentIndices: [Int] = []
     private var isEmbedded: Bool = false
     private var cellTweetId: String?
     private var shouldLoadVideo: Bool = true
@@ -75,6 +76,9 @@ class MediaGridUIView: UIView {
         currentTweetId = tweet.mid
         self.parentTweet = tweet
         self.attachments = attachments
+        self.originalAttachmentIndices = attachments.enumerated().map { displayIndex, attachment in
+            tweet.attachments?.firstIndex(where: { $0.mid == attachment.mid }) ?? displayIndex
+        }
         self.isEmbedded = isEmbedded
         self.cellTweetId = cellTweetId
         self.shouldLoadVideo = shouldLoadVideo
@@ -98,7 +102,7 @@ class MediaGridUIView: UIView {
             // Aspect ratio will be updated in layoutSubviews with correct dimensions
             cellView.configure(
                 parentTweet: tweet,
-                attachmentIndex: i,
+                attachmentIndex: originalAttachmentIndex(i),
                 aspectRatio: 1.0,  // Placeholder, will be updated in layoutSubviews
                 shouldLoadVideo: shouldLoadVideo,
                 isEmbedded: isEmbedded,
@@ -128,6 +132,11 @@ class MediaGridUIView: UIView {
 
     @objc private func gridTapped() {
         // Consume tap to prevent propagation
+    }
+
+    private func originalAttachmentIndex(_ displayIndex: Int) -> Int {
+        guard originalAttachmentIndices.indices.contains(displayIndex) else { return displayIndex }
+        return originalAttachmentIndices[displayIndex]
     }
 
     override func layoutSubviews() {
@@ -166,7 +175,7 @@ class MediaGridUIView: UIView {
             if let parentVC = parentViewController {
                 cellView.configure(
                     parentTweet: parentTweet,
-                    attachmentIndex: i,
+                    attachmentIndex: originalAttachmentIndex(i),
                     aspectRatio: cellAspectRatio,
                     shouldLoadVideo: shouldLoadVideo,
                     isEmbedded: isEmbedded,
@@ -481,6 +490,7 @@ class MediaGridUIView: UIView {
         currentTweetId = nil
         parentTweet = nil
         attachments = []
+        originalAttachmentIndices = []
         isGridVisible = false
         hasInitialized = false
         shouldLoadVideo = true

@@ -34,11 +34,11 @@ struct MediaBrowserView: View {
     @State private var isShareSheetVisible: Bool = false // Track share sheet state in fullscreen
     @State private var suppressTabPagingAnimation: Bool = false // Suppress TabView paging during vertical next-video transitions
     private var attachments: [MimeiFileType] {
-        // Filter to only show media types (images, videos, audio) - no documents
+        // Audio is handled by the compact playlist player; the browser pages visual media only.
         let allAttachments = currentTweet.attachments ?? []
         return allAttachments.filter { attachment in
             switch attachment.type {
-            case .image, .video, .hls_video, .audio:
+            case .image, .video, .hls_video:
                 return true
             default:
                 return false
@@ -55,13 +55,23 @@ struct MediaBrowserView: View {
     }
 
     init(tweet: Tweet, initialIndex: Int, cellTweetId: String? = nil) {
+        let visualAttachments = (tweet.attachments ?? []).filter {
+            $0.type == .image || $0.type == .video || $0.type == .hls_video
+        }
+        let initialAttachment = tweet.attachments?.indices.contains(initialIndex) == true
+            ? tweet.attachments?[initialIndex]
+            : nil
+        let browserIndex = initialAttachment.flatMap { attachment in
+            visualAttachments.firstIndex(where: { $0.mid == attachment.mid })
+        } ?? min(max(initialIndex, 0), max(visualAttachments.count - 1, 0))
+
         self.tweet = tweet
         self.initialIndex = initialIndex
         self.cellTweetId = cellTweetId
-        self._currentIndex = State(initialValue: initialIndex)
+        self._currentIndex = State(initialValue: browserIndex)
         self._currentTweet = State(initialValue: tweet)
         self._currentCellTweetId = State(initialValue: cellTweetId ?? tweet.mid)
-        self._previousIndex = State(initialValue: initialIndex)
+        self._previousIndex = State(initialValue: browserIndex)
         print("MediaBrowserView init - tweet: \(tweet.mid), cellTweet: \(cellTweetId ?? tweet.mid), attachments: \(tweet.attachments?.count ?? 0), initialIndex: \(initialIndex)")
     }
 

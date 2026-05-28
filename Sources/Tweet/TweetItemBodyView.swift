@@ -114,12 +114,21 @@ struct TweetItemBodyView: View {
             }
             // Separate media and documents
             if let attachments = tweet.attachments, !attachments.isEmpty {
-                // Filter attachments into media (visual) and documents
+                // Filter attachments into audio, visual media, and documents
+                let audioAttachments = attachments.filter { $0.type == .audio }
                 let mediaAttachments = attachments.filter { isMediaType($0.type) }
                 let documentAttachments = attachments.filter { isDocumentType($0.type) }
                 
                 VStack(alignment: .leading, spacing: 0) {
-                    // MediaGrid for images, videos, and audio (visual content)
+                    if !audioAttachments.isEmpty {
+                        CompactAudioPlaylistPlayer(
+                            parentTweet: tweet,
+                            attachments: audioAttachments
+                        )
+                        .padding(.top, 6)
+                    }
+
+                    // MediaGrid for images and videos
                     if !mediaAttachments.isEmpty {
                         MediaGridView(
                             parentTweet: tweet,
@@ -131,7 +140,7 @@ struct TweetItemBodyView: View {
                             .clipped()
                             .cornerRadius(8)
                             .id("\(tweet.mid)_grid_\(isEmbedded ? "embedded" : "regular")")
-                            .padding(.top, 6)
+                            .padding(.top, audioAttachments.isEmpty ? 6 : 8)
                             // STABILITY: Layout priority ensures media grid maintains consistent sizing
                             .layoutPriority(1)
                             // STABILITY: Fixed vertical size prevents content from shifting media position
@@ -156,7 +165,7 @@ struct TweetItemBodyView: View {
                             documents: documentAttachments,
                             maxDocuments: 2 // Show at most 2 documents in tweet list
                         )
-                        .padding(.top, mediaAttachments.isEmpty ? 4 : 8)
+                        .padding(.top, (mediaAttachments.isEmpty && audioAttachments.isEmpty) ? 4 : 8)
                     }
                 }
             }
@@ -171,7 +180,7 @@ struct TweetItemBodyView: View {
     /// Determines if a media type is visual content (should be in MediaGrid)
     private func isMediaType(_ type: MediaType) -> Bool {
         switch type {
-        case .image, .video, .hls_video, .audio:
+        case .image, .video, .hls_video:
             return true
         default:
             return false

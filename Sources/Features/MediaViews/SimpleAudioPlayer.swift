@@ -270,3 +270,296 @@ struct SimpleAudioPlayer: View {
         playerItem = nil
     }
 }
+
+struct CompactAudioPlaylistPlayer: View {
+    let parentTweet: Tweet
+    let attachments: [MimeiFileType]
+    var autoPlay: Bool = false
+
+    @State private var player: AVPlayer?
+    @State private var currentIndex = 0
+    @State private var isPlaying = false
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 0
+    @State private var timeObserver: Any?
+    @State private var cancellables = Set<AnyCancellable>()
+
+    private var baseUrl: URL {
+        parentTweet.author?.baseUrl
+            ?? HproseInstance.shared.appUser.baseUrl
+            ?? HproseInstance.baseUrl
+    }
+
+    private var playableAttachments: [MimeiFileType] {
+        attachments.filter { $0.type == .audio && $0.getUrl(baseUrl) != nil }
+    }
+
+    private var currentAttachment: MimeiFileType? {
+        guard playableAttachments.indices.contains(currentIndex) else { return nil }
+        return playableAttachments[currentIndex]
+    }
+
+    private var currentTitle: String {
+        guard let attachment = currentAttachment else {
+            return NSLocalizedString("Audio", comment: "Audio attachment fallback title")
+        }
+        return displayName(for: attachment)
+    }
+
+    var body: some View {
+        if !playableAttachments.isEmpty {
+            VStack(spacing: 8) {
+                playlistMenu
+
+                HStack(spacing: 10) {
+                    controlButton(systemName: "backward.fill", action: playPrevious)
+                        .opacity(playableAttachments.count > 1 ? 1 : 0.35)
+                        .disabled(playableAttachments.count <= 1)
+
+                    controlButton(systemName: isPlaying ? "pause.fill" : "play.fill", action: togglePlayback, isPrimary: true)
+
+                    controlButton(systemName: "forward.fill", action: playNext)
+                        .opacity(playableAttachments.count > 1 ? 1 : 0.35)
+                        .disabled(playableAttachments.count <= 1)
+                }
+
+                VStack(spacing: 5) {
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.primary.opacity(0.16))
+
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.themeAccent)
+                                .frame(width: proxy.size.width * CGFloat(progress))
+                        }
+                    }
+                    .frame(height: 8)
+
+                    HStack {
+                        Text(formatTime(currentTime))
+                        Spacer()
+                        Text(formatTime(duration))
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(UIColor.secondarySystemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .onAppear {
+                setupPlayerIfNeeded()
+            }
+            .onDisappear {
+                cleanupCompactPlayer()
+            }
+            .onChange(of: playableAttachments.map(\.mid)) { _, _ in
+                if currentIndex >= playableAttachments.count {
+                    currentIndex = 0
+                }
+                loadCurrentItem(shouldPlay: isPlaying || autoPlay)
+            }
+        }
+    }
+
+    private var playlistMenu: some View {
+        Menu {
+            ForEach(Array(playableAttachments.enumerated()), id: \.element.mid) { index, attachment in
+                Button {
+                    selectItem(index)
+                } label: {
+                    if index == currentIndex {
+                        Label(displayName(for: attachment), systemImage: "checkmark")
+                    } else {
+                        Text(displayName(for: attachment))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(currentTitle)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func controlButton(systemName: String, action: @escaping () -> Void, isPrimary: Bool = false) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: isPrimary ? 23 : 18, weight: .semibold))
+                .foregroundColor(isPrimary ? .white : .primary)
+                .frame(width: 48, height: 48)
+                .background(
+                    Circle()
+                        .fill(isPrimary ? Color.themeAccent : Color.primary.opacity(0.08))
+                )
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+    }
+
+    private var progress: Double {
+        guard duration.isFinite, duration > 0, currentTime.isFinite else { return 0 }
+        return min(max(currentTime / duration, 0), 1)
+    }
+
+    private func setupPlayerIfNeeded() {
+        guard player == nil else { return }
+
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("DEBUG: [COMPACT AUDIO] Failed to configure audio session: \(error)")
+        }
+
+        player = AVPlayer()
+        addTimeObserver()
+        loadCurrentItem(shouldPlay: autoPlay)
+    }
+
+    private func loadCurrentItem(shouldPlay: Bool) {
+        guard let player,
+              let attachment = currentAttachment,
+              let url = attachment.getUrl(baseUrl) else { return }
+
+        cancellables.removeAll()
+        currentTime = 0
+        duration = 0
+
+        let item = AVPlayerItem(asset: AVURLAsset(url: url))
+        player.replaceCurrentItem(with: item)
+        observe(item: item)
+
+        Task {
+            do {
+                let loadedDuration = try await item.asset.load(.duration)
+                await MainActor.run {
+                    if loadedDuration.isValid && !loadedDuration.isIndefinite {
+                        duration = loadedDuration.seconds
+                    }
+                }
+            } catch {
+                print("DEBUG: [COMPACT AUDIO] Failed to load duration: \(error)")
+            }
+        }
+
+        if shouldPlay {
+            player.play()
+            isPlaying = true
+        } else {
+            isPlaying = false
+        }
+    }
+
+    private func observe(item: AVPlayerItem) {
+        item.publisher(for: \.duration)
+            .receive(on: DispatchQueue.main)
+            .sink { newDuration in
+                if newDuration.isValid && !newDuration.isIndefinite {
+                    duration = newDuration.seconds
+                }
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime, object: item)
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                if playableAttachments.count > 1 {
+                    playNext()
+                } else {
+                    isPlaying = false
+                    currentTime = 0
+                    player?.seek(to: .zero)
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func addTimeObserver() {
+        guard let player else { return }
+        let interval = CMTime(seconds: 0.2, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            currentTime = time.seconds.isFinite ? time.seconds : 0
+        }
+    }
+
+    private func togglePlayback() {
+        setupPlayerIfNeeded()
+        guard let player else { return }
+
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    private func selectItem(_ index: Int) {
+        guard playableAttachments.indices.contains(index) else { return }
+        let shouldResume = isPlaying
+        currentIndex = index
+        loadCurrentItem(shouldPlay: shouldResume)
+    }
+
+    private func playPrevious() {
+        guard playableAttachments.count > 1 else { return }
+        let nextIndex = (currentIndex - 1 + playableAttachments.count) % playableAttachments.count
+        selectItem(nextIndex)
+    }
+
+    private func playNext() {
+        guard playableAttachments.count > 1 else { return }
+        let nextIndex = (currentIndex + 1) % playableAttachments.count
+        selectItem(nextIndex)
+    }
+
+    private func cleanupCompactPlayer() {
+        if let timeObserver, let player {
+            player.removeTimeObserver(timeObserver)
+        }
+        timeObserver = nil
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+        cancellables.removeAll()
+        isPlaying = false
+    }
+
+    private func displayName(for attachment: MimeiFileType) -> String {
+        if let fileName = attachment.fileName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !fileName.isEmpty {
+            return fileName
+        }
+        return NSLocalizedString("Audio", comment: "Audio attachment fallback title")
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite && seconds >= 0 else { return "0:00" }
+        let totalSeconds = Int(seconds)
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}

@@ -996,11 +996,21 @@ struct TweetDetailView: View {
         Group {
             if let attachments = displayTweet.attachments,
                !attachments.isEmpty {
+                let audioAttachments = attachments.filter { $0.type == .audio }
                 let mediaAttachments = attachments.filter { isMediaType($0.type) }
 
-                if !mediaAttachments.isEmpty {
+                if !audioAttachments.isEmpty || !mediaAttachments.isEmpty {
                     let cellWidth = UIScreen.main.bounds.width
                     LazyVStack(spacing: 1) {
+                        if !audioAttachments.isEmpty {
+                            CompactAudioPlaylistPlayer(
+                                parentTweet: displayTweet,
+                                attachments: audioAttachments
+                            )
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 8)
+                        }
+
                         ForEach(mediaAttachments.indices, id: \.self) { idx in
                             let attachment = mediaAttachments[idx]
                             let origIdx = attachments.firstIndex(where: { $0.mid == attachment.mid }) ?? idx
@@ -1019,7 +1029,7 @@ struct TweetDetailView: View {
                                             shouldLoad: false
                                         )
                                         .trackAttachmentVideoVisibility(
-                                            attachmentIndex: idx,
+                                            attachmentIndex: origIdx,
                                             videoMid: attachment.mid,
                                             coordinator: commentsVideoCoordinator,
                                             scrollCoordinateSpace: "commentsScroll"
@@ -1035,7 +1045,7 @@ struct TweetDetailView: View {
                                     )
                                     .contentShape(Rectangle())
                                     .onTapGesture {
-                                        selectedMediaIndex = idx
+                                        selectedMediaIndex = origIdx
                                         showBrowser = true
                                     }
                                 }
@@ -1453,10 +1463,10 @@ struct TweetDetailView: View {
         return max(0.5, min(2.0, minAspectRatio))
     }
     
-    // Helper to check if attachment is media type (image, video, audio)
+    // Helper to check if attachment is visual media type
     private func isMediaType(_ type: MediaType) -> Bool {
         switch type {
-        case .image, .video, .hls_video, .audio:
+        case .image, .video, .hls_video:
             return true
         default:
             return false

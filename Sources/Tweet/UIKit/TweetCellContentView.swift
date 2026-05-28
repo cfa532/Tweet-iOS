@@ -271,6 +271,10 @@ class TweetCellContentView: UIView {
         // taps on the right side of the media (e.g. the mute button).
         let bodyLocation = gesture.location(in: bodyView)
         if bodyView.bounds.contains(bodyLocation) {
+            if bodyView.isAudioPlayerPoint(bodyLocation) {
+                return
+            }
+
             // Use hitTest to check if tap is on an interactive element in body (media grid)
             if let hitView = bodyView.hitTest(bodyLocation, with: nil),
                hitView !== bodyView {
