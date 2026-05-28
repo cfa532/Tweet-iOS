@@ -1031,7 +1031,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         }
 
         if coordinatorWantsToPlay {
-            if isVideoAtEnd(newPlayer) {
+            if isVideoAtEnd(newPlayer, tolerance: 5.0) {
                 newPlayer.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                     guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
                     self.requestPlaybackStartIfNeeded(player, reason: "alreadyReady-seekToStart")
@@ -1040,9 +1040,19 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 requestPlaybackStartIfNeeded(newPlayer, reason: "alreadyReady")
             }
         } else {
-            // Seek to force AVPlayerLayer to decode a frame.
+            // Seek to force AVPlayerLayer to decode a frame for the thumbnail.
+            // Prefer the saved resume position so the thumbnail shows where the user left off,
+            // and so a coordinator play command arriving moments later finds the player already
+            // at the right position (avoids the race where a pending 0.01s seek overrides play).
             videoPlayerView.observeReadyForDisplay()
-            let seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
+            let mid = attachment?.mid ?? ""
+            let seekTarget: CMTime
+            if let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid),
+               info.time.seconds.isFinite, info.time.seconds > 0.25 {
+                seekTarget = info.time
+            } else {
+                seekTarget = CMTime(seconds: 0.01, preferredTimescale: 600)
+            }
             newPlayer.seek(to: seekTarget, toleranceBefore: .zero, toleranceAfter: .zero)
         }
     }
@@ -1295,6 +1305,13 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         VideoStateCache.shared.clearStoppedByCoordinator(mid)
         coordinatorWantsToPlay = true
 
+        // Don't auto-replay a video that already played to completion this session.
+        // The user can still tap to watch it fullscreen; this only suppresses coordinator autoplay.
+        if let id = videoIdentifier, VideoStateCache.shared.isVideoFinished(id) {
+            coordinatorWantsToPlay = false
+            return
+        }
+
         // If the layer already has a frame AND item is actually ready, play immediately.
         // If item is not ready (stale .playerReady state), fall through to re-acquire.
         if let player = player, videoCellState == .playerReady {
@@ -1413,8 +1430,10 @@ class MediaCellUIView: UIView, MediaCellDelegate {
             return
         }
 
-        // Reset finished videos to beginning before playing
-        if isVideoAtEnd(player) {
+        // If near the end (within 5s), restart from the beginning rather than resuming
+        // at an awkward near-end position. Videos that finished naturally are already
+        // gated above by the finishedVideoIdentifiers check.
+        if isVideoAtEnd(player, tolerance: 5.0) {
             VideoStateCache.shared.clearCachedState(for: mid)
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                 guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
@@ -1544,32 +1563,30 @@ class MediaCellUIView: UIView, MediaCellDelegate {
            recoveryTime.seconds.isFinite,
            recoveryTime.seconds > 0.25 {
             pendingRecoverySeekTime = nil
-            let currentSeconds = player.currentTime().seconds
-            if !currentSeconds.isFinite || abs(currentSeconds - recoveryTime.seconds) > 0.25 {
-                player.seek(to: recoveryTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                    guard let self else { return }
-                    DispatchQueue.main.async {
-                        guard self.attachment?.mid == mid else { return }
-                        print("\(self.logPrefix) 🔄 recovery seek restored \(String(format: "%.1f", recoveryTime.seconds))s")
-                        self.startPlaybackWithFade(player)
-                    }
+            player.seek(to: recoveryTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    guard self.attachment?.mid == mid else { return }
+                    print("\(self.logPrefix) 🔄 recovery seek restored \(String(format: "%.1f", recoveryTime.seconds))s")
+                    self.startPlaybackWithFade(player)
                 }
-                return
             }
+            return
         }
 
-        // Check for cached position to resume from
+        // Resume from saved position.
+        // Always seek even when player.currentTime() already reports the target — a pending
+        // async seek to 0.01s (issued by handleAlreadyReadyPlayer for thumbnail decoding) can
+        // race against play() and snap the position back to near-zero after play is called.
+        // Issuing a new seek here cancels that pending seek and guarantees the correct start.
         if let info = VideoStateCache.shared.getCachedPlaybackInfo(for: mid) {
             let targetSeconds = info.time.seconds
             if targetSeconds.isFinite, targetSeconds > 0.25 {
-                let currentSeconds = player.currentTime().seconds
-                if currentSeconds.isFinite, abs(currentSeconds - targetSeconds) > 0.25 {
-                    player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                        guard let self, let _ = self.attachment?.mid else { return }
-                        self.startPlaybackWithFade(player)
-                    }
-                    return
+                player.seek(to: info.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                    guard let self, let _ = self.attachment?.mid else { return }
+                    self.startPlaybackWithFade(player)
                 }
+                return
             }
         }
 
@@ -1935,7 +1952,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
                     if firstReadyTransition {
                         if self.coordinatorWantsToPlay, let player = self.player {
-                            if self.isVideoAtEnd(player) {
+                            if self.isVideoAtEnd(player, tolerance: 5.0) {
                                 player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
                                     guard let self, self.coordinatorWantsToPlay, let player = self.player else { return }
                                     // Only start if not already playing (onReadyForDisplay may have fired first)
@@ -2140,6 +2157,11 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         )
 
         VideoStateCache.shared.clearCache(for: mid, force: true)
+
+        // Prevent coordinator from auto-replaying this video when it scrolls back into view.
+        if let id = videoIdentifier {
+            VideoStateCache.shared.markVideoFinished(identifier: id)
+        }
     }
 
     // MARK: - Utilities
@@ -2149,7 +2171,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         guard player.currentItem != nil else { return }
         let currentTime = player.currentTime()
         guard currentTime.seconds.isFinite, currentTime.seconds > 0.25 else { return }
-        guard !isVideoAtEnd(player) else { return }
+        // Don't save position when near the end — resuming from there is jarring;
+        // the video will restart from the beginning on next play instead.
+        guard !isVideoAtEnd(player, tolerance: 5.0) else { return }
 
         VideoStateCache.shared.cacheVideoState(
             for: mid,

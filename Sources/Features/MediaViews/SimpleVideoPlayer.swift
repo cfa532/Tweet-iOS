@@ -85,6 +85,10 @@ class VideoStateCache {
     // This prevents black screen when SwiftUI recreates the view
     private var stoppedByCoordinatorMids: Set<String> = []
 
+    // Track videos that played to completion (by videoIdentifier = tweetId_videoMid_index).
+    // Prevents coordinator from auto-replaying finished videos when they scroll back into view.
+    private var finishedVideoIdentifiers = Set<String>()
+
     private init() {}
     
     /// Mark a video as visible (prevents eviction)
@@ -111,7 +115,19 @@ class VideoStateCache {
     func isStoppedByCoordinator(_ mid: String) -> Bool {
         return stoppedByCoordinatorMids.contains(mid)
     }
-    
+
+    func markVideoFinished(identifier: String) {
+        finishedVideoIdentifiers.insert(identifier)
+    }
+
+    func isVideoFinished(_ identifier: String) -> Bool {
+        finishedVideoIdentifiers.contains(identifier)
+    }
+
+    func clearVideoFinished(_ identifier: String) {
+        finishedVideoIdentifiers.remove(identifier)
+    }
+
     /// Clear cached state for a video (e.g., when video finishes)
     func clearCachedState(for mid: String) {
         cache.removeValue(forKey: mid)
@@ -212,6 +228,7 @@ class VideoStateCache {
     
     func clearAllCache() {
         cache.removeAll()
+        finishedVideoIdentifiers.removeAll()
     }
     
     /// Clear stale cached states (older than expiration interval)
