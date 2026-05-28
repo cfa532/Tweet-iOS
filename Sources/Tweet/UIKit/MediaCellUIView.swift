@@ -214,6 +214,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
     private var effectiveBaseUrl: URL = HproseInstance.baseUrl
     private var isSingleMedia: Bool = false
     private weak var parentViewController: UIViewController?
+    private var shouldAcquirePlayerWhenVisible: Bool = true
 
     /// Matches VideoPlaybackInfo.identifier format: cellTweetId_videoMid_attachmentIndex.
     /// Used to register/unregister delegate independently per feed cell, so the same video
@@ -2374,8 +2375,20 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
     // MARK: - Visibility
 
-    func setVisible(_ visible: Bool) {
-        guard isVisible != visible else { return }
+    func setVisible(_ visible: Bool, shouldAcquirePlayer: Bool = true) {
+        let wasVisible = isVisible
+        let previousShouldAcquirePlayer = shouldAcquirePlayerWhenVisible
+        shouldAcquirePlayerWhenVisible = shouldAcquirePlayer
+        let shouldStartAcquiring = visible &&
+            wasVisible &&
+            !previousShouldAcquirePlayer &&
+            shouldAcquirePlayer
+
+        if visible, wasVisible, isVideoAttachment {
+            shouldLoadVideo = shouldAcquirePlayer
+        }
+
+        guard isVisible != visible || shouldStartAcquiring else { return }
         isVisible = visible
 
         guard let attachment else { return }
@@ -2401,9 +2414,9 @@ class MediaCellUIView: UIView, MediaCellDelegate {
 
             // Mark video as visible for cache preservation
             if isVideoAttachment {
-                // Visibility is foreground demand: every on-screen video should
-                // load a cover/player even when it is not the autoplay primary.
-                shouldLoadVideo = true
+                // Visibility preserves the cell/delegate immediately, but AVPlayer
+                // creation is held until the media is close to autoplay range.
+                shouldLoadVideo = shouldAcquirePlayer
                 if attachment.getUrl(effectiveBaseUrl) != nil {
                     SharedAssetCache.shared.markAsVisible(attachment.mid)
                     VideoStateCache.shared.markAsVisible(attachment.mid)
@@ -2427,7 +2440,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
                 }
             }
 
-            if isVideoAttachment {
+            if isVideoAttachment && shouldAcquirePlayer {
                 schedulePlayerAcquireIfNeeded()
             }
 
@@ -2841,6 +2854,7 @@ class MediaCellUIView: UIView, MediaCellDelegate {
         attachment = nil
         parentTweet = nil
         isVisible = false
+        shouldAcquirePlayerWhenVisible = true
     }
 
     deinit {

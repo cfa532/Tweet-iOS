@@ -34,6 +34,7 @@ class MediaGridUIView: UIView {
     // Track whether layout needs recalculation
     private var needsFrameRecalculation: Bool = false
     private var lastLayoutWidth: CGFloat = 0
+    private let playerAcquireVisibilityThreshold: CGFloat = 0.35
 
     var isGridVisible: Bool = false {
         didSet {
@@ -442,7 +443,8 @@ class MediaGridUIView: UIView {
 
             // Keep loading tied to actual media-cell geometry, not just table-row visibility.
             let isLoadVisible = isGridVisible && ratio > 0.05
-            cellView.setVisible(isLoadVisible)
+            let shouldAcquirePlayer = ratio >= playerAcquireVisibilityThreshold
+            cellView.setVisible(isLoadVisible, shouldAcquirePlayer: shouldAcquirePlayer)
 
             guard cellView.isVideoAttachment,
                   let identifier = cellView.videoIdentifier else { continue }

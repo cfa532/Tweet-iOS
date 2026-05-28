@@ -140,6 +140,7 @@ class TweetTableViewController: UITableViewController {
     private var isUserDragging: Bool = false
     private var isDecelerating: Bool = false
     private var isTableViewUpdating: Bool = false
+    private var pendingHeightRelayoutTweetIds = Set<String>()
     /// Tweet IDs whose content is currently expanded by the user ("More..." tapped).
     /// `heightForRowAt` returns `automaticDimension` for these so the table re-measures
     /// the cell at full expanded height instead of using the cached truncated height.
@@ -1283,21 +1284,10 @@ class TweetTableViewController: UITableViewController {
             tweet.cachedHeight = desiredHeight
             TweetHeightCache.shared.setHeight(desiredHeight, for: tweet.mid)
 
-            // Guard: only trigger height recalc if data source is still consistent
-            // If pinnedTweets/tweets changed since last reload, a reloadData is pending
-            let expectedCount = self.pinnedTweets.count + self.tweets.count
-            let currentCount = self.tableView.numberOfRows(inSection: 0)
-            if expectedCount == currentCount {
-                UIView.performWithoutAnimation {
-                    self.isTableViewUpdating = true
-                    self.tableView.beginUpdates()
-                    self.tableView.endUpdates()
-                    self.isTableViewUpdating = false
-                }
-                // No post-beginUpdates re-caching: we already cached the Auto Layout
-                // fitting height above. Re-querying cell.frame.height here can read
-                // a transient pre-layout value, and calling calculateTweetHeight as
-                // a sanity check would re-introduce the broken estimate.
+            if self.isUserDragging || self.isDecelerating {
+                self.pendingHeightRelayoutTweetIds.insert(tweet.mid)
+            } else {
+                self.performPendingHeightRelayout(include: tweet.mid)
             }
         }
 
@@ -1780,6 +1770,7 @@ class TweetTableViewController: UITableViewController {
         // CRITICAL: Save scroll position immediately when user stops dragging
         // (if not decelerating, scroll has stopped - save now to survive app termination)
         if !decelerate {
+            performPendingHeightRelayout()
             saveScrollPositionIfNeeded()
             triggerPreloadOnScrollStop()
         }
@@ -1790,6 +1781,7 @@ class TweetTableViewController: UITableViewController {
 
         // Deceleration skipped video visibility updates — do one final update now
         updateVisibleTweetsForVideoPlayback()
+        performPendingHeightRelayout()
 
         triggerPreloadOnScrollStop()
 
@@ -1801,6 +1793,25 @@ class TweetTableViewController: UITableViewController {
         let topInset = scrollView.adjustedContentInset.top
         if scrollView.contentOffset.y <= -topInset + 10 {
             showBarsWithoutAnimation()
+        }
+    }
+
+    private func performPendingHeightRelayout(include tweetId: String? = nil) {
+        if let tweetId {
+            pendingHeightRelayoutTweetIds.insert(tweetId)
+        }
+        guard !pendingHeightRelayoutTweetIds.isEmpty else { return }
+
+        let expectedCount = pinnedTweets.count + tweets.count
+        let currentCount = tableView.numberOfRows(inSection: 0)
+        guard expectedCount == currentCount else { return }
+
+        pendingHeightRelayoutTweetIds.removeAll()
+        UIView.performWithoutAnimation {
+            isTableViewUpdating = true
+            tableView.beginUpdates()
+            tableView.endUpdates()
+            isTableViewUpdating = false
         }
     }
 
@@ -2116,6 +2127,12 @@ class TweetTableViewController: UITableViewController {
             guard isTweetVisible, let tweet = tweetForRow(indexPath.row) else { continue }
             visibleTweetIds.insert(tweet.mid)
         }
+        guard loadVisibleVideoIds != lastLoadVisibleVideoIds ||
+              onScreenVideoIds != lastOnScreenVideoIds ||
+              visibleTweetIds != lastVisibleTweetIds else {
+            return
+        }
+
         lastLoadVisibleVideoIds = loadVisibleVideoIds
         lastOnScreenVideoIds = onScreenVideoIds
         lastVisibleTweetIds = visibleTweetIds
