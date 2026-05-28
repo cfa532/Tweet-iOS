@@ -16,6 +16,7 @@ extension View {
 @available(iOS 16.0, *)
 private struct FeedStyleTruncatedTextView: UIViewRepresentable {
     let content: String
+    let onBodyTap: (() -> Void)?
 
     func makeUIView(context: Context) -> UILabel {
         let label = UILabel()
@@ -23,10 +24,14 @@ private struct FeedStyleTruncatedTextView: UIViewRepresentable {
         label.lineBreakMode = .byTruncatingTail
         label.font = TweetBodyUIView.contentFont
         label.textColor = .label
+        label.isUserInteractionEnabled = true
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        label.addGestureRecognizer(tap)
         return label
     }
 
     func updateUIView(_ uiView: UILabel, context: Context) {
+        context.coordinator.onBodyTap = onBodyTap
         let width = uiView.bounds.width > 0 ? uiView.bounds.width : UIScreen.main.bounds.width - 32
         uiView.attributedText = TweetBodyUIView.makeContentAttributedString(
             content: content,
@@ -42,6 +47,28 @@ private struct FeedStyleTruncatedTextView: UIViewRepresentable {
         )
         let fitSize = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         return CGSize(width: width, height: ceil(fitSize.height))
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onBodyTap: onBodyTap)
+    }
+
+    final class Coordinator: NSObject {
+        var onBodyTap: (() -> Void)?
+
+        init(onBodyTap: (() -> Void)?) {
+            self.onBodyTap = onBodyTap
+        }
+
+        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard let label = gesture.view as? UILabel else { return }
+            let point = gesture.location(in: label)
+            if let url = TweetBodyUIView.detectedURL(in: label, at: point) {
+                TweetBodyUIView.openExternalURL(url)
+                return
+            }
+            onBodyTap?()
+        }
     }
 }
 
@@ -101,16 +128,10 @@ struct TweetItemBodyView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let content = tweet.content, !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                FeedStyleTruncatedTextView(content: content)
+                FeedStyleTruncatedTextView(content: content, onBodyTap: onTweetBodyTap)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .if(enableTap) { $0.contentShape(Rectangle()) }
                     .padding(.bottom, 2)
-                    .if(onTweetBodyTap != nil) { view in
-                        view.onTapGesture {
-                            // Tap to open tweet detail
-                            onTweetBodyTap?()
-                        }
-                    }
             }
             // Separate media and documents
             if let attachments = tweet.attachments, !attachments.isEmpty {

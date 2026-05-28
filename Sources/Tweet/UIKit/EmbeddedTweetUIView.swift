@@ -156,13 +156,18 @@ class EmbeddedTweetUIView: UIView {
         headerView.menuButton(visible: false)
 
         // Tap gesture for navigation
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         addGestureRecognizer(tap)
         isUserInteractionEnabled = true
     }
 
-    @objc private func handleTap() {
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         guard let tweet = loadedTweet else { return }
+        let bodyLocation = gesture.location(in: bodyView)
+        if bodyView.bounds.contains(bodyLocation),
+           bodyView.isURLLinkPoint(bodyLocation) || bodyView.isMoreLinkPoint(bodyLocation) {
+            return
+        }
         onTap?(tweet)
     }
 

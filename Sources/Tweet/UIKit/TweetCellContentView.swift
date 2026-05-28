@@ -275,6 +275,10 @@ class TweetCellContentView: UIView {
                 return
             }
 
+            if bodyView.isURLLinkPoint(bodyLocation) {
+                return
+            }
+
             // Use hitTest to check if tap is on an interactive element in body (media grid)
             if let hitView = bodyView.hitTest(bodyLocation, with: nil),
                hitView !== bodyView {

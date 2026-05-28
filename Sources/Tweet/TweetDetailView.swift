@@ -277,11 +277,39 @@ struct SelectableTextView: UIViewRepresentable {
     private func makeAttributedString(_ text: String) -> NSAttributedString {
         let ps = NSMutableParagraphStyle()
         ps.lineSpacing = 3
-        return NSAttributedString(string: text, attributes: [
+        let attributedString = NSMutableAttributedString(string: text, attributes: [
             .font: UIFont.preferredFont(forTextStyle: .body),
             .foregroundColor: UIColor.label,
             .paragraphStyle: ps,
         ])
+        applyDetectedLinks(to: attributedString)
+        return attributedString
+    }
+
+    private func applyDetectedLinks(to attributedString: NSMutableAttributedString) {
+        guard attributedString.length > 0,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return
+        }
+
+        let fullString = attributedString.string as NSString
+        let fullRange = NSRange(location: 0, length: attributedString.length)
+        detector.enumerateMatches(in: attributedString.string, options: [], range: fullRange) { match, _, _ in
+            guard let match,
+                  let url = match.url,
+                  NSMaxRange(match.range) <= attributedString.length else { return }
+
+            let matchedText = fullString.substring(with: match.range)
+            let trimmedLength = matchedText.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:)］】》」'\"")).utf16.count
+            let linkRange = NSRange(location: match.range.location, length: trimmedLength)
+            guard linkRange.length > 0 else { return }
+
+            attributedString.addAttributes([
+                .link: url,
+                .foregroundColor: UIColor.systemBlue,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ], range: linkRange)
+        }
     }
 
     func makeUIView(context: Context) -> UITextView {
@@ -294,12 +322,17 @@ struct SelectableTextView: UIViewRepresentable {
         textView.textContainerInset = .zero
         textView.textContainer.lineFragmentPadding = 0
         textView.textContainer.widthTracksTextView = true
-        textView.linkTextAttributes = [:]
+        textView.linkTextAttributes = [
+            .foregroundColor: UIColor.systemBlue,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ]
+        textView.delegate = context.coordinator
         textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return textView
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
+        uiView.delegate = context.coordinator
         if uiView.text != text {
             uiView.attributedText = makeAttributedString(text)
         }
@@ -310,6 +343,21 @@ struct SelectableTextView: UIViewRepresentable {
         uiView.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         return size
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
+            guard case .link(let url) = textItem.content else {
+                return defaultAction
+            }
+            return UIAction { _ in
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
+        }
     }
 }
 

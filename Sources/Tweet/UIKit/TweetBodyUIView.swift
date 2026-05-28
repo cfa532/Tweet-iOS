@@ -13,6 +13,7 @@ import Combine
 
 extension NSAttributedString.Key {
     static let moreLinkTap = NSAttributedString.Key("com.tweet.moreLinkTap")
+    static let tweetDetectedURL = NSAttributedString.Key("com.tweet.detectedURL")
 }
 
 class TweetBodyUIView: UIView {
@@ -156,6 +157,14 @@ class TweetBodyUIView: UIView {
     }
 
     @objc private func bodyTapped() {
+        if let tap = contentLabelTapGesture {
+            let tapPoint = tap.location(in: contentLabel)
+            if let url = Self.detectedURL(in: contentLabel, at: tapPoint) {
+                Self.openExternalURL(url)
+                return
+            }
+        }
+
         if isTruncated, !isExpanded, let tap = contentLabelTapGesture {
             let tapPoint = tap.location(in: contentLabel)
             if isMoreLinkTap(at: tapPoint) {
@@ -171,6 +180,11 @@ class TweetBodyUIView: UIView {
         guard isTruncated, !isExpanded else { return false }
         let labelPoint = convert(pointInBodyView, to: contentLabel)
         return isMoreLinkTap(at: labelPoint)
+    }
+
+    func isURLLinkPoint(_ pointInBodyView: CGPoint) -> Bool {
+        let labelPoint = convert(pointInBodyView, to: contentLabel)
+        return Self.detectedURL(in: contentLabel, at: labelPoint) != nil
     }
 
     func isAudioPlayerPoint(_ pointInBodyView: CGPoint) -> Bool {
@@ -204,18 +218,9 @@ class TweetBodyUIView: UIView {
         guard let content = currentFullContent, !isExpanded else { return }
         isExpanded = true
 
-        let ps = NSMutableParagraphStyle()
-        ps.lineSpacing = 3
-        ps.lineBreakMode = .byWordWrapping
-        let fullAttr = NSAttributedString(string: content, attributes: [
-            .font: Self.contentFont,
-            .foregroundColor: UIColor.label,
-            .paragraphStyle: ps,
-        ])
-
         contentLabel.numberOfLines = 0
         contentLabel.lineBreakMode = .byWordWrapping
-        contentLabel.attributedText = fullAttr
+        contentLabel.attributedText = Self.makeFullContentAttributedString(content: content)
 
         setNeedsLayout()
         onContentExpanded?()
@@ -631,14 +636,7 @@ class TweetBodyUIView: UIView {
 
         // No truncation needed — return plain text
         guard needsTruncation else {
-            let ps = NSMutableParagraphStyle()
-            ps.lineSpacing = 3
-            ps.lineBreakMode = .byWordWrapping
-            return NSAttributedString(string: content, attributes: [
-                .font: font,
-                .foregroundColor: UIColor.label,
-                .paragraphStyle: ps
-            ])
+            return makeFullContentAttributedString(content: content)
         }
 
         // UILabel says truncation is needed — use TextKit to find the truncation point
@@ -663,14 +661,7 @@ class TweetBodyUIView: UIView {
         // Edge case: UILabel says truncation needed but NSLayoutManager disagrees.
         // Return plain text — UILabel will naturally truncate via numberOfLines=7.
         guard lineGlyphRanges.count > maxLines else {
-            let ps = NSMutableParagraphStyle()
-            ps.lineSpacing = 3
-            ps.lineBreakMode = .byWordWrapping
-            return NSAttributedString(string: content, attributes: [
-                .font: font,
-                .foregroundColor: UIColor.label,
-                .paragraphStyle: ps
-            ])
+            return makeFullContentAttributedString(content: content)
         }
 
         // Text is truncated — find character range visible in maxLines
@@ -719,7 +710,80 @@ class TweetBodyUIView: UIView {
             .foregroundColor: UIColor.systemBlue,
             .moreLinkTap: true,
         ]))
+        applyDetectedLinks(to: result, in: NSRange(location: 0, length: bodyText.utf16.count))
 
         return result
+    }
+
+    static func makeFullContentAttributedString(content: String) -> NSAttributedString {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 3
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        let result = NSMutableAttributedString(string: content, attributes: [
+            .font: contentFont,
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraphStyle,
+        ])
+        applyDetectedLinks(to: result, in: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    static func detectedURL(in label: UILabel, at point: CGPoint) -> URL? {
+        guard let attrText = label.attributedText,
+              attrText.length > 0,
+              label.bounds.contains(point) else { return nil }
+
+        let textStorage = NSTextStorage(attributedString: attrText)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: label.bounds.size)
+        textContainer.lineFragmentPadding = 0
+        textContainer.maximumNumberOfLines = label.numberOfLines
+        textContainer.lineBreakMode = label.lineBreakMode
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let characterIndex = layoutManager.characterIndex(
+            for: point,
+            in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: nil
+        )
+        guard characterIndex < attrText.length,
+              let url = attrText.attribute(.tweetDetectedURL, at: characterIndex, effectiveRange: nil) as? URL else {
+            return nil
+        }
+        return url
+    }
+
+    static func openExternalURL(_ url: URL) {
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
+    }
+
+    private static func applyDetectedLinks(to attributedString: NSMutableAttributedString, in range: NSRange) {
+        guard range.location >= 0,
+              range.length > 0,
+              NSMaxRange(range) <= attributedString.length,
+              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return
+        }
+
+        let fullString = attributedString.string as NSString
+        detector.enumerateMatches(in: attributedString.string, options: [], range: range) { match, _, _ in
+            guard let match,
+                  let url = match.url,
+                  NSMaxRange(match.range) <= attributedString.length else { return }
+
+            let matchedText = fullString.substring(with: match.range)
+            let trimmedLength = matchedText.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?;:)］】》」'\"")).utf16.count
+            let linkRange = NSRange(location: match.range.location, length: trimmedLength)
+            guard linkRange.length > 0 else { return }
+
+            attributedString.addAttributes([
+                .tweetDetectedURL: url,
+                .foregroundColor: UIColor.systemBlue,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ], range: linkRange)
+        }
     }
 }
